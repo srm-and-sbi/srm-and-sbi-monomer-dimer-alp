@@ -1,0 +1,450 @@
+"""PyTorch ANN architecture for the inference stage.
+
+This module defines the **embedding network** that maps a video tensor
+`[batch, time, height, width]` to a latent embedding `[batch, embed_dim]`.
+The embedding is then consumed by a downstream density estimator (a masked
+autoregressive flow, MAF) that learns the posterior `p(theta | video)`.
+
+Forward pipeline:
+
+    video:  [B, T, H, W]
+      |
+      v   Complex3DCNN (3D convolutional encoder)
+      |   - 3D convs capture local spatio-temporal patterns (a particle's
+      |     PSF + its motion across a few neighboring frames).
+      |   - Spatial dims are halved at each layer via MaxPool3d.
+      |   - Temporal dim T is preserved through the conv stack.
+      |
+      v   Spatial averaging  ->  [B, C, T]
+      |
+      v   TemporalTransformer (attention over the temporal sequence)
+      |   - Captures long-range temporal dependencies that 3D convs
+      |     cannot reach with small kernels.
+      |   - Returns a single summary vector (CLS-token embedding).
+      |
+      v   embedding:  [B, embed_dim]
+      |
+      v   [downstream: MAF density estimator]
+
+Module contents:
+    PositionalEncoding   -- sinusoidal positional encoding (Vaswani et al., 2017,
+                            "Attention Is All You Need",
+                            https://arxiv.org/abs/1706.03762).
+    AttentionBlock       -- single transformer-style block: multi-head self-attention
+                            + Mish-MLP, both residual with LayerNorm.
+    TemporalTransformer  -- stack of AttentionBlocks with a learnable CLS token
+                            and sinusoidal positional encoding (BERT-style CLS:
+                            Devlin et al., 2018, https://arxiv.org/abs/1810.04805;
+                            extended to vision in Dosovitskiy et al., 2020,
+                            https://arxiv.org/abs/2010.11929).
+    Complex3DCNN         -- end-to-end encoder: 3D CNN backbone + optional
+                            TemporalTransformer.
+"""
+
+import math
+
+import torch
+from torch import nn
+
+
+# =============================================================================
+# Positional encoding
+# =============================================================================
+
+class PositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding from Vaswani et al. (2017),
+    "Attention Is All You Need" (https://arxiv.org/abs/1706.03762).
+
+    Adds a fixed (non-learnable) position-dependent vector to each token in an
+    input sequence so that an otherwise permutation-invariant attention block
+    can use order information. Sinusoidal because:
+        - it generalizes to sequence lengths longer than seen at training time;
+        - it provides a continuous notion of relative position via the
+          sin/cos identities.
+
+    The encoding is precomputed up to `max_len` positions and registered as a
+    non-parametric buffer (saved with state_dict, but not optimized).
+
+    Args:
+        d_model: Embedding dimension. Each position gets a `d_model`-vector.
+        max_len: Maximum sequence length supported. Inputs longer than this
+            will raise an indexing error in `forward`.
+    """
+
+    def __init__(self, d_model: int, max_len: int = 1000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        # Shape [1, max_len, d_model] for broadcast addition.
+        self.register_buffer("pe", pe.unsqueeze(0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Add positional encoding to an input sequence.
+
+        Args:
+            x: Tensor of shape `[batch, seq_len, d_model]`. `seq_len` must be
+                <= `max_len` set at construction.
+
+        Returns:
+            Tensor of same shape as `x`, with the positional code added.
+        """
+        return x + self.pe[:, : x.size(1)]
+
+
+# =============================================================================
+# Attention block (self-attention + Mish-MLP, both residual)
+# =============================================================================
+
+class AttentionBlock(nn.Module):
+    """Transformer-style block: multi-head self-attention + feed-forward MLP.
+
+    The architecture is "post-norm" (LayerNorm is applied AFTER the residual
+    addition), matching the original Vaswani et al. (2017) formulation,
+    https://arxiv.org/abs/1706.03762. Each sub-layer is followed by a residual
+    connection and LayerNorm:
+
+        x = LayerNorm(x + MultiHeadAttention(x, x, x))
+        x = LayerNorm(x + MLP(x))
+
+    The MLP expansion factor is 4 (Linear from `embed_dim` to `4*embed_dim`
+    and back), which is the standard Transformer choice.
+
+    Activation is Mish (Misra, 2019, "Mish: A Self Regularized Non-Monotonic
+    Activation Function", https://arxiv.org/abs/1908.08681), a smooth
+    non-monotonic alternative to GELU/Swish; empirically slightly better
+    on some image-recognition benchmarks.
+
+    Args:
+        embed_dim: Token embedding dimension. Must be divisible by `num_heads`
+            (`nn.MultiheadAttention` constraint).
+        num_heads: Number of attention heads. Each head sees `embed_dim/num_heads`
+            channels.
+    """
+
+    def __init__(self, embed_dim: int, num_heads: int = 8):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=0.0,
+            batch_first=True,
+        )
+        self.layer_norm1 = nn.LayerNorm(embed_dim)
+        self.layer_norm2 = nn.LayerNorm(embed_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.Mish(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply self-attention then MLP, each with a residual connection.
+
+        Args:
+            x: Tensor `[batch, seq_len, embed_dim]`.
+
+        Returns:
+            Tensor of same shape as input.
+        """
+        # Self-attention with residual + LayerNorm
+        attn_out, _attn_weights = self.attention(x, x, x)
+        x = self.layer_norm1(x + attn_out)
+        # MLP with residual + LayerNorm
+        mlp_out = self.mlp(x)
+        x = self.layer_norm2(x + mlp_out)
+        return x
+
+
+# =============================================================================
+# Temporal transformer (CLS token + positional encoding + stacked AttentionBlocks)
+# =============================================================================
+
+class TemporalTransformer(nn.Module):
+    """Transformer encoder that summarizes a temporal sequence into a single embedding.
+
+    A learnable "CLS" (class) token is prepended to each input sequence; after
+    several attention blocks, the CLS token's final embedding serves as a
+    summary of the whole sequence. This is the same pattern used in BERT
+    (Devlin et al., 2018, https://arxiv.org/abs/1810.04805) and extended to
+    image patches in Vision Transformer / ViT (Dosovitskiy et al., 2020,
+    https://arxiv.org/abs/2010.11929).
+
+    Why a CLS token? Self-attention is permutation-invariant on the input
+    set, so any "summary" pooling would lose order information. The CLS
+    token, combined with positional encoding, gives the model a designated
+    "output" position whose embedding can attend to all other positions and
+    is supervised through downstream loss.
+
+    Args:
+        embed_dim: Token embedding dimension.
+        n_layers: Number of stacked AttentionBlocks.
+        num_heads: Number of attention heads per block.
+    """
+
+    def __init__(self, embed_dim: int, n_layers: int = 2, num_heads: int = 8):
+        super().__init__()
+        # Learnable token prepended at position 0 of every sequence.
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
+        self.pos_encoder = PositionalEncoding(embed_dim)
+        self.layers = nn.ModuleList([
+            AttentionBlock(embed_dim, num_heads) for _ in range(n_layers)
+        ])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Summarize a temporal sequence to a single embedding via the CLS token.
+
+        Args:
+            x: Tensor `[batch, seq_len, embed_dim]` (one embedding per time step).
+
+        Returns:
+            Tensor `[batch, embed_dim]` — the CLS-token output after `n_layers`
+            attention blocks. This is the summary embedding of the whole sequence.
+        """
+        batch_size = x.shape[0]
+        # Broadcast the learnable CLS token across the batch and prepend.
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)         # [B, T+1, embed_dim]
+        x = self.pos_encoder(x)
+        for layer in self.layers:
+            x = layer(x)
+        return x[:, 0]                                # CLS-token output: [B, embed_dim]
+
+
+# =============================================================================
+# Complex 3D CNN encoder (+ Temporal transformer)
+# =============================================================================
+
+class Complex3DCNN(nn.Module):
+    """End-to-end video-to-embedding network for simulation-based inference.
+
+    Architecture:
+
+        input video:     [B, T, H, W]   or   [B, 1, T, H, W]
+              |
+              |   1. 3D CNN backbone
+              |      ----------------
+              |      Stack of `n_conv_layers` blocks of:
+              |        Conv3d(kernel=(k,3,3))              -- first block strides time by
+              |                                               `s` (k = max(3, s)) to reduce T
+              |                                               toward temporal_target_frames;
+              |                                               later blocks preserve T, H, W
+              |        BatchNorm3d
+              |        Mish activation
+              |        MaxPool3d(kernel=(1,2,2))           -- halves H, W; T preserved
+              |      Channels double at each layer:
+              |        in_channels -> start_channels -> ... -> start_channels * 2^(n-1)
+              v
+        features:        [B, C, T', H', W']   (T' = reduced temporal length)
+              |
+              |   2. Spatial averaging
+              |      -----------------
+              |      Mean over (H', W') axes.
+              v
+        features:        [B, C, T]
+              |
+              |   3. Temporal summarization
+              |      ----------------------
+              |      EITHER the TemporalTransformer (if `use_temporal_attention=True`),
+              |      which returns the CLS-token embedding of the sequence,
+              |      OR a simple temporal mean over T.
+              v
+        embedding:       [B, C]
+
+    The CLS-token embedding IS the output, suitable as a conditioning input for
+    a downstream MAF density estimator that learns the full posterior
+    p(theta | video).
+
+    Why this architecture?
+        - 3D convolutions capture LOCAL spatio-temporal features (a single
+          particle's appearance and its motion across a few frames).
+        - The temporal transformer captures LONG-RANGE temporal dependencies
+          across many frames, which small 3D conv kernels cannot reach.
+        - Spatial pooling -- and, for long videos, the first conv's temporal
+          stride -- reduce dimensionality before the attention stage, whose
+          cost grows with the (reduced) temporal length T'.
+
+    Args:
+        n_frames: Number of temporal frames in the input video. The network
+            uses a dummy forward pass at construction to infer the output
+            shape after the 3D conv stack, so `n_frames` is required (cannot
+            be inferred at construction without an actual input). Compute as
+            `total_time_seconds / frame_time_seconds` for the configured run.
+        input_channels: Channels in the input video (1 for grayscale).
+        n_conv_layers: Number of 3D conv blocks in the backbone.
+        n_attn_layers: Number of AttentionBlocks in the TemporalTransformer
+            (only used if `use_temporal_attention=True`).
+        start_channels: Output channels of the first conv block; doubles each
+            block. With `start_channels=8` and `n_conv_layers=5`, the final
+            channel count is 128.
+        use_temporal_attention: If True, summarize the temporal sequence via
+            TemporalTransformer (CLS token output). If False, average over T.
+        attention_heads: Number of attention heads in each AttentionBlock.
+            Must divide `start_channels * 2^(n_conv_layers-1)`.
+        temporal_target_frames: Target temporal length, in FRAMES, for long
+            videos. The video is reduced by an integer factor
+            `s = n_frames // temporal_target_frames`, folded into the first
+            conv's temporal stride (with the temporal kernel widened to
+            `max(3, s)` so kernel >= stride, i.e. consecutive windows leave no
+            gap -- this is pooling, never decimation), so the activations and the
+            transformer sequence stay bounded regardless of duration. The
+            resulting length is the standard conv output size,
+            `T_out = (n_frames + 2*pad - kernel) // s + 1` with `pad = 0`
+            whenever `s > 1`, so the target is a FACTOR and not an exact output
+            length: 250 frames with target 100 gives `s = 2` and `T_out = 124`,
+            not 100. The kernel is then widened to the smallest value congruent
+            to `n_frames` modulo `s`, which makes `(n_frames - kernel) % s == 0`
+            so the final window ends exactly on the last frame and EVERY input
+            frame is read. This is asserted at construction and costs nothing:
+            the output length is unchanged (it only drops the unusable
+            remainder). Note `s` is floor division, so a video below
+            `2 * target` frames is not reduced at all. Videos with `n_frames <= temporal_target_frames` are left
+            unchanged (`s = 1`: the first block reduces to the original
+            (3,3,3)/stride-1 conv, so short videos and the 2 s baseline are
+            bit-identical to the un-reduced network). Because
+            `n_frames = duration_seconds * frame_rate`, a given target maps to a
+            different physical duration per frame rate (100 frames = 2 s @ 50
+            FPS = 1 s @ 100 FPS = 4 s @ 25 FPS). `None` disables the reduction.
+    """
+
+    def __init__(self,
+                 n_frames: int,
+                 input_channels: int = 1,
+                 n_conv_layers: int = 5,
+                 n_attn_layers: int = 2,
+                 start_channels: int = 8,
+                 use_temporal_attention: bool = True,
+                 attention_heads: int = 4,
+                 temporal_target_frames: int = None,
+                 verbose: bool = False):
+        super().__init__()
+        self.use_temporal_attention = use_temporal_attention
+
+        # ---- Temporal reduction factor (folded into the first conv) ---------
+        # Long videos are reduced toward `temporal_target_frames` by striding
+        # the FIRST conv block in time, so activations and the transformer
+        # sequence stay bounded regardless of duration. The factor is an integer
+        #     s = n_frames // temporal_target_frames   (floor; >= target retained)
+        # and it is 1 -- a no-op -- whenever the video is already at or below the
+        # target, so short videos and the 2 s baseline are left untouched. The
+        # first conv's temporal kernel is widened to `max(3, s)` so that
+        # kernel >= stride: consecutive windows leave no gap between them, which
+        # is what makes this learnable pooling rather than decimation. Note this
+        # does NOT imply every input frame is seen -- see the tail-frame note on
+        # the invariant assert below.
+        temporal_stride = 1
+        if temporal_target_frames and n_frames > temporal_target_frames:
+            temporal_stride = n_frames // temporal_target_frames
+        self.temporal_stride = temporal_stride
+        first_kernel_t = max(3, temporal_stride)
+        # Widen the kernel to the smallest size congruent to n_frames modulo the stride, so
+        # that `(n_frames - kernel) % stride == 0` and the final window ends exactly on the
+        # last input frame. Without this the trailing `(n_frames - kernel) % stride` frames
+        # fall past the last window and are never read -- one frame at 5 s @ 50 FPS, the one
+        # documented duration where the remainder is non-zero. Widening costs nothing
+        # downstream: it removes only the unusable remainder, so the output length is
+        # unchanged. Padding was rejected as the alternative because zero or replicated tail
+        # frames would bias precisely the temporal-decay quantities the detector workflow
+        # infers (bleaching drift, flicker rate).
+        if temporal_stride > 1:
+            first_kernel_t += (n_frames - first_kernel_t) % temporal_stride
+        first_pad_t = 1 if temporal_stride == 1 else 0
+        # Two invariants, and the second is the one that binds. `kernel >= stride`
+        # rules out GAPS between consecutive windows (this is pooling, not
+        # decimation). It does NOT by itself imply that every input frame is read:
+        # the output position count is `(n + 2*pad - kernel) // stride + 1`, so a
+        # non-zero `(n - kernel) % stride` leaves trailing frames past the last
+        # window. That is asserted directly below, because the weaker invariant
+        # passed happily for every duration while 5 s silently dropped a frame.
+        assert first_kernel_t >= temporal_stride
+        _t_out = (n_frames + 2 * first_pad_t - first_kernel_t) // temporal_stride + 1
+        _last_frame_seen = ((_t_out - 1) * temporal_stride
+                            - first_pad_t + first_kernel_t - 1)
+        assert _last_frame_seen >= n_frames - 1, (
+            f"temporal reduction would leave the last "
+            f"{n_frames - 1 - _last_frame_seen} input frame(s) unread: "
+            f"n_frames={n_frames}, stride={temporal_stride}, kernel={first_kernel_t}")
+
+        # ---- 3D CNN backbone ------------------------------------------------
+        layers = []
+        in_channels = input_channels
+        out_channels = start_channels
+        for layer_index in range(n_conv_layers):
+            # Only the first block strides time (by `temporal_stride`); every
+            # later block keeps the original (3,3,3)/stride-1 temporal behavior.
+            if layer_index == 0:
+                kernel_t, stride_t, pad_t = first_kernel_t, temporal_stride, first_pad_t
+            else:
+                kernel_t, stride_t, pad_t = 3, 1, 1
+            layers.extend([
+                nn.Conv3d(in_channels, out_channels,
+                          kernel_size=(kernel_t, 3, 3),
+                          stride=(stride_t, 1, 1),
+                          padding=(pad_t, 1, 1)),
+                nn.BatchNorm3d(out_channels),
+                nn.Mish(),
+                nn.MaxPool3d(kernel_size=(1, 2, 2)),  # spatial /2 each block; time via block-1 stride
+            ])
+            in_channels = out_channels
+            out_channels *= 2
+        self.features = nn.Sequential(*layers)
+
+        # ---- Infer output shape via dummy forward pass ----------------------
+        # The post-conv channel count drives the embedding dimension of the
+        # temporal transformer (it is independent of the temporal length).
+        # Spatial dims are hardcoded to 256x256 to match the simulation grid;
+        # if the simulation grid size changes, update here.
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, input_channels, n_frames, 256, 256)
+            dummy_output = self.features(dummy_input)
+            pre_pool_shape = dummy_output.shape
+            _, channels, reduced_frames, _, _ = dummy_output.shape
+            self.feature_dim = channels
+            self.reduced_frames = reduced_frames   # temporal length seen by the transformer
+
+        # ---- Optional temporal transformer ----------------------------------
+        if use_temporal_attention:
+            self.temporal_transformer = TemporalTransformer(
+                embed_dim=self.feature_dim,
+                n_layers=n_attn_layers,
+                num_heads=attention_heads,
+            )
+
+        if verbose:
+            attn_part = f", {n_attn_layers} attention layers" if use_temporal_attention else ""
+            reduce_part = (
+                f"; temporal x{temporal_stride} ({n_frames} -> {self.reduced_frames} frames)"
+                if temporal_stride > 1 else "; no temporal reduction"
+            )
+            print(
+                f"Complex3DCNN initialized: {n_conv_layers} CNN layers{attn_part}{reduce_part}; "
+                f"pre-pool shape {pre_pool_shape}; feature dim {self.feature_dim}"
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode a video into a summary embedding.
+
+        Args:
+            x: Input tensor. Either:
+                - `[B, T, H, W]` (4D; channel dim will be added automatically), or
+                - `[B, 1, T, H, W]` (5D; channel dim already present).
+
+        Returns:
+            `[B, feature_dim]` -- the summary embedding (the CLS-token output
+            when temporal attention is used, otherwise the temporal mean).
+        """
+        # Add channel dim if missing.
+        if x.dim() == 4:
+            x = x.unsqueeze(1)                # [B, 1, T, H, W]
+        x = self.features(x)                  # [B, C, T, H', W']
+        x = torch.mean(x, dim=(3, 4))         # spatial mean -> [B, C, T]
+        if self.use_temporal_attention:
+            x = x.transpose(1, 2)              # [B, T, C]
+            x = self.temporal_transformer(x)   # CLS token -> [B, C]
+        else:
+            x = torch.mean(x, dim=2)           # temporal mean -> [B, C]
+        return x
