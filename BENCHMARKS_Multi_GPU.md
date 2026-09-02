@@ -1,4 +1,4 @@
-# Multi-GPU timing benchmark — srm-and-sbi-dimer-alp
+# Multi-GPU timing benchmark — srm-and-sbi-monomer-dimer-alp
 
 > Scope: the three GPU stages that shard across every allocated device —
 > data-parallel training (Inference), and the sharded MAP passes (Evaluation,
@@ -136,8 +136,8 @@ cell video is split into non-overlapping temporal chunks; work is sharded by cel
 
 | Timing | Cells | Chunks/cell | Estimates | Wall-clock | Per-estimate rate |
 |---|---|---|---|---|---|
-| 2 s | 50 (ALP + BET) | 10 | 500 | 458 s (0:07:38) | ~3.5 s |
-| 5 s | 50 (ALP + BET) | 4 | 200 | 257 s (0:04:17) | ~5.0 s |
+| 2 s | 50 (FAB + INLB) | 10 | 500 | 458 s (0:07:38) | ~3.5 s |
+| 5 s | 50 (FAB + INLB) | 4 | 200 | 257 s (0:04:17) | ~5.0 s |
 
 Experiment is the cheapest GPU stage — minutes, not hours — because it touches
 only the real cells (tens of videos), not thousands of synthetic ones. The 2 s

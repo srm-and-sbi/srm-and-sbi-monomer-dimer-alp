@@ -1,4 +1,4 @@
-# Single-GPU timing benchmark — srm-and-sbi-dimer-alp
+# Single-GPU timing benchmark — srm-and-sbi-monomer-dimer-alp
 
 > Scope: **single GPU per machine** (one device used, no DataParallel/sharding).
 > These are the dated single-GPU baseline numbers, measured 2026-06-18; the
@@ -42,7 +42,7 @@ are not the detector recipe.
 | · epoch 1 (compile) | 652 s | 12 s | **898 s** |
 | · steady / epoch | ~638 s | **6.7 s** | ~29 s |
 | Evaluation (20 EVAL videos) | (suppressed) | 527 s (~26 s/video) | 1047 s (~52 s/video; task 1 steady ~44 s) |
-| Experiment (per cell) | (suppressed) | ~260 s/cell (4 cells: 2 ALP+2 BET) | ~437 s/cell steady (2 ALP cells; see caveat) |
+| Experiment (per cell) | (suppressed) | ~260 s/cell (4 cells: 2 FAB+2 INLB) | ~437 s/cell steady (2 FAB cells; see caveat) |
 
 ### Normalized per-unit rates (steady, single-GPU)
 - **Inference, s/epoch:** CPU ~638 · RTX 6000 Ada **6.7** · MI210 ~29  → RTX is ~95× CPU and ~4.3× MI210.
@@ -57,7 +57,7 @@ are not the detector recipe.
 - **Production inference:** steady epoch scales ~linearly with #batches (data size); plus the one-time compile (amortized, or cached).
 
 ### Notes on this benchmark run
-- The MI210 node's Experiment run processed **2 ALP cells only** — `--export=ALL,KINDS=ALP,BET` split on the comma (→ `KINDS=ALP`). Per-cell rate valid; for full ALP+BET, rely on the `.sh` `KINDS` default rather than overriding via a comma-bearing `--export`.
+- The MI210 node's Experiment run processed **2 FAB cells only** — `--export=ALL,KINDS=FAB,INLB` split on the comma (→ `KINDS=FAB`). Per-cell rate valid; for full FAB+INLB, rely on the `.sh` `KINDS` default rather than overriding via a comma-bearing `--export`.
 - The HPC node's generation scheduled its two TRAIN array elements on the **same node** (sequential), not two nodes — scheduler placement, not a code issue.
 
 ### Known optimization opportunities (to be measured against this baseline)

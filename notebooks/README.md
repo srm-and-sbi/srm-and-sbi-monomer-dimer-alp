@@ -4,12 +4,12 @@ Interactive Jupyter notebooks for inspecting pipeline outputs by eye. These are 
 part of the production pipeline: they render an already-produced artifact and never run a
 simulation or an inference.
 
-- **`SRM_AND_SBI_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb`** — the posterior-predictive
+- **`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb`** — the posterior-predictive
   check. Views one persisted clip (`*_Synthetic_Video.npz`) as an experimental-vs-synthetic pair:
   a scrubber (frame / center / zoom sliders) and a real-time player. The clip format is shared by
   both posterior-predictive engines, so the notebook serves clips written by either
-  `Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.py` (detector
-  workflow) or `Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_Posterior_Predictive_Video.py`
+  `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.py` (detector
+  workflow) or `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.py`
   (biology workflow). A pure viewer — it needs only `numpy`, `matplotlib`, and `ipywidgets`; no project
   package and no `MACHINE_PROFILE`.
 - **`Video_Scrubber.ipynb`** — frame-by-frame viewer and player for DLI video **sets**. Loads a
@@ -73,7 +73,7 @@ different environment) instead. List and stop stragglers first:
 <envy_v0_prefix>/bin/jupyter server stop 8888            # stop a straggler on that port, if any
 
 cd <repo-root>
-<envy_v0_prefix>/bin/jupyter-lab notebooks/SRM_AND_SBI_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb
+<envy_v0_prefix>/bin/jupyter-lab notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb
 ```
 
 Open the URL the launch prints (a fresh tab — a tab left over from a previous server carries a

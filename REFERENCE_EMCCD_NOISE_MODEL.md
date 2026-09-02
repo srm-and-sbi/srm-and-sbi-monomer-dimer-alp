@@ -2,7 +2,7 @@
 
 *This document specifies the diffraction-limited-imaging detector noise model: the physically grounded electron-multiplying CCD (EMCCD) forward chain that maps expected incident photons to digital pixel values, together with the optical-background model that supplies those photon expectations. It is the reference against which the imaging stage's detector draw is defined and validated.*
 
-**Scope.** This specification is self-contained: it justifies each stage on detector physics and publicly available sources, states its assumptions and their accuracy, and gives a reference implementation in the conventions of the package `srm_and_sbi_dimer_alp`. American spelling; photon and electron counts are per pixel per frame unless noted. Parameter values are quoted only to make the arithmetic concrete — they are representative acquisition settings, not authoritative constants. "DLI" (diffraction-limited imaging) and "detector" denote the same imaging model as elsewhere in the repository.
+**Scope.** This specification is self-contained: it justifies each stage on detector physics and publicly available sources, states its assumptions and their accuracy, and gives a reference implementation in the conventions of the package `srm_and_sbi_monomer_dimer_alp`. American spelling; photon and electron counts are per pixel per frame unless noted. Parameter values are quoted only to make the arithmetic concrete — they are representative acquisition settings, not authoritative constants. "DLI" (diffraction-limited imaging) and "detector" denote the same imaging model as elsewhere in the repository.
 
 ---
 
@@ -166,7 +166,7 @@ The gain and conversion enter the image likelihood only through the ratio `γ = 
 
 ## 7. Reference implementation
 
-The forward chain is a single detector-draw function, in the conventions of `srm_and_sbi_dimer_alp` (seedless by default; the RNG is derived from an optional seed). The `EMCCD` attributes are the unit contract of §2.
+The forward chain is a single detector-draw function, in the conventions of `srm_and_sbi_monomer_dimer_alp` (seedless by default; the RNG is derived from an optional seed). The `EMCCD` attributes are the unit contract of §2.
 
 ```python
 import numpy as np

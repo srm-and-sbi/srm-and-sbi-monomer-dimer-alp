@@ -1,4 +1,4 @@
-# Validation and Reproducibility — srm-and-sbi-dimer-alp
+# Validation and Reproducibility — srm-and-sbi-monomer-dimer-alp
 
 This guide describes how to set up the environment, confirm that each pipeline
 stage runs, and validate a trained posterior. It covers three things:
@@ -75,7 +75,7 @@ build (see the install guide's gotchas).
 **Verify**:
 
 ```bash
-python -c "import srm_and_sbi_dimer_alp; print(srm_and_sbi_dimer_alp.__version__)"
+python -c "import srm_and_sbi_monomer_dimer_alp; print(srm_and_sbi_monomer_dimer_alp.__version__)"
 ```
 
 ### 1.3 Configure `machine_profiles.toml`
@@ -92,7 +92,7 @@ Define at least one profile. Required keys per profile:
 ```toml
 [my_local_profile]
 running_mode      = "LOCAL"
-script_bank_root  = "/full/path/to/srm-and-sbi-dimer-alp/Script_Bank"
+script_bank_root  = "/full/path/to/srm-and-sbi-monomer-dimer-alp/Script_Bank"
 data_bank_root    = "/full/path/to/Data_Bank"
 compute_backend   = "GPU"
 gpu_device_index  = 0
@@ -118,7 +118,7 @@ submission script.
 **Verify** the configuration loads cleanly:
 
 ```bash
-python -c "from srm_and_sbi_dimer_alp.parameterization import PARAMETERS; print(PARAMETERS.machine.name)"
+python -c "from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS; print(PARAMETERS.machine.name)"
 ```
 
 This should print your profile name. The configuration validates at import time:
@@ -178,16 +178,16 @@ counts, core-per-node geometry, or GPU counts; the scripts already pin them.
 ### 2.1 RDS (reaction-diffusion simulation)
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
 ```
 
 **Expected**: per split, one `.h5` trajectory per simulation under the RDS
 trajectory directory `READY_TRACT/`, namespaced by split — for TRAIN,
-`<data_bank>/Video/READY_TRACT/SRM_AND_SBI_DIMER_ALP_2S_50FPS_TASK_0_TRAIN/`
+`<data_bank>/Video/READY_TRACT/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_TASK_0_TRAIN/`
 (`..._TASK_0_SIM_0_TRAIN.h5`, …), and one `.zarr` theta set per task at
-`<data_bank>/Theta/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`
+`<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`
 (with the `_TEST` / `_EVAL` namespaces for the other two splits). This generates
 250 / 50 / 20 (train / test / eval) trajectories. Add `--verbose` to print the
 sampled diffusion and reaction rates per simulation.
@@ -195,13 +195,13 @@ sampled diffusion and reaction rates per simulation.
 ### 2.2 DLI (diffraction-limited imaging)
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --video-dtype-bits 8 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --video-dtype-bits 8 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --video-dtype-bits 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --video-dtype-bits 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --video-dtype-bits 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --video-dtype-bits 8 --seed None
 ```
 
 **Expected**: one `.zarr` video set per task at
-`<data_bank>/Video/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Video_Set_TASK_0_TRAIN.zarr`
+`<data_bank>/Video/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Video_Set_TASK_0_TRAIN.zarr`
 (and the `_TEST` / `_EVAL` namespaces), 250 / 50 / 20 videos in all. At 2 s each
 video is `(100, 256, 256)` — 100 frames at 50 frames per second over a 256×256
 detector grid — and every value is a non-negative integer pixel count. Because the
@@ -224,15 +224,15 @@ intro.
 ### 2.3 Inference (posterior training)
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 25 --test-tasks 5 --epochs 5 --batch-size 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 25 --test-tasks 5 --epochs 5 --batch-size 8 --seed None
 ```
 
 **Expected**: a network checkpoint at
-`<data_bank>/Labor/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Optimum_ANN.pth` and a
+`<data_bank>/Labor/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Optimum_ANN.pth` and a
 version-portable estimator artifact at
-`<data_bank>/Posit/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Estimator.npz`. The
+`<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Estimator.npz`. The
 training loop also writes a full-state resume file beside the checkpoint,
-`<data_bank>/Labor/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Resurrect_State_ANN.pth`, updated
+`<data_bank>/Labor/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Resurrect_State_ANN.pth`, updated
 every epoch — its presence is what lets a later `--resurrect` hot-restart (see §2.4).
 Five epochs on the small smoke dataset (250 train / 50 test videos) will not
 produce a useful posterior, but they exercise the full training and save path,
@@ -255,7 +255,7 @@ is memory-heavy (one 3D convolution alone needs roughly 6 GB), so even the smoke
   small GPU. This verifies the pipeline without producing a useful posterior:
 
   ```bash
-  python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 25 --test-tasks 5 --epochs 5 --batch-size 1 --seed None
+  python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 25 --test-tasks 5 --epochs 5 --batch-size 1 --seed None
   ```
 
 - **Train on a larger GPU**, or on CPU when no adequate GPU is available
@@ -265,7 +265,7 @@ is memory-heavy (one 3D convolution alone needs roughly 6 GB), so even the smoke
 ### 2.4 Resurrect (continue from an existing run)
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 25 --test-tasks 5 --epochs 5 --seed None --resurrect
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 25 --test-tasks 5 --epochs 5 --seed None --resurrect
 ```
 
 **Expected**: because the inference smoke test (§2.3) left a full-state resume file
@@ -293,21 +293,21 @@ experiment` sequence, mirroring the Detector reference (§2.5, steps 4–5) with
 biology entry points and the same flags:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Evaluation.py --total-time-seconds 2.0 --eval-tasks 2 --pool-mode unrestricted --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Experiment.py --total-time-seconds 2.0 --kinds ALP,BET --max-cells 2 --pool-mode unrestricted --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py --total-time-seconds 2.0 --eval-tasks 2 --pool-mode unrestricted --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py --total-time-seconds 2.0 --kinds FAB,INLB --max-cells 2 --pool-mode unrestricted --seed None
 ```
 
 `--pool-mode unrestricted` is mandatory here for the same reason as §2.5: the smoke
 posterior is undertrained, so its mass falls outside the prior box and the default
 `bounded` rejection pool stalls. Evaluation reports MAP recovery on the 20 EVAL videos
 (requires the Inference smoke's estimator); Experiment applies the posterior to the real
-MET recordings and writes a per-condition report for the ALP and BET cells (requires
+MET recordings and writes a per-condition report for the FAB and INLB cells (requires
 those recordings present under the experiment data directory).
 
 **Acceptance** (biology): all five stages exit zero; the Inference test loss descends
 across the epochs on fresh per-video data (a flat curve signals a frozen-seed
 regression); Evaluation reports MAP recovery on the 20 EVAL videos; Experiment writes a
-per-condition report for the ALP and BET cells.
+per-condition report for the FAB and INLB cells.
 
 ### 2.5 Detector calibration smoke test
 
@@ -321,19 +321,19 @@ one duration. The inferred imaging vector is 6-dimensional — the five EMCCD ca
 
 ```bash
 # 1. Diffusion-only trajectories + imaging theta, per split (seedless)
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Simulation_RDS.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Simulation_RDS.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Simulation_RDS.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_RDS.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_RDS.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_RDS.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
 # 2. Render videos, per split (seedless; 8-bit, matching what the estimator trains on)
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Simulation_DLI.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --video-dtype-bits 8 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Simulation_DLI.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --video-dtype-bits 8 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Simulation_DLI.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --video-dtype-bits 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --video-dtype-bits 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --video-dtype-bits 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --video-dtype-bits 8 --seed None
 # 3. Train the imaging posterior (single GPU)
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Inference.py --total-time-seconds 2.0 --epochs 5 --tasks 25 --test-tasks 5 --batch-size 8 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Inference.py --total-time-seconds 2.0 --epochs 5 --tasks 25 --test-tasks 5 --batch-size 8 --seed None
 # 4. MAP recovery on the held-out EVAL set
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Evaluation.py --total-time-seconds 2.0 --eval-tasks 2 --pool-mode unrestricted --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Evaluation.py --total-time-seconds 2.0 --eval-tasks 2 --pool-mode unrestricted --seed None
 # 5. Real-data application
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_DETECTOR_Experiment.py --total-time-seconds 2.0 --kinds ALP,BET --max-cells 2 --pool-mode unrestricted --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment.py --total-time-seconds 2.0 --kinds FAB,INLB --max-cells 2 --pool-mode unrestricted --seed None
 ```
 
 This generates 250 / 50 / 20 (train / test / eval) videos. `--pool-mode
@@ -345,13 +345,13 @@ on (raw experimental frames are 16-bit, converted to 8-bit for inference) and is
 also the DLI default. Unlike biology, the detector DLI needs no `Nuisance_DLI` artifact
 — it draws imaging from the prior box, because imaging is what the detector infers. As
 with biology, Evaluation and Experiment require the estimator trained in step 3, and
-Experiment additionally requires the real ALP/BET recordings staged under the experiment
+Experiment additionally requires the real FAB/INLB recordings staged under the experiment
 data directory.
 
 **Acceptance**: all five stages exit zero; the Inference test loss descends across
 the five epochs on fresh per-video data (a flat curve signals a frozen-seed
 regression); Evaluation reports MAP recovery on the 20 EVAL videos; Experiment
-writes a per-condition report for the ALP and BET cells.
+writes a per-condition report for the FAB and INLB cells.
 
 ### 2.5b Build the Nuisance_DLI (detector → biology bridge)
 
@@ -359,27 +359,27 @@ The biology DLI stage draws its imaging from the `Nuisance_DLI` artifact — the
 calibration turned into a samplable imaging distribution. It is therefore built **after**
 the detector workflow (§2.5) and **before** the biology smoke (see **Run order** in the
 section intro). The artifact is Detector-namespaced
-(`<data_bank>/Posit/SRM_AND_SBI_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI.npz`) and shared:
+(`<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI.npz`) and shared:
 the detector workflow produces it, the biology workflow consumes it.
 
-The construction (`Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_DETECTOR_Nuisance_DLI.py`)
+The construction (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py`)
 reads a value-based spec whose `posterior_sample_pool_choice` sets how the calibration
 becomes the samplable artifact. **Production** uses `raw` — the faithful calibration,
 resampled from the detector estimator's posterior over the real recordings; it is a GPU
 step and needs the estimator trained in the detector Inference stage. For a **smoke** the
 imaging values need only be valid, so use `box_user` with each parameter's range set to its
 imaging prior box — the six learnable imaging parameters' `PRIOR_RANGE` values defined in
-`srm_and_sbi_dimer_alp/detector_parameterization.py` (the `DETECTOR_PARAMETERIZATION` table).
+`srm_and_sbi_monomer_dimer_alp/detector_parameterization.py` (the `DETECTOR_PARAMETERIZATION` table).
 This is a per-parameter uniform over the prior that needs no estimator, no GPU, and no
 recordings — the smoke's fast stand-in for the calibration, occupying the same recipe slot. Write the spec to
-`<data_bank>/Posit/SRM_AND_SBI_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI_Spec.toml`:
+`<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI_Spec.toml`:
 
 ```toml
 [block]
 posterior_sample_pool_choice = "box_user"   # per-parameter uniform over the ranges below; no pool / estimator / GPU
 pool_mode = "bounded"
 # Each [low, high] is that parameter's imaging prior PRIOR_RANGE (log10), defined in
-# srm_and_sbi_dimer_alp/detector_parameterization.py (the DETECTOR_PARAMETERIZATION table;
+# srm_and_sbi_monomer_dimer_alp/detector_parameterization.py (the DETECTOR_PARAMETERIZATION table;
 # also det.theta_lower_bound() / det.theta_upper_bound()). The numbers below are that prior
 # at the current version — if the imaging prior changes there, re-derive these to match.
 # box_user validates every range against the prior box and fails loud otherwise, so a stale
@@ -407,20 +407,20 @@ high = 1.0
 Then build it (CPU, seconds):
 
 ```bash
-python Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_DETECTOR_Nuisance_DLI.py --total-time-seconds 2.0 --build
+python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py --total-time-seconds 2.0 --build
 ```
 
-**Expected**: `<data_bank>/Posit/SRM_AND_SBI_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI.npz`
+**Expected**: `<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI.npz`
 plus a `..._Nuisance_DLI_Analysis/` directory (a `report.md` and a 1-D marginals figure).
 The biology DLI (§2.2) then loads it; with `box_user` over the prior box every drawn imaging
 vector lies inside the prior (the report's "frac outside prior" is 0). The full set of
 representations and the calibration rationale are in the companion note
-`SRM_AND_SBI_DIMER_ALP_DETECTOR_Nuisance_DLI.md`.
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md`.
 
 ### 2.6 Running smokes on HPC
 
 The same smoke runs on a cluster through the committed wrappers — the biology
-`SRM_AND_SBI_DIMER_ALP_HPC_*` set and the Detector `SRM_AND_SBI_DIMER_ALP_DETECTOR_HPC_*`
+`SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_*` set and the Detector `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_*`
 set — which exercise the paths a single workstation cannot: **multi-CPU
 generation** (many tasks packed per node, fanned out with a Slurm `--array`) and
 **multi-GPU training, evaluation, and experiment** (data-parallel training;
@@ -548,7 +548,7 @@ against any particular reference run. Equivalence rests on three pillars:
    ```bash
    python -c "
    import zarr
-   z = zarr.open('<data_bank>/Theta/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr', mode='r')
+   z = zarr.open('<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr', mode='r')
    print(z[:].tolist())
    "
    ```
@@ -602,9 +602,9 @@ the same explicit seed:
 DB=<data_bank>            # the data_bank_root from your machine profile
 for i in 1 2 3; do
     rm -rf "$DB/Theta" "$DB/Video"
-    python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py \
+    python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py \
         --total-time-seconds 2.0 --tasks 1 --task-simulations 5 --seed 42
-    find "$DB/Theta/SRM_AND_SBI_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr" \
+    find "$DB/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr" \
         -type f | sort | xargs md5sum
 done
 ```
@@ -641,7 +641,7 @@ duration (the duration sets the timing label whose labels are checked):
 
 ```bash
 MACHINE_PROFILE=<profile> python \
-    Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_Seeding_Validation.py \
+    Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.py \
     --total-time-seconds 2.0
 ```
 
@@ -651,7 +651,7 @@ writes the data bank and needs no GPU. It writes no files: it prints one
 failure so it can gate a generation launch from a script. This check is a
 standalone reproducibility diagnostic, not one of the biology pipeline stages,
 and is kept out of the stage dispatcher. See the companion note
-`Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_Seeding_Validation.md` for what each
+`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.md` for what each
 check covers, how to read a failure, and the precise scope of what it does and does
 not guarantee.
 
@@ -677,11 +677,11 @@ legs run on the biology DLI path (section 3.1); the duration arithmetic is also
 confirmed through the RDS leg and the derived-frame-count check below:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py \
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py \
     --total-time-seconds 10.0 --tasks 1 --task-simulations 5 --seed None --verbose
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py \
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py \
     --total-time-seconds 10.0 --tasks 1 --task-simulations 5 --seed None --verbose
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Inference.py \
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py \
     --total-time-seconds 10.0 --tasks 1 --epochs 1 --seed None --verbose
 ```
 
@@ -693,7 +693,7 @@ Confirm the derived frame count:
 
 ```bash
 python -c "
-from srm_and_sbi_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
 t = RunTiming(total_time_seconds=10.0, frames=PARAMETERS.simulation.timing)
 print('frame_count =', t.frame_count)
 "
@@ -717,7 +717,7 @@ never seen, using the two MAP-recovery stages.
   underconfident one).
 
   ```bash
-  python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Evaluation.py \
+  python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py \
       --total-time-seconds 2.0 --eval-tasks 1 --summary both --pool-mode unrestricted
   ```
 
@@ -736,7 +736,7 @@ never seen, using the two MAP-recovery stages.
   posterior, not a correctness check.
 
   ```bash
-  python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Experiment.py \
+  python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py \
       --total-time-seconds 2.0 --summary both --pool-mode unrestricted
   ```
 
@@ -764,7 +764,7 @@ section 2.7). Run any stage with `--help` for the full flag list.
 
 ### Import-time configuration errors
 
-If `python -c "import srm_and_sbi_dimer_alp.parameterization"` raises:
+If `python -c "import srm_and_sbi_monomer_dimer_alp.parameterization"` raises:
 
 - **"MACHINE_PROFILE environment variable is not set"** — set it (selecting the
   active profile, section 1.4).

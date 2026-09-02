@@ -1,34 +1,33 @@
-# srm-and-sbi-dimer-alp
+# srm-and-sbi-monomer-dimer-alp
 
-Simulation-based inference of reaction-diffusion parameters for the **DIMER** model (two-particle dimerization: A monomer, B mobile dimer, C immobile dimer).
+Simulation-based inference of receptor reaction-diffusion parameters from single-particle-tracking microscopy videos: the **MONOMER_DIMER** model family (A monomer, B mobile dimer, C immobile dimer) with an explicit observation layer — measured degree of labeling (DOL), per-subunit label draws, and probe occupancy — where MET-FAB and MET-INLB are two frozen configurations of one codebase.
 
-This repository is a self-contained pipeline within the `srm-and-sbi` project: it simulates the DIMER reaction-diffusion system, renders the trajectories as diffraction-limited microscopy videos, and trains a neural posterior to recover the underlying rate and diffusion parameters from a video. It pairs that inference with a leak-proof train/test/eval data split, held-out MAP-recovery validation on synthetic data with known ground truth, and application of the trained posterior to experimental microscopy recordings (no ground truth). See **[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md)** for the full scientific treatment.
+This repository is a self-contained pipeline within the `srm-and-sbi` project: it simulates the reaction-diffusion system, renders the trajectories as diffraction-limited microscopy videos, and trains a neural posterior to recover the underlying parameters from a video. It pairs that inference with a leak-proof train/test/eval data split, held-out MAP-recovery validation on synthetic data with known ground truth, and application of the trained posterior to experimental microscopy recordings (no ground truth). See **[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md)** for the full scientific treatment.
 
 ## Repository status
 
-**Feature-complete (frozen at 0.4.23).** This repository is the reference implementation of the
-three-species DIMER model, including the stationary OU brightness photo-physics adopted in 0.4.22
-and the detector-calibration workflow whose production artifacts remain the calibration of record
-for this model. It receives corrections only. The measured degree of labeling (DOL) of the MET
-probes makes the labeling statistics an explicit part of the observation model, and that change is
-fundamental — it redefines what the receptor-count parameters mean — so it proceeds in a new
-sibling repository, `srm-and-sbi-monomer-dimer-alp`, rather than as an increment here.
+**In development (0.1.0).** The codebase begins as a copy of the tracked tree of
+`srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
+of the three-species DIMER model with the stationary OU brightness photo-physics — and implements
+the MONOMER_DIMER model family on top of it: the DOL-explicit observation layer, the
+reparameterized counts (true receptor abundance and composition), and the condition axis. Until
+those changes land, the pipeline behaves as the copied reference implementation; documents
+describing the model reflect the copied state where not yet rewritten.
 
-**Legacy condition tokens.** In this repository's experimental data and derived artifact
-filenames, `ALP` names the MET-FAB (Fab-labeled) condition and `BET` the MET-INLB (InlB-labeled)
-condition — a historical namespace fixed when the recordings were first staged, unrelated to the
-repo-iteration suffixes `alp`/`bet`. Archived filenames keep these tokens because data files are
-provenance; the code maps them to the scientific names (`CONDITION_DISPLAY` in
-`srm_and_sbi_dimer_alp/experiment_support.py`), and every user-facing surface says
-MET-FAB / MET-INLB.
+**Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the Fab-labeled
+monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,
+schema field, and CLI argument; display surfaces prepend the receptor (MET-FAB / MET-INLB). The
+repo-iteration suffixes (`alp`, `bet`, ...) are a separate namespace and never name a condition.
+Experimental recordings enter this repository's data bank under the `FAB`/`INLB` names, with a
+provenance mapping to their public accession recorded at staging time.
 
 ## Naming conventions
 
 Names are consistent across the surfaces a user touches:
 
-- **GitHub repository** — kebab-case: `srm-and-sbi-dimer-alp`.
-- **Python package** — snake_case: `srm_and_sbi_dimer_alp` (the repo name with hyphens normalized to underscores).
-- **Runtime identifiers** (entry-point script names, output-file prefixes) — SCREAMING_SNAKE, composed as `[program]_[model]_[iteration]_[stage]_[sub-stage]`, e.g. `SRM_AND_SBI_DIMER_ALP_Simulation_RDS`. The prefix encodes provenance so data files remain self-describing once they leave the repository.
+- **GitHub repository** — kebab-case: `srm-and-sbi-monomer-dimer-alp`.
+- **Python package** — snake_case: `srm_and_sbi_monomer_dimer_alp` (the repo name with hyphens normalized to underscores).
+- **Runtime identifiers** (entry-point script names, output-file prefixes) — SCREAMING_SNAKE, composed as `[program]_[model]_[iteration]_[stage]_[sub-stage]`, e.g. `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS`. The prefix encodes provenance so data files remain self-describing once they leave the repository.
 - The trailing **three-letter suffix** (`alp`) is this iteration's tag; sibling iterations carry their own (`bet`, `chi`, …).
 
 ## Getting Started
@@ -46,12 +45,12 @@ The environment is **`SRM_AND_SBI_ENVY_V0`** — Python 3.13 with ReaDDy 2.0.14,
 
 ### 3. Install this package into the active env
 
-`pip install -e . --no-deps` registers the `srm_and_sbi_dimer_alp` package as an editable install — source edits take effect immediately without reinstalling. Use **`--no-deps`**: the runtime dependencies are already provided by the environment, and a plain `pip install -e .` would re-resolve them — downgrading sbi and overwriting the hardware-specific PyTorch build (see the install guide's gotchas).
+`pip install -e . --no-deps` registers the `srm_and_sbi_monomer_dimer_alp` package as an editable install — source edits take effect immediately without reinstalling. Use **`--no-deps`**: the runtime dependencies are already provided by the environment, and a plain `pip install -e .` would re-resolve them — downgrading sbi and overwriting the hardware-specific PyTorch build (see the install guide's gotchas).
 
 ### 4. Verify
 
 ```bash
-python -c "from srm_and_sbi_dimer_alp.parameterization import PARAMETERS; print(PARAMETERS.machine.name)"
+python -c "from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS; print(PARAMETERS.machine.name)"
 ```
 
 Should print your profile name. If it raises a `ValueError`, the message points to the misconfiguration (env var unset, profile not found, missing keys, paths not existing).
@@ -66,7 +65,7 @@ The pipeline is a five-stage chain. The first two stages form **generation** (**
 - **Evaluation** — MAP-recovery validation: estimates parameters on the held-out EVAL set and scores recovery against the known ground truth.
 - **Experiment** — experimental-data application: applies the trained posterior to experimental microscopy videos (no ground truth).
 
-Each stage is an entry-point under `Script_Bank/Prime/`, run with the active `MACHINE_PROFILE` set. The stages communicate through on-disk artifacts, so a run can **target a single stage** rather than the whole chain: invoking a stage script directly (with `--split {train,test,eval}`) re-runs just that stage against the artifacts already on disk — for example, re-rendering videos with `SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py` (the DLI stage only) over trajectories that an RDS run already wrote to disk. Run any stage with `--help` for its full flag list.
+Each stage is an entry-point under `Script_Bank/Prime/`, run with the active `MACHINE_PROFILE` set. The stages communicate through on-disk artifacts, so a run can **target a single stage** rather than the whole chain: invoking a stage script directly (with `--split {train,test,eval}`) re-runs just that stage against the artifacts already on disk — for example, re-rendering videos with `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (the DLI stage only) over trajectories that an RDS run already wrote to disk. Run any stage with `--help` for its full flag list.
 
 For the exact mapping from each scientific concept and pipeline stage to the module, function, and on-disk artifact that implements it, see the implementation map in [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md).
 
@@ -75,14 +74,14 @@ For the exact mapping from each scientific concept and pipeline stage to the mod
 One command runs RDS → DLI for all three splits in the correct proportions:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Generate_Datasets.py --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Generate_Datasets.py --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0 --dry-run   # preview sizing only
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0 --dry-run   # preview sizing only
 ```
 
 ### Train the posterior on TRAIN, selecting on TEST
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 8 --test-tasks 2 --epochs 50
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 8 --test-tasks 2 --epochs 50
 ```
 
 #### Multi-GPU / multi-node
@@ -123,8 +122,8 @@ tune the behavior:
 Validate by MAP recovery on the held-out EVAL set, then apply the posterior to experimental microscopy videos:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Evaluation.py --total-time-seconds 2.0 --eval-tasks 1 --summary both
-python Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Experiment.py --total-time-seconds 2.0 --kinds ALP,BET --summary both
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py --total-time-seconds 2.0 --eval-tasks 1 --summary both
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py --total-time-seconds 2.0 --kinds FAB,INLB --summary both
 ```
 
 Evaluation reports per-parameter recovery accuracy + posterior calibration; Experiment reports inferred-parameter distributions per condition (no ground truth). The experimental recordings are staged under `<data_bank_root>/Experiment/SPT_Data_MET_FAB_INLB_S-BSST712/` as `Experiment_<KIND>_Cell_<n>_<span>S_RAW.tif` (BioStudies accession S-BSST712). Both write a self-contained report (figures + tables + arrays + a live `progress.log`) under `Posit/`. Run any stage with `--help` for the full flag list (`--summary {map,posterior,both}`, `--pool-mode {bounded,unrestricted}`, `--posterior-samples`, …; Evaluation additionally takes `--bin-mode {prior,quantile}`, and Experiment `--dump-posterior-samples`, which keeps each window's raw posterior draws alongside the quantiles so the temporal-dynamics analysis can plot a pooled density rather than an interval width). The Inference, Evaluation, and Experiment stages also accept `--dry-run`, which resolves the machine profile and the input paths, prints what it would read and write (flagging anything missing), and exits before any compute (no GPU, no output directories) — run it before a long job or a queue submission; the dataset-generation orchestrator (`Generate_Datasets.py`) offers the same preview.
@@ -143,7 +142,7 @@ Recording length is supplied per run via the **required `--total-time-seconds`**
 
 Generation is **non-deterministic by default** — prior sampling, particle placement, optics, and camera noise all draw fresh entropy each run — which matches the reaction-diffusion stepper itself being unseedable. A `--seed` flag opts into a deterministic base seed when one is wanted; the batch-generation scripts pass none. No scientific information is lost: the sampled parameters are persisted per task, so every (parameters, video) pair is recorded. Dataset integrity instead rests on a **global task index encoded in each file name** (`..._TASK_<tid>_<split>`), which keeps parallel fan-out, array overflow, and incremental appends from ever colliding on a filename or mixing split namespaces. The reproducibility characteristics and the task-index scheme are detailed in [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md), under the non-deterministic generation and provenance section.
 
-For running on a Slurm cluster, the [HPC operations runbook](Script_Bank/HPC/README.md) is the authoritative guide. Submissions are **dry-run first**: a unified submit helper (`Script_Bank/HPC/SRM_AND_SBI_DIMER_ALP_HPC_Submit.sh`) and the generation controller both build and print the exact `sbatch` command for review, submitting only when `DRYRUN=0` is set, so a misconfigured job never reaches the queue.
+For running on a Slurm cluster, the [HPC operations runbook](Script_Bank/HPC/README.md) is the authoritative guide. Submissions are **dry-run first**: a unified submit helper (`Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh`) and the generation controller both build and print the exact `sbatch` command for review, submitting only when `DRYRUN=0` is set, so a misconfigured job never reaches the queue.
 
 ## Debug mode & diagnostics
 
@@ -172,7 +171,7 @@ then open the printed `http://localhost:8888/...` URL in your browser and run th
 - `Script_Bank/Analysis` — post-hoc diagnostics, run on completed outputs (not pipeline stages): paired `.py`/`.md` scripts (each script ships with a companion `.md` explaining its interpretation) serving both the biology and detector workflows, grouped by family — posterior calibration, estimator comparison, test-loss distribution, embedding-space distance, posterior-predictive video, sample-geometric-median, temporal dynamics, population composition, seeding validation, and `Nuisance_DLI` construction
 - `Script_Bank/HPC` — HPC-mode submission and orchestration scripts
 - `Script_Bank/Prime` — stage entry points for the biology workflow: simulation (`Simulation_RDS`, `Simulation_DLI`), dataset generation (`Generate_Datasets`), training (`Inference`), and validation (`Evaluation` on synthetic EVAL data, `Experiment` on experimental microscopy) — plus the `DETECTOR_`-prefixed mirrors of the five stage scripts for the Detector calibration workflow
-- `srm_and_sbi_dimer_alp/` — main Python package (modules, support functions)
+- `srm_and_sbi_monomer_dimer_alp/` — main Python package (modules, support functions)
 
 ## Documentation
 

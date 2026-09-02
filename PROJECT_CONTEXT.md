@@ -1,29 +1,30 @@
-## Project Context — srm-and-sbi-dimer-alp
+## Project Context — srm-and-sbi-monomer-dimer-alp
 
 This document is self-contained. It describes the scientific context for the
-DIMER model and its reaction-diffusion-parameter inference: the research
+model family and its reaction-diffusion-parameter inference: the research
 question, the molecular system, the two-stage inference architecture, the data
 and computational flow, the inference network, the validation methodology, and
 the design rationale that shapes the implementation.
 
-**Repository status.** The repository is feature-complete (frozen at 0.4.23)
-and receives corrections only. The measured degree of labeling (DOL) of the MET
-probes makes the labeling statistics an explicit part of the observation model;
-that change is fundamental — it redefines what the receptor-count parameters
-mean (true receptor abundance rather than visible-spot abundance) — and
-proceeds in the new sibling repository `srm-and-sbi-monomer-dimer-alp`. The
-recalibration of the `Nuisance_DLI` imaging artifact under the stationary
-brightness model is carried out there under the DOL-explicit observation model;
-the artifact frozen here remains as calibrated, with its documented caveats.
+**Repository status.** In development (0.1.0). The codebase begins as a copy of
+the tracked tree of `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release
+`v0.4.23` and implements the MONOMER_DIMER model family on top of it: the
+DOL-explicit observation layer (measured degree of labeling, per-subunit label
+draws, probe occupancy), the reparameterized counts (true receptor abundance
+N_R and composition, in place of visible-spot counts), and the condition axis
+(MET-FAB and MET-INLB as two frozen configurations of one codebase). The
+`Nuisance_DLI` imaging recalibration under the stationary brightness model is
+carried out here, under the DOL-explicit observation model. Until those changes
+land, the pipeline behaves as the copied reference implementation, and the
+scientific sections below describe the copied state where not yet rewritten.
 
-**Legacy condition tokens.** In experimental data and derived artifact
-filenames, `ALP` names the MET-FAB (Fab-labeled) condition and `BET` the
-MET-INLB (InlB-labeled) condition — a historical namespace fixed when the
-recordings were first staged, unrelated to the repo-iteration suffixes
-`alp`/`bet`. Archived filenames keep these tokens because data files are
-provenance; the code maps them to the scientific names (`CONDITION_DISPLAY` in
-`experiment_support.py`), and every user-facing surface says
-MET-FAB / MET-INLB.
+**Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the
+Fab-labeled monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer
+condition) in every filename, schema field, and CLI argument; display surfaces
+prepend the receptor. The repo-iteration suffixes (`alp`, `bet`, ...) are a
+separate namespace and never name a condition. Experimental recordings enter
+this repository's data bank under the `FAB`/`INLB` names, with a provenance
+mapping to their public accession recorded at staging time.
 
 ---
 
@@ -186,7 +187,7 @@ train/test set sizes, epochs, and test loss. See the HPC operations runbook
 
 ### RDS Simulation (this repository, step 1)
 
-**Script:** `Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py`
+**Script:** `Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`
 
 **Process:**
 1. Sample RDS parameters `θ` from a log-uniform prior over biologically
@@ -231,7 +232,7 @@ displacement (~47 nm at max diffusivity) with margin, so no reaction is missed.
 
 ### DLI Imaging (this repository, step 2)
 
-**Script:** `Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py`
+**Script:** `Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py`
 
 **Process:**
 1. Read the RDS trajectory from `.h5` and extract per-frame poses (and a dimer
@@ -369,7 +370,7 @@ stage and why every duration produces full-length, fully-populated videos.
 
 ### Inference (this repository, step 3)
 
-**Script:** `Script_Bank/Prime/SRM_AND_SBI_DIMER_ALP_Inference.py` (with an
+**Script:** `Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py` (with an
 optional `--resurrect` flag to continue from an existing checkpoint)
 
 **Process:**
@@ -511,7 +512,7 @@ feature is invisible where it is not used. Experimental microscopy data is
 external and irreplaceable, so it always lives on permanent storage and never on
 scratch.
 
-### Support functions (Python package: `srm_and_sbi_dimer_alp/`)
+### Support functions (Python package: `srm_and_sbi_monomer_dimer_alp/`)
 
 The support code is organized into a flat Python package of focused modules
 rather than a single monolithic support file. The modules and their roles:
@@ -695,13 +696,13 @@ take effect without reinstallation.
 
 `Script_Bank/Analysis/` collects post-hoc analyses that run on completed outputs
 rather than producing pipeline artifacts:
-`SRM_AND_SBI_DIMER_ALP_Experiment_Temporal_Dynamics.py` tracks each inferred
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py` tracks each inferred
 parameter's MAP estimate over the real recordings per condition (non-overlapping
 chunk → time), overlays the experimental range for the parameters the source paper
 constrains (Li et al. 2026, doi:10.1002/smll.202507115), annotates each figure with
 its held-out recovery quality, and writes figures plus a self-contained `report.md`;
 its companion `Experiment_Temporal_Dynamics.md` gives the full interpretation.
-`SRM_AND_SBI_DIMER_ALP_Experiment_Population_Composition.py` reports the relative
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.py` reports the relative
 abundance of the three modeled species across the experimental recordings — the share of
 the population that is monomer, mobile dimer, and immobile dimer — formed inside each
 posterior draw so the count-to-count correlations are carried through, aggregated with the
@@ -713,15 +714,15 @@ bootstrap check of the error bars, the sensitivity of the headline to prior-supp
 restriction and to the choice of compositional center, and the recording-level condition
 contrast. Biology only: the detector workflow infers no species counts and so has no
 composition to report. Its companion
-`SRM_AND_SBI_DIMER_ALP_Experiment_Population_Composition.md` documents the derivation, what
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.md` documents the derivation, what
 the result does and does not establish, and how it relates to the published
 trajectory-classification and photobleaching-stoichiometry measurements of the same receptor
 system.
-`SRM_AND_SBI_DIMER_ALP_Seeding_Validation.py` checks the RNG / non-determinism
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.py` checks the RNG / non-determinism
 behavior of the generation stack.
 
-`SRM_AND_SBI_DIMER_ALP_Posterior_Calibration.py` and its
-`SRM_AND_SBI_DIMER_ALP_DETECTOR_Posterior_Calibration.py` twin score how
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py` and its
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Calibration.py` twin score how
 well-calibrated a trained posterior is on the held-out EVAL set — simulation-based
 calibration, expected coverage, TARP, and local C2ST (§7), overall and stratified by
 each target parameter — over one shared engine
@@ -729,20 +730,20 @@ each target parameter — over one shared engine
 the pipeline stages use, so one implementation serves both workflows and the entry-point
 name carries the namespace. It reads only the estimator and the EVAL set, writes its
 report to `Posit/`, is multi-GPU sharded with a `--merge` combine step, and is kept out
-of the stage dispatcher; the companion `SRM_AND_SBI_DIMER_ALP_Posterior_Calibration.md`
+of the stage dispatcher; the companion `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.md`
 documents both workflows.
 
-`SRM_AND_SBI_DIMER_ALP_Estimator_Comparison.py` and its
-`SRM_AND_SBI_DIMER_ALP_DETECTOR_Estimator_Comparison.py` twin decide whether one trained
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Estimator_Comparison.py` and its
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Estimator_Comparison.py` twin decide whether one trained
 estimator generalizes better than another by the paired log-score on the shared
 `(task, sim)` TEST subset — pairing cancels each video's intrinsic entropy floor, so the
 difference isolates the two estimators' KL gap (§7) — over one shared engine
 (`estimator_comparison_runner.run_estimator_comparison`), the same two-shim structure.
 It reads two `TestLossDistribution` artifacts, needs no GPU, writes its report to
 `Posit/`, is kept out of the dispatcher, and is documented for both workflows in
-`SRM_AND_SBI_DIMER_ALP_Estimator_Comparison.md`.
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Estimator_Comparison.md`.
 
-`SRM_AND_SBI_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py` reuses the trained DIMER-ALP
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py` reuses the trained DIMER-ALP
 posterior — with no retraining — to MAP-estimate parameters from real recordings of two
 oligomeric-state control receptors, the constitutive monomer CD86 and the constitutive dimer
 CTLA-4 (BioImage Archive accession S-BIAD1369). A special-scope, ad-hoc reuse of the posterior
@@ -754,8 +755,8 @@ per-condition inferred-parameter `report.md`, per-parameter figures, and the reu
 per-(cell, chunk) `.npz` arrays. Real data carry no ground truth, so the deliverable is a
 per-condition distribution rather than a recovery check, with the diffusion scale as the
 transferable quantitative read-out. Usage and interpretation are in the companions
-`SRM_AND_SBI_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.md` and
-`SRM_AND_SBI_DIMER_ALP_Experiment_CD86_CTLA-4_Controls_Temporal_Dynamics.md`.
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.md` and
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls_Temporal_Dynamics.md`.
 
 ### Configuration architecture
 
@@ -788,33 +789,33 @@ committed record.
 Each scientific concept and pipeline stage maps to a specific module and
 function in the package, driven by a thin entry-point shim over the stage's
 shared runner, and produces a defined on-disk artifact. Module paths are relative to the package
-`srm_and_sbi_dimer_alp/`; entry-point scripts live under `Script_Bank/Prime/`.
+`srm_and_sbi_monomer_dimer_alp/`; entry-point scripts live under `Script_Bank/Prime/`.
 
 | Scientific concept / stage | Code (module → function/class) | On-disk artifact |
 | --- | --- | --- |
 | DIMER reaction system (`A + A ↔ B`, `B ↔ C`): species, diffusion coefficients, reaction rates, simulation box | `simulation_rds_support.py` → `build_system()`; the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
-| RDS trajectory recording (particle positions, species, time over the recording length) | entry point `SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py` (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
+| RDS trajectory recording (particle positions, species, time over the recording length) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py` (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
 | Trajectory extraction (per-frame poses and the dimer mask) | `simulation_rds_support.py` → `extract_trajectory_poses()` (reused by the imaging stage, which requests the dimer mask) | (per-frame pose arrays passed to imaging) |
 | Diffraction-limited imaging forward model: Gaussian PSF, Poisson + EMCCD readout noise, dimer-brightness scaling, photobleaching | `simulation_dli_support.py` → `render_dli_video()` (source-agnostic renderer of an assembled 11-key imaging vector; shared by both DLI stages), with `Gaussian` / `sample_psf_width()` (PSF), `compute_intensity()` + `add_pixel_counts()` (intensity accumulation), `generate_brightness_photons()` (brightness photo-physics: stationary OU ln-brightness flicker + absorbing photobleaching), `EMCCD` / `add_noise()` / `generate_frames()` (detector noise) | (noised video array passed to writer below) |
-| DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py` (drives `extract_trajectory_poses()` → `render_dli_video()`, with the imaging block marginalized from `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
+| DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (drives `extract_trajectory_poses()` → `render_dli_video()`, with the imaging block marginalized from `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
 | Parameter prior and specification (ranges, log flags, units, labels; log-uniform prior and bounds) | `parameterization.py` → `PARAMETERS` (a `Parameters` singleton) with `build_prior()`, `theta_lower_bound()`, `theta_upper_bound()`, `parameter_find()` | (configuration in code; sampled theta persisted in the RDS theta-set `.zarr`) |
 | NPE + MAF estimator with 3D-CNN + temporal-transformer embedding | `inference_network.py` → `Complex3DCNN` (video encoder), `TemporalTransformer` (with `AttentionBlock`, `PositionalEncoding`); training wired in `inference_support.py` → `setup_training()`, `train_loop()` (with the resurrect branch) | (in-memory network; checkpoint + posterior written below) |
-| Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_DIMER_ALP_Generate_Datasets.py` (runs RDS → DLI per split with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
-| Posterior training run (gradient updates on TRAIN, selection on TEST) | entry point `SRM_AND_SBI_DIMER_ALP_Inference.py` (drives `build_datasets()` → `setup_training()` → `train_loop()`, then `artifacts.save_estimator()`) | version-portable estimator artifact (`Estimator.npz`, via `artifacts.py` → `save_estimator()`), loaded downstream as a `DirectPosterior`; network checkpoint at each new optimum |
-| MAP recovery and calibration on held-out EVAL | `evaluation.py` → `map_estimate()` (seed-then-optimize: `collect_theta_prex()`, `collect_score_prex()`, `extract_elite_prex()`, `optimize_elite()`), `posterior_summary()`, `recovery_stats()`, `recovery_table()`, `posterior_coverage_table()`; driven by entry point `SRM_AND_SBI_DIMER_ALP_Evaluation.py` | recovery report (figures + tables + arrays + a live `progress.log`) under the validation output directory |
-| Real-data application (no ground truth) | same `evaluation.py` estimator (`map_estimate()`, `experiment_table()`); driven by entry point `SRM_AND_SBI_DIMER_ALP_Experiment.py` | per-condition inferred-parameter report under the validation output directory |
+| Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` (runs RDS → DLI per split with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
+| Posterior training run (gradient updates on TRAIN, selection on TEST) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py` (drives `build_datasets()` → `setup_training()` → `train_loop()`, then `artifacts.save_estimator()`) | version-portable estimator artifact (`Estimator.npz`, via `artifacts.py` → `save_estimator()`), loaded downstream as a `DirectPosterior`; network checkpoint at each new optimum |
+| MAP recovery and calibration on held-out EVAL | `evaluation.py` → `map_estimate()` (seed-then-optimize: `collect_theta_prex()`, `collect_score_prex()`, `extract_elite_prex()`, `optimize_elite()`), `posterior_summary()`, `recovery_stats()`, `recovery_table()`, `posterior_coverage_table()`; driven by entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py` | recovery report (figures + tables + arrays + a live `progress.log`) under the validation output directory |
+| Real-data application (no ground truth) | same `evaluation.py` estimator (`map_estimate()`, `experiment_table()`); driven by entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py` | per-condition inferred-parameter report under the validation output directory |
 | Configuration, paths, storage routing, and file I/O | `parameterization.py` → `Paths`, `MachineProfile` / `load_machine_profile()`, `FrameConfig`, `RunTiming`; `io.py` → `load_data()`, `save_video_set()`, `save_theta_set()`, `convert_video_dtype()` | resolved absolute paths (per-machine `machine_profiles.toml`); all artifacts above land under the configured roots |
 
 The five pipeline stages are RDS, DLI, Inference, Evaluation, and Experiment.
 Each stage has one shared runner (`<stage>_runner.py` → `run_<stage>()`) and two
 thin Prime entry-point shims over it: the unqualified biology entry point
-(`SRM_AND_SBI_DIMER_ALP_Simulation_RDS.py`,
-`SRM_AND_SBI_DIMER_ALP_Simulation_DLI.py`, `SRM_AND_SBI_DIMER_ALP_Inference.py`,
-`SRM_AND_SBI_DIMER_ALP_Evaluation.py`, `SRM_AND_SBI_DIMER_ALP_Experiment.py`) and
+(`SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`,
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py`, `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py`,
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py`, `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py`) and
 its `_DETECTOR`-qualified detector counterpart. Each shim parses arguments,
 builds a `WorkflowConfig`, and calls the shared runner, which drives the package
 functions above and writes outputs to the configuration-defined paths.
-`SRM_AND_SBI_DIMER_ALP_Generate_Datasets.py` orchestrates the generation pair
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` orchestrates the generation pair
 (RDS → DLI) across all three splits in one command.
 
 ---
@@ -1017,7 +1018,7 @@ generalization is a different question, answered by coverage under model
 misspecification, the embedding-space experimental-versus-synthetic distance (MMD / C2ST,
 implemented by the workflow-agnostic `embedding_space_distance` kernel and its shared
 runner; the biology companion note is
-`Script_Bank/Analysis/SRM_AND_SBI_DIMER_ALP_Embedding_Space_Distance.md`), and
+`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Embedding_Space_Distance.md`), and
 posterior-predictive checks; misspecification-robust simulation-based inference
 (Ward et al. 2022; Kelly et al. 2023 — pending independent verification) is the
 relevant literature.
@@ -1137,4 +1138,4 @@ single-cell, per-video model extend to population posteriors?
 
 ---
 
-**End of Project Context — srm-and-sbi-dimer-alp**
+**End of Project Context — srm-and-sbi-monomer-dimer-alp**

@@ -3,8 +3,8 @@ requires = ["setuptools>=65", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "srm-and-sbi-dimer-alp"
-version = "0.4.23"
+name = "srm-and-sbi-monomer-dimer-alp"
+version = "0.1.0"
 description = "Simulation-based inference of reaction-diffusion parameters for DIMER (two-particle dimerization) model"
 requires-python = ">=3.10"
 # Deliberately sparse: the runtime stack (torch, readdy, numpy, scipy, zarr, ...) is provided
@@ -29,4 +29,4 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["srm_and_sbi_dimer_alp*"]
+include = ["srm_and_sbi_monomer_dimer_alp*"]

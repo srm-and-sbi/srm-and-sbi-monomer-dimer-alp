@@ -1,4 +1,4 @@
-# Environments & install guide — `srm-and-sbi-dimer-alp`
+# Environments & install guide — `srm-and-sbi-monomer-dimer-alp`
 
 How to set up the Python environment for this project (a ReaDDy reaction-diffusion +
 SBI inference pipeline).
@@ -76,8 +76,8 @@ environment name is `SRM_AND_SBI_ENVY_V0`.
 2. Clone the repo and enter it (steps 1–2 below can run from anywhere, but step 3 assumes
    you are **inside the clone**):
    ```bash
-   git clone https://github.com/srm-and-sbi/srm-and-sbi-dimer-alp.git
-   cd srm-and-sbi-dimer-alp
+   git clone https://github.com/srm-and-sbi/srm-and-sbi-monomer-dimer-alp.git
+   cd srm-and-sbi-monomer-dimer-alp
    ```
 
 ### Steps
@@ -107,7 +107,7 @@ pip install torch==2.9.1 sbi==0.26.1 nflows==0.14 zuko==1.6.0
 pip install -e . --no-deps
 
 # 4. sanity check
-python -c "import readdy, torch, sbi, zarr, numpy, psutil, srm_and_sbi_dimer_alp; \
+python -c "import readdy, torch, sbi, zarr, numpy, psutil, srm_and_sbi_monomer_dimer_alp; \
 print('OK', torch.__version__, 'cuda/hip avail:', torch.cuda.is_available())"
 ```
 (`cuda/hip avail` is `True` only when a GPU is actually visible — on an HPC node that means

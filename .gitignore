@@ -28,7 +28,7 @@ env/
 .DS_Store
 
 # Conda environments
-srm-and-sbi-dimer-alp/
+srm-and-sbi-monomer-dimer-alp/
 
 # Data (large scientific outputs)
 *.h5

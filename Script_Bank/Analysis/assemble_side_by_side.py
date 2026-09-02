@@ -3,7 +3,7 @@
 Loads two posterior-predictive renders from the Data_Bank Posit tier -- the render under
 the retired grid brightness chain and a fixed-model render (--fixed-label picks its
 --run-label token, default OU_FIX) -- for the condition and cell given by --kind/--cell,
-and writes into <data_bank_root>/Posit/SRM_AND_SBI_DIMER_ALP_Brightness_Stationarity_Audit/
+and writes into <data_bank_root>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit/
 (analysis results are data and never live in the codebase; the Data_Bank location comes
 from machine_profiles.toml via the MACHINE_PROFILE environment variable):
 
@@ -24,7 +24,7 @@ from machine_profiles.toml via the MACHINE_PROFILE environment variable):
 The engine's own two-panel comparison figures exist beside each render npz
 (experimental vs grid in the canonical archive; experimental vs fixed in the
 worktree shadow); this figure adds the three-way view with the same conventions.
-The interactive viewer is notebooks/SRM_AND_SBI_DIMER_ALP_Brightness_Stationarity_Audit_Video.ipynb.
+The interactive viewer is notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit_Video.ipynb.
 """
 
 import argparse
@@ -42,8 +42,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 FFMPEG = "/home/mars-fias/anaconda3/envs/READY_MARS/bin/ffmpeg"
 
-PPV_DIR = "SRM_AND_SBI_DIMER_ALP_2S_50FPS_Posterior_Predictive_Video"
-AUDIT_DIR = "SRM_AND_SBI_DIMER_ALP_Brightness_Stationarity_Audit"
+PPV_DIR = "SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Posterior_Predictive_Video"
+AUDIT_DIR = "SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit"
 
 
 OUT = None  # resolved in main() from the active machine profile
@@ -57,7 +57,7 @@ def data_bank_root() -> str:
 
 def stem(kind: str, cell: int, label: str = "") -> str:
     token = f"_{label}" if label else ""
-    return (f"SRM_AND_SBI_DIMER_ALP_2S_50FPS_MAP_Estimate_SGM_{kind}_Cell_{cell}"
+    return (f"SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_MAP_Estimate_SGM_{kind}_Cell_{cell}"
             f"_20S{token}_Synthetic_Video.npz")
 
 INK, INK_2, SURFACE = "#0b0b0b", "#52514e", "#fcfcfb"

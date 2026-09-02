@@ -1,4 +1,4 @@
-# Machine profiles for srm-and-sbi-dimer-alp
+# Machine profiles for srm-and-sbi-monomer-dimer-alp
 #
 # Each machine running this repository should define its own profile.
 # Copy this file to `machine_profiles.toml` (which is gitignored),
@@ -10,7 +10,7 @@
 # Example LOCAL-mode profile for a personal workstation.
 # Replace paths with your actual directories.
 running_mode      = "LOCAL"
-script_bank_root  = "/path/to/srm-and-sbi-dimer-alp/Script_Bank"
+script_bank_root  = "/path/to/srm-and-sbi-monomer-dimer-alp/Script_Bank"
 data_bank_root    = "/path/to/Data_Bank"
 compute_backend   = "GPU"           # "GPU" | "CPU"
 gpu_device_index  = 0               # required when compute_backend = "GPU"
@@ -24,7 +24,7 @@ num_workers       = 0               # node-wide TOTAL DataLoader-worker budget (
 # Example HPC-mode profile for a cluster submission.
 # The MACHINE_PROFILE env var should be set in your job submission script.
 running_mode      = "HPC"
-script_bank_root  = "/path/to/srm-and-sbi-dimer-alp/Script_Bank"
+script_bank_root  = "/path/to/srm-and-sbi-monomer-dimer-alp/Script_Bank"
 data_bank_root    = "/path/to/Data_Bank"   # permanent / backed-up tier: posterior, checkpoints, reports
 compute_backend   = "GPU"
 gpu_device_index  = 0
