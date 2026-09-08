@@ -29,6 +29,7 @@ import sys
 
 import numpy as np
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
     PARAMETERS,
     RunTiming,
@@ -73,6 +74,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Generation seeding & file-label sanity check (HPC fan-out).")
     parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
+    parser.add_argument(
         "--total-time-seconds", type=float, required=True,
         help="Run duration in seconds; sets the timing label whose path collisions "
              "are checked, so it matches the actual fan-out being validated.")
@@ -80,7 +87,8 @@ def parse_args(argv=None):
 
 
 def main(args):
-    global TL
+    global TL, PATHS
+    PATHS = PATHS.with_condition(args.condition)   # the DLI-side products carry the condition
     TL = RunTiming(
         total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing,
     ).label

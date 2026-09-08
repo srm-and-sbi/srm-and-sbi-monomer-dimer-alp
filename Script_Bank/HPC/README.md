@@ -19,13 +19,15 @@ runs the matching entry point under `Script_Bank/Prime/`.
 
 | Stage | Script | Compute | Production partition | Check partition |
 |-------|--------|---------|----------------------|-----------------|
-| Simulation (RDS → DLI) | `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh` | CPU | `general1` | `test` |
+| Simulation (RDS → DLI; `SIM_STAGE=rds` generates the shared trajectory tier alone) | `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh` | CPU | `general1` | `test` |
 | Inference (train + select) | `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Inference.sh` | GPU | `gpu` | `gpu_test` |
 | Evaluation (MAP recovery) | `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh` | GPU | `gpu` | `gpu_test` |
 | Experiment (real videos) | `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh` | GPU | `gpu` | `gpu_test` |
 
 - **Simulation** packs many generation tasks per node (RDS reaction-diffusion
-  trajectories, then DLI diffraction-limited videos) and is CPU-bound.
+  trajectories — the one tier both workflows and both conditions re-image — then the
+  biology's DLI diffraction-limited videos; `SIM_STAGE=rds` generates the tier alone,
+  `SIM_STAGE=dli` re-images an existing tier for one `CONDITION`) and is CPU-bound.
 - **Inference** trains the posterior on the TRAIN tasks and selects on the
   TEST tasks. It adapts to the allocation: more than one **node** trains
   data-parallel *across nodes* (`srun` + `torchrun`, one process per GPU, all ranks
@@ -91,9 +93,9 @@ config are built by the tool, they cannot be mistyped at submit time.
 
 ```bash
 # Dry run (the default): print the exact sbatch line, submit nothing
-bash Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh inference TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
+bash Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
 # Submit it (only after the printed command checks out)
-DRYRUN=0 GPU_PART=gpu bash Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh inference TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
+DRYRUN=0 GPU_PART=gpu bash Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
 ```
 
 `<stage>` is `simulation | inference | evaluation | experiment`; the `KEY=VALUE`
@@ -102,8 +104,10 @@ stage script's own default). sbatch-level overrides go in the environment:
 `PART` (CPU partition — required for a live `simulation`, whose baked
 `--partition` is a placeholder), `GPU_PART`, `ACCT`, `TIME`,
 `ARRAY`/`NTPN`/`CPT` (simulation only), `GRES`, `NODES` (GPU stages — multi-node,
-`--gres` is per node so `NODES=2 GRES=gpu:4` → `world_size` 8), `MON_OUT`. A multi-value `KINDS`
-(e.g. `KINDS=FAB,INLB`) is carried safely through the exported environment via
+`--gres` is per node so `NODES=2 GRES=gpu:4` → `world_size` 8), `MON_OUT`. `CONDITION` (`FAB`|`INLB`; required for every stage except an RDS-only simulation, whose shared
+trajectory tier carries neither qualifier nor condition) is validated and
+forwarded by the dispatcher and enters the job name right after the alias. A multi-value `KINDS`
+(e.g. `KINDS=FAB,INLB`, a deliberate cross-condition application) is carried safely through the exported environment via
 `ALL` rather than the comma-split `--export`. The helper is to a single job what
 the generation controller (§5) is to the full generation campaign — both default
 to dry-run, and you opt in to submitting with `DRYRUN=0`.
@@ -128,19 +132,27 @@ Submit from the repository root. Set `--partition` to the partition for the run
 on the Simulation script and `gpu` on the GPU scripts.
 
 ```bash
-# Simulation — TRAIN split, one node, 8 packed tasks (always submit with --array)
+# Simulation — the shared trajectory tier alone (SIM_STAGE=rds; no CONDITION; both workflows re-image it),
+# TRAIN split, one node, 8 packed tasks (always submit with --array)
 cd /path/to/srm-and-sbi-monomer-dimer-alp
 sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Simulation_TRAIN \
        --partition=general1 --array=0-0 --ntasks-per-node=8 \
        --output="$MON_OUT/%x_%A_Node_%a.out" \
-       --export=ALL,REPO=$PWD,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8,TASK_SIMS=1000,TOTAL_TIME=2.0 \
+       --export=ALL,REPO=$PWD,SIM_STAGE=rds,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8,TASK_SIMS=1000,TOTAL_TIME=2.0 \
+       Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
+# Simulation — RDS then the biology DLI of one condition in one job (SIM_STAGE=both, the default;
+# the biology DLI needs that condition's Nuisance_DLI artifact)
+sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN \
+       --partition=general1 --array=0-0 --ntasks-per-node=8 \
+       --output="$MON_OUT/%x_%A_Node_%a.out" \
+       --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8,TASK_SIMS=1000,TOTAL_TIME=2.0 \
        Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
 ```
 
 ```bash
 # Inference — train on 8 TRAIN tasks, select on 2 TEST tasks, 50 epochs
 cd /path/to/srm-and-sbi-monomer-dimer-alp
-sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Inference \
+sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Inference \
        --partition=gpu \
        --output="$MON_OUT/%x_%A.out" \
        --export=ALL,REPO=$PWD,TRAIN_TASKS=8,TEST_TASKS=2,EPOCHS=50,TOTAL_TIME=2.0 \
@@ -152,7 +164,7 @@ sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Inference \
 ```bash
 # Evaluation — MAP recovery on the held-out EVAL set
 cd /path/to/srm-and-sbi-monomer-dimer-alp
-sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Evaluation \
+sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Evaluation \
        --partition=gpu \
        --output="$MON_OUT/%x_%A.out" \
        --export=ALL,REPO=$PWD,EVAL_TASKS=1,SUMMARY=both,POOL_MODE=bounded,TOTAL_TIME=2.0 \
@@ -161,13 +173,13 @@ sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Evaluation \
 
 ```bash
 # Experiment — apply the trained posterior to real videos.
-# KINDS defaults to FAB,INLB (baked in the script). Do NOT place a multi-value
+# KINDS defaults to the run's CONDITION (baked in the script). Do NOT place a multi-value
 # KINDS inside --export: Slurm splits --export on commas, so KINDS=FAB,INLB would
 # parse as KINDS=FAB plus a stray, value-less INLB. To override KINDS with multiple
 # values, pre-export it in the submitting shell and let --export=ALL carry it
 # (export KINDS=FAB,INLB) — or just use the Submit.sh helper, which does this for you.
 cd /path/to/srm-and-sbi-monomer-dimer-alp
-sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Experiment \
+sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment \
        --partition=gpu \
        --output="$MON_OUT/%x_%A.out" \
        --export=ALL,REPO=$PWD,SUMMARY=both,TOTAL_TIME=2.0 \
@@ -205,7 +217,7 @@ SRM_AND_SBI_MONOMER_DIMER_ALP_<timing_label>_<Stage>[_<SPLIT>]
 | Experiment | `SRM_AND_SBI_MONOMER_DIMER_ALP_<timing_label>_Experiment` |
 
 Examples: `SRM_AND_SBI_MONOMER_DIMER_ALP_5S_50FPS_Inference`,
-`SRM_AND_SBI_MONOMER_DIMER_ALP_1S_50FPS_Simulation_TRAIN`.
+`SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_1S_50FPS_Simulation_TRAIN`.
 
 Set the job name with `--job-name` and direct the batch log into the monitoring
 directory:
@@ -246,9 +258,9 @@ regenerating existing ones. The per-task global index is
 
 ```bash
 # TRAIN 8 / TEST 2 / EVAL 1 tasks (per CORE=100), submit from the repo root:
-sbatch --partition=general1 --array=0-0 --ntasks-per-node=8 --export=ALL,REPO=$PWD,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 ...Simulation.sh
-sbatch --partition=general1 --array=0-0 --ntasks-per-node=2 --export=ALL,REPO=$PWD,SPLIT=test,TASK_OFFSET=0,TASK_COUNT=2  ...Simulation.sh
-sbatch --partition=general1 --array=0-0 --ntasks-per-node=1 --export=ALL,REPO=$PWD,SPLIT=eval,TASK_OFFSET=0,TASK_COUNT=1  ...Simulation.sh
+sbatch --partition=general1 --array=0-0 --ntasks-per-node=8 --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 ...Simulation.sh
+sbatch --partition=general1 --array=0-0 --ntasks-per-node=2 --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=test,TASK_OFFSET=0,TASK_COUNT=2  ...Simulation.sh
+sbatch --partition=general1 --array=0-0 --ntasks-per-node=1 --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=eval,TASK_OFFSET=0,TASK_COUNT=1  ...Simulation.sh
 ```
 
 Larger campaigns pack 10 tasks/node with `--cpus-per-task=4` (10 × 4 = 40 cores,
@@ -258,9 +270,9 @@ controller (§5) drives this.
 **Check (`test`), 1 s smoke — TRAIN 16 / TEST 4 / EVAL 2 tasks, 10 sims/task:**
 
 ```bash
-sbatch --partition=test --array=0-0 --ntasks-per-node=16 --export=ALL,REPO=$PWD,SPLIT=train,TASK_COUNT=16,TASK_SIMS=10,TOTAL_TIME=1.0 ...Simulation.sh
-sbatch --partition=test --array=0-0 --ntasks-per-node=4  --export=ALL,REPO=$PWD,SPLIT=test,TASK_COUNT=4,TASK_SIMS=10,TOTAL_TIME=1.0  ...Simulation.sh
-sbatch --partition=test --array=0-0 --ntasks-per-node=2  --export=ALL,REPO=$PWD,SPLIT=eval,TASK_COUNT=2,TASK_SIMS=10,TOTAL_TIME=1.0  ...Simulation.sh
+sbatch --partition=test --array=0-0 --ntasks-per-node=16 --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_COUNT=16,TASK_SIMS=10,TOTAL_TIME=1.0 ...Simulation.sh
+sbatch --partition=test --array=0-0 --ntasks-per-node=4  --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=test,TASK_COUNT=4,TASK_SIMS=10,TOTAL_TIME=1.0  ...Simulation.sh
+sbatch --partition=test --array=0-0 --ntasks-per-node=2  --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=eval,TASK_COUNT=2,TASK_SIMS=10,TOTAL_TIME=1.0  ...Simulation.sh
 ```
 
 ### Inference / Evaluation / Experiment (GPU)
@@ -555,17 +567,20 @@ a backed-up location.
 The **Detector calibration workflow** is a complete workflow parallel to the
 biology pipeline: it runs the same four-step process (simulate → infer →
 evaluate → experiment) but infers the imaging (diffraction-limited-imaging)
-parameters with the physics frozen to pure diffusion, so those parameters are
+parameters with the reaction-diffusion biology marginalized over its prior, so those parameters are
 calibrated for production rather than hand-tuned. It has its **own committed
 submission machinery**, filename-namespaced (`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_*`)
 and coexisting with the biology wrappers in this directory — the same
 filename-alias scheme as the `_DETECTOR` data and entry scripts. It is a separate,
 parallel workflow: it is **never wired into the biology `Submit.sh` dispatcher
-or the four biology stage wrappers**, and they are never wired into it.
+or the four biology stage wrappers**, and they are never wired into it. The one
+shared input is the RDS trajectory tier: generated once by the biology dispatcher's
+RDS-only simulation and re-imaged by the Detector's DLI-only Simulation wrapper, so a
+Detector campaign needs no RDS submission of its own.
 
 | Detector script | Role | Compute |
 |---|---|---|
-| `..._DETECTOR_HPC_Simulation.sh` | generation: diffusion-only RDS (B1) → imaging-from-theta DLI (B2), packed per node, `--array` fan-out, seedless | CPU |
+| `..._DETECTOR_HPC_Simulation.sh` | generation: a DLI-only pass over the shared trajectory tier (B2) — imaging drawn from the detector prior, per condition; the tier itself comes from the biology dispatcher's RDS-only simulation (`SIM_STAGE=rds`); packed per node, `--array` fan-out, seedless | CPU |
 | `..._DETECTOR_HPC_Inference.sh` | train the imaging posterior (B3); >1 GPU → DDP via `torchrun`, >1 node → DDP across nodes (`srun`+torchrun, c10d); saves the version-portable A5 estimator | GPU |
 | `..._DETECTOR_HPC_Evaluation.sh` | imaging MAP recovery on the held-out EVAL set (B5); shards across all ranks (>1 GPU/node) + a separate `--merge` step | GPU |
 | `..._DETECTOR_HPC_Experiment.sh` | imaging MAP estimation on real microscopy videos (B4); shards across all ranks (>1 GPU/node) + a separate `--merge` step | GPU |
@@ -582,7 +597,7 @@ Detector by the standalone analysis wrappers in §6 —
 **Dispatcher.** `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Submit.sh` mirrors the
 biology `Submit.sh` — dry-run first (`DRYRUN=1` prints the exact `sbatch` line;
 `DRYRUN=0` submits) — for the Detector stages, and renders the `_DETECTOR`
-job-name `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_<timing_label>_<Stage>[_<SPLIT>]`.
+job-name `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_<CONDITION>_<timing_label>_<Stage>[_<SPLIT>]`.
 
 **Two GPU modes (Goethe), set explicitly at submit time.** Neither dispatcher pins
 a GPU mode: both `Submit.sh` scripts only forward what the submitter sets
@@ -617,7 +632,7 @@ recipe is `VALIDATION.md` section 2.5 ("Detector calibration smoke test"):
     GPU_PART=gpu_test DEP=afterok:<gen-train>:<gen-test> bash $S inference  TRAIN_TASKS=16 TEST_TASKS=4 EPOCHS=5 BATCH=8 TOTAL_TIME=2.0
     GPU_PART=gpu_test DEP=afterok:<inference>:<gen-eval> bash $S evaluation EVAL_TASKS=2 POOL_MODE=unrestricted TOTAL_TIME=2.0
     # experiment (afterok inference): apply the undertrained posterior to real videos.
-    # KINDS defaults to FAB,INLB; because Slurm --export splits on commas, leave KINDS
+    # KINDS defaults to the run's CONDITION; because Slurm --export splits on commas, leave KINDS
     # at its default or pre-export it. POOL_MODE=unrestricted is required for the
     # undertrained smoke posterior.
     GPU_PART=gpu_test DEP=afterok:<inference> bash $S experiment MAX_CELLS=2 POOL_MODE=unrestricted TOTAL_TIME=2.0

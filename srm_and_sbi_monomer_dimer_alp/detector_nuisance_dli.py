@@ -34,11 +34,11 @@ governed by `pool_mode`. Only `box`/`box_user` are constrained to the prior box,
 (never silently) at build.
 
 Distinction from the RDS nuisance. The reaction-diffusion biology marginalized during
-detector calibration is a *transient* `BoxUniform` drawn on the fly during generation
-(`detector_parameterization.build_nuisance_prior`); it is never instantiated as an object,
-and only its per-simulation draws persist (as the `Nuisance_RDS_Theta_Set`). The two share
-the marginalization *role* but not the artifact: the `Nuisance_DLI` is a persisted
-calibration result, so it — and only it — is the object defined here.
+detector calibration is never drawn or built anywhere: the detector re-images the shared
+RDS trajectory tier, whose ten-parameter `Theta_Set` (the biology's own labels) is the
+record of that nuisance. The two share the marginalization *role* but not the artifact:
+the `Nuisance_DLI` is a persisted calibration result, so it — and only it — is the object
+defined here.
 
 Enforcement. Downstream consumers call `require_nuisance_dli(...)`, which loads the built
 artifact and fails loud (naming the analysis to run) if it is absent — the `Nuisance_DLI`
@@ -71,7 +71,7 @@ _BOX = ("box", "box_user")                   # stored as low/high, drawn as a pe
 # The sgm_percentiles selection (whole vectors at signed distance-to-SGM percentiles; p50 = the SGM).
 SGM_DEFAULT_PERCENTILES = [50.0]             # one percentile 50 -> the SGM alone (a frozen vector)
 SGM_SELECTION_SOURCES = ("experiment", "window-sgm")
-SGM_CONDITIONS = ("pooled", "FAB", "INLB")
+SGM_CONDITIONS = ("FAB", "INLB")
 
 # Which cached pool each choice draws on. raw/gaussian/box share the posterior-sample pool;
 # map_estimate_pool uses the MAP pool; box_user and sgm_percentiles need none (sgm_percentiles REUSES
@@ -463,7 +463,8 @@ def load_map_vectors(experiment_map_path, posterior_pool_path, *, source, condit
     data (no GPU). ``source='experiment'`` reuses the Detector Experiment MAP output
     (``inferred_log10`` + ``kind_index``/``kinds``); ``source='window-sgm'`` computes the per-window
     Sample Geometric Median from the labeled posterior-sample pool. Then restricts to ``condition``
-    (``pooled``/``ALP``/``BET``) via the labels. Returns ``(vectors_log (n_win, D), source_label)``."""
+    (``FAB`` or ``INLB``; None keeps every row) via the labels. Returns ``(vectors_log (n_win, D),
+    source_label)``."""
     range_abs = 10.0 ** np.asarray(prior_high, float) - 10.0 ** np.asarray(prior_low, float)
     if source == "experiment":
         p = Path(experiment_map_path)
@@ -488,7 +489,7 @@ def load_map_vectors(experiment_map_path, posterior_pool_path, *, source, condit
         label = f"window-SGM of the posterior pool ({p.name})"
     else:
         raise ValueError(f"unknown selection_source {source!r} (use 'experiment' or 'window-sgm').")
-    if condition != "pooled":
+    if condition is not None:
         if condition not in kinds:
             raise ValueError(f"condition {condition!r} is not among the source kinds {kinds}.")
         mask = kind_index == kinds.index(condition)
@@ -636,7 +637,7 @@ def emit_spec_template(path, imaging_keys, suggestions, *, pool_mode="bounded", 
         "",
         '# Read ONLY by "sgm_percentiles":',
         'percentiles = [50]                       # 50 = the SGM (a single frozen vector); e.g. [5,25,50,75,95] = a 5-vector pool',
-        'condition = "pooled"                     # pooled | ALP (MET-FAB, monomer) | BET (MET-INLB, dimer)',
+        '# condition = "FAB"                      # optional: FAB (MET-FAB, monomer) | INLB (MET-INLB, dimer); default = the artifact\'s own condition',
         'selection_source = "experiment"          # experiment (reuse the Experiment MAPs) | window-sgm (posterior pool)',
         "",
         "# Per-parameter ranges are read ONLY by \"box_user\"; pre-filled with the pool's",
@@ -709,8 +710,8 @@ def load_spec(path, imaging_keys, prior_low, prior_high):
                 or not all(isinstance(v, (int, float)) and 0.0 <= float(v) <= 100.0 for v in pct)):
             raise ValueError(f"{path}: [block].percentiles must be a non-empty list of numbers in "
                              f"[0, 100]; got {pct!r}.")
-        cond = block.get("condition", "pooled")
-        if cond not in SGM_CONDITIONS:
+        cond = block.get("condition", None)      # None = the artifact's own condition
+        if cond is not None and cond not in SGM_CONDITIONS:
             raise ValueError(f"{path}: [block].condition={cond!r} must be one of {SGM_CONDITIONS}.")
         src = block.get("selection_source", "experiment")
         if src not in SGM_SELECTION_SOURCES:

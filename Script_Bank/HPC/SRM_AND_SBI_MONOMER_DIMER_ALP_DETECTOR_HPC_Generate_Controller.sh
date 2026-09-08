@@ -3,8 +3,12 @@
 # DIMER DETECTOR production generation -- rolling submit-and-gate controller.
 # The Detector variant of the canonical generation controller: identical staging,
 # QOS caps, and eval gating, differing only in what it launches -- the Detector
-# Simulation (RDS reaction-diffusion parameters drawn as the marginalized nuisance,
-# imaging parameters the inference target) -- and in emitting _DETECTOR job-names.
+# Simulation, a DLI-only pass over the SHARED trajectory tier (imaging parameters
+# drawn from the detector prior as the inference target; the reaction-diffusion
+# biology marginalized by re-imaging the tier) -- and in emitting _DETECTOR job-names.
+# It submits NO RDS: the tier must already exist for every task of every split, at
+# the same sims/task and durations (generate it with the biology controller under
+# SIM_STAGE=rds; the same tier then serves the biology DLI of both conditions).
 # Submits the six (case x split) generation arrays for the 2 s and 5 s datasets,
 # keeping within the QOS caps (<=40 running, <=50 in-system), then HARD-GATES the
 # eval splits until every train+test job has COMPLETED.
@@ -30,9 +34,9 @@
 # output dir), USER_ME (queue-owner username for polling), SIM (per-task launcher
 # path), CASES (which dataset(s): 5s|2s|both), DRYRUN (1 = print only, 0 = submit).
 #     DRY RUN (default -- prints the exact sbatch lines, submits nothing):
-#         bash SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Generate_Controller.sh
+#         CONDITION=FAB bash SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Generate_Controller.sh
 #     LIVE:
-#         DRYRUN=0 bash SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Generate_Controller.sh 2>&1 | tee ~/detector_gen_controller.log
+#         DRYRUN=0 CONDITION=FAB bash SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Generate_Controller.sh 2>&1 | tee ~/detector_gen_controller.log
 #
 # Safety: on any train+test job finishing in a non-COMPLETED state the controller
 # STOPS before submitting eval (so eval is never generated against broken data).
@@ -45,7 +49,7 @@
 #     cd /path/to/srm-and-sbi-monomer-dimer-alp && \
 #       sbatch --array=0-0 --ntasks-per-node=10 --cpus-per-task=4 --time=24:00:00 \
 #         --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_5S_50FPS_Simulation_TRAIN \
-#         --export=ALL,REPO=$PWD,SPLIT=train,TASK_OFFSET=50,TASK_COUNT=10,TASK_SIMS=500,TOTAL_TIME=5.0 \
+#         --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=50,TASK_COUNT=10,TASK_SIMS=500,TOTAL_TIME=5.0 \
 #         Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
 #   single task (id 137): --ntasks-per-node=1 TASK_OFFSET=137 TASK_COUNT=1 (same SPLIT/SIMS/TIME).
 # Then confirm label completeness with the seeding-validation script before training.
@@ -88,6 +92,8 @@ STAGE_B=(
 # independently.
 CASES="${CASES:-both}"
 case "$CASES" in both|5s|2s) ;; *) echo "bad CASES=$CASES (use 5s|2s|both)" >&2; exit 1;; esac
+CONDITION="${CONDITION:-}"
+case "$CONDITION" in FAB|INLB) ;; *) echo "FATAL: CONDITION='$CONDITION' (use FAB|INLB; the DLI stage's labeling law)." >&2; exit 1;; esac
 if [ "$CASES" != both ]; then
   _A=(); for e in "${STAGE_A[@]}"; do [[ "${e%%|*}" == "${CASES}-"* ]] && _A+=("$e"); done; STAGE_A=("${_A[@]}")
   _B=(); for e in "${STAGE_B[@]}"; do [[ "${e%%|*}" == "${CASES}-"* ]] && _B+=("$e"); done; STAGE_B=("${_B[@]}")
@@ -102,15 +108,15 @@ submit(){   # $1 = entry; echoes job id on stdout, logs to stderr
   # REPO is forwarded EXPLICITLY: it is a plain shell var on the login node, so
   # --export=ALL alone would NOT carry it to the spooled child (which runs from
   # /var/spool and cannot resolve the repo from its own path).
-  local export="ALL,REPO=$REPO,SPLIT=$split,TASK_OFFSET=0,TASK_COUNT=$count,TASK_SIMS=$sims,TOTAL_TIME=$ttime"
+  local export="ALL,REPO=$REPO,CONDITION=$CONDITION,SPLIT=$split,TASK_OFFSET=0,TASK_COUNT=$count,TASK_SIMS=$sims,TOTAL_TIME=$ttime"
   # Job name follows the data-file naming convention:
-  # SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_<timing_label>_Simulation_<SPLIT>, with timing_label
+  # SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_<CONDITION>_<timing_label>_Simulation_<SPLIT>, with timing_label
   # rendered exactly as PARAMETERS.simulation.timing.label does ("{duration}S_50FPS",
   # duration via :g so 2.0 -> 2, 5.0 -> 5, 2.5 -> 2.5) and SPLIT upper-cased.
   local timing_label split_uc jobname
   timing_label="$(LC_ALL=C printf '%gS_50FPS' "$ttime")"
   split_uc="$(echo "$split" | tr '[:lower:]' '[:upper:]')"
-  jobname="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_${timing_label}_Simulation_${split_uc}"
+  jobname="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_${CONDITION}_${timing_label}_Simulation_${split_uc}"
   # batch-log --output is forced here (the launcher's baked #SBATCH --output is a
   # submit-directory path); --partition and --account are appended only when set,
   # so an unset PART/ACCT leaves the submit line at the launcher's baked defaults.

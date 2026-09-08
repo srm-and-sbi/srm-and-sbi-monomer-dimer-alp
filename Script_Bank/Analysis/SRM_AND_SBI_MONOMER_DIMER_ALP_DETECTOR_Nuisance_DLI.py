@@ -73,14 +73,15 @@ from srm_and_sbi_monomer_dimer_alp import detector_nuisance_dli as ndli
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
 
 
-def _resolve(total_time_seconds):
-    """Detector-namespaced paths + timing + the imaging keys and prior box."""
+def _resolve(total_time_seconds, condition):
+    """Detector-namespaced, condition-specific paths + timing + the imaging keys and prior box."""
     timing = RunTiming(total_time_seconds=total_time_seconds, frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = det.detector_paths(PARAMETERS.paths)                 # _DETECTOR-aliased namespace
+    paths = det.detector_paths(PARAMETERS.paths).with_condition(condition)   # _DETECTOR + condition namespace
     posit_dir = data_bank_root / paths.posit_subdir
     experiment_dir = data_bank_root / paths.experiment_subdir
     estimator_path = posit_dir / f"{paths.project_alias}_{timing.label}_Estimator.npz"
@@ -109,8 +110,8 @@ def _chunk_geometry(timing, span, chunk_step_seconds):
 def _read_all_chunks(R, kinds, span, n_frames, step_frames, max_cells, topo=None):
     """Read the real recordings and cut them into model-length windows; return one flat list.
 
-    Pools chunks across every (kind, cell), because the Nuisance_DLI is pooled across conditions
-    (a by-kind split is only a diagnostic, never the constructed artifact). Returns
+    Pools chunks across every (kind, cell) requested; by default the kinds are the run's single
+    condition, since each condition has its own detector calibration and Nuisance_DLI. Returns
     ``(chunks, chunk_labels, summary)`` where ``chunks`` is a list of ``(n_frames, H, W)`` uint8
     arrays and ``chunk_labels`` is the aligned list of ``(kind_index, cell, chunk)`` identities
     -- the condition (index into ``kinds``) and the time-window position (cell, sliding-window
@@ -171,9 +172,16 @@ def _estimator_sha256(R):
     return artifacts.load_estimator_manifest(str(R["estimator_path"]))["weights_sha256"]
 
 
+def _kinds(args):
+    """The recording kinds to pool: --kinds when given, else the run's condition alone."""
+    if args.kinds is None:
+        return [args.condition]
+    return [k.strip() for k in args.kinds.split(",") if k.strip()]
+
+
 def _pool_provenance(R, args, pool_mode, n_per):
     """The cache key for a pool built from these inputs (see detector_nuisance_dli)."""
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    kinds = _kinds(args)
     return ndli.pool_provenance(
         pool_mode=pool_mode, n_per_chunk=n_per, span_seconds=args.experiment_span_seconds,
         chunk_step_seconds=args.chunk_step_seconds, kinds=kinds, max_cells=args.max_cells,
@@ -195,7 +203,7 @@ def _get_pool(R, args, pool_kind, pool_mode, n_frames, step_frames, n_per):
         if cached is not None:
             return cached, f"cache ({cache.name})"
     posterior, device, vista_device = _load_posterior(R)
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    kinds = _kinds(args)
     chunks, chunk_labels, _ = _read_all_chunks(R, kinds, args.experiment_span_seconds, n_frames,
                                                step_frames, args.max_cells)
     if not chunks:
@@ -227,7 +235,7 @@ def _emit_pool_shard(args, R, topo, out_dir, n_frames, step_frames, n_per, eval_
     worker holding whole cells builds its slice independently and the merge just concatenates
     (exact and order-independent; percentiles / fits do not depend on draw order)."""
     posterior, device, vista_device = _load_posterior(R)
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    kinds = _kinds(args)
     chunks, chunk_labels, _ = _read_all_chunks(R, kinds, args.experiment_span_seconds, n_frames,
                                                step_frames, args.max_cells, topo=topo)
     if chunks:
@@ -275,7 +283,7 @@ def _merge_pool_shards(R, args, out_dir, n_per):
     except ValueError:
         raise SystemExit(f"--merge: every pool shard in {out_dir} was empty (no draws)")
     pool = merged["pool"]
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    kinds = _kinds(args)
     labels = {"kind_index": merged["kind_index"], "cell": merged["cell"],
               "chunk": merged["chunk"], "kinds": kinds}    # labels travel with their rows through the merge
     ndli.save_pool(cache, pool, prov, labels=labels)
@@ -303,7 +311,7 @@ def _emit_template_dry_run(args, R, topo, spec, out_dir):
         print(f"    pool cache  : {cache}")
         print(f"    spec        : {spec}")
         return
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    kinds = _kinds(args)
     cells_by_kind = {}
     for kind in kinds:
         cells = discover_cells(R["experiment_dir"], kind, args.experiment_span_seconds)
@@ -384,7 +392,7 @@ def _build_sgm_percentiles(args, R, block, spec_dict, art):
     window SGM), and mint them as the Nuisance_DLI. p50 = the SGM (a single frozen vector); several
     percentiles = a small, correlation-preserving marginalization pool. No GPU, no re-inference."""
     percentiles = block.get("percentiles", list(ndli.SGM_DEFAULT_PERCENTILES))
-    condition = block.get("condition", "pooled")
+    condition = block.get("condition", args.condition)   # default: the artifact's own condition
     source = block.get("selection_source", "experiment")
     exp_stem = R["paths"].experiment_recovery_pattern.format(
         project_alias=R["paths"].project_alias, timing_label=R["timing_label"])
@@ -463,7 +471,7 @@ def _build(args, R):
         nu = ndli.build_nuisance_dli(spec_dict, R["imaging_keys"], R["plo"], R["phi"], pool=pool)
     nu.flush(str(art))
     report_dir = _write_nuisance_report(nu, R, art)
-    print(f"Built pooled Nuisance_DLI (posterior_sample_pool_choice={choice}, "
+    print(f"Built Nuisance_DLI (posterior_sample_pool_choice={choice}, "
           f"pool_mode={nu.pool_mode}) and saved to:\n    {art}\n"
           f"Analysis (report + 1-D marginals plot):\n    {report_dir}")
 
@@ -620,7 +628,7 @@ def _migrate_pool_labels(args, R):
 
 
 def main(args):
-    R = _resolve(args.total_time_seconds)
+    R = _resolve(args.total_time_seconds, args.condition)
     if args.migrate_pool_labels:
         _migrate_pool_labels(args, R)
         return
@@ -630,6 +638,9 @@ def main(args):
 def parse_args(argv):
     p = argparse.ArgumentParser(
         description="Construct the Nuisance_DLI from the Detector calibration (analysis step).")
+    p.add_argument("--condition", required=True, choices=LABELING_CONDITIONS,
+                   help="experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): the "
+                        "condition-specific detector calibration this Nuisance_DLI is built from.")
     p.add_argument("--total-time-seconds", type=float, required=True,
                    help="model window / recording duration for the estimator (sets the timing label).")
     mode = p.add_mutually_exclusive_group()
@@ -640,8 +651,9 @@ def parse_args(argv):
     p.set_defaults(build=False)
     p.add_argument("--experiment-span-seconds", type=int, default=20,
                    help="duration (s) of the real recordings to read (default 20).")
-    p.add_argument("--kinds", type=str, default="ALP,BET",
-                   help="comma-separated recording kinds to pool (default 'ALP,BET').")
+    p.add_argument("--kinds", type=str, default=None,
+                   help="comma-separated recording kinds to pool (default: the run's --condition, "
+                        "the recordings this detector was calibrated for).")
     p.add_argument("--chunk-step-seconds", type=int, default=None,
                    help="sliding-window step (s); default = the model window (non-overlapping).")
     p.add_argument("--max-cells", type=int, default=0,

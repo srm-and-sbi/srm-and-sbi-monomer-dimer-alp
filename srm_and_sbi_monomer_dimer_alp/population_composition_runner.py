@@ -40,6 +40,7 @@ from dataclasses import dataclass
 import numpy as np
 from matplotlib.figure import Figure
 
+from .labeling import LABELING_CONDITIONS
 from . import population_composition as pc
 from .diagnostics import DiagnosticReporter
 from .experiment_support import condition_display
@@ -604,6 +605,12 @@ def run_population_composition(cfg, args):
 
 def build_parser(description):
     p = argparse.ArgumentParser(description=description)
+    p.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     p.add_argument("--total-time-seconds", type=float, required=True,
                    help="model window / recording duration; sets the timing label locating the "
                         "inputs and naming the outputs.")
@@ -649,7 +656,7 @@ def _population_composition_spec(cfg, args) -> CompositionSpec:
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     exp_dir = paths.experiment_recovery_dir(data_bank_root, timing.label)
     rec_dir = paths.map_recovery_dir(data_bank_root, timing.label)
     posit_dir = data_bank_root / paths.posit_subdir

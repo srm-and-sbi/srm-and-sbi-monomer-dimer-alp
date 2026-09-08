@@ -16,7 +16,7 @@
 # not an --export knob. Reads the trained posterior + the .tif recordings under
 # <data_bank>/Experiment/, writes inferred-parameter distributions per condition
 # (Posit/..._MAP_Experiment/).
-# Overridable via --export: KINDS (e.g. ALP,BET), MAX_CELLS (0=all),
+# Overridable via --export: CONDITION (FAB|INLB, required), KINDS (default = CONDITION), MAX_CELLS (0=all),
 #   CHUNK_STEP (seconds; unset -> model-window default, non-overlapping), SUMMARY (map|posterior|both), POOL_MODE, TOTAL_TIME,
 #   SRM_AND_SBI_GPUS (cap the GPUs used; default = all allocated),
 #   EXIT_BARRIER (seconds; raises torch-elastic's 300 s exit barrier so straggler
@@ -30,15 +30,15 @@
 # launcher default (2.0 s) gives timing_label 2S_50FPS, so swap the token (e.g.
 # 5S_50FPS) whenever you pass TOTAL_TIME=5.0.
 # CAVEAT: Slurm's --export splits its value on commas, so a multi-value KINDS
-# CANNOT go inside the --export string (--export=ALL,KINDS=ALP,BET would parse as
-# KINDS=ALP plus a stray, value-less BET). Either leave KINDS at the script default
-# (ALP,BET), or pre-export it in the submitting shell and let --export=ALL carry it:
+# CANNOT go inside the --export string (--export=ALL,KINDS=FAB,INLB would parse as
+# KINDS=FAB plus a stray, value-less INLB). Either leave KINDS at the script default (the run's CONDITION)
+# or pre-export it in the submitting shell and let --export=ALL carry it:
 # Example (default KINDS):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
 #   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Experiment --export=ALL,REPO=$PWD,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh
 # Example (multi-value KINDS via the environment, NOT inside --export):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   export KINDS=ALP,BET
+#   export KINDS=FAB,INLB   # a deliberate cross-condition application, not the default
 #   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Experiment --export=ALL,REPO=$PWD,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh
 # Example (two nodes, (kind, cell) work sharded across both -- add --nodes=N; --gres is per node):
 #   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Experiment --export=ALL,REPO=$PWD,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh
@@ -90,7 +90,7 @@ source "${CONDA_SETUP:-$HOME/miniconda3/etc/profile.d/conda.sh}"
 conda activate SRM_AND_SBI_ENVY_V0
 export MACHINE_PROFILE="${MACHINE_PROFILE:?set MACHINE_PROFILE (via hpc_local.env or --export) to a profile in your machine_profiles.toml}"
 
-KINDS="${KINDS:-ALP,BET}"
+KINDS="${KINDS:-$CONDITION}"   # default: the run's condition; override only for a deliberate cross-condition application
 MAX_CELLS="${MAX_CELLS:-0}"
 # Leave CHUNK_STEP unset by default so the Experiment entry point applies its own
 # default (step = the integer model window -> non-overlapping tiling), which is
@@ -108,7 +108,11 @@ TOTAL_TIME="${TOTAL_TIME:-2.0}"
 GPUS="${SRM_AND_SBI_GPUS:-${SLURM_GPUS_ON_NODE:-1}}"
 NNODES="${SLURM_NNODES:-1}"
 EXP_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment.py"
-EXP_ARGS=( --kinds "$KINDS" --max-cells "$MAX_CELLS"
+# CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
+# re-images the trajectories per condition), so the token is required and forwarded.
+case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
+
+EXP_ARGS=( --condition "$CONDITION" --kinds "$KINDS" --max-cells "$MAX_CELLS"
            --summary "$SUMMARY" --pool-mode "$POOL_MODE" --total-time-seconds "$TOTAL_TIME" )
 # Forward --chunk-step-seconds only when explicitly set; otherwise let the entry
 # point default it to the model window (see the CHUNK_STEP note above).

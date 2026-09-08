@@ -1,19 +1,22 @@
-"""Shared RDS-stage engine for both DIMER workflows (biology + detector).
+"""Shared RDS-stage engine: the ONE reaction-diffusion trajectory tier both workflows read.
 
 ``run_rds(cfg, args)`` holds the entire RDS orchestration -- pre-run banner,
 task-index resolution, dry-run probe, log10 prior sampling + exponentiation, the
-per-task theta/nuisance write, the sim-0 diagnostics block, the per-simulation
-ReaDDy build+run with the kernel-leak mitigation, and the end-of-task report.
-The two entry-point scripts
-(``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`` and its ``_DETECTOR`` twin) shrink
-to: build the workflow ``WorkflowConfig``, parse args, and call ``run_rds``.
+per-task theta write, the sim-0 diagnostics block, the per-simulation ReaDDy
+build+run with the kernel-leak mitigation, and the end-of-task report. The single
+entry-point script (``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py``) shrinks to:
+build the biology ``WorkflowConfig``, parse args, and call ``run_rds``.
 
-The only genuine per-workflow difference in RDS is the simulation builder --
-biology registers the four reaction channels (reactive), the detector builds the
-ReaDDy system diffusion-only (the reaction-diffusion domain is a marginalized
-nuisance there). That fork, plus the parameter table / prior bounds / persisted-set
-provenance name / display wording, is resolved once in ``_rds_spec(cfg)``; the
-engine body below carries no workflow branch.
+The RDS tier is shared. The ten reaction-diffusion parameters are drawn from the
+biology prior once per simulation and persisted as the ``Theta_Set``; the trajectories
+and that ``Theta_Set`` carry the bare sibling alias (``Paths.rds_alias``) -- no workflow
+qualifier, no condition token -- because both workflows and both conditions re-image
+the same trajectories at the DLI stage. To the biology workflow the ``Theta_Set`` is the
+learnable label; to the detector workflow the same file is the record of the
+reaction-diffusion nuisance it marginalizes (``detector_parameterization.DETECTOR_NUISANCE``,
+nuisance-from-object: supplied by this tier). There is therefore no detector RDS stage
+and no separate RDS-nuisance draw: the detector marginalizes the biology prior by
+construction, not by a checked copy of its ranges.
 """
 
 from __future__ import annotations
@@ -21,9 +24,7 @@ from __future__ import annotations
 import argparse
 import gc
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
 
 import numcodecs
 import numpy as np
@@ -36,7 +37,15 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import (
     prior_sampling_table,
 )
 from srm_and_sbi_monomer_dimer_alp.io import save_theta_set
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import (
+    PARAMETERIZATION,
+    PARAMETERIZATION_RAW,
+    PARAMETERS,
+    RunTiming,
+    theta_lower_bound,
+    theta_upper_bound,
+)
+from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import build_simulation, build_system
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
 )
@@ -54,86 +63,30 @@ _UNIT_DISPLAY = {
 }
 
 
-@dataclass(frozen=True)
-class _RdsSpec:
-    """Per-workflow RDS specializations resolved from a ``WorkflowConfig``."""
-    draw_spec: list          # the sampled parameter table (PARAMETERIZATION | DETECTOR_NUISANCE)
-    fixed_spec: list         # the fixed-parameter table (*_RAW)
-    lower: np.ndarray        # log10 lower prior bounds
-    upper: np.ndarray        # log10 upper prior bounds
-    build_sim: Callable      # (theta, seed, skin_factor, verbose) -> ReaDDy Simulation (smut)
-    set_path: Callable       # (paths, task, data_bank_root, timing_label, compress, split) -> Path
-    spec_title: str          # verbose prior-dump title
-    draw_noun: str           # "theta" | "RDS nuisance" ("Sampled <draw_noun>")
-    set_label: str           # "theta set" | "nuisance set" (dry-run + banner)
-    set_token: str           # "Theta_Set" | "Nuisance_RDS_Theta_Set" (banner path pattern)
-
-
-def _biology_build_sim(theta, seed, skin_factor, verbose):
-    """Reactive builder: register the four reaction channels (biology workflow)."""
-    from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import build_simulation, build_system
+def _build_sim(theta, seed, skin_factor, verbose):
+    """Build the reactive ReaDDy simulation for one theta: register the four reaction
+    channels (`build_system`) and place the initial particles (`build_simulation`)."""
     stem = build_system(theta, verbose=verbose)
     # `stem` is reachable only through the returned Simulation; deleting the
     # Simulation (+ gc) in the engine loop releases the ReaDDy kernel and the system.
     return build_simulation(stem, theta, seed=seed, skin_factor=skin_factor, verbose=verbose)
 
 
-def _detector_build_sim(theta, seed, skin_factor, verbose):
-    """Diffusion-only builder: no reaction channels; assembles canonical theta from
-    the RDS-nuisance draw (detector workflow)."""
-    from srm_and_sbi_monomer_dimer_alp.detector_simulation_rds_support import (
-        build_detector_rds_simulation,
-    )
-    smut, _theta = build_detector_rds_simulation(
-        theta, seed=seed, skin_factor=skin_factor, verbose=verbose)
-    return smut
-
-
-def _detector_nuisance_set_path(paths, task_alias, data_bank_root, timing_label, compress, split):
-    """Detector RDS-nuisance provenance file: the theta-set path with the object
-    token swapped ``Theta_Set`` -> ``Nuisance_RDS_Theta_Set`` (reuses the canonical
-    path pattern; no new path code)."""
-    base = paths.theta_set_path(task_alias, data_bank_root, timing_label, compress, split)
-    return base.with_name(base.name.replace("Theta_Set", "Nuisance_RDS_Theta_Set"))
-
-
-def _rds_spec(cfg: WorkflowConfig) -> _RdsSpec:
-    """Resolve the RDS stage's per-workflow specializations from the workflow config.
-
-    This is the single place the biology/detector fork lives for RDS; the engine
-    body reads only the resolved ``_RdsSpec``.
-    """
-    m = cfg.param_module
-    if cfg.tag == "detector":
-        return _RdsSpec(
-            draw_spec=m.DETECTOR_NUISANCE,
-            fixed_spec=m.DETECTOR_PARAMETERIZATION_RAW,
-            lower=np.array(m.nuisance_lower_bound()),
-            upper=np.array(m.nuisance_upper_bound()),
-            build_sim=_detector_build_sim,
-            set_path=_detector_nuisance_set_path,
-            spec_title="RDS nuisance prior spec",
-            draw_noun="RDS nuisance",
-            set_label="nuisance set",
-            set_token="Nuisance_RDS_Theta_Set",
-        )
-    return _RdsSpec(
-        draw_spec=m.PARAMETERIZATION,
-        fixed_spec=m.PARAMETERIZATION_RAW,
-        lower=np.array(m.theta_lower_bound()),
-        upper=np.array(m.theta_upper_bound()),
-        build_sim=_biology_build_sim,
-        set_path=lambda paths, *a: paths.theta_set_path(*a),
-        spec_title="Learnable theta prior spec",
-        draw_noun="theta",
-        set_label="theta set",
-        set_token="Theta_Set",
-    )
+def _require_shared_tier_config(cfg: WorkflowConfig) -> None:
+    """The RDS tier is generated once, through the biology config, whose ``Paths`` carry
+    the bare sibling alias and whose parameter table is the ten-parameter prior the tier
+    samples. A detector config here would only re-generate the same tier under a
+    qualified name, so it is refused."""
+    if cfg.tag != "biology":
+        raise ValueError(
+            f"run_rds: the RDS trajectory tier is shared by both workflows and is generated "
+            f"once through the unqualified entry point (biology config); got workflow "
+            f"{cfg.tag!r}. The detector re-images this tier at its DLI stage.")
 
 
 def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run the full RDS generation pipeline for the given workflow + CLI args."""
-    spec = _rds_spec(cfg)
+    _require_shared_tier_config(cfg)
 
     # Per-run timing from the required --total-time-seconds + the fixed frame cadence.
     timing = RunTiming(
@@ -152,7 +105,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     div = "=" * 72
 
     print(div)
-    print(f" {paths.project_alias} — Simulation_RDS")
+    print(f" {paths.rds_alias} — Simulation_RDS   (the shared RDS tier: both workflows, both conditions)")
     print(f" Started at  : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(div)
 
@@ -207,15 +160,16 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print("\nOutput destinations:")
     print(f"  data_bank_root  : {data_bank_root}")
     print(f"  trajectories    : <data_bank>/{paths.video_subdir}/"
-          f"{paths.trajectory_repo}/{paths.project_alias}_{timing_label}_TASK_{{n}}/"
-          f"{paths.project_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5")
-    print(f"  {spec.set_label + 's':<16}: <data_bank>/{paths.theta_subdir}/"
-          f"{paths.project_alias}_{timing_label}_{spec.set_token}_TASK_{{n}}.{output_fmt}")
+          f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
+          f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (shared tier)")
+    print(f"  theta sets      : <data_bank>/{paths.theta_subdir}/"
+          f"{paths.rds_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
+          f"(biology labels = detector RDS nuisance)")
 
     if args.verbose:
-        print(f"\n{spec.spec_title} ({len(spec.draw_spec)} parameters, "
+        print(f"\nLearnable theta prior spec ({len(PARAMETERIZATION)} parameters, "
               f"sampled in log10 then exponentiated):")
-        for para in spec.draw_spec:
+        for para in PARAMETERIZATION:
             lo, hi = para["PRIOR_RANGE"]
             unit = _UNIT_DISPLAY.get(para["UNIT"], para["UNIT"])
             derived = para.get("DERIVED_UNIT")
@@ -253,11 +207,11 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"{args.task_simulations} sim(s) = {planned} trajectory(ies), "
               f"split _{split}.")
         for task in task_indices:
-            theta_set_path = spec.set_path(
-                paths, task, data_bank_root, timing_label, compress, split)
+            theta_set_path = paths.theta_set_path(
+                task, data_bank_root, timing_label, compress, split)
             traj_dir = paths.trajectory_dir(
                 task, data_bank_root, timing_label, split)
-            print(f"  writes {spec.set_label:<13}(task {task}): {theta_set_path}")
+            print(f"  writes theta set    (task {task}): {theta_set_path}")
             print(f"  writes trajectories (task {task}): {traj_dir}/  "
                   f"({args.task_simulations} .h5 file(s))")
         print("\n[DRY RUN] configuration validated; all outputs resolved.")
@@ -265,8 +219,8 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         return
 
     # ---- Sample the parameter sets in log space, exponentiate to physical space --
-    low = spec.lower
-    high = spec.upper
+    low = np.array(theta_lower_bound())
+    high = np.array(theta_upper_bound())
     rng = np.random.default_rng(args.seed)
     theta_log10 = rng.uniform(
         low=low, high=high,
@@ -289,8 +243,8 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         traj_dir.mkdir(parents=True, exist_ok=True)
 
         # Write the sampled set: incremental zarr.open for compressed, save_theta_set for plain.
-        theta_set_path = spec.set_path(
-            paths, task_alias, data_bank_root, timing_label, compress, split)
+        theta_set_path = paths.theta_set_path(
+            task_alias, data_bank_root, timing_label, compress, split)
         theta_set_path.parent.mkdir(parents=True, exist_ok=True)
         theta_set_data = theta_sets[task]  # shape (task_simulations, n_params)
 
@@ -317,7 +271,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             dump=args.debug_dump,
             dump_dir=(paths.debug_run_dir(data_bank_root, timing_label, "RDS", split)
                       / f"TASK_{task_alias}"),
-            run_label=f"{paths.project_alias}_{timing_label}_TASK_{task_alias}_{split}",
+            run_label=f"{paths.rds_alias}_{timing_label}_TASK_{task_alias}_{split}",
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         )
         theta_log10_task = theta_log10[task]
@@ -328,8 +282,8 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             theta = theta_set_data[sim]
 
             if args.verbose:
-                print(f"\n  Sampled {spec.draw_noun} (sim {sim + 1}|{args.task_simulations}):")
-                for i, para in enumerate(spec.draw_spec):
+                print(f"\n  Sampled theta (sim {sim + 1}|{args.task_simulations}):")
+                for i, para in enumerate(PARAMETERIZATION):
                     val = theta[i]
                     print(f"    {para['KEY']:<32}  =  {val:10.4g}   "
                           f"(log10 = {np.log10(val):+.3f})")
@@ -339,7 +293,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             # unseeded, so identical-posterior reproducibility is unreachable
             # regardless; the sampled set is persisted per task and the global
             # task index is the provenance handle.
-            smut = spec.build_sim(theta, args.seed, args.skin_factor, args.verbose)
+            smut = _build_sim(theta, args.seed, args.skin_factor, args.verbose)
 
             traj_path = paths.trajectory_path(
                 task_alias, sim, data_bank_root, timing_label, split)
@@ -361,7 +315,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             # ---- Sim-0 diagnostics (debug mode) -----------------------
             if reporter.enabled and sim == 0:
                 theta_by_key = {p["KEY"]: theta[i]
-                                for i, p in enumerate(spec.draw_spec)}
+                                for i, p in enumerate(PARAMETERIZATION)}
                 counts = [theta_by_key.get("count_alp", float("nan")),
                           theta_by_key.get("count_bet", float("nan")),
                           theta_by_key.get("count_chi", float("nan"))]
@@ -389,7 +343,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.check_file("trajectory", traj_path)
 
                 # Full prior-range vs sampled-value summary for this simulation.
-                headers, prior_rows = prior_sampling_table(spec.draw_spec, theta)
+                headers, prior_rows = prior_sampling_table(PARAMETERIZATION, theta)
                 reporter.table(
                     "Prior sampling (sim 0)", headers, prior_rows,
                     note="Log-uniform prior bounds and the value drawn for this "
@@ -397,7 +351,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                          "particle numbers the run was seeded with -- cross-check "
                          "against the rendered video.",
                 )
-                fixed_headers, fixed_rows = fixed_parameters_table(spec.fixed_spec)
+                fixed_headers, fixed_rows = fixed_parameters_table(PARAMETERIZATION_RAW)
                 reporter.table(
                     "Fixed parameters", fixed_headers, fixed_rows,
                     note="Non-learnable parameters held constant across all "
@@ -421,8 +375,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                         note="total firings of this reaction channel over the run.")
 
                 if reporter.dump:
-                    import warnings as _warnings
                     from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
+                        collapse_species_axis,
+                        extract_subunit_lineage,
                         extract_trajectory_poses,
                     )
                     from srm_and_sbi_monomer_dimer_alp.visualization_rds import (
@@ -434,13 +389,19 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                         caption="Total firings of each reaction channel over the "
                                 "trajectory (fusion, fission, (im)mobilization).",
                     )
-                    tray_poses, _ = extract_trajectory_poses(
-                        tray, return_dimer_mask=True)
-                    with _warnings.catch_warnings():
-                        _warnings.filterwarnings(
-                            "ignore", message="All-NaN slice encountered",
-                            category=RuntimeWarning)
-                        poses = np.nanmax(tray_poses, axis=3)
+                    poses = collapse_species_axis(extract_trajectory_poses(tray))
+                    # Replay the reaction records into the subunit lineage the DLI stage
+                    # consumes; the extractor fails loud on any conservation violation, so
+                    # reaching the stat below IS the check.
+                    lineage = extract_subunit_lineage(tray)
+                    reporter.check(
+                        "subunit_lineage_replays", True,
+                        f"{lineage.n_subunits} subunits over {lineage.soul_ids.shape[0]} "
+                        f"particle ids",
+                        note="the reaction records replay into a per-frame subunit -> "
+                             "particle table covering every subunit exactly once (the "
+                             "RDS/DLI handoff of the labeling model).",
+                    )
                     xy = poses[..., :2].reshape(-1, 2)
                     xy = xy[~np.isnan(xy).any(axis=1)]
                     reporter.save_figure(

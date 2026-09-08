@@ -7,9 +7,12 @@ inference target, so this stage draws the six imaging parameters per simulation 
 imaging prior box (the training label) -- whereas the biology stage marginalizes them from the
 ``Nuisance_DLI`` artifact -- and persists the drawn imaging theta as the primary ``Theta_Set``.
 The five SCOPE camera parameters are still marginalized (recorded as ``Nuisance_SCOPE``). The
-trajectories consumed here are the diffusion-only trajectories produced by the detector RDS
-stage. Detector data namespaces separately under the ``_DETECTOR`` runtime-prefix qualifier, so
-nothing collides with biology.
+trajectories consumed here are the SHARED RDS tier -- the reactive trajectories the single RDS
+entry point (``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py``) generates once under the bare
+alias for both workflows; their ten-parameter ``Theta_Set`` is, to this workflow, the record of
+the reaction-diffusion nuisance it marginalizes. The detector has no RDS stage of its own. Every
+product this stage writes namespaces under the ``_DETECTOR`` qualifier and the condition token,
+so nothing collides with biology.
 
 The DLI stage runs on ONE shared engine used by both workflows:
 ``srm_and_sbi_monomer_dimer_alp.simulation_dli_runner.run_dli`` -- which renders every video through the
@@ -25,10 +28,14 @@ Outputs (the ``{timing_label}`` token, e.g. ``5S_50FPS``, is rendered from
         -- imaging-theta labels (the inference target / training label)
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Nuisance_SCOPE_Theta_Set_TASK_{n}_{split}.zarr
         -- the five SCOPE camera parameters drawn from their a-priori box (physical)
+    <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Labeling_Set_TASK_{n}_{split}.zarr
+        -- the per-simulation labeling record (true and visible initial composition)
+    (``<project_alias>`` here carries the qualifier AND the condition:
+    ``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_...``)
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py \\
-        --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 \\
+        --condition FAB --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 \\
         --video-dtype-bits 8 --seed None
     (repeat with --split test --tasks 5, and --split eval --tasks 2)
     For the full detector smoke test see section 2.5 in VALIDATION.md.

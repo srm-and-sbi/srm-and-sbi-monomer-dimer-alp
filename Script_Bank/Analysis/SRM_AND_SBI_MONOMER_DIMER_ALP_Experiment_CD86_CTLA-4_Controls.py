@@ -49,6 +49,7 @@ import tifffile
 import torch
 import torch._dynamo
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
     map_estimate,
@@ -299,7 +300,7 @@ def main(args: argparse.Namespace) -> None:
         total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing,
     )
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = PARAMETERS.paths
+    paths = PARAMETERS.paths.with_condition(args.condition)   # the MET estimator's condition namespace
     eval_cfg = PARAMETERS.inference.evaluation
     span = args.experiment_span_seconds
 
@@ -592,6 +593,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     eval_cfg = PARAMETERS.inference.evaluation
     parser = argparse.ArgumentParser(
         description="MAP-estimate parameters from real experimental videos (no ground truth).",
+    )
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
     )
     parser.add_argument(
         "--total-time-seconds", type=float,

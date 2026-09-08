@@ -1,7 +1,15 @@
 #!/bin/bash
 # =============================================================================
-# Slurm HPC generation submitter: RDS -> DLI, many tasks packed per node.
+# Slurm HPC generation submitter (detector): DLI over the shared trajectory tier,
+# many tasks packed per node.
 # =============================================================================
+# The detector has NO RDS stage of its own. It re-images the shared RDS trajectory
+# tier -- generated once, under the bare alias, by the RDS-only biology simulation
+# (`SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh simulation SIM_STAGE=rds`) -- with the six
+# imaging parameters drawn from the detector prior (the training label) and the camera
+# from the SCOPE box, under the labeling law of CONDITION. The tier must exist for every
+# task this submission renders (same SPLIT, task ids, TASK_SIMS, and TOTAL_TIME); the
+# DLI stage fails loud on a missing trajectory.
 # The CPU partition is typically exclusive, so each job owns a whole node. We
 # launch the packed tasks as background processes (the OS spreads them over the
 # node's cores) and `wait`.
@@ -11,20 +19,17 @@
 #
 #     tid = TASK_OFFSET + SLURM_ARRAY_TASK_ID * SLURM_NTASKS_PER_NODE + k
 #
-# Knobs (--export / CLI): SPLIT, TASK_SIMS, TOTAL_TIME, TASK_OFFSET, TASK_COUNT
-# (tasks this submission generates; default = --ntasks-per-node), VIDEO_DTYPE_BITS
-# (DLI output video dtype in bits, default 8; 8|16), SKIN_FACTOR (ReaDDy
-# neighbor-list skin as a MULTIPLE of the particle diameter -- an RDS-only
-# PERFORMANCE knob, not physics; unset = the code default 10x = 100 nm; see
-# SimulationRDS.neighbor_list_skin_factor); pack size and core share are
-# set by --ntasks-per-node / --cpus-per-task. Debug knobs
-# (default off, production-identical when unset): PROBE=1 logs per-sim resource
-# use (threads/open-fds/RSS); VERBOSE=1 adds per-sim detail (reaction counts, shapes);
-# DEBUG_DUMP=1 writes the DiagnosticReporter console.log + arrays; SEED=<int> fixes
-# the RNG for a reproducible run. SEED is for isolated reproducibility debugging
-# only; leave it unset for the smoke/check and normal campaigns because detector
-# generation is seedless by design (a fixed seed freezes per-video variability and
-# reintroduces the frozen-data regression). See VALIDATION.md section 2.5.
+# Knobs (--export / CLI): SPLIT, CONDITION (FAB|INLB; the DLI stage's labeling law --
+# REQUIRED), TASK_SIMS, TOTAL_TIME, TASK_OFFSET, TASK_COUNT (tasks this submission
+# renders; default = --ntasks-per-node), VIDEO_DTYPE_BITS (output video dtype in bits,
+# default 8; 8|16); pack size and core share are set by --ntasks-per-node /
+# --cpus-per-task. Debug knobs (default off, production-identical when unset): PROBE=1
+# logs per-sim resource use (threads/open-fds/RSS); VERBOSE=1 adds per-sim detail
+# (emitter counts, shapes); DEBUG_DUMP=1 writes the DiagnosticReporter console.log +
+# arrays; SEED=<int> fixes the RNG for a reproducible run. SEED is for isolated
+# reproducibility debugging only; leave it unset for the smoke/check and normal
+# campaigns because generation is seedless by design (a fixed seed freezes per-video
+# variability and reintroduces the frozen-data regression). See VALIDATION.md section 2.5.
 #
 # ALWAYS submit with --array (one element per node, --array=0-0 for a single
 # node) so the batch-log %a is a clean node number (0,1,...); without --array,
@@ -33,20 +38,22 @@
 # Submit from the repo root and forward REPO: Slurm spools this script to
 # /var/spool, so the child must be told where the repo is (--export=ALL,REPO=$PWD).
 # --job-name follows the data-file naming convention
-# SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_<timing_label>_Simulation_<SPLIT>; with no TOTAL_TIME set
-# the launcher default (2.0 s) gives timing_label 2S_50FPS, so use a different
-# job-name token (e.g. 5S_50FPS) whenever you pass TOTAL_TIME=5.0.
-# CORE=100 production (TRAIN 8 / TEST 2 / EVAL 1; 1000 sims/task), one node each:
+# SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_<CONDITION>_<timing_label>_Simulation_<SPLIT>; with no
+# TOTAL_TIME set the launcher default (2.0 s) gives timing_label 2S_50FPS, so use a
+# different job-name token (e.g. 5S_50FPS) whenever you pass TOTAL_TIME=5.0.
+# CORE=100 production (TRAIN 8 / TEST 2 / EVAL 1; 1000 sims/task), one node each, over an
+# existing tier:
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
-#   sbatch --array=0-0 --ntasks-per-node=2 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Simulation_TEST  --export=ALL,REPO=$PWD,SPLIT=test,TASK_OFFSET=0,TASK_COUNT=2  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
-#   sbatch --array=0-0 --ntasks-per-node=1 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Simulation_EVAL  --export=ALL,REPO=$PWD,SPLIT=eval,TASK_OFFSET=0,TASK_COUNT=1  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
-# Two nodes, 20 tasks (element 0 -> Task_0..9, element 1 -> Task_10..19):
-#   sbatch --array=0-1 --ntasks-per-node=10 --cpus-per-task=4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=20 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
-# Grow TRAIN later (appends tasks 8..15, no regeneration):
-#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SPLIT=train,TASK_OFFSET=8,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
+#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
+#   sbatch --array=0-0 --ntasks-per-node=2 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Simulation_TEST  --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=test,TASK_OFFSET=0,TASK_COUNT=2  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
+#   sbatch --array=0-0 --ntasks-per-node=1 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Simulation_EVAL  --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=eval,TASK_OFFSET=0,TASK_COUNT=1  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
+# The other condition is one more submission per split over the SAME tier (CONDITION=INLB,
+# job-name token _INLB_). Two nodes, 20 tasks (element 0 -> Task_0..9, element 1 -> Task_10..19):
+#   sbatch --array=0-1 --ntasks-per-node=10 --cpus-per-task=4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=20 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
+# Grow TRAIN later (renders tasks 8..15 once the tier holds them, re-rendering nothing):
+#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=8,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
 # -----------------------------------------------------------------------------
-#SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation   # fallback; per-run --job-name (with timing_label) overrides this
+#SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation   # fallback; per-run --job-name (with condition + timing_label) overrides this
 #SBATCH --partition=YOUR_PARTITION   # set to your cluster's CPU partition (or override on the sbatch command line)
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=8
@@ -105,52 +112,34 @@ ARRAY_ID="${SLURM_ARRAY_TASK_ID:-0}"
 JOB_TAG="${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}"
 
 # Debug knobs (default off -> production-identical). PROBE=1 adds per-sim resource
-# logging; VERBOSE=1 / DEBUG_DUMP=1 add per-sim detail / dumps; SEED=<int> fixes the
-# RNG. (Per-sim ReaDDy cleanup is always on.)
+# logging; VERBOSE=1 / DEBUG_DUMP=1 add per-sim detail / dumps; SEED=<int> fixes the RNG.
 SIM_FLAGS=""
 [ "${PROBE:-0}" = 1 ]      && SIM_FLAGS="$SIM_FLAGS --probe"
 [ "${VERBOSE:-0}" = 1 ]    && SIM_FLAGS="$SIM_FLAGS --verbose"
 [ "${DEBUG_DUMP:-0}" = 1 ] && SIM_FLAGS="$SIM_FLAGS --debug-dump"
 [ -n "${SEED:-}" ]         && SIM_FLAGS="$SIM_FLAGS --seed ${SEED}"
 
-# SKIN_FACTOR (RDS-only): ReaDDy neighbor-list (Verlet) skin as a MULTIPLE of the
-# particle diameter -- a performance knob (coarsens the cell-linked-list grid; does
-# NOT change the physics). Passed ONLY to the RDS entry point (DLI has no such flag).
-# Unset -> the code default (SimulationRDS.neighbor_list_skin_factor = 10x = 100 nm).
-RDS_ONLY_FLAGS=""
-[ -n "${SKIN_FACTOR:-}" ]  && RDS_ONLY_FLAGS="$RDS_ONLY_FLAGS --skin-factor ${SKIN_FACTOR}"
-
-# SIM_STAGE selects which stage(s) run per task: both (default) | rds | dli. SIM_STAGE=dli is
-# a DLI-only re-run that reuses the existing trajectories (e.g. to re-render videos
-# after a DLI-side fix without repeating the expensive RDS).
-SIM_STAGE="${SIM_STAGE:-both}"
-case "$SIM_STAGE" in both|rds|dli) ;; *) echo "bad SIM_STAGE=$SIM_STAGE (use both|rds|dli)" >&2; exit 1;; esac
+# CONDITION selects the DLI stage's static labeling law (FAB = MET-FAB, INLB = MET-INLB).
+# This launcher IS the DLI stage, so it is always required.
+CONDITION="${CONDITION:-}"
+case "$CONDITION" in FAB|INLB) ;; *) echo "FATAL: CONDITION='$CONDITION' (use FAB|INLB; the detector simulation is a DLI pass over the shared tier and always needs it)." >&2; exit 1;; esac
 
 start=$(( TASK_OFFSET + ARRAY_ID * PER_NODE ))
 end=$(( TASK_OFFSET + TASK_COUNT ))
-echo "=== Simulation | $(hostname) | split=${SPLIT} sims=${TASK_SIMS} time=${TOTAL_TIME}s | seed=None | tasks [${start}..$(( end - 1 ))] ==="
+echo "=== Detector Simulation (DLI over the shared tier) | $(hostname) | split=${SPLIT} condition=${CONDITION} sims=${TASK_SIMS} time=${TOTAL_TIME}s | seed=None | tasks [${start}..$(( end - 1 ))] ==="
 
 declare -a PIDS=()
 for (( tid=start; tid < start + PER_NODE && tid < end; tid++ )); do
     out="${MON}/${SLURM_JOB_NAME}_${JOB_TAG}_Node_${ARRAY_ID}_Task_${tid}.out"
-    ( rc=0
-      if [ "$SIM_STAGE" != dli ]; then
-        python -u "$PRIME/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_RDS.py" \
-            --task-id "$tid" --task-simulations "$TASK_SIMS" \
-            --total-time-seconds "$TOTAL_TIME" --split "$SPLIT" $SIM_FLAGS $RDS_ONLY_FLAGS || rc=1
-      fi
-      if [ "$rc" = 0 ] && [ "$SIM_STAGE" != rds ]; then
-        python -u "$PRIME/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py" \
-            --task-id "$tid" --task-simulations "$TASK_SIMS" \
-            --total-time-seconds "$TOTAL_TIME" --split "$SPLIT" \
-            --video-dtype-bits "$VIDEO_DTYPE_BITS" $SIM_FLAGS || rc=1
-      fi
-      exit "$rc" ) > "$out" 2>&1 &
+    ( python -u "$PRIME/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py" \
+          --task-id "$tid" --task-simulations "$TASK_SIMS" \
+          --total-time-seconds "$TOTAL_TIME" --split "$SPLIT" --condition "$CONDITION" \
+          --video-dtype-bits "$VIDEO_DTYPE_BITS" $SIM_FLAGS ) > "$out" 2>&1 &
     PIDS+=( "$!" )
     echo "  -> Task ${tid} -> $(basename "$out")"
 done
 
 rc=0
 for p in "${PIDS[@]}"; do wait "$p" || rc=1; done
-echo "=== Simulation | array element ${ARRAY_ID} (${SPLIT}) complete (rc=${rc}) ==="
+echo "=== Detector Simulation | array element ${ARRAY_ID} (${SPLIT}, ${CONDITION}) complete (rc=${rc}) ==="
 exit "$rc"

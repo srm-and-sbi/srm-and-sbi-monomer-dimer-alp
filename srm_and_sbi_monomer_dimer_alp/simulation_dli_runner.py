@@ -1,11 +1,21 @@
 """Shared DLI-stage engine for both DIMER workflows (biology + detector).
 
 ``run_dli(cfg, args)`` holds the DLI orchestration -- pre-run banner, the SCOPE
-camera draw, the dry-run probe, the per-task render loop (read trajectory ->
-extract poses -> frame-count guard -> nanmax collapse -> assemble the eleven-key
-imaging vector -> ``render_dli_video`` -> dtype convert -> store), the sim-0
-diagnostics, and the end-of-task report. The two entry-point scripts shrink to:
-build the workflow ``WorkflowConfig``, parse args, call ``run_dli``.
+camera draw, the labeling-law resolution for the run's ``--condition``, the dry-run
+probe, the per-task render loop (read trajectory -> extract poses + subunit lineage ->
+frame-count guard -> species-axis collapse -> draw the static per-subunit dye counts ->
+assemble the eleven-key imaging vector -> ``render_dli_video`` -> dtype convert ->
+store), the per-task ``Labeling_Set`` record, the sim-0 diagnostics, and the end-of-task
+report. The two entry-point scripts shrink to: build the workflow ``WorkflowConfig``,
+parse args, call ``run_dli``.
+
+The experimental condition (``FAB`` or ``INLB``) is a DLI-side axis: the same RDS
+trajectories are re-imaged per condition under the condition's static labeling law
+(``labeling``), so the DLI stage requires ``--condition`` in both workflows while the
+trajectory tier -- ONE shared tier under the bare sibling alias, read by both workflows
+-- carries neither qualifier nor condition. Every subunit draws its dye count once per
+recording; only dyes render; the ``Labeling_Set`` records, per simulation, the true and
+visible initial composition the draw produced.
 
 DLI genuinely diverges more than RDS: the imaging block's SOURCE and ROLE differ
 between the workflows, so the fork is larger and localized in labeled branches on
@@ -33,7 +43,6 @@ from __future__ import annotations
 
 import argparse
 import time
-import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -52,8 +61,18 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import (
     fixed_parameters_table,
     prior_sampling_table,
 )
+from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_DISPLAY
 from srm_and_sbi_monomer_dimer_alp.io import (
     convert_video_dtype, load_data, save_theta_set, save_video_set,
+)
+from srm_and_sbi_monomer_dimer_alp.labeling import (
+    LABELING_CONDITIONS,
+    LABELING_SET_COLUMNS,
+    draw_dye_counts,
+    labeling_summary,
+    occupancy_per_subunit,
+    parse_occupancy,
+    resolve_labeling_law,
 )
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
     PARAMETER_RAW_FIND,
@@ -63,7 +82,9 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
     RunTiming,
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
-from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import extract_trajectory_poses
+from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
+    collapse_species_axis, extract_subunit_lineage, extract_trajectory_poses,
+)
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
 )
@@ -85,17 +106,26 @@ _DLI_PARAM_GROUPS = {
 
 
 def _nuisance_dli_path(paths, task_alias, data_bank_root, timing_label, compress, split):
-    """Photophysics (calibrated-imaging) nuisance provenance file: the canonical
-    theta-set path with ``Theta_Set`` -> ``Nuisance_DLI_Theta_Set`` (biology only)."""
-    base = paths.theta_set_path(task_alias, data_bank_root, timing_label, compress, split)
-    return base.with_name(base.name.replace("Theta_Set", "Nuisance_DLI_Theta_Set"))
+    """Photophysics (calibrated-imaging) nuisance provenance file: the theta-set pattern
+    with the object token ``Nuisance_DLI_Theta_Set`` (biology only; a DLI product, so it
+    carries the condition)."""
+    return paths.record_set_path("Nuisance_DLI_Theta_Set", task_alias, data_bank_root,
+                                 timing_label, compress, split)
 
 
 def _nuisance_scope_path(paths, task_alias, data_bank_root, timing_label, compress, split):
-    """SCOPE camera-nuisance provenance file: the canonical theta-set path with
-    ``Theta_Set`` -> ``Nuisance_SCOPE_Theta_Set`` (both workflows, shared camera block)."""
-    base = paths.theta_set_path(task_alias, data_bank_root, timing_label, compress, split)
-    return base.with_name(base.name.replace("Theta_Set", "Nuisance_SCOPE_Theta_Set"))
+    """SCOPE camera-nuisance provenance file: the theta-set pattern with the object token
+    ``Nuisance_SCOPE_Theta_Set`` (both workflows, shared camera block; a DLI product)."""
+    return paths.record_set_path("Nuisance_SCOPE_Theta_Set", task_alias, data_bank_root,
+                                 timing_label, compress, split)
+
+
+def _labeling_set_path(paths, task_alias, data_bank_root, timing_label, compress, split):
+    """Labeling provenance file: the theta-set pattern with the object token ``Labeling_Set``
+    (both workflows; a DLI product); one ``labeling.LABELING_SET_COLUMNS`` row per
+    simulation -- the true and visible initial composition the static dye draw produced."""
+    return paths.record_set_path("Labeling_Set", task_alias, data_bank_root,
+                                 timing_label, compress, split)
 
 
 @dataclass(frozen=True)
@@ -133,9 +163,19 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     geom = PARAMETERS.simulation.stem
     rds_cfg = PARAMETERS.simulation.rds
     dli_cfg = PARAMETERS.simulation.dli
-    paths = cfg.paths
+    # Every DLI product is condition-specific: the labeling law re-images the condition-free
+    # trajectories, so the run's Paths carry the condition token from here on (the
+    # trajectory and biology theta-set builders strip it again by themselves).
+    paths = cfg.paths.with_condition(args.condition)
     div = "=" * 72
     timing_label = timing.label
+
+    # ---- Labeling law: the DLI-side condition axis. Resolved once per run, applied per
+    # simulation as a static per-subunit dye draw (labeling.draw_dye_counts).
+    condition = args.condition
+    law_name, law = resolve_labeling_law(condition, args.labeling_law)
+    occupancy = parse_occupancy(args.occupancy)
+    rds_species = PARAMETERS.simulation.rds
 
     # ---- Imaging block setup (the six photophysics/imaging + five SCOPE camera).
     # Both share the SCOPE box (drawn from det.scope_*_bound) and the six imaging keys
@@ -149,7 +189,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     if artifact:
         # biology: resolve the durable Nuisance_DLI artifact (like the estimator: EVAL tier,
         # Detector alias). Loaded/guarded below; the six photophysics are drawn from it per task.
-        det_paths = det.detector_paths(PARAMETERS.paths)
+        # The calibrated imaging is the CONDITION's detector calibration (one artifact per
+        # condition), so the detector paths carry the same condition token.
+        det_paths = det.detector_paths(PARAMETERS.paths).with_condition(args.condition)
         posit_dir = PARAMETERS.machine.root_for("EVAL") / PARAMETERS.paths.posit_subdir
         nuisance_artifact = nuisance_dli_artifact_path(
             posit_dir, det_paths.project_alias, timing_label)
@@ -211,12 +253,18 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  {rds_cfg.particle_species_names}   "
           f"A=Monomer, B=Mobile Dimer, C=Immobile Dimer")
 
+    print("\nLabeling (static degree of labeling; the condition axis of the DLI stage):")
+    print(f"  condition               : {condition}   ({CONDITION_DISPLAY[condition]})")
+    print(f"  labeling law            : {law_name} = {law.describe()}   "
+          f"(per-subunit dye count, drawn once per recording; fixed, never inferred)")
+    print(f"  occupancy               : {occupancy}   (probe-occupancy probability; 1 = saturating)")
+    print(f"  visible fractions       : monomer {law.visible_probability:.3f}, dimer "
+          f"{law.visible_fraction(2):.3f}   (derived from the law at occupancy 1)")
+
     print("\nDLI runtime defaults:")
-    print(f"  dimer_mule              : {dli_cfg.dimer_mule}   "
-          f"(multiply-model factor; inert under the sum model — see PROJECT_CONTEXT.md)")
     print(f"  optical background      : SCOPE nuisance kappa_o (drawn per sim; pre-PSF photon floor)")
     print(f"  sqrt_2sigma_dist_label  : {dli_cfg.sqrt_2sigma_dist_label}            "
-          f"(PSF width sampling distribution)")
+          f"(PSF width sampling distribution; one width per subunit)")
 
     print("\nOutput destinations:")
     print(f"  data_bank_root       : {data_bank_root}")
@@ -224,11 +272,11 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         print(f"  reads Nuisance_DLI    : {nuisance_artifact}   "
               f"(calibrated-imaging photophysics artifact; durable tier)")
         print(f"  reads theta sets     : <data_bank>/{paths.theta_subdir}/"
-              f"{paths.project_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
-              f"(10-RDS labels; diagnostics only, not re-written)")
+              f"{paths.theta_set_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
+              f"(10-RDS labels; the shared tier, bare alias; diagnostics only, not re-written)")
         print(f"  reads trajectories   : <data_bank>/{paths.video_subdir}/"
-              f"{paths.trajectory_repo}/{paths.project_alias}_{timing_label}_TASK_{{n}}/"
-              f"{paths.project_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5")
+              f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
+              f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the shared tier: bare alias)")
         print(f"  writes Nuisance_DLI   : <data_bank>/{paths.theta_subdir}/"
               f"{paths.project_alias}_{timing_label}_Nuisance_DLI_Theta_Set_TASK_{{n}}.{output_fmt}   "
               f"(photophysics drawn from the artifact)")
@@ -240,17 +288,21 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"(dtype: {target_dtype_name})")
     else:
         print(f"  writes theta sets   : <data_bank>/{paths.theta_subdir}/"
-              f"{paths.project_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
+              f"{paths.theta_set_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
               f"(imaging-theta labels; the inference target)")
         print(f"  writes SCOPE sets    : <data_bank>/{paths.theta_subdir}/"
               f"{paths.project_alias}_{timing_label}_Nuisance_SCOPE_Theta_Set_TASK_{{n}}.{output_fmt}   "
               f"(marginalized camera nuisance)")
         print(f"  reads trajectories  : <data_bank>/{paths.video_subdir}/"
-              f"{paths.trajectory_repo}/{paths.project_alias}_{timing_label}_TASK_{{n}}/"
-              f"{paths.project_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5")
+              f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
+              f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the shared tier: bare alias)")
         print(f"  writes video sets   : <data_bank>/{paths.video_subdir}/"
               f"{paths.project_alias}_{timing_label}_Video_Set_TASK_{{n}}.{output_fmt}   "
               f"(dtype: {target_dtype_name})")
+
+    print(f"  writes Labeling_Set  : <data_bank>/{paths.theta_subdir}/"
+          f"{paths.project_alias}_{timing_label}_Labeling_Set_TASK_{{n}}.{output_fmt}   "
+          f"(per-simulation labeling record: {', '.join(LABELING_SET_COLUMNS)})")
 
     if args.verbose:
         if artifact:
@@ -319,6 +371,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         print(f"[DRY RUN] plans {n_tasks} task(s) (index {task_span}) x "
               f"{args.task_simulations} sim(s) = {planned} video(s), "
               f"split _{split}.")
+        print(f"[DRY RUN] labeling: condition {condition} ({CONDITION_DISPLAY[condition]}), "
+              f"law {law_name} = {law.describe()}, occupancy {occupancy}.")
         if artifact:
             # The imaging block is marginalized: photophysics from the persisted Nuisance_DLI
             # artifact (a required input, like the estimator), camera from the SCOPE box.
@@ -427,6 +481,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         scope_data = scope_sets[task_alias]                                   # (sims, 5) physical, DETECTOR_SCOPE_KEYS order
         scope_set_path = _nuisance_scope_path(
             paths, task_alias, data_bank_root, timing_label, compress, split)
+        labeling_set_path = _labeling_set_path(
+            paths, task_alias, data_bank_root, timing_label, compress, split)
+        labeling_rows = np.full((args.task_simulations, len(LABELING_SET_COLUMNS)), np.nan)
 
         # ---- Draw + record this task's imaging block. The six-block source + record
         # provenance is the biology/detector fork; the five-block SCOPE record is shared.
@@ -520,9 +577,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 task_alias, sim, data_bank_root, timing_label, split)
             print(f"  Reading trajectory: {traj_path}")
             tray = readdy.Trajectory(filename=str(traj_path))
-            tray_poses, dimer_mask = extract_trajectory_poses(
-                tray, return_dimer_mask=True, verbose=args.verbose,
-            )
+            tray_poses = extract_trajectory_poses(tray, verbose=args.verbose)
+            lineage = extract_subunit_lineage(tray, verbose=args.verbose)
             # Guard: the trajectory's own frame count must match this run's declared
             # duration. A mismatch means the trajectory was generated at a different
             # --total-time-seconds than the run claims, so the rendered video would be
@@ -533,26 +589,37 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     f"declares {timing.frame_count} frames (--total-time-seconds "
                     f"{args.total_time_seconds}). Refusing to render a duration-mismatched video."
                 )
-            # Collapse species-rank axis: each particle's (x,y,z) coord at each frame
-            # (NaN for absent particles, taken as max-over-rank since each particle is in
-            # exactly one species per frame so only one rank has a non-NaN entry).
-            # Suppress the benign all-NaN-slice warning that nanmax emits whenever a
-            # (frame, particle) slot has no species present in any rank.
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message="All-NaN slice encountered",
-                    category=RuntimeWarning,
-                )
-                pro_tray_poses = np.nanmax(a=tray_poses, axis=3)
+            # Collapse the species-rank axis: each particle's (x, y, z) at each frame, NaN
+            # where absent (a particle is exactly one species per frame).
+            soul_poses = collapse_species_axis(tray_poses)
+
+            # Static labeling draw: one dye count per SUBUNIT, once per recording, from the
+            # condition's law composed with the probe occupancy (per initial species). The
+            # lineage carries each subunit -- and so its dyes -- through the reactions; only
+            # dyes render. Seeded per (seed, task, sim) when --seed is given so a task index
+            # draws the same labeling under --task-id fan-out; None stays non-deterministic.
+            rank_to_species = {int(rank): name for name, rank in tray.particle_types.items()}
+            initial_species = [rank_to_species[int(rank)] for rank in lineage.host_rank[0]]
+            labeling_rng = np.random.default_rng(
+                None if args.seed is None else [args.seed, task_alias, sim])
+            dye_counts = draw_dye_counts(
+                law, lineage.n_subunits, labeling_rng,
+                occupancy=occupancy_per_subunit(occupancy, initial_species))
+            monomer_ranks = [int(tray.particle_types[name]) for name, n_sub
+                             in zip(rds_species.particle_species_names,
+                                    rds_species.subunit_counts_per_species)
+                             if n_sub == 1 and name in tray.particle_types]
+            labeling_rows[sim] = labeling_summary(
+                dye_counts, lineage.host_index[0], lineage.host_rank[0], monomer_ranks)
 
             # Assemble the full eleven-key imaging vector (det.DETECTOR_IMAGING order): the six
             # photophysics/imaging followed by the five SCOPE camera-nuisance draws.
             imaging_physical = np.concatenate([imaging_draw[sim], scope_data[sim]])
             frames = render_dli_video(
-                pro_tray_poses=pro_tray_poses,
+                soul_poses=soul_poses,
+                host_index=lineage.host_index,
+                dye_counts=dye_counts,
                 imaging_physical=imaging_physical,
-                dimer_mask=dimer_mask,
                 seed=args.seed,   # default None -> non-deterministic
                 verbose=args.verbose,
             )
@@ -571,8 +638,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.checkpoint(
                     "DLI render (sim 0)",
                     tray_poses=tray_poses,
-                    dimer_mask=dimer_mask,
-                    pro_tray_poses=pro_tray_poses,
+                    host_index=lineage.host_index,
+                    dye_counts=dye_counts,
+                    soul_poses=soul_poses,
                     frames=frames,
                     video=video,
                 )
@@ -590,10 +658,16 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                          "overflow/clipping bug).",
                 )
                 reporter.stat(
-                    "particles", int(tray_poses.shape[1]),
-                    note="number of particle tracks across the trajectory "
-                         "(all species combined).",
+                    "particle_ids", int(tray_poses.shape[1]),
+                    note="ReaDDy particle ids over the trajectory (all species; a subunit "
+                         "takes a new id at every reaction it undergoes).",
                 )
+                for column, value in zip(LABELING_SET_COLUMNS, labeling_rows[sim]):
+                    reporter.stat(
+                        column, int(value),
+                        note=f"labeling record ({law_name}, occupancy {occupancy}); "
+                             "see labeling.LABELING_SET_COLUMNS.",
+                    )
                 reporter.stat(
                     "frame_count", int(video.shape[0]),
                     expected=str(timing.frame_count),
@@ -626,8 +700,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.table(
                     "Parameters of this video (sim 0)", headers, prior_rows,
                     note="The prior bounds and sampled values behind this video. "
-                         "count_alp/bet/chi are the initial A/B/C particle counts -- "
-                         "compare against the spots visible in the sample frame.",
+                         "count_alp/bet/chi are the TRUE initial A/B/C particle counts; only "
+                         "labeled subunits render (see the labeling record), so the sample "
+                         "frame shows fewer spots.",
                 )
                 fixed_headers, fixed_rows = fixed_parameters_table(PARAMETERIZATION_RAW)
                 reporter.table(
@@ -663,6 +738,18 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 _th, _fd, _rss = probe_resources()
                 print(f"[probe] sim {sim + 1}: threads={_th} fds={_fd} "
                       f"rss_mb={_rss}", flush=True)
+
+        # ---- Persist the per-simulation labeling record (both workflows) ----
+        print(f"  Writing Labeling_Set:   {labeling_set_path}")
+        if compress:
+            labeling_store = zarr.open(
+                store=str(labeling_set_path), mode="w", shape=labeling_rows.shape,
+                chunks=(1, labeling_rows.shape[1]), dtype=np.float64,
+                compressor=theta_compressor,
+            )
+            labeling_store[:, :] = labeling_rows
+        else:
+            save_theta_set(labeling_set_path, labeling_rows, compress=False)
 
         # ---- Save uncompressed buffer if not using .zarr ---------------
         if not compress:
@@ -714,6 +801,25 @@ def build_dli_parser() -> argparse.ArgumentParser:
              "Default: train.",
     )
     parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition whose labeling law re-images the trajectories: FAB "
+             "(MET-FAB; Poisson dye counts at the measured mean DOL 1.64) or INLB (MET-INLB; "
+             "Bernoulli dye counts at the measured labeling probability 0.5). Required: the RDS "
+             "trajectory tier is condition-free and every DLI product is condition-specific.",
+    )
+    parser.add_argument(
+        "--labeling-law", type=str, default=None,
+        help="Override the condition's baseline labeling law for a sensitivity run: a registry "
+             "key (e.g. FAB_BINOMIAL, FAB_NEGATIVE_BINOMIAL) or 'family:mean[:shape]' (e.g. "
+             "bernoulli:0.4). Default: the condition's baseline (FAB_POISSON / INLB_BERNOULLI).",
+    )
+    parser.add_argument(
+        "--occupancy", type=str, default="1.0",
+        help="Static probe-occupancy probability composing with the labeling law: one value, or "
+             "per initial species 'A=1.0,B=0.8,C=0.8'. A subunit not occupied by a probe carries "
+             "no dye. Default 1.0 (saturating; no effect).",
+    )
+    parser.add_argument(
         "--video-dtype-bits", type=int, default=8, choices=[8, 16],
         help="Output bit depth for video pixels: 8 (uint8) or 16 (uint16). "
              "Default 8.",
@@ -722,8 +828,8 @@ def build_dli_parser() -> argparse.ArgumentParser:
         "--seed",
         type=lambda v: None if str(v).strip().lower() in ("none", "") else int(v),
         default=None,
-        help="RNG seed for PSF widths, brightness states, and noise. "
-             "Default: None (non-deterministic).",
+        help="RNG seed for PSF widths, brightness states, noise, and the labeling draw "
+             "(per task and simulation). Default: None (non-deterministic).",
     )
     parser.add_argument(
         "--no-compress", action="store_true",

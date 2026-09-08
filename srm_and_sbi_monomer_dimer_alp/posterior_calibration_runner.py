@@ -40,6 +40,7 @@ import numpy as np
 import torch
 import torch._dynamo
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp import posterior_calibration as pcal
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
@@ -628,7 +629,7 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
     compress = True
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     eval_cfg = PARAMETERS.inference.evaluation
 
     if args.seed is not None:
@@ -783,6 +784,12 @@ def build_posterior_calibration_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Score a trained posterior's calibration on the EVAL namespace "
                     "(SBC / expected coverage / TARP / L-C2ST), overall and stratified.")
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,
         help="Video duration in seconds; must match the trained posterior's runs.")

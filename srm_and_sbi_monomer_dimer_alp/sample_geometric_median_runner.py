@@ -24,6 +24,7 @@ from typing import Callable, Sequence
 import numpy as np
 from matplotlib.figure import Figure
 
+from .labeling import LABELING_CONDITIONS
 from . import sample_geometric_median as sgm
 from .diagnostics import DiagnosticReporter
 
@@ -32,7 +33,7 @@ from .diagnostics import DiagnosticReporter
 # tokens "FAB"/"INLB" name the labeling condition in the data-file namespace and in the `kinds`
 # field of the Experiment output; presentation prepends the receptor (MET-). The mapping itself
 # lives in experiment_support, so every stage and analysis spells these names identically.
-from .experiment_support import CONDITION_CHOICES, KIND_OF_CONDITION
+from .experiment_support import KIND_OF_CONDITION
 
 
 @dataclass(frozen=True)
@@ -80,11 +81,9 @@ def load_experiment_maps(path, parameter_keys):
 def apply_condition(condition, vecs, labels):
     """Restrict a collection to one experimental condition using its per-row labels.
 
-    'pooled' passes through. A named condition on an unlabeled collection is a loud error rather
-    than a silent full-collection summary, because the two differ and the report would not say so.
+    A condition on an unlabeled collection is a loud error rather than a silent full-collection
+    summary, because the two differ and the report would not say so.
     """
-    if condition == "pooled":
-        return vecs, labels, " [pooled: both conditions]"
     if labels is None:
         raise SystemExit(f"--condition {condition} needs a collection carrying per-row condition "
                          f"labels; this one has none.")
@@ -177,11 +176,9 @@ def _figure_out_of_box(frac_below, frac_above, keys):
 # ---- report ------------------------------------------------------------------------------------
 
 def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
-    # A condition-restricted summary gets its own directory. The conditions are the comparison this
-    # analysis exists to support (monomer control versus dimer), so writing them to one path would
-    # let each run silently destroy the one before it and leave a report whose condition line is the
-    # only evidence of which is on disk. 'pooled' keeps the plain name.
-    stem = spec.report_stem if args.condition == "pooled" else f"{spec.report_stem}_{args.condition}"
+    # The alias already carries the condition (the condition slot of the runtime grammar), so
+    # each condition's summary has its own directory without a further suffix.
+    stem = spec.report_stem
     report_dir = spec.posit_dir / f"{spec.alias}_{spec.timing_label}_{stem}"
     keys = list(spec.parameter_keys)
     low, high = spec.theta_low, spec.theta_high
@@ -250,17 +247,12 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
         note="The cross-parameter correlations the SGM preserves and the vector of medians discards. "
              "The larger these are in magnitude, the more the per-dimension composite misrepresents "
              "the collection."
-             + (" Pooled correlations can be inflated by a between-condition shift (Simpson's "
-                "paradox): two conditions with no internal correlation still produce one when their "
-                "centers differ along both axes."
-                if args.condition == "pooled" else
-                f" Computed within a single condition ({args.condition}), so the between-condition "
-                f"(Simpson's paradox) inflation does not apply here."))
+             + f" Computed within a single condition ({args.condition}), so a between-condition "
+               f"shift cannot inflate them (Simpson's paradox does not apply).")
 
     reporter.stat("collection", collection_label)
     reporter.stat("condition", args.condition,
-                  note=("both conditions summarized together" if args.condition == "pooled" else
-                        "MET-FAB is the monomer control; MET-INLB is the dimer condition"))
+                  note="MET-FAB is the monomer control; MET-INLB is the dimer condition")
     reporter.stat("collection size (vectors)", str(n), note=f"in-box: {int(in_box.sum())} / {n}")
     reporter.stat("space", "absolute (10**theta), normalized by the absolute prior range")
     for row in spec.extra_stats:
@@ -308,9 +300,7 @@ def run_sample_geometric_median(cfg, args):
         print(f"    method     : Sample Geometric Median in absolute space (exact medoid up to "
               f"{sgm.EXACT_MEDOID_CAPACITY} members, else Weiszfeld + snap); full collection and "
               f"in-box subcollection")
-        stem = (spec.report_stem if args.condition == "pooled"
-                else f"{spec.report_stem}_{args.condition}")
-        print(f"    writes     : {spec.posit_dir}/{spec.alias}_{spec.timing_label}_{stem}/")
+        print(f"    writes     : {spec.posit_dir}/{spec.alias}_{spec.timing_label}_{spec.report_stem}/")
         print("[DRY RUN] no compute performed.")
         return 0
 
@@ -341,10 +331,10 @@ def build_parser(description):
     p.add_argument("--collection", default="experiment-map",
                    help="which collection the geometric median summarizes (workflow-dependent; "
                         "--dry-run lists what this workflow offers).")
-    p.add_argument("--condition", choices=CONDITION_CHOICES, default="pooled",
-                   help="restrict the collection to one experimental condition before the summary: "
-                        "'pooled' (default) both; 'MET-FAB' the monomer control; 'MET-INLB' the "
-                        "dimer condition.")
+    p.add_argument("--condition", required=True, choices=LABELING_CONDITIONS,
+                   help="experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects "
+                        "the condition-specific estimator namespace, and the collection is restricted "
+                        "to that condition's rows by its per-row labels.")
     p.add_argument("--max-samples", type=int, default=0,
                    help="cap the collection by uniform subsampling before the geometric median, for "
                         "tractability (0 = use all; a rendering detail, not a scientific knob).")
@@ -373,7 +363,7 @@ def _sgm_spec(cfg, args):
 
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     posit_dir = PARAMETERS.machine.data_bank_root / paths.posit_subdir
     alias = paths.project_alias
     para = cfg.param_module

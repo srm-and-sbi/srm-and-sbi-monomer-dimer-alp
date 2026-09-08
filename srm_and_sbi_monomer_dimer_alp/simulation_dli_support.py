@@ -4,13 +4,21 @@ This module turns a reaction-diffusion simulation's particle trajectories
 into synthetic fluorescence-microscopy videos. The pipeline:
 
     particle positions (per frame, per particle)
-        -> Gaussian point-spread function rendered at each emitter
-        -> per-pixel photon-count integrals via erf
-        -> emitter brightness from a stationary continuous per-dye process
+      + subunit lineage + per-subunit dye counts
+        -> per-dye emitter tracks (each dye follows the particle hosting its subunit)
+        -> Gaussian point-spread function rendered at each dye
+        -> per-pixel photon-count integrals via erf (co-located dyes' photons add)
+        -> per-dye brightness from a stationary continuous process
            (photo-physics: OU log-brightness flicker + absorbing photobleaching)
         -> corrected EMCCD noise chain (Poisson thinning -> stochastic Gamma EM
            register -> gain-independent Gaussian read noise -> bias)
         -> output video frames in ADU (analog-to-digital units)
+
+The emitters are DYES, not particles: the degree of labeling enters here, as the
+static per-subunit dye counts drawn by `labeling` and carried through the reactions
+by the subunit lineage of `simulation_rds_support.extract_subunit_lineage`. A subunit
+without a dye never renders; a dimer's dyes render at one position, so a dimer's
+brightness is the sum of independent per-dye processes, with no multiplier anywhere.
 
 Module contents:
 
@@ -36,14 +44,9 @@ Module contents:
                                           independent state-independent bleaching)
 
     Top-level renderer
-        render_dli_video          (particle poses + a physical 11-key imaging vector
-                                   -> fully noised video). Source-agnostic: it reads
-                                   each imaging value by key, so a value is rendered the
-                                   same whether it arrived as an inference target or a
-                                   marginalized nuisance. Shared by the canonical DLI
-                                   stage (imaging marginalized) and the Detector DLI stage
-                                   (imaging inferred), which re-exports it as
-                                   render_detector_video.
+        build_dye_tracks          (per-subunit dye counts + lineage -> per-dye emitter tracks)
+        render_dli_video          (particle poses + lineage + dye counts + a physical
+                                   11-key imaging vector -> video frames in ADU)
 """
 
 from abc import ABC
@@ -341,47 +344,28 @@ def compute_intensity(tracks: np.ndarray,
                       background_photons: np.ndarray,
                       xbounds: np.ndarray,
                       ybounds: np.ndarray,
-                      PSF: Gaussian,
-                      dimer_mask: Optional[np.ndarray] = None,
-                      dimer_mule: float = 2.0,
-                      dimer_model: str = "sum",
-                      dimer_photons: Optional[np.ndarray] = None) -> np.ndarray:
+                      PSF: Gaussian) -> np.ndarray:
     """Compute the noise-free per-pixel photon-count image.
 
+    Emitters are dyes. Several dyes at one position -- the dyes of one subunit, or of
+    the two subunits of a dimer -- are separate columns whose photons add in
+    `add_pixel_counts`, so multi-dye spots need no special handling here.
+
     Args:
-        tracks: Particle coordinates of shape `(n_frames, 2, n_emitters)`,
-            in pixel units. NaN for absent particles.
+        tracks: Emitter coordinates of shape `(n_frames, 2, n_emitters)`,
+            in pixel units. NaN for absent emitters.
         emitter_photons: Per-emitter, per-frame latent photon values of shape
             `(n_frames, n_emitters)` (0 where bleached). Produced by
             `generate_brightness_photons`; any per-frame photon source with this
             shape is accepted (the stationarity audit exploits this to drive
             reference arms through the identical downstream path).
-        background_photons: 2D array of shape `(n_pix_x, n_pix_y)` — the pre-PSF
+        background_photons: 2D array of shape `(n_pix_x, n_pix_y)` -- the pre-PSF
             per-pixel photon floor added under the emitter signal. Zero by default
             (no background); the detector fills it with the optical background
             `kappa_o`. This is NOT dark current (thermal electrons do not pass
             through QE and are handled separately by `EMCCD`).
         xbounds, ybounds: 1D arrays of pixel-boundary positions.
         PSF: `Gaussian` instance with per-emitter `sqrt_2sigma`.
-        dimer_mask: Optional boolean array of shape `(1, n_emitters, n_frames)`
-            flagging emitters in dimer states (B or C). Their brightness is
-            combined per `dimer_model` -- the `sum` default adds an independent
-            second-label draw; `multiply` scales one draw by `dimer_mule` -- to
-            model the brighter signal from a dimer compared to a monomer.
-        dimer_mule: Merged-dimer brightness relative to a monomer, applied ONLY
-            under `dimer_model="multiply"` (a dimer is two labels within one PSF,
-            imaged as one spot whose photons combine). Regime-dependent in [1, 2]:
-            `2.0` = two PERMANENTLY-ON labels (the always-on ATTO 647N case);
-            `sqrt(2)` ~= 1.41 when only ~one label is visible on average
-            (photoswitching dye, or ~50% labeling). See PROJECT_CONTEXT.md.
-        dimer_model: how a dimer's two labels combine. "sum" (default): the merged
-            brightness is the SUM of two INDEPENDENT monomer brightnesses (photons add; an
-            n-mer's intensity distribution is the n-fold convolution of the monomer's, Mutch
-            et al. 2007 Biophys J; Digman & Gratton 2008 Number & Brightness) -- same mean
-            as `dimer_mule=2` but a lighter upper tail; requires `dimer_photons`. "multiply":
-            brightness is scaled by `dimer_mule` (a fixed factor of one monomer draw).
-        dimer_photons: the second label's INDEPENDENT per-frame photon values (same shape
-            as `emitter_photons`); used only when `dimer_model="sum"`.
 
     Returns:
         Intensity array of shape `(n_pix_x, n_pix_y, n_frames)`, in photon
@@ -391,27 +375,10 @@ def compute_intensity(tracks: np.ndarray,
     intensity = np.repeat(background_photons[:, :, None], tracks.shape[0], axis=2)
     # emitter_photons has shape (n_frames, n_emitters); transpose to
     # (n_emitters, n_frames) and reshape to (1, n_emitters, n_frames) for
-    # broadcast in add_pixel_counts.
-    brightness_array = emitter_photons.T.reshape(1, emitter_photons.shape[1], -1).copy()
-    if dimer_mask is not None:
-        if dimer_model == "sum":
-            # Physically-motivated dimer: two co-located labels, photons ADD, so the merged
-            # brightness is the SUM of two INDEPENDENT monomer brightnesses -- an n-mer's
-            # intensity distribution is the n-fold convolution of the monomer's (Mutch et al.
-            # 2007 Biophys J; Digman & Gratton 2008 Number & Brightness). Same mean as
-            # dimer_mule=2 but a lighter upper tail than doubling one draw. dimer_photons is
-            # the second label's INDEPENDENT flicker trajectory.
-            if dimer_photons is None:
-                raise ValueError("dimer_model='sum' requires dimer_photons (the second label's "
-                                 "independent per-frame photon values).")
-            second = dimer_photons.T.reshape(1, dimer_photons.shape[1], -1)
-            brightness_array[dimer_mask] += second[dimer_mask]
-        else:
-            # 'multiply': merged-spot brightness = monomer * dimer_mule. A dimer is
-            # two labels within one PSF, imaged as ONE spot whose photons combine; dimer_mule in
-            # [1, 2]: 2 for two permanently-on labels (photons sum -- the always-on ATTO 647N
-            # case); sqrt(2) under blinking / partial labeling. See PROJECT_CONTEXT.md.
-            brightness_array[dimer_mask] *= dimer_mule
+    # broadcast in add_pixel_counts. Explicit sizes so an emitter-free scene
+    # (every subunit unlabeled) renders as background only instead of failing.
+    n_frames, n_emitters = emitter_photons.shape
+    brightness_array = emitter_photons.T.reshape(1, n_emitters, n_frames).copy()
     intensity = add_pixel_counts(intensity, tracks, brightness_array, xbounds, ybounds, PSF)
     return intensity
 
@@ -457,8 +424,8 @@ def generate_brightness_photons(nframes: int,
 
     Args:
         nframes: Number of frames.
-        nemitters: Number of independent dyes (one process per dye; a dimer's
-            second label gets its own independent call).
+        nemitters: Number of independent dyes (one process per dye; every dye of
+            every subunit is one column, see `render_dli_video`).
         mu_pc, sigma_pc: Median (photons) and ln-spread of the per-frame
             single-dye brightness law.
         lambda_rate: Correlation-decay rate of ln-brightness, in 1/s.
@@ -508,13 +475,51 @@ def _fixed(key: str):
     return PARAMETERIZATION_RAW[PARAMETER_RAW_FIND[key]]["VALUE"]
 
 
-def render_dli_video(pro_tray_poses: np.ndarray,
+def build_dye_tracks(soul_poses: np.ndarray, host_index: np.ndarray,
+                     dye_counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Expand per-subunit dye counts into per-dye emitter tracks.
+
+    Each dye is one emitter, rendered at the position of the particle hosting its
+    subunit in that frame. Co-located dyes (the dyes of one subunit, and the dyes of the
+    two subunits of a dimer) are separate emitters at one position, so their photons add
+    through the PSF integration with no special casing.
+
+    Args:
+        soul_poses: particle coordinates ``(n_frames, n_particles, 3)`` (nm; NaN where the
+            particle is absent from the frame), i.e. `collapse_species_axis` of the pose tensor.
+        host_index: the subunit lineage's ``(n_frames, n_subunits)`` host-particle indices.
+        dye_counts: per-subunit dye counts ``(n_subunits,)`` (``>= 0``).
+
+    Returns:
+        ``(dye_positions, dye_subunit)``: ``dye_positions`` has shape
+        ``(n_frames, n_dyes, 2)`` (x, y in nm) and ``dye_subunit`` shape ``(n_dyes,)`` maps
+        each dye to its subunit. ``n_dyes = dye_counts.sum()`` and may be zero.
+    """
+    dye_counts = np.asarray(dye_counts, dtype=np.int64)
+    if dye_counts.ndim != 1 or dye_counts.shape[0] != host_index.shape[1]:
+        raise ValueError(
+            f"dye_counts has shape {dye_counts.shape}; expected ({host_index.shape[1]},), "
+            f"one count per subunit of the lineage.")
+    if (dye_counts < 0).any():
+        raise ValueError("dye_counts must be non-negative.")
+    if soul_poses.shape[0] != host_index.shape[0]:
+        raise ValueError(
+            f"soul_poses holds {soul_poses.shape[0]} frames but the lineage {host_index.shape[0]}.")
+    dye_subunit = np.repeat(np.arange(dye_counts.shape[0]), dye_counts)      # (n_dyes,)
+    dye_host = host_index[:, dye_subunit]                                     # (n_frames, n_dyes)
+    frames = np.arange(soul_poses.shape[0])[:, None]
+    dye_positions = soul_poses[frames, dye_host, :2]                          # (n_frames, n_dyes, 2)
+    return dye_positions, dye_subunit
+
+
+def render_dli_video(soul_poses: np.ndarray,
+                     host_index: np.ndarray,
+                     dye_counts: np.ndarray,
                      imaging_physical: np.ndarray,
-                     dimer_mask=None,
-                     dimer_model: str = "sum",
                      seed=None,
                      verbose: bool = False) -> np.ndarray:
-    """Render one video from particle poses and a physical imaging vector.
+    """Render one video from particle poses, the subunit lineage, per-subunit dye counts,
+    and a physical imaging vector.
 
     The source-agnostic diffraction-limited-imaging renderer shared by both DLI stages. It
     sources the 11 imaging parameters entirely from ``imaging_physical`` -- the imaging
@@ -524,25 +529,28 @@ def render_dli_video(pro_tray_poses: np.ndarray,
     draws the whole imaging block as a nuisance (photophysics from the ``Nuisance_DLI``
     artifact, camera from the SCOPE box); the Detector stage draws the six emitter parameters
     as its learnable target and the five camera as the SCOPE nuisance (which re-exports this
-    renderer as ``render_detector_video``). The fixed hyperparameters that are not part of the
-    vector (``numb_photo_bleach``, ``dimer_mule``) are read from the
-    canonical parameter table; ``delta_frame`` is the fixed camera cadence
-    (``PARAMETERS.simulation.timing``). The lower-level building blocks are reused unchanged.
+    renderer as ``render_detector_video``). The fixed hyperparameter that is not part of the
+    vector (``numb_photo_bleach``) is read from the canonical parameter table;
+    ``delta_frame`` is the fixed camera cadence (``PARAMETERS.simulation.timing``).
+
+    The emitters are DYES, not particles (the DOL-explicit observation layer; see
+    ``labeling``): every dye of every subunit is one emitter with its own stationary OU
+    brightness and bleaching process, rendered at the position of the particle hosting its
+    subunit in that frame (`build_dye_tracks`). A subunit with no dye never renders; a
+    dimer's dyes render at one position and their photons add through the PSF integration.
+    The PSF width is drawn once per SUBUNIT and follows it through the reactions, so a
+    subunit's spot does not change width when its particle reacts.
 
     Args:
-        pro_tray_poses: particle coordinates ``(n_frames, n_emitters, 3)`` in nm
-            (only x, y are used; z dropped); NaN for absent particles.
+        soul_poses: particle coordinates ``(n_frames, n_particles, 3)`` in nm (only x, y are
+            used; z dropped); NaN for absent particles (`collapse_species_axis`).
+        host_index: the subunit lineage's ``(n_frames, n_subunits)`` host-particle indices
+            (`extract_subunit_lineage`).
+        dye_counts: per-subunit static dye counts ``(n_subunits,)`` (`labeling.draw_dye_counts`).
         imaging_physical: physical values of the 11 imaging parameters,
             in ``det.DETECTOR_IMAGING`` order.
-        dimer_mask: optional boolean mask ``(1, n_emitters, n_frames)`` flagging
-            dimer-state emitters; their brightness is combined per ``dimer_model``.
-        dimer_model: "sum" (default) adds an independent second-label draw -- a dimer is
-            two independent labels whose photon counts add (sum of two monomers: same
-            mean, lighter tail than doubling; an n-mer's brightness is the n-fold
-            convolution of the monomer, Mutch et al. 2007). "multiply" scales one draw by
-            ``dimer_mule`` (heavier tail; retained as an option).
         seed: optional RNG seed for PSF widths, brightness, and EMCCD noise.
-        verbose: print the resolved OU brightness quantities.
+        verbose: print the resolved emitter and OU brightness quantities.
 
     Returns:
         Frames of shape ``(root_size_px, root_size_px, n_frames)`` in ADU.
@@ -555,10 +563,15 @@ def render_dli_video(pro_tray_poses: np.ndarray,
         )
     img = dict(zip(_IMAGING_KEYS, imaging_physical))
 
-    nframes, nemitters, _ = pro_tray_poses.shape
+    nframes = soul_poses.shape[0]
+    n_subunits = host_index.shape[1]
     stem_geometry = PARAMETERS.simulation.stem
     pixel_size_nm = stem_geometry.pixel_size_nm
     root_size_px = stem_geometry.root_size_px
+
+    # --- Dyes as emitters: positions follow the host particle of each dye's subunit -----
+    dye_positions_nm, dye_subunit = build_dye_tracks(soul_poses, host_index, dye_counts)
+    ndyes = dye_subunit.shape[0]
 
     # --- Camera params + EMCCD detector (imaging from the vector) ----------
     # The videos identify gain and conversion only through gamma = g/C (ADU per
@@ -572,52 +585,40 @@ def render_dli_video(pro_tray_poses: np.ndarray,
         bias_adu=img["kappa_b"],
     )
 
-    # --- PSF params + per-emitter widths (mu_r, sigma_r from the vector) ---
-    per_emitter_sqrt2sigma = sample_psf_width(
-        nemitters,
+    # --- PSF params + per-SUBUNIT widths (mu_r, sigma_r from the vector) ---
+    # One width per subunit, carried by every dye of that subunit for the whole recording.
+    subunit_sqrt2sigma = sample_psf_width(
+        n_subunits,
         PARAMETERS.simulation.dli.sqrt_2sigma_dist_label,
         keyword_args={"mu_r": img["mu_r"], "sigma_r": img["sigma_r"]},
         seed=seed,
     )
-    PSF = Gaussian(per_emitter_sqrt2sigma)
+    PSF = Gaussian(subunit_sqrt2sigma[dye_subunit])
 
     # --- Photo-physics: stationary continuous per-dye brightness -----------
     # mu_pc, sigma_pc, prob_photo_bleach, lambda_rate from the vector;
-    # numb_photo_bleach fixed; delta_frame = fixed cadence. The per-frame
-    # marginal is exactly LogNormal(mu_pc, sigma_pc) at every frame and
-    # lambda_rate is the correlation-decay rate of ln-brightness
+    # numb_photo_bleach fixed; delta_frame = fixed cadence. One independent
+    # process per DYE: the per-frame marginal is exactly LogNormal(mu_pc, sigma_pc)
+    # at every frame and lambda_rate is the correlation-decay rate of ln-brightness
     # (see generate_brightness_photons).
     mu_pc = img["mu_pc"]
     sigma_pc = img["sigma_pc"]
     delta_frame = PARAMETERS.simulation.timing.frame_time_seconds
     if verbose:
         rho = np.exp(-img["lambda_rate"] * delta_frame)
-        print(f"[render_dli_video] OU brightness: mu_pc={mu_pc:.4g} photons, "
+        print(f"[render_dli_video] emitters: {ndyes} dyes on {int((np.asarray(dye_counts) > 0).sum())} "
+              f"of {n_subunits} subunits; OU brightness: mu_pc={mu_pc:.4g} photons, "
               f"sigma_pc={sigma_pc:.4g} (ln), lambda_rate={img['lambda_rate']:.4g}/s "
               f"(per-frame rho={rho:.4f}), prob_photo_bleach={img['prob_photo_bleach']:.4g} "
               f"per {_fixed('numb_photo_bleach')} frames")
     emitter_photons = generate_brightness_photons(
-        nframes=nframes, nemitters=nemitters,
+        nframes=nframes, nemitters=ndyes,
         mu_pc=mu_pc, sigma_pc=sigma_pc,
         lambda_rate=img["lambda_rate"],
         prob_photo_bleach=img["prob_photo_bleach"],
         numb_photo_bleach=_fixed("numb_photo_bleach"),
         delta_frame=delta_frame, seed=seed,
     )
-    # For dimer_model="sum", each dimer's SECOND label needs its OWN independent flicker
-    # trajectory (a dimer = two labels, brightness = X1 + X2). Independent seed so it is not
-    # identical to the first label's; None stays non-deterministic.
-    dimer_photons = None
-    if dimer_model == "sum":
-        dimer_photons = generate_brightness_photons(
-            nframes=nframes, nemitters=nemitters,
-            mu_pc=mu_pc, sigma_pc=sigma_pc,
-            lambda_rate=img["lambda_rate"],
-            prob_photo_bleach=img["prob_photo_bleach"],
-            numb_photo_bleach=_fixed("numb_photo_bleach"),
-            delta_frame=delta_frame,
-            seed=(None if seed is None else seed + 1),
-        )
 
     # --- Pixel grid + optical background floor -----------------------------
     # kappa_o = optical background (incident photons): ONE scalar per video,
@@ -631,16 +632,14 @@ def render_dli_video(pro_tray_poses: np.ndarray,
     xbounds = np.linspace(0, root_size_px, root_size_px + 1)
     ybounds = np.linspace(0, root_size_px, root_size_px + 1)
 
-    # --- Particle positions -> pixel-unit (x, y) tracks --------------------
-    tracks_pixels = pro_tray_poses[:, :, :2] / pixel_size_nm
-    tracks_pixels = np.transpose(tracks_pixels, (0, 2, 1)).astype(np.float64)
+    # --- Dye positions -> pixel-unit (x, y) tracks -------------------------
+    tracks_pixels = dye_positions_nm / pixel_size_nm                          # (n_frames, n_dyes, 2)
+    tracks_pixels = np.transpose(tracks_pixels, (0, 2, 1)).astype(np.float64)  # (n_frames, 2, n_dyes)
 
     # --- Noise-free intensity + EMCCD noise --------------------------------
     intensity = compute_intensity(
         tracks=tracks_pixels, emitter_photons=emitter_photons,
         background_photons=optical_background, xbounds=xbounds, ybounds=ybounds, PSF=PSF,
-        dimer_mask=dimer_mask, dimer_mule=_fixed("dimer_mule"),
-        dimer_model=dimer_model, dimer_photons=dimer_photons,
     )
     frames = generate_frames(intensity, detector, seed=seed)
     return frames

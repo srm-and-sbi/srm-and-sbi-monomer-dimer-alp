@@ -32,6 +32,7 @@ import numpy as np
 import tifffile
 from matplotlib.figure import Figure
 
+from .labeling import LABELING_CONDITIONS
 from . import artifacts
 from . import embedding_space_distance as esd
 from .diagnostics import DiagnosticReporter
@@ -558,7 +559,8 @@ def run_embedding_space_distance(cfg, args):
     R = _esd_spec(cfg, args)
     # The CLI names conditions scientifically; the recordings on disk are named with the stored
     # tokens, so translate once, here, at the boundary.
-    kinds = [KIND_OF_CONDITION.get(k.strip(), k.strip()) for k in args.kinds.split(",") if k.strip()]
+    kinds = ([args.condition] if args.kinds is None else
+             [KIND_OF_CONDITION.get(k.strip(), k.strip()) for k in args.kinds.split(",") if k.strip()])
     n_frames, step_frames = _chunk_geometry(R["timing"], args.chunk_step_seconds)
 
     if args.dry_run:
@@ -643,14 +645,21 @@ def run_embedding_space_distance(cfg, args):
 
 def build_parser(description):
     p = argparse.ArgumentParser(description=description)
+    p.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     p.add_argument("--total-time-seconds", type=float, required=True,
                    help="model window / recording duration; sets the timing label locating the "
                         "estimator and EVAL set and naming the outputs.")
     p.add_argument("--experiment-span-seconds", type=int, default=20,
                    help="duration (s) of the experimental recordings to read (default 20).")
-    p.add_argument("--kinds", type=str, default="MET-FAB,MET-INLB",
-                   help="comma-separated experimental conditions (default 'MET-FAB,MET-INLB'); each "
-                        "is a diagnostic row, all are pooled for the primary row.")
+    p.add_argument("--kinds", type=str, default=None,
+                   help="comma-separated experimental conditions to embed (default: the run's "
+                        "--condition, the recordings this estimator was trained for); each is a "
+                        "diagnostic row, all are pooled for the primary row.")
     p.add_argument("--eval-tasks", type=int, default=None,
                    help="number of synthetic EVAL tasks to embed as the reference "
                         "(default: all present).")
@@ -698,7 +707,7 @@ def _esd_spec(cfg, args):
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     posit_dir = data_bank_root / paths.posit_subdir
     return dict(
         timing=timing, timing_label=timing.label, data_bank_root=data_bank_root,

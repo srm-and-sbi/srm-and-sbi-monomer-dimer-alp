@@ -100,9 +100,12 @@ separate changed composition from deeper spatial/photophysical memory.
 ## Seeds, identity, and reproducibility
 
 - A **master seed** is fixed at `prepare` (drawn from OS entropy and persisted when not
-  supplied), and every (theta, arm, replicate) gets its own placement seed and render seed via
+  supplied), and every (theta, arm, replicate) gets its own placement, render, and labeling seed via
   `numpy.random.SeedSequence` — resets are independently randomized, never copies of one stream,
-  and a rerun of the same cohort reproduces the same placements and renders. ReaDDy's internal
+  and a rerun of the same cohort reproduces the same placements, labelings, and renders.
+- Every phase takes `--condition` (`FAB` or `INLB`): it selects the condition-specific estimator
+  and output namespace and the static labeling law the renders use (`--labeling-law` overrides
+  it for a sensitivity run), and both are recorded in every generated file. ReaDDy's internal
   reaction/diffusion RNG has no exposed seed and stays OS-seeded: trajectories are not
   bit-reproducible, and the audit does not claim otherwise.
 - Every cohort carries a **cohort_id** digest (the exact theta matrix plus every

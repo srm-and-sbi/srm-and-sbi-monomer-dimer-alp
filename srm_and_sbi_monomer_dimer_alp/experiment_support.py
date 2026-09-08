@@ -50,7 +50,6 @@ from .io import convert_video_dtype
 # copy can quietly acquire a different spelling.
 CONDITION_DISPLAY = {"FAB": "MET-FAB", "INLB": "MET-INLB"}        # stored token -> scientific name
 KIND_OF_CONDITION = {v: k for k, v in CONDITION_DISPLAY.items()}  # scientific name -> stored token
-CONDITION_CHOICES = ("pooled", *KIND_OF_CONDITION)                # for --condition style arguments
 
 
 def condition_display(kind):

@@ -63,16 +63,16 @@ Figures: `sgm_plane` (dimer abundance versus dimerization rate, with both summar
 ```bash
 MACHINE_PROFILE=<profile> python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Sample_Geometric_Median.py \
-    --total-time-seconds 2.0 [--condition pooled|MET-FAB|MET-INLB] [--max-samples N] [--dry-run]
+    --total-time-seconds 2.0 --condition FAB|INLB [--max-samples N] [--dry-run]
 ```
 
 CPU only, seconds to run — it reads the completed Experiment output and neither loads the
 estimator nor renders videos. It is a post-hoc analysis, never wired into the stage dispatcher.
 
-`--condition` selects the experimental condition by its scientific name: `MET-FAB` (the monomer
-control), `MET-INLB` (the dimer condition), or `pooled` for both. A named condition writes to its
-own `..._MET-FAB/` or `..._MET-INLB/` directory, because comparing the conditions is the point and
-a shared path would let each run destroy the one before it.
+`--condition` (`FAB` = MET-FAB, the monomer control; `INLB` = MET-INLB, the dimer condition) is the
+run's experimental condition: it selects the condition-specific estimator namespace (the condition
+slot of the runtime grammar), and the collection is restricted to that condition's rows by its
+per-row labels. Each condition therefore writes to its own directory by construction.
 
 The tokens `ALP` and `BET` appear nowhere in the interface, the report, or the output paths. They
 survive only inside the Experiment output's stored `kinds` field — a data-schema artifact of how

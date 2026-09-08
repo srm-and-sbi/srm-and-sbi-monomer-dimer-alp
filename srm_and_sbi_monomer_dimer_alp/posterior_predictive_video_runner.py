@@ -9,8 +9,8 @@ held-out synthetic data can reveal, because it only appears when the model is po
 The two workflows invert which half of the model the MAP supplies and which half is held fixed:
 
 * **detector** -- the MAP supplies the six IMAGING parameters; the reaction-diffusion block is a
-  marginalized nuisance, drawn (or pinned) per render, and the system is built diffusion-only
-  because the detector's physics model has no reactions.
+  marginalized nuisance, drawn from the biology prior (or pinned) per render, and the system is
+  built with its full reaction network -- the same simulator the detector was calibrated against.
 * **biology** -- the MAP supplies the ten REACTION-DIFFUSION parameters and the system is built
   with its full reaction network; the imaging block is held fixed at the calibrated vector the
   training videos were generated with, read from the ``Nuisance_DLI`` artifact at run time.
@@ -27,23 +27,26 @@ here for the imaging CONTRACT even on the biology path.
 from __future__ import annotations
 
 import argparse
-import warnings
 
 import numpy as np
 from matplotlib.figure import Figure
 
 from . import detector_parameterization as det
-from .detector_simulation_rds_support import build_detector_rds_simulation, draw_nuisance_physical
+from . import parameterization as bio
 from .parameterization import PARAMETERS, RunTiming
 from .sample_geometric_median import sample_geometric_median
 from .simulation_dli_support import render_dli_video
-from .simulation_rds_support import build_simulation, build_system, extract_trajectory_poses
+from .simulation_rds_support import (
+    build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
+    extract_trajectory_poses,
+)
 from .workflow import parameter_keys as _wf_keys, parameter_table
 
 # Conditions are named scientifically wherever a reader sees them; the tokens below survive only as
 # the stored ``kinds`` field of the MAP database and the recording filenames on disk.
 # Condition naming (stored token <-> scientific name) has ONE definition, in experiment_support.
 from .experiment_support import KIND_OF_CONDITION
+from .labeling import draw_dye_counts, resolve_labeling_law
 
 def _clip_span_token(n_frames, frame_time):
     """The clip's own duration as a label token (e.g. 1000 frames @ 0.02 s -> ``20S``); the
@@ -167,21 +170,33 @@ def _fixed_imaging_theta(overrides=None):
     return theta
 
 
-# RDS-nuisance keys, in DETECTOR_NUISANCE order (three counts + three diffusivities).
-_NUISANCE_KEYS = [e["KEY"] for e in det.DETECTOR_NUISANCE]
+# The detector's RDS nuisance is the biology's ten-parameter prior -- the detector re-images the
+# shared trajectory tier -- so its keys, order, and ranges are the biology table's.
+_NUISANCE_KEYS = [e["KEY"] for e in bio.PARAMETERIZATION]
+
+
+def _draw_nuisance_physical(rng=None):
+    """One fresh RDS-nuisance draw for a posterior-predictive render: the ten reaction-diffusion
+    parameters from the biology log-uniform prior, exponentiated to physical space, in the
+    canonical ``PARAMETERIZATION`` order -- exactly what the shared RDS tier draws per
+    simulation."""
+    rng = np.random.default_rng() if rng is None else rng
+    low = np.asarray(bio.theta_lower_bound(), dtype=float)
+    high = np.asarray(bio.theta_upper_bound(), dtype=float)
+    return np.power(10.0, rng.uniform(low, high))
 
 
 def _fixed_nuisance_physical(overrides=None):
-    """Physical RDS-nuisance vector for --fixed-nuisance-RDS: every nuisance parameter held at
-    its prior-center nominal (the log-midpoint of its BoxUniform range), then any ``overrides``
-    (``{key: physical_value}``) applied last. This replaces the fresh random ``draw_nuisance_physical``
-    draw with a deterministic, controlled nuisance, so the emitter counts (monomer ``count_alp``,
-    mobile-dimer ``count_bet``, immobile-dimer ``count_chi``) and diffusivities are pinned to
-    condition-appropriate values rather than sampled from a flat prior (whose ~equal expected
-    counts make every render implausibly dimer-heavy). Returns a ``(len(DETECTOR_NUISANCE),)``
-    array in DETECTOR_NUISANCE order."""
+    """Physical RDS-nuisance vector for --fixed-nuisance-RDS: every reaction-diffusion parameter
+    held at its prior-center nominal (the log-midpoint of its biology-prior range), then any
+    ``overrides`` (``{key: physical_value}``) applied last. This replaces the fresh
+    ``_draw_nuisance_physical`` draw with a deterministic, controlled nuisance, so the counts
+    (monomer ``count_alp``, mobile-dimer ``count_bet``, immobile-dimer ``count_chi``),
+    diffusivities, and reaction rates are pinned to condition-appropriate values rather than
+    sampled from a flat prior (whose ~equal expected counts make every render implausibly
+    dimer-heavy). Returns a ``(len(PARAMETERIZATION),)`` array in canonical theta order."""
     centers = {e["KEY"]: e["LOG_BASE"] ** ((e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2.0)
-               for e in det.DETECTOR_NUISANCE}
+               for e in bio.PARAMETERIZATION}
     for key, value in (overrides or {}).items():
         if key not in centers:
             raise ValueError(
@@ -329,10 +344,11 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     dli_lines = "\n".join("  " + "  ".join(dli[j:j + 3]) for j in range(0, len(dli), 3))
     nuis = np.asarray(nuisance, dtype=float).ravel()
     npart = []
-    # The label table must match the block being shown, or zip() silently truncates: the detector's
-    # nuisance is 6 entries while biology's MAP is 10, so defaulting to the detector table dropped
-    # biology's four rate parameters without any error.
-    table = det.DETECTOR_NUISANCE if rds_table is None else rds_table
+    # The label table must match the block being shown, or zip() silently truncates. Both
+    # workflows' reaction-diffusion vectors are the biology's ten parameters in canonical order
+    # (the detector's RDS nuisance is that prior, re-imaged from the shared tier), so the biology
+    # table labels either; the explicit check keeps a future schema change from truncating.
+    table = bio.PARAMETERIZATION if rds_table is None else rds_table
     if len(table) != nuis.size:
         raise ValueError(f"RDS label table has {len(table)} entries but the vector has "
                          f"{nuis.size}; they must correspond.")
@@ -471,18 +487,21 @@ def run_posterior_predictive_video(cfg, args):
 
     # ---- poses -> render with the resolved imaging vector ----
     tray = readdy.Trajectory(filename=str(traj_path))
-    tray_poses, dimer_mask = extract_trajectory_poses(
-        tray, return_dimer_mask=True, verbose=args.verbose)
+    tray_poses = extract_trajectory_poses(tray, verbose=args.verbose)
+    lineage = extract_subunit_lineage(tray, verbose=args.verbose)
     if tray_poses.shape[0] != render_timing.frame_count:
         raise RuntimeError(f"trajectory holds {tray_poses.shape[0]} frames but the render "
                            f"length is {render_timing.frame_count}.")
-    with warnings.catch_warnings():   # absent particles are NaN by design (mirror Simulation_DLI)
-        warnings.filterwarnings("ignore", message="All-NaN slice encountered",
-                                category=RuntimeWarning)
-        pro_tray_poses = np.nanmax(a=tray_poses, axis=3)
-    synth = render_dli_video(pro_tray_poses=pro_tray_poses,
-                             imaging_physical=imaging_physical,
-                             dimer_mask=dimer_mask, dimer_model=args.dimer_model,
+    soul_poses = collapse_species_axis(tray_poses)
+    # Static labeling draw for the recording's condition (the DOL-explicit observation layer):
+    # one dye count per subunit, carried through the reactions by the lineage; only dyes render.
+    condition = KIND_OF_CONDITION.get(args.kind, args.kind)
+    law_name, law = resolve_labeling_law(condition, args.labeling_law)
+    dye_counts = draw_dye_counts(law, lineage.n_subunits, np.random.default_rng(args.seed))
+    print(f"Labeling: {condition} {law_name} = {law.describe()} -> {int(dye_counts.sum())} dyes "
+          f"on {int((dye_counts > 0).sum())} of {lineage.n_subunits} subunits.")
+    synth = render_dli_video(soul_poses=soul_poses, host_index=lineage.host_index,
+                             dye_counts=dye_counts, imaging_physical=imaging_physical,
                              seed=args.seed, verbose=args.verbose)
     synth = np.moveaxis(synth, -1, 0)                          # (H, W, n_frames) -> (n_frames, H, W)
 
@@ -506,6 +525,8 @@ def run_posterior_predictive_video(cfg, args):
         map_theta=(np.array([]) if map_theta is None else map_theta),
         map_keys=np.array(keys), map_block=S["map_block"], workflow=cfg.tag,
         rds_provenance=rds_provenance,
+        condition=condition, labeling_law=law_name, dye_counts=dye_counts,
+        n_subunits=lineage.n_subunits, n_dyes=int(dye_counts.sum()),
         kind=args.kind, cell=args.cell,
         chunk=(-1 if args.chunk is None else args.chunk), map_source=args.map_source,
         seed=(-1 if args.seed is None else args.seed),
@@ -520,7 +541,7 @@ def run_posterior_predictive_video(cfg, args):
                          else "INFERRED imaging (MAP theta, absolute)")
         rds_label = "NUISANCE reaction-diffusion (marginalized)"
         motion_desc = None
-        rds_table = None                                 # detector: the 6-entry nuisance table
+        rds_table = None                                 # detector: labeled by the biology table (its RDS nuisance)
     _save_comparison_png(out_dir / f"{stem}_Comparison.png", experimental, synth_u16,
                          args.kind, args.cell, args.map_source,
                          args.display_norm, rds_provenance, imaging_physical,
@@ -553,8 +574,10 @@ def build_parser(description):
                         "median, which can compose a combination no chunk produced.")
     p.add_argument("--experiment-span-seconds", type=int, default=20,
                    help="duration (s) of the experimental recording to read (default 20).")
-    p.add_argument("--dimer-model", choices=("sum", "multiply"), default="sum",
-                   help="how a dimer's brightness combines (default 'sum').")
+    p.add_argument("--labeling-law", type=str, default=None,
+                   help="override the condition's baseline static labeling law (registry key or "
+                        "'family:mean[:shape]'); default: the baseline of --kind's condition "
+                        "(FAB_POISSON / INLB_BERNOULLI).")
     p.add_argument("--display-norm", default="full", choices=("full", "autoscale", "percentile"),
                    help="display normalization for the comparison figure: 'full' (default; "
                         "shared full-range window), 'autoscale' (per-image), or 'percentile'. "
@@ -581,7 +604,7 @@ def _scope_met():
     return np.array([MET_CAMERA_PHYSICAL[k] for k in det.DETECTOR_SCOPE_KEYS], dtype=float)
 
 
-def biology_fixed_imaging(data_bank_root, map_label):
+def biology_fixed_imaging(data_bank_root, map_label, condition):
     """The biology render's fixed 11-key imaging vector, resolved from the artifacts.
 
     Biology holds imaging FIXED at the calibrated vector the training videos were generated
@@ -597,7 +620,8 @@ def biology_fixed_imaging(data_bank_root, map_label):
     the physical 11-key ``DETECTOR_IMAGING``-order render input.
     """
     from .detector_nuisance_dli import artifact_path, require_nuisance_dli
-    det_paths = det.detector_paths(PARAMETERS.paths)
+    # One Nuisance_DLI per condition: the detector calibrated on that condition's recordings.
+    det_paths = det.detector_paths(PARAMETERS.paths).with_condition(condition)
     nu = require_nuisance_dli(data_bank_root / det_paths.posit_subdir,
                               det_paths.project_alias, map_label)
     emitter_log10 = np.asarray(nu.samples, dtype=float)
@@ -620,13 +644,15 @@ def biology_fixed_imaging(data_bank_root, map_label):
 
 def _ppv_spec(cfg, args):
     """Resolve the workflow-specific half: which block the MAP supplies, and how the other is fixed."""
-    paths = cfg.paths
+    kind_token = KIND_OF_CONDITION.get(args.kind, args.kind)
+    # The recording's condition selects the condition-specific estimator namespace (MAP
+    # database, outputs) and, on the biology path, that condition's calibrated imaging.
+    paths = cfg.paths.with_condition(kind_token)
     data_bank_root = PARAMETERS.machine.data_bank_root
     map_label = RunTiming(total_time_seconds=args.total_time_seconds,
                           frames=PARAMETERS.simulation.timing).label
     posit_dir = data_bank_root / paths.posit_subdir
     exp_out_dir = paths.experiment_recovery_dir(data_bank_root, map_label)
-    kind_token = KIND_OF_CONDITION.get(args.kind, args.kind)
 
     S = dict(
         paths=paths, map_label=map_label,
@@ -642,7 +668,7 @@ def _ppv_spec(cfg, args):
         S["map_block"] = "imaging"
         S["map_keys"] = _wf_keys(cfg)                       # the 6 learnable imaging parameters
         S["imaging_desc"] = "MAP emitter parameters + MET SCOPE camera"
-        S["rds_desc"] = "diffusion-only system from the RDS nuisance (no reactions)"
+        S["rds_desc"] = "full reactive system from the RDS nuisance (drawn from the biology prior, or pinned)"
 
         def imaging_physical(a, map_theta):
             if a.fixed_imaging_parameters:
@@ -659,10 +685,13 @@ def _ppv_spec(cfg, args):
                     overrides=_parse_kv(a.fixed_nuisance_rds, "--fixed-nuisance-RDS"))
                 desc = "pinned RDS nuisance"
             else:
-                nuisance = draw_nuisance_physical()
+                nuisance = _draw_nuisance_physical()
                 desc = "drawn RDS nuisance"
-            smut, _theta = build_detector_rds_simulation(nuisance, seed=a.seed, verbose=a.verbose)
-            return smut, nuisance, desc + " (diffusion-only)"
+            # The nuisance vector IS a canonical theta (biology order), so the ordinary reactive
+            # builders apply -- the same system the shared RDS tier simulates.
+            stem = build_system(nuisance, verbose=a.verbose)
+            smut = build_simulation(stem, nuisance, seed=a.seed, verbose=a.verbose)
+            return smut, nuisance, desc + " (full reactive system)"
     else:
         S["map_block"] = "rds"
         S["map_keys"] = _wf_keys(cfg)                       # the 10 learnable RDS parameters
@@ -673,7 +702,7 @@ def _ppv_spec(cfg, args):
             # Biology holds imaging FIXED at the calibrated Nuisance_DLI + MET SCOPE vector,
             # resolved by the shared module-level helper (one definition, also used by the
             # horizon audit), with any --set-imaging overrides applied on top.
-            vec, desc = biology_fixed_imaging(data_bank_root, map_label)
+            vec, desc = biology_fixed_imaging(data_bank_root, map_label, kind_token)
             overrides = _parse_kv(a.set_imaging, "--set-imaging")
             if overrides:
                 find = {k: i for i, k in enumerate(det.DETECTOR_IMAGING_KEYS)}
@@ -686,12 +715,11 @@ def _ppv_spec(cfg, args):
             return vec, desc
 
         def build_rds(a, map_theta):
-            # Reactions ARE the inference target here, so the full reactive system is built --
-            # pure_diffusion would silently delete the very physics the MAP describes.
+            # Reactions ARE the inference target here: the full reactive system is built from the MAP.
             if a.fixed_nuisance_rds:
                 raise SystemExit("--fixed-nuisance-RDS applies to the detector workflow only: here "
                                  "the reaction-diffusion block is the MAP, not a nuisance.")
-            stem = build_system(map_theta, pure_diffusion=False, verbose=a.verbose)
+            stem = build_system(map_theta, verbose=a.verbose)
             smut = build_simulation(stem, map_theta, seed=a.seed, verbose=a.verbose)
             return smut, map_theta, "full reactive system from the MAP"
 

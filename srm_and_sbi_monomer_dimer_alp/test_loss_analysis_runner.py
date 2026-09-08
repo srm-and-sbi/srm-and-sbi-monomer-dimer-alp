@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import test_loss_analysis as tla
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.test_loss_distribution import TestLossDistribution
@@ -49,7 +50,11 @@ def _resolve_paths(cfg: WorkflowConfig, args):
         raise SystemExit(
             "canonical mode needs --total-time-seconds (sets the timing label); "
             "or pass --tld-path to analyze a specific artifact directly.")
-    paths = cfg.paths
+    if args.condition is None:
+        raise SystemExit(
+            "canonical mode needs --condition (FAB or INLB; selects the condition-specific "
+            "estimator namespace); or pass --tld-path to analyze a specific artifact directly.")
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     data_bank_root = PARAMETERS.machine.data_bank_root
     timing_label = RunTiming(total_time_seconds=args.total_time_seconds,
                              frames=PARAMETERS.simulation.timing).label
@@ -250,6 +255,12 @@ def build_test_loss_analysis_parser() -> argparse.ArgumentParser:
         "--tld-path", type=str, default=None,
         help="Path to a Test_Loss_Distribution .npz. If omitted, this workflow's canonical "
              "artifact is resolved from the machine profile + --total-time-seconds.")
+    parser.add_argument(
+        "--condition", default=None, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     parser.add_argument(
         "--total-time-seconds", type=float, default=None,
         help="Run duration in seconds; sets the timing label used to resolve the canonical "

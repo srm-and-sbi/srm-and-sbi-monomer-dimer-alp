@@ -35,6 +35,7 @@ import numpy as np
 import torch
 import torch._dynamo
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
@@ -275,7 +276,7 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing,
     )
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     eval_cfg = PARAMETERS.inference.evaluation
     span = args.experiment_span_seconds
 
@@ -335,7 +336,8 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     n_chunks = (exp_frames - n_frames) // step_frames + 1
 
     # ---- Resolve the (kind, cells) work list -----------------------------
-    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    kinds = ([args.condition] if args.kinds is None
+             else [k.strip() for k in args.kinds.split(",") if k.strip()])
     explicit_cells = ([int(c) for c in args.cells.split(",")] if args.cells else None)
     cells_by_kind = {}
     for kind in kinds:
@@ -563,6 +565,12 @@ def build_experiment_parser() -> argparse.ArgumentParser:
         description="MAP-estimate parameters from real experimental videos (no ground truth).",
     )
     parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
+    parser.add_argument(
         "--total-time-seconds", type=float, required=True,
         help="Model window duration in seconds; must match the trained posterior.",
     )
@@ -577,8 +585,10 @@ def build_experiment_parser() -> argparse.ArgumentParser:
              "= non-overlapping. Smaller steps yield more (overlapping) chunks.",
     )
     parser.add_argument(
-        "--kinds", type=str, default="FAB,INLB",
-        help="Comma-separated experimental conditions (default: 'FAB,INLB').",
+        "--kinds", type=str, default=None,
+        help="Comma-separated experimental conditions to analyze (default: the run's --condition, "
+             "the recordings this estimator was calibrated for). Naming the other condition is a "
+             "deliberate cross-condition application, a misspecification test, not the default.",
     )
     parser.add_argument(
         "--cells", type=str, default=None,

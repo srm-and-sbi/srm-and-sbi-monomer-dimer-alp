@@ -126,6 +126,7 @@ matplotlib.use("Agg")   # headless: construct + save figures without a display
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, PARAMETERIZATION, RunTiming
 
 # ---------------------------------------------------------------------------
@@ -603,7 +604,7 @@ def main(args):
                        frames=PARAMETERS.simulation.timing)
     timing_label = timing.label
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = PARAMETERS.paths
+    paths = PARAMETERS.paths.with_condition(args.condition)   # the MET estimator's condition namespace
 
     out_dir = (data_bank_root / paths.posit_subdir /
                CONTROLS_RECOVERY_PATTERN.format(
@@ -718,6 +719,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Temporal-dynamics figures + report of the inferred parameters over "
                     "the real experimental recordings (per non-overlapping MAP chunk).")
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,
         help="Run duration (selects the Experiment .npz via its timing_label, e.g. "

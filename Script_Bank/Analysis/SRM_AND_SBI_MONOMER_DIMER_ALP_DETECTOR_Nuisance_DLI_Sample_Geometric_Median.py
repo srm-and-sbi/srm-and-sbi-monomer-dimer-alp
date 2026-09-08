@@ -47,7 +47,7 @@ Usage:
     MACHINE_PROFILE=<p> python \
         Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI_Sample_Geometric_Median.py \
         --total-time-seconds 2.0 [--collection map|posterior] [--map-source experiment|window-sgm] \
-        [--condition pooled|MET-FAB|MET-INLB] [--pool-source artifact|cache] [--dry-run]
+        --condition FAB|INLB [--pool-source artifact|cache] [--dry-run]
 """
 import argparse
 import json
@@ -70,7 +70,8 @@ _FIGURE_SUBSAMPLE = 5000         # cap on scatter points drawn per figure
 # Conditions are named scientifically wherever a reader sees them. "ALP"/"BET" survive only as the
 # stored `kinds` field of the pools, a data-schema artifact, and are translated at the boundary.
 # Condition naming has ONE definition, in the package's experiment_support module.
-from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_CHOICES, KIND_OF_CONDITION
+from srm_and_sbi_monomer_dimer_alp.experiment_support import KIND_OF_CONDITION
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 _NUISANCE_DLI_BUILD = "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py"
 
 
@@ -95,11 +96,11 @@ def parse_args(argv):
                         "errors if neither exists (never a silent stand-in). 'window-sgm' the per-window "
                         "Sample Geometric Median (the medoid of each window's posterior draws) from the "
                         "posterior-sample pool -- an explicit samples-derived estimate.")
-    p.add_argument("--condition", choices=CONDITION_CHOICES, default="pooled",
-                   help="restrict the collection to one experimental condition before the summary: "
-                        "'pooled' (default) both; 'MET-FAB' the monomer control; 'MET-INLB' the dimer "
-                        "condition. Uses the collection's own per-row labels; a legacy unlabeled pool "
-                        "must be migrated first (the Nuisance_DLI build's --migrate-pool-labels).")
+    p.add_argument("--condition", required=True, choices=LABELING_CONDITIONS,
+                   help="experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+                        "condition-specific Nuisance_DLI namespace, and the collection is restricted to "
+                        "that condition's rows by its per-row labels; a legacy unlabeled pool must be "
+                        "migrated first (the Nuisance_DLI build's --migrate-pool-labels).")
     p.add_argument("--n-samples", type=int, default=0,
                    help="number of vectors to draw when the artifact is a gaussian/box representation "
                         "(0 = 200000; ignored for a stored sample pool).")
@@ -115,11 +116,11 @@ def parse_args(argv):
     return p.parse_args(argv)
 
 
-def _resolve(total_time_seconds):
-    """Detector-namespaced paths + timing for this run."""
+def _resolve(total_time_seconds, condition):
+    """Detector-namespaced, condition-specific paths + timing for this run."""
     timing = RunTiming(total_time_seconds=total_time_seconds, frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = det.detector_paths(PARAMETERS.paths)                       # _DETECTOR-aliased namespace
+    paths = det.detector_paths(PARAMETERS.paths).with_condition(condition)   # _DETECTOR + condition namespace
     posit_dir = data_bank_root / paths.posit_subdir
     alias = paths.project_alias
     exp_stem = paths.experiment_recovery_pattern.format(project_alias=alias, timing_label=timing.label)
@@ -239,10 +240,8 @@ def _load_posterior_collection(args, R):
 
 def _apply_condition(args, vecs, labels):
     """Restrict (vecs, labels) to args.condition using the collection's per-row kind labels. Returns
-    (vecs, labels, suffix). 'pooled' passes through; a real condition on an unlabeled collection is a
-    loud error rather than a silent full-pool summary."""
-    if args.condition == "pooled":
-        return vecs, labels, " [pooled: both conditions]"
+    (vecs, labels, suffix). A condition on an unlabeled collection is a loud error rather than a
+    silent full-pool summary."""
     if labels is None:
         raise SystemExit(
             f"--condition {args.condition} needs a labeled collection, but this one carries no per-row "
@@ -411,16 +410,13 @@ def _write_report(args, R, pool_log, keys, choice, mode, n_source, low, high, re
         ["parameter"] + keys,
         [[keys[a]] + [f"{corr[a, b]:+.3f}" for b in range(len(keys))] for a in range(len(keys))],
         note="The cross-parameter correlations the SGM preserves and the vector of medians discards."
-             + (" Pooled correlations can be inflated by a between-condition shift (Simpson's paradox)."
-                if args.condition == "pooled" else
-                f" Computed within a single condition ({args.condition}), so the between-condition "
-                f"(Simpson's paradox) inflation does not apply here."))
+             + f" Computed within a single condition ({args.condition}), so a between-condition "
+               f"shift cannot inflate them (Simpson's paradox does not apply).")
 
     reporter.stat("Nuisance_DLI artifact", str(R["artifact_path"]))
     reporter.stat("collection", collection_label)
     reporter.stat("condition", args.condition,
-                  note=("both conditions summarized together" if args.condition == "pooled" else
-                        "MET-FAB is the monomer control; MET-INLB is the dimer condition"))
+                  note="MET-FAB is the monomer control; MET-INLB is the dimer condition")
     reporter.stat("map source" if args.collection == "map" else "pool source",
                   args.map_source if args.collection == "map" else args.pool_source)
     reporter.stat("posterior_sample_pool_choice", choice)
@@ -473,9 +469,8 @@ def _run(args, R):
         else:
             ap = R["artifact_path"]
             print(f"    artifact   : {ap}  [{'OK' if ap.exists() else 'MISSING'}]")
-        if args.condition != "pooled":
-            print(f"    labels     : the condition filter needs per-row labels (a labeled pool, or the "
-                  f"experiment MAP)")
+        print(f"    labels     : the condition filter needs per-row labels (a labeled pool, or the "
+              f"experiment MAP)")
         print(f"    prior box  : log10 low {low.tolist()}  high {high.tolist()}")
         print(f"    method     : Sample Geometric Median in absolute space (exact medoid when small, "
               f"else Weiszfeld + snap); full pool and in-box subcollection")
@@ -503,7 +498,7 @@ def _run(args, R):
 
 
 def main(args):
-    _run(args, _resolve(args.total_time_seconds))
+    _run(args, _resolve(args.total_time_seconds, args.condition))
 
 
 if __name__ == "__main__":

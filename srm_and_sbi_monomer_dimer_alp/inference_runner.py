@@ -41,6 +41,7 @@ import torch._dynamo
 from sbi.neural_nets.net_builders import build_maf
 from torch.utils.data import DataLoader
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.inference_network import Complex3DCNN
@@ -121,7 +122,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     geom = PARAMETERS.simulation.stem
     training_cfg = PARAMETERS.inference.training
     network_cfg = PARAMETERS.inference.network
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     div = "=" * 72
 
     # Resolve effective learning rate (None → lr_minimum × max_factor).
@@ -176,7 +177,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  reads videos    : <data_bank>/{paths.video_subdir}/"
           f"{paths.project_alias}_{timing_label}_Video_Set_TASK_{{{task_range}}}.zarr")
     print(f"  reads thetas    : <data_bank>/{paths.theta_subdir}/"
-          f"{paths.project_alias}_{timing_label}_Theta_Set_TASK_{{{task_range}}}.zarr")
+          f"{paths.theta_set_alias}_{timing_label}_Theta_Set_TASK_{{{task_range}}}.zarr")
     print(f"  writes ckpt     : {checkpoint_path}")
     print(f"  writes resume   : {resurrect_state_path}   (full-state hot restart; every epoch)")
     print(f"  writes estimator: {estimator_path}   (version-portable)")
@@ -406,6 +407,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     if use_tld:
         tld_manifest = {
             "project_alias": paths.project_alias,
+            "condition": paths.condition,
             "timing_label": timing_label,
             "test_set_id": f"TEST/{timing_label}",
             "theta_space": "log10",
@@ -584,6 +586,12 @@ def build_inference_parser() -> argparse.ArgumentParser:
     """Construct the Inference CLI parser (identical for both workflows)."""
     parser = argparse.ArgumentParser(
         description="Train the SBI posterior estimator (NPE + MAF on Complex3DCNN embedding).",
+    )
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
     )
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,

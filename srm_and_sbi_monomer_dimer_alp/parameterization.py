@@ -21,7 +21,7 @@ Public interface:
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -200,6 +200,21 @@ class Paths:
     provenance: a `.h5` or `.zarr` file moved or shared outside the original
     repository still identifies the program, model, and iteration that
     produced it.
+
+    The runtime grammar is ``[program]_[sibling]_[iter][_qualifier]_[condition]_
+    [timing]_[stage]``: the optional workflow qualifier (``_DETECTOR``) and the
+    experimental-condition token (``FAB`` or ``INLB``) sit between the iteration
+    and the timing label, so ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Video_Set_...``
+    is a biology product and ``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_...``
+    a detector product of the MET-FAB condition. The condition enters at the DLI
+    stage (the static labeling law re-images the trajectories per condition), so
+    every DLI-side and inference-side product carries it, while the RDS products --
+    the trajectory tier and its ten-parameter ``Theta_Set`` -- form ONE shared tier:
+    generated once under the bare sibling alias (``sibling_alias``, exposed as
+    ``rds_alias``), free of both the qualifier and the condition, and re-imaged by
+    both workflows and per condition at the DLI stage. A stage applies its condition
+    with ``with_condition``; the trajectory and theta-set builders below pick the
+    right alias by themselves.
     """
     project_alias: str = "SRM_AND_SBI_MONOMER_DIMER_ALP"
     labor_subdir: str = "Labor"
@@ -224,28 +239,76 @@ class Paths:
     experiment_pattern: str = "Experiment_{kind}_Cell_{cell}_{span}S_RAW.tif"
     compressed_ext: str = "zarr"
     uncompressed_ext: str = "npy"
+    # The bare sibling alias every RDS product carries. The trajectory tier and its
+    # ten-parameter ``Theta_Set`` are generated once and shared by both workflows and both
+    # conditions, so they never take the workflow qualifier or the condition token that
+    # ``project_alias`` may carry (``rds_alias`` returns this).
+    sibling_alias: str = "SRM_AND_SBI_MONOMER_DIMER_ALP"
+    # The condition token these Paths carry (None = condition-free; see the class
+    # docstring). Set only through ``with_condition``, which also appends the token to
+    # ``project_alias``; ``rds_alias`` strips it again for the RDS products.
+    condition: Optional[str] = None
+    # Whether this workflow's ``Theta_Set`` is an RDS product (biology: the ten
+    # reaction-diffusion labels -- the shared tier's own record, under ``rds_alias``) or a
+    # DLI product (detector: the six imaging labels, drawn when the videos are rendered,
+    # hence qualified and per condition).
+    theta_set_is_rds_product: bool = True
 
     # The `timing_label` token (e.g., "2S_50FPS") encodes simulation duration
     # + frame rate in every output filename, so a 2 s and 10 s run never
     # collide on disk and a file moved out of context still identifies the
     # config that produced it. The token is rendered by RunTiming.label.
 
+    def with_condition(self, condition: str) -> "Paths":
+        """A copy of these Paths carrying the experimental condition.
+
+        ``project_alias`` gains the token (``..._ALP_FAB``, ``..._ALP_DETECTOR_INLB``), so
+        every path pattern namespaces this condition's products; ``rds_alias`` still
+        resolves the shared RDS tier. Applying a condition twice is an error.
+        """
+        if self.condition is not None:
+            raise ValueError(
+                f"Paths already carry condition {self.condition!r}; cannot apply {condition!r}.")
+        token = str(condition).strip()
+        if not token or not token.isupper() or not token.isalnum():
+            raise ValueError(
+                f"condition token must be an uppercase alphanumeric word such as FAB or INLB "
+                f"(got {condition!r}).")
+        return replace(self, project_alias=f"{self.project_alias}_{token}", condition=token)
+
+    @property
+    def rds_alias(self) -> str:
+        """The alias of the shared RDS tier (trajectories and the ten-parameter ``Theta_Set``):
+        the bare sibling alias, whatever qualifier or condition these Paths carry."""
+        if not self.project_alias.startswith(self.sibling_alias):
+            raise ValueError(
+                f"project_alias {self.project_alias!r} does not extend the sibling alias "
+                f"{self.sibling_alias!r}; the shared RDS tier cannot be located from it.")
+        return self.sibling_alias
+
+    @property
+    def theta_set_alias(self) -> str:
+        """Alias of this workflow's ``Theta_Set``: the shared RDS tier's bare alias for an RDS
+        product (biology: the ten reaction-diffusion labels), the qualified and conditioned
+        alias for a DLI product (detector: the six imaging labels)."""
+        return self.rds_alias if self.theta_set_is_rds_product else self.project_alias
+
     def trajectory_dir(self, task_alias: int, data_bank_root: Path,
                        timing_label: str, split: str = "TRAIN") -> Path:
-        """Per-task subdirectory for .h5 trajectory files.
+        """Per-task subdirectory for .h5 trajectory files (the shared RDS tier: bare alias).
 
         ``split`` ∈ {"TRAIN", "TEST", "EVAL"} namespaces the data by role so
         the held-out sets never collide with the training set on disk.
         """
         return (data_bank_root / self.video_subdir / self.trajectory_repo /
-                f"{self.project_alias}_{timing_label}_TASK_{task_alias}_{split}")
+                f"{self.rds_alias}_{timing_label}_TASK_{task_alias}_{split}")
 
     def trajectory_path(self, task_alias: int, task_simulation: int,
                         data_bank_root: Path, timing_label: str,
                         split: str = "TRAIN") -> Path:
-        """Full path for a single .h5 trajectory file."""
+        """Full path for a single .h5 trajectory file (the shared RDS tier: bare alias)."""
         filename = self.trajectory_pattern.format(
-            project_alias=self.project_alias,
+            project_alias=self.rds_alias,
             timing_label=timing_label,
             task_alias=task_alias,
             task_simulation=task_simulation,
@@ -256,9 +319,30 @@ class Paths:
     def theta_set_path(self, task_alias: int, data_bank_root: Path,
                        timing_label: str, compress: bool = True,
                        split: str = "TRAIN") -> Path:
-        """Full path for a theta-set file (.zarr if compress, else .npy)."""
+        """Full path for a theta-set file (.zarr if compress, else .npy); see
+        ``theta_set_alias`` for which alias it carries."""
         ext = self.compressed_ext if compress else self.uncompressed_ext
         filename = self.theta_set_pattern.format(
+            project_alias=self.theta_set_alias,
+            timing_label=timing_label,
+            task_alias=task_alias,
+            ext=ext,
+            split=split,
+        )
+        return data_bank_root / self.theta_subdir / filename
+
+    def record_set_path(self, token: str, task_alias: int, data_bank_root: Path,
+                        timing_label: str, compress: bool = True,
+                        split: str = "TRAIN") -> Path:
+        """Full path for a per-task record set written beside the theta set: the theta-set
+        pattern with ``Theta_Set`` replaced by ``token`` (``Nuisance_DLI_Theta_Set``,
+        ``Nuisance_SCOPE_Theta_Set``, ``Labeling_Set``), under THIS Paths' alias -- the
+        qualified, conditioned alias of the DLI stage that writes them.
+        """
+        if "Theta_Set" not in self.theta_set_pattern:
+            raise ValueError("theta_set_pattern must contain the 'Theta_Set' token.")
+        ext = self.compressed_ext if compress else self.uncompressed_ext
+        filename = self.theta_set_pattern.replace("Theta_Set", token).format(
             project_alias=self.project_alias,
             timing_label=timing_label,
             task_alias=task_alias,
@@ -566,6 +650,12 @@ class SimulationRDS:
     particle_species_names: tuple[str, ...] = ("A", "B", "C")
     # A = Monomer, B = Mobile Dimer, C = Immobile Dimer
     # (three-species DIMER model: A+A <-> B and B <-> C reactions)
+    # Receptor subunits per species, aligned with particle_species_names: a monomer is
+    # one subunit, a dimer (mobile or immobile) two. The reaction network conserves the
+    # subunit count, which is what lets the DLI stage attach static per-subunit
+    # quantities (dye counts, PSF widths) and follow them through the reactions
+    # (simulation_rds_support.extract_subunit_lineage).
+    subunit_counts_per_species: tuple[int, ...] = (1, 2, 2)
 
     # ReaDDy neighbor-list (Verlet) skin, expressed as a MULTIPLE of the particle
     # diameter: the actual skin distance is
@@ -592,7 +682,6 @@ class SimulationRDS:
 @dataclass(frozen=True)
 class SimulationDLI:
     """DLI-stage runtime defaults."""
-    dimer_mule: float = 2.0                         # merged-dimer brightness vs monomer; 2 = two always-on labels (photons sum, MET), sqrt(2) under blinking/partial labeling (see PROJECT_CONTEXT.md)
     sqrt_2sigma_dist_label: str = "lognormal"      # PSF width sampling distribution
     # darkcounts removed (W1): the pre-PSF photon floor is the SCOPE-drawn optical background kappa_o (REFERENCE_EMCCD_NOISE_MODEL.md sec. 5); dark current is handled inside EMCCD (dark_current_e_per_s=0).
 
@@ -906,7 +995,6 @@ _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
         {'KEY': 'delta_frame', 'VALUE': 0.020, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Second', 'DERIVED_UNIT': None, 'LABEL': r'$\delta_{f}$', 'NOTE': 'Known Parameter'},
         {'KEY': 'prob_photo_bleach', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': None, 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{pb}$', 'NOTE': 'Imaging nuisance (role nuisance_object): the production DLI stage marginalizes it by drawing per simulation from the persisted Nuisance_DLI artifact and recording the draw as Nuisance_DLI_Theta_Set (DETECTOR_WORKFLOW.md sec. 9.3, Phase D). Calibrated operating point = the corrected imaging prior center (sec. 6.2), 10**-1.25.'},
         {'KEY': 'numb_photo_bleach', 'VALUE': 100, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': None, 'DERIVED_UNIT': None, 'LABEL': r'$\psi_{pb}$', 'NOTE': 'Known Parameter'},
-        {'KEY': 'dimer_mule', 'VALUE': 2.0, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': None, 'DERIVED_UNIT': None, 'LABEL': r'$m_{D}$', 'NOTE': 'Merged-dimer brightness relative to a monomer. Physical picture: a dimer is two labels within one PSF, so single-emitter fitting sees ONE spot whose photons combine into a brighter detection. Two combination models implement this (DETECTOR_WORKFLOW.md sec. 6.4). The DLI forward model renders dimers by dimer_model="sum": the merged brightness is the SUM of two INDEPENDENT monomer draws, each carrying its own flicker/bleach trajectory -> mean ~2x a monomer with a lighter upper tail than a rigid doubling; this path does NOT read dimer_mule. dimer_mule is consumed ONLY by dimer_model="multiply", the retained sensitivity alternative, which instead scales a SINGLE monomer draw by this factor. As that multiply factor it is regime-dependent in [1,2]: 2.0 = two PERMANENTLY-ON labels (the MET always-on ATTO 647N case, corroborated by the ~2x InlB/Fab per-spot intensity ratio); sqrt(2) ~= 1.41 when only ~one label is visible on average (photoswitching dye, or ~50% labeling). Fixed hyperparameter (value inert under the sum model); the render_dli_video fixed-hyperparameter source, mirroring PARAMETERS.simulation.dli.dimer_mule and the detector table dimer_mule.'},
         {'KEY': 'lambda_rate', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': None, 'DERIVED_UNIT': None, 'LABEL': r'$\lambda$', 'NOTE': 'Imaging nuisance (role nuisance_object): the production DLI stage marginalizes it by drawing per simulation from the persisted Nuisance_DLI artifact and recording the draw as Nuisance_DLI_Theta_Set (DETECTOR_WORKFLOW.md sec. 9.3, Phase D). Correlation-decay rate of the stationary OU ln-brightness flicker: ACF(lag) = exp(-lambda_rate * lag), so tau_corr = 1/lambda_rate (generate_brightness_photons). Calibrated operating point = the corrected imaging prior center (sec. 6.2), 10**0.5.'},
     ],
 }
@@ -925,6 +1013,12 @@ if len(_PARAMETERIZATION_RAW_NESTED['diffusivity']) != _species_count:
     raise ValueError(
         f"_PARAMETERIZATION_RAW_NESTED['diffusivity'] has "
         f"{len(_PARAMETERIZATION_RAW_NESTED['diffusivity'])} entries; "
+        f"expected {_species_count} (one per particle species)."
+    )
+if len(PARAMETERS.simulation.rds.subunit_counts_per_species) != _species_count:
+    raise ValueError(
+        f"SimulationRDS.subunit_counts_per_species has "
+        f"{len(PARAMETERS.simulation.rds.subunit_counts_per_species)} entries; "
         f"expected {_species_count} (one per particle species)."
     )
 
@@ -954,7 +1048,7 @@ PARAMETER_RAW_FIND: dict[str, int] = {
 # and the six photophysics (mu_r, sigma_r, mu_pc, sigma_pc, prob_photo_bleach, lambda_rate)
 # are the calibrated-imaging nuisance (nuisance_object, drawn per simulation from the
 # persisted Nuisance_DLI artifact). The remaining imaging rows (kappa_g, kappa_c,
-# delta_frame, numb_photo_bleach, dimer_mule) resolve to 'fixed', so
+# delta_frame, numb_photo_bleach) resolve to 'fixed', so
 # the learnable subset is exactly the 10 RDS parameters.
 
 

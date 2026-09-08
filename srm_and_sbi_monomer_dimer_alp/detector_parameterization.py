@@ -2,7 +2,10 @@
 
 This module is the parameter contract for the Detector calibration workflow — a
 special-situation entry point that infers the diffraction-limited-imaging (DLI)
-model with the physics frozen to pure diffusion. It is deliberately DECOUPLED
+model with the reaction-diffusion biology marginalized over its full prior: the
+detector re-images the shared reactive trajectory tier the biology prior generates
+once, so the ten reaction-diffusion parameters are a nuisance SUPPLIED by that tier,
+never drawn here. It is deliberately DECOUPLED
 from the canonical ``parameterization.py``: the detector-calibration system is
 similar to but distinct from the production system, its parameter roles differ
 (the imaging parameters are inferred here, marginalized as a nuisance there), and its ranges differ
@@ -58,24 +61,21 @@ Public interface
     DETECTOR_PARAMETERIZATION_RAW   -- flat list of all entries (full spec)
     DETECTOR_PARAMETERIZATION       -- learnable subset (the inference prior / theta)
     DETECTOR_PARAMETER_KEYS         -- ordered learnable keys (the theta schema; load-guard)
-    DETECTOR_NUISANCE               -- RDS biology nuisance subset (drawn at the RDS stage)
+    DETECTOR_NUISANCE               -- RDS biology nuisance subset (nuisance-from-object: supplied by the shared RDS tier)
     DETECTOR_NUISANCE_SCOPE         -- SCOPE camera nuisance subset (drawn at the DLI stage)
     DETECTOR_IMAGING                -- full imaging vector: learnable + SCOPE (the render contract)
     DETECTOR_IMAGING_KEYS / DETECTOR_SCOPE_KEYS   -- ordered imaging / SCOPE keys
-    DETECTOR_RAW_FIND / DETECTOR_FIND / DETECTOR_NUISANCE_FIND  -- KEY -> index maps
+    DETECTOR_RAW_FIND / DETECTOR_FIND  -- KEY -> index maps
     role_of(entry)                  -- value-based role of a single entry
     detector_find(key)              -- learnable-parameter index (for theta vectors)
     to_physical(draw, entry)        -- map a (log10) draw to physical space
     build_prior(device)             -- BoxUniform over the learnable imaging params
-    build_nuisance_prior(device)    -- BoxUniform over the nuisance-from-spec RDS params
     theta_lower_bound / theta_upper_bound             -- learnable log10 bounds
     flag_out_of_bounds(theta, low, high)              -- flag/measure learnable values outside the prior box
-    nuisance_lower_bound / nuisance_upper_bound       -- RDS nuisance log10 bounds
     scope_lower_bound / scope_upper_bound             -- SCOPE camera-nuisance log10 bounds
 
-Assembling the concrete argument vectors the theta-driven forward models
-(``build_system``, ``render_dli_video``) consume is finalized against those call
-sites in the Detector simulation scripts, where ``to_physical`` and
+Assembling the eleven-key imaging vector the renderer (``render_dli_video``) consumes
+is finalized against its call site in the shared DLI runner, where ``to_physical`` and
 the subset/index maps here are the building blocks.
 """
 
@@ -122,28 +122,45 @@ _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
 _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
     # ----- RDS nuisance: biology marginalized during detector calibration -----
-    # Drawn per simulation from a restricted BoxUniform; fed to the diffusion-only
-    # forward model. Ranges from the RDS-nuisance section of DETECTOR_WORKFLOW.md.
+    # Nuisance-from-object (VALUE = NUISANCE, PRIOR_RANGE = None): the ten reaction-diffusion
+    # parameters are SUPPLIED by the shared RDS trajectory tier, which the biology prior
+    # (`parameterization.PARAMETERIZATION`) generates once and both workflows re-image at the
+    # DLI stage -- the tier's `Theta_Set` is the detector's record of this nuisance. Nothing
+    # is drawn here and no range is duplicated, so the detector marginalizes the biology
+    # prior by construction; these rows declare the role and label the provenance tables.
+    # The ranges live only in the biology table (DETECTOR_WORKFLOW.md sec. 6.1 points there).
     'count': [
-        {'KEY': 'count_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (0.0, 2.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'LABEL': r'$C_{A}$',
-         'NOTE': 'Initial molecule count of species A (monomer), C_A. RDS biology marginalized as a nuisance during detector calibration; drawn from [1, 316] (log-uniform floor at a single emitter per species, covering sparse monomer-dominated fields).'},
-        {'KEY': 'count_bet', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (0.0, 2.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'LABEL': r'$C_{B}$',
-         'NOTE': 'Initial molecule count of species B (mobile dimer), C_B. RDS nuisance; drawn from [1, 316] (log-uniform floor at a single emitter per species, so this species can be near-absent).'},
-        {'KEY': 'count_chi', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (0.0, 2.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'LABEL': r'$C_{C}$',
-         'NOTE': 'Initial molecule count of species C (immobile dimer), C_C. RDS nuisance; drawn from [1, 316] (log-uniform floor at a single emitter per species, so this species can be near-absent).'},
+        {'KEY': 'count_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$C_{A}$',
+         'NOTE': 'Initial molecule count of species A (monomer), C_A. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+        {'KEY': 'count_bet', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$C_{B}$',
+         'NOTE': 'Initial molecule count of species B (mobile dimer), C_B. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+        {'KEY': 'count_chi', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$C_{C}$',
+         'NOTE': 'Initial molecule count of species C (immobile dimer), C_C. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
     ],
     'diffusivity': [
-        {'KEY': 'diffusivity_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (-1.25, -0.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Square Micrometer Per Second', 'LABEL': r'$D_{A}$',
-         'NOTE': 'Monomer (species A) diffusion coefficient D_A, absolute. Sets the diffusion scale the dimer species are specified relative to. RDS nuisance; drawn from [10^-1.25, 10^-0.25] um^2/s.'},
-        {'KEY': 'relative_diffusivity_bet', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (-0.625, -0.125), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{B}$',
-         'NOTE': 'Mobile-dimer (species B) diffusion RELATIVE to D_A: R_B in (0,1], so D_B = R_B * D_A. RDS nuisance; drawn from [10^-0.625, 10^-0.125].'},
-        {'KEY': 'relative_diffusivity_chi', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (-2.0, -1.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{C}$',
-         'NOTE': 'Immobile-dimer (species C) diffusion RELATIVE to D_A: R_C, so D_C = R_C * D_A (much slower). RDS nuisance; drawn from [10^-2, 10^-1].'},
+        {'KEY': 'diffusivity_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Square Micrometer Per Second', 'LABEL': r'$D_{A}$',
+         'NOTE': 'Monomer (species A) diffusion coefficient D_A, absolute; sets the scale the dimer species are specified relative to. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+        {'KEY': 'relative_diffusivity_bet', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{B}$',
+         'NOTE': 'Mobile-dimer (species B) diffusion RELATIVE to D_A: D_B = R_B * D_A. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+        {'KEY': 'relative_diffusivity_chi', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{C}$',
+         'NOTE': 'Immobile-dimer (species C) diffusion RELATIVE to D_A: D_C = R_C * D_A. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+    ],
+    'dimerization_dissociation': [
+        {'KEY': 'relative_rate_dimerization', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{ON}$',
+         'NOTE': 'Dimerization rate R_ON (A + A -> B) as a fraction of the diffusion-limited Smoluchowski cap. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+        {'KEY': 'rate_dissociation', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{OFF}$',
+         'NOTE': 'Dissociation rate kappa_OFF (B -> A + A), 1/s. Under the labeling model a dissociating one-dye dimer leaves one visible and one invisible daughter -- a signature the detector must see during calibration so it is not absorbed into photobleaching. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+    ],
+    'immobilization_mobilization': [
+        {'KEY': 'rate_immobility', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{IMMOBILITY}$',
+         'NOTE': 'Immobilization rate kappa_IMMOBILITY (B -> C), 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+        {'KEY': 'rate_mobility', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{MOBILITY}$',
+         'NOTE': 'Mobilization rate kappa_MOBILITY (C -> B), 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
     ],
     # ----- Fixed geometry -----
     'geometry': [
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'LABEL': r'$\rho_{CAP}$',
-         'NOTE': 'Smoluchowski reaction radius rho_CAP (nm) = particle_diameter_nm = 2*monomer_radius (center-to-center contact of two monomers). Drives kappa_ON = 4*pi*D_R*rho_CAP, the capture volume V_CAP ~ rho_CAP^3, and the fusion/fission distances. Inert under the diffusion-only detector model (reactions off); build_system derives the active value from PARAMETERS.simulation.stem.particle_diameter_nm.'},
+         'NOTE': 'Smoluchowski reaction radius rho_CAP (nm) = particle_diameter_nm = 2*monomer_radius (center-to-center contact of two monomers). Drives kappa_ON = 4*pi*D_R*rho_CAP, the capture volume V_CAP ~ rho_CAP^3, and the fusion/fission distances. Active in the reactive detector system exactly as in biology; build_system derives the value from PARAMETERS.simulation.stem.particle_diameter_nm.'},
     ],
     # ----- Learnable imaging parameters (calibration targets) -----
     # Ranges from the learnable-imaging-parameter section of DETECTOR_WORKFLOW.md; VALUE = 10**mid(range) (center).
@@ -178,8 +195,6 @@ _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
          'NOTE': 'Camera frame interval (s); 0.020 = 50 FPS. Fixed acquisition constant. Duration-general: n_frames is supplied per run, this is only the per-frame time.'},
         {'KEY': 'numb_photo_bleach', 'VALUE': 100, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': None, 'LABEL': r'$\psi_{pb}$',
          'NOTE': 'Reference frame window normalizing prob_photo_bleach (NOT the video length): p_video = 1 - (1 - prob_photo_bleach)^(n_frames/numb_photo_bleach). Fixed = 100.'},
-        {'KEY': 'dimer_mule', 'VALUE': 2.0, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': None, 'LABEL': r'$m_{D}$',
-         'NOTE': 'Merged-dimer brightness relative to a monomer. Physical picture: a dimer is two labels within one PSF, so single-emitter fitting sees ONE spot whose photons combine into a brighter detection. Two combination models implement this (see DETECTOR_WORKFLOW.md sec. 6.4). THIS detector workflow uses dimer_model="sum": the merged brightness is the SUM of two INDEPENDENT monomer draws, each carrying its own flicker/bleach trajectory -> mean ~2x a monomer with a lighter upper tail than a rigid doubling; this path does NOT read dimer_mule. dimer_mule is consumed ONLY by dimer_model="multiply", the retained sensitivity alternative (both DLI stages render dimers by the sum model via the shared render_dli_video), which instead scales a SINGLE monomer draw by this factor. As that multiply factor it is regime-dependent in [1,2]: 2.0 = two PERMANENTLY-ON labels (the MET always-on ATTO 647N case, corroborated by the ~2x InlB/Fab per-spot intensity ratio); sqrt(2) ~= 1.41 when only ~one label is visible on average (photoswitching dye -> time-averaged geometric mean GM(1x,2x) of bright/dark states, or ~50% labeling). Held Fixed here for parity with the canonical table (value inert under the sum model); a per-dataset photophysical setting, not a universal law. Mirrors PARAMETERS.simulation.dli.dimer_mule.'},
         {'KEY': 'prob_photo_bleach', 'VALUE': 10**(-1.25), 'PRIOR_RANGE': (-2.0, -0.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': None, 'LABEL': r'$\rho_{pb}$',
          'NOTE': 'Probability an emitter enters the absorbing bleached state over numb_photo_bleach (100) frames. Learnable photophysics target; drawn from [10^-2, 10^-0.5].'},
         {'KEY': 'lambda_rate', 'VALUE': 10**0.5, 'PRIOR_RANGE': (0.0, 1.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': None, 'LABEL': r'$\lambda$',
@@ -278,16 +293,16 @@ DETECTOR_PARAMETERIZATION: list[dict] = [
 # vectors would otherwise be misread column-for-column).
 DETECTOR_PARAMETER_KEYS: list[str] = [entry['KEY'] for entry in DETECTOR_PARAMETERIZATION]
 
-# The nuisance parameters form two blocks, consumed at different stages and
-# recorded in separate Nuisance_<DOMAIN>_Theta_Set files (DETECTOR_WORKFLOW.md
-# sec. 7 / 9.3): the RDS biology (drawn and used at the RDS stage) and the SCOPE
-# camera (drawn and rendered at the DLI stage, recorded as Nuisance_SCOPE). They are
-# grouped by the nested-dict category, so flipping the camera rows to a nuisance does
-# not pull them into the RDS draw.
-_RDS_NUISANCE_GROUPS = ('count', 'diffusivity')
+# The nuisance parameters form two blocks with different media (DETECTOR_WORKFLOW.md
+# sec. 7 / 9.3): the RDS biology (nuisance-from-object, supplied by the shared RDS tier,
+# whose ten-parameter Theta_Set is its record) and the SCOPE camera (nuisance-from-spec,
+# drawn at the DLI stage and recorded as Nuisance_SCOPE). They are grouped by the
+# nested-dict category, so flipping the camera rows to a nuisance does not pull them
+# into the RDS block.
+_RDS_NUISANCE_GROUPS = ('count', 'diffusivity', 'dimerization_dissociation', 'immobilization_mobilization')
 _SCOPE_NUISANCE_GROUPS = ('camera',)
 
-# RDS biology nuisance subset (marginalized during calibration; drawn at the RDS stage).
+# RDS biology nuisance subset (marginalized during calibration; supplied by the shared RDS tier).
 DETECTOR_NUISANCE: list[dict] = [
     entry for group in _RDS_NUISANCE_GROUPS for entry in _DETECTOR_RAW_NESTED[group]
     if role_of(entry) in ('nuisance_spec', 'nuisance_object')
@@ -311,9 +326,6 @@ DETECTOR_RAW_FIND: dict[str, int] = {
 }
 DETECTOR_FIND: dict[str, int] = {
     entry['KEY']: index for index, entry in enumerate(DETECTOR_PARAMETERIZATION)
-}
-DETECTOR_NUISANCE_FIND: dict[str, int] = {
-    entry['KEY']: index for index, entry in enumerate(DETECTOR_NUISANCE)
 }
 
 
@@ -383,18 +395,6 @@ def flag_out_of_bounds(theta_log10, low=None, high=None):
     return signed_margin != 0.0, signed_margin
 
 
-def nuisance_lower_bound() -> list[float]:
-    """Lower bounds of the nuisance-from-spec RDS box, in log10 space."""
-    return [entry['PRIOR_RANGE'][0] for entry in DETECTOR_NUISANCE
-            if role_of(entry) == 'nuisance_spec']
-
-
-def nuisance_upper_bound() -> list[float]:
-    """Upper bounds of the nuisance-from-spec RDS box, in log10 space."""
-    return [entry['PRIOR_RANGE'][1] for entry in DETECTOR_NUISANCE
-            if role_of(entry) == 'nuisance_spec']
-
-
 def scope_lower_bound() -> list[float]:
     """Lower bounds of the SCOPE camera-nuisance box, in log10 space."""
     return [entry['PRIOR_RANGE'][0] for entry in DETECTOR_NUISANCE_SCOPE]
@@ -418,31 +418,6 @@ def build_prior(device: str = "cpu") -> BoxUniform:
     )
 
 
-def build_nuisance_prior(device: str = "cpu") -> BoxUniform:
-    """BoxUniform over the nuisance-from-spec RDS box (log10 space).
-
-    The RDS nuisance is declared entirely from-spec: an inline BoxUniform over the biology
-    ranges, drawn on the fly during detector-calibration generation. There is no persisted
-    RDS nuisance object -- only its draws persist, as the ``Nuisance_RDS_Theta_Set`` -- and it
-    is distinct from the imaging-only ``NuisanceDLI`` artifact. The value-based scheme's
-    supplied-distribution role ('nuisance_object') is not used by the RDS nuisance; this
-    builder raises if any nuisance row lacks a range.
-    """
-    objects = [entry['KEY'] for entry in DETECTOR_NUISANCE
-               if role_of(entry) == 'nuisance_object']
-    if objects:
-        raise ValueError(
-            f"build_nuisance_prior only handles nuisance-from-spec rows; "
-            f"{objects} are nuisance-from-object, which the RDS nuisance does not use "
-            f"(declare them from-spec with a PRIOR_RANGE)."
-        )
-    return BoxUniform(
-        low=torch.tensor(nuisance_lower_bound()),
-        high=torch.tensor(nuisance_upper_bound()),
-        device=device,
-    )
-
-
 def detector_paths(canonical_paths):
     """Return a copy of the canonical `Paths` whose `project_alias` carries the
     Detector qualifier, so every canonical path pattern namespaces Detector data
@@ -454,4 +429,8 @@ def detector_paths(canonical_paths):
     return dataclasses.replace(
         canonical_paths,
         project_alias=f"{canonical_paths.project_alias}_{DETECTOR_ALIAS_SUFFIX}",
+        # The detector's Theta_Set holds the six imaging labels drawn at the DLI stage, so
+        # it is a qualified, per-condition product (unlike the shared RDS tier's Theta_Set,
+        # which `rds_alias` keeps under the bare sibling alias for both workflows).
+        theta_set_is_rds_product=False,
     )

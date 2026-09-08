@@ -1,9 +1,11 @@
 """Entry-point script (biology workflow): render diffraction-limited videos from RDS trajectories.
 
-Reads each .h5 trajectory produced by the biology RDS stage, extracts particle
-poses + dimer state mask, renders the synthetic fluorescence video via the shared
-DLI renderer (PSF + Poisson + EMCCD noise), and saves the videos as a .zarr
-(compressed) or .npy (uncompressed) video set per task.
+Reads each .h5 trajectory of the SHARED RDS tier (generated once by
+``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`` for both workflows), extracts the
+particle poses and replays the reaction records into the subunit lineage, draws the
+condition's static per-subunit dye counts, renders the synthetic fluorescence video via
+the shared dye-centric DLI renderer (PSF + Poisson + EMCCD noise), and saves the videos
+as a .zarr (compressed) or .npy (uncompressed) video set per task.
 
 The whole imaging block is marginalized as a nuisance in production (DETECTOR_WORKFLOW.md
 sec. 9.3, Phase D): the six photophysics (``mu_r``, ``sigma_r``, ``mu_pc``, ``sigma_pc``,
@@ -33,10 +35,14 @@ Outputs (the ``{timing_label}`` token, e.g. ``2S_50FPS``, is rendered from
         -- the six photophysics drawn from the Nuisance_DLI artifact (physical)
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Nuisance_SCOPE_Theta_Set_TASK_{n}_{split}.zarr
         -- the five SCOPE camera parameters drawn from their a-priori box (physical)
+    <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Labeling_Set_TASK_{n}_{split}.zarr
+        -- the per-simulation labeling record (true and visible initial composition)
+    (``<project_alias>`` here carries the condition: ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_...``;
+    the trajectories and the ten-parameter ``Theta_Set`` it reads carry the bare alias)
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py \\
-        --total-time-seconds 2.0 --tasks 2 --task-simulations 5 --video-dtype-bits 8 --seed None
+        --condition FAB --total-time-seconds 2.0 --tasks 2 --task-simulations 5 --video-dtype-bits 8 --seed None
     (add --dry-run to resolve config + inputs and print planned I/O without rendering)
 """
 

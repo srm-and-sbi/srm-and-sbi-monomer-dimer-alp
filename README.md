@@ -6,13 +6,16 @@ This repository is a self-contained pipeline within the `srm-and-sbi` project: i
 
 ## Repository status
 
-**In development (0.1.0).** The codebase begins as a copy of the tracked tree of
+**In development (0.1.1).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
 of the three-species DIMER model with the stationary OU brightness photo-physics — and implements
-the MONOMER_DIMER model family on top of it: the DOL-explicit observation layer, the
-reparameterized counts (true receptor abundance and composition), and the condition axis. Until
-those changes land, the pipeline behaves as the copied reference implementation; documents
-describing the model reflect the copied state where not yet rewritten.
+the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the
+measured degree of labeling as a static per-subunit dye draw carried through the reactions; emitters
+are dyes), the condition axis (MET-FAB and MET-INLB as two frozen configurations of one codebase,
+entering at the DLI stage and carried by a condition slot in every downstream name), and a detector
+calibration that marginalizes the full reactive biology prior. Pending: the reparameterized counts
+(true receptor abundance and composition) and the per-condition `Nuisance_DLI` recalibration under
+the DOL-explicit model.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the Fab-labeled
 monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,
@@ -59,11 +62,13 @@ Should print your profile name. If it raises a `ValueError`, the message points 
 
 The pipeline is a five-stage chain. The first two stages form **generation** (**RDS → DLI**), and the remaining three consume its artifacts:
 
-- **RDS** — reaction-diffusion simulation (ReaDDy-based): produces particle trajectories from sampled parameters.
+- **RDS** — reaction-diffusion simulation (ReaDDy-based): produces the one shared trajectory tier from sampled parameters; both workflows and both conditions re-image it, so it has a single entry point.
 - **DLI** — diffraction-limited imaging: renders each trajectory as a microscopy video (PSF + Poisson + EMCCD noise).
 - **Inference** — neural posterior estimation: trains the posterior on TRAIN and selects the network on TEST.
 - **Evaluation** — MAP-recovery validation: estimates parameters on the held-out EVAL set and scores recovery against the known ground truth.
 - **Experiment** — experimental-data application: applies the trained posterior to experimental microscopy videos (no ground truth).
+
+**Conditions.** The experimental condition (`FAB` = MET-FAB, `INLB` = MET-INLB) enters at the DLI stage, where the condition's measured labeling law re-images the condition-free trajectories, so every stage past RDS takes `--condition FAB|INLB` and every product from the videos onward carries the token in its name (`..._ALP_FAB_2S_50FPS_Video_Set_...`, `..._ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz`). MET-FAB and MET-INLB are two frozen configurations of one codebase, generated, trained, and validated separately; the condition-slot section of [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) lists which products carry the token.
 
 Each stage is an entry-point under `Script_Bank/Prime/`, run with the active `MACHINE_PROFILE` set. The stages communicate through on-disk artifacts, so a run can **target a single stage** rather than the whole chain: invoking a stage script directly (with `--split {train,test,eval}`) re-runs just that stage against the artifacts already on disk — for example, re-rendering videos with `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (the DLI stage only) over trajectories that an RDS run already wrote to disk. Run any stage with `--help` for its full flag list.
 
@@ -71,17 +76,20 @@ For the exact mapping from each scientific concept and pipeline stage to the mod
 
 ### Generate a complete dataset
 
-One command runs RDS → DLI for all three splits in the correct proportions:
+One command runs the shared RDS tier and the requested DLI passes — one per workflow and condition, all over the same trajectories — for all three splits in the correct proportions. It refuses to regenerate a tier that already exists (a fresh draw would mislabel the videos rendered from the old one) and checks the biology's per-condition `Nuisance_DLI` artifacts before anything runs:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0 --dry-run   # preview sizing only
+# the shared tier once per split, then the detector videos of both conditions
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --workflows detector --conditions FAB,INLB --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
+# the biology videos of both conditions over the same tier, once the detector chain has minted the per-condition Nuisance_DLI artifacts
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --workflows biology --conditions FAB,INLB --reuse-rds --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --workflows detector,biology --conditions FAB,INLB --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0 --dry-run   # preview sizing + prerequisite checks only
 ```
 
 ### Train the posterior on TRAIN, selecting on TEST
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --total-time-seconds 2.0 --tasks 8 --test-tasks 2 --epochs 50
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --condition FAB --total-time-seconds 2.0 --tasks 8 --test-tasks 2 --epochs 50
 ```
 
 #### Multi-GPU / multi-node
@@ -122,11 +130,11 @@ tune the behavior:
 Validate by MAP recovery on the held-out EVAL set, then apply the posterior to experimental microscopy videos:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py --total-time-seconds 2.0 --eval-tasks 1 --summary both
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py --total-time-seconds 2.0 --kinds FAB,INLB --summary both
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py --condition FAB --total-time-seconds 2.0 --eval-tasks 1 --summary both
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py --condition FAB --total-time-seconds 2.0 --summary both
 ```
 
-Evaluation reports per-parameter recovery accuracy + posterior calibration; Experiment reports inferred-parameter distributions per condition (no ground truth). The experimental recordings are staged under `<data_bank_root>/Experiment/SPT_Data_MET_FAB_INLB_S-BSST712/` as `Experiment_<KIND>_Cell_<n>_<span>S_RAW.tif` (BioStudies accession S-BSST712). Both write a self-contained report (figures + tables + arrays + a live `progress.log`) under `Posit/`. Run any stage with `--help` for the full flag list (`--summary {map,posterior,both}`, `--pool-mode {bounded,unrestricted}`, `--posterior-samples`, …; Evaluation additionally takes `--bin-mode {prior,quantile}`, and Experiment `--dump-posterior-samples`, which keeps each window's raw posterior draws alongside the quantiles so the temporal-dynamics analysis can plot a pooled density rather than an interval width). The Inference, Evaluation, and Experiment stages also accept `--dry-run`, which resolves the machine profile and the input paths, prints what it would read and write (flagging anything missing), and exits before any compute (no GPU, no output directories) — run it before a long job or a queue submission; the dataset-generation orchestrator (`Generate_Datasets.py`) offers the same preview.
+Evaluation reports per-parameter recovery accuracy + posterior calibration; Experiment reports inferred-parameter distributions for the run's condition (no ground truth; `--kinds` names another condition only for a deliberate cross-condition application). The experimental recordings are staged under `<data_bank_root>/Experiment/SPT_Data_MET_FAB_INLB_S-BSST712/` as `Experiment_<KIND>_Cell_<n>_<span>S_RAW.tif` (BioStudies accession S-BSST712). Both write a self-contained report (figures + tables + arrays + a live `progress.log`) under `Posit/`. Run any stage with `--help` for the full flag list (`--summary {map,posterior,both}`, `--pool-mode {bounded,unrestricted}`, `--posterior-samples`, …; Evaluation additionally takes `--bin-mode {prior,quantile}`, and Experiment `--dump-posterior-samples`, which keeps each window's raw posterior draws alongside the quantiles so the temporal-dynamics analysis can plot a pooled density rather than an interval width). The Inference, Evaluation, and Experiment stages also accept `--dry-run`, which resolves the machine profile and the input paths, prints what it would read and write (flagging anything missing), and exits before any compute (no GPU, no output directories) — run it before a long job or a queue submission; the dataset-generation orchestrator (`Generate_Datasets.py`) offers the same preview.
 
 For the Detector calibration workflow, the runnable smoke test is the Detector calibration smoke test (section 2.5) in [`VALIDATION.md`](VALIDATION.md).
 
@@ -170,13 +178,13 @@ then open the printed `http://localhost:8888/...` URL in your browser and run th
 
 - `Script_Bank/Analysis` — post-hoc diagnostics, run on completed outputs (not pipeline stages): paired `.py`/`.md` scripts (each script ships with a companion `.md` explaining its interpretation) serving both the biology and detector workflows, grouped by family — posterior calibration, estimator comparison, test-loss distribution, embedding-space distance, posterior-predictive video, sample-geometric-median, temporal dynamics, population composition, seeding validation, and `Nuisance_DLI` construction
 - `Script_Bank/HPC` — HPC-mode submission and orchestration scripts
-- `Script_Bank/Prime` — stage entry points for the biology workflow: simulation (`Simulation_RDS`, `Simulation_DLI`), dataset generation (`Generate_Datasets`), training (`Inference`), and validation (`Evaluation` on synthetic EVAL data, `Experiment` on experimental microscopy) — plus the `DETECTOR_`-prefixed mirrors of the five stage scripts for the Detector calibration workflow
+- `Script_Bank/Prime` — stage entry points: the shared-tier simulation (`Simulation_RDS`, one entry point for both workflows), the biology stages (`Simulation_DLI`, training with `Inference`, validation with `Evaluation` on synthetic EVAL data and `Experiment` on experimental microscopy), dataset generation (`Generate_Datasets`, fanning the DLI passes out over workflows and conditions) — plus the `DETECTOR_`-prefixed mirrors of the four stages past RDS for the Detector calibration workflow
 - `srm_and_sbi_monomer_dimer_alp/` — main Python package (modules, support functions)
 
 ## Documentation
 
 - **[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md)** — scientific context, model parameters, ReaDDy semantics, the data split, timing model, reproducibility, and the inference workflow in full.
-- **[`DETECTOR_WORKFLOW.md`](DETECTOR_WORKFLOW.md)** — the Detector calibration workflow: design and justification for calibrating the diffraction-limited-imaging model by simulation-based inference (physics fixed to pure diffusion), with the parameter ranges, their justification, and the implementation plan.
+- **[`DETECTOR_WORKFLOW.md`](DETECTOR_WORKFLOW.md)** — the Detector calibration workflow: design and justification for calibrating the diffraction-limited-imaging model by simulation-based inference (the reaction-diffusion biology marginalized over its prior), with the parameter ranges, their justification, and the implementation plan.
 - **[`VALIDATION.md`](VALIDATION.md)** — environment setup, smoke tests, the validation methodology, and success criteria.
 - **[`env_snapshots/README.md`](env_snapshots/README.md)** — the canonical install guide.
 - **[`BENCHMARKS_Single_GPU.md`](BENCHMARKS_Single_GPU.md)** and **[`BENCHMARKS_Multi_GPU.md`](BENCHMARKS_Multi_GPU.md)** — wall-clock timing references: the single-GPU baseline on a fixed micro-check, and the multi-GPU timings from the production-scale 2 s and 5 s runs (data-parallel training plus sharded evaluation and experiment), with an honest read of the single-vs-multi gap.

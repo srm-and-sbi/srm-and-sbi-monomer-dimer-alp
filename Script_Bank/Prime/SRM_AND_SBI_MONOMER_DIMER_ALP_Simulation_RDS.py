@@ -1,28 +1,34 @@
-"""Entry-point script (biology workflow): generate ReaDDy reaction-diffusion trajectories.
+"""Entry-point script: generate the shared ReaDDy reaction-diffusion trajectory tier.
 
-Samples the DIMER model's learnable reaction-diffusion parameters from the
-log-uniform prior, runs ReaDDy simulations for each (task, simulation) pair, and
-saves the resulting particle trajectories as .h5 files and the parameter samples
-as a .zarr (compressed) or .npy (uncompressed) theta set.
+Samples the DIMER model's ten reaction-diffusion parameters from the log-uniform
+prior, runs ReaDDy simulations for each (task, simulation) pair, and saves the
+resulting particle trajectories (with their reaction records) as .h5 files and the
+parameter samples as a .zarr (compressed) or .npy (uncompressed) theta set.
 
-The RDS stage runs on ONE shared engine used by both the biology and the detector
-workflows: ``srm_and_sbi_monomer_dimer_alp.simulation_rds_runner.run_rds``. This entry
-point is the biology shim -- it builds the biology ``WorkflowConfig`` and hands it
-to the shared runner. The detector twin
-(``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_RDS.py``) is identical except it
-builds the detector config; the engine, and therefore the behavior, is shared.
+This is the ONE RDS entry point of the pipeline. The trajectory tier is shared: both
+workflows re-image it at their DLI stages (the biology under the calibrated imaging
+nuisance, the detector with the imaging drawn as its inference target) and both
+conditions re-image it under their labeling law, so it carries the bare sibling alias --
+no workflow qualifier, no condition token. To the biology workflow the ``Theta_Set`` is
+the learnable label; to the detector workflow the same file is the record of the
+reaction-diffusion nuisance it marginalizes. The engine is
+``srm_and_sbi_monomer_dimer_alp.simulation_rds_runner.run_rds``; this shim builds the
+biology ``WorkflowConfig`` (whose paths carry the bare alias) and hands it over.
 
 Outputs (the ``{timing_label}`` token, e.g. ``2S_50FPS``, is rendered from
 ``PARAMETERS.simulation.timing.label`` to namespace files by duration + fps):
 
-    <data_bank>/<video_subdir>/<trajectory_repo>/<project_alias>_{timing_label}_TASK_{n}/
-        <project_alias>_{timing_label}_TASK_{n}_SIM_{m}.h5       -- per-simulation trajectory
+    <data_bank>/<video_subdir>/<trajectory_repo>/<sibling_alias>_{timing_label}_TASK_{n}_{split}/
+        <sibling_alias>_{timing_label}_TASK_{n}_SIM_{m}_{split}.h5     -- per-simulation trajectory
     <data_bank>/<theta_subdir>/
-        <project_alias>_{timing_label}_Theta_Set_TASK_{n}.zarr   -- per-task theta sample set
+        <sibling_alias>_{timing_label}_Theta_Set_TASK_{n}_{split}.zarr -- per-task theta sample set
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py \\
         --total-time-seconds 2.0 --tasks 2 --task-simulations 5 --seed None
+    (then render per workflow and condition with SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py
+    and SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py, or drive everything with
+    SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py)
 
 Diagnostics:
     --probe logs the process resource limits (RLIMIT_NPROC / RLIMIT_NOFILE) at

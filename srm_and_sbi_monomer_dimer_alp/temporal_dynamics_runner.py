@@ -50,6 +50,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import (AutoMinorLocator, FuncFormatter, LogLocator,
                               MaxNLocator, NullFormatter)
 
+from .labeling import LABELING_CONDITIONS
 from . import temporal_dynamics as tdk
 from .parameterization import PARAMETERS, RunTiming
 from .workflow import parameter_keys, parameter_table
@@ -216,7 +217,7 @@ def _temporal_dynamics_spec(cfg, args) -> _TemporalSpec:
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     out_dir = paths.experiment_recovery_dir(data_bank_root, timing.label)
     rec_dir = paths.map_recovery_dir(data_bank_root, timing.label)
     table = parameter_table(cfg)
@@ -1012,6 +1013,12 @@ def run_temporal_dynamics(cfg, args):
 
 def build_parser(description):
     p = argparse.ArgumentParser(description=description)
+    p.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     p.add_argument("--total-time-seconds", type=float, required=True,
                    help="run duration; selects the Experiment output via its timing label "
                         "(e.g. 2.0 -> 2S_50FPS). Must match a completed Experiment run.")

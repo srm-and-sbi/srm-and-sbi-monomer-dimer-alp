@@ -96,7 +96,11 @@ NNODES="${SLURM_NNODES:-1}"
 # set on a single GPU. An over-provisioned rank with no videos writes no shard and
 # --merge tolerates the missing file.
 EVAL_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py"
-EVAL_ARGS=( --eval-tasks "$EVAL_TASKS" --summary "$SUMMARY" --pool-mode "$POOL_MODE"
+# CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
+# re-images the trajectories per condition), so the token is required and forwarded.
+case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
+
+EVAL_ARGS=( --condition "$CONDITION" --eval-tasks "$EVAL_TASKS" --summary "$SUMMARY" --pool-mode "$POOL_MODE"
             --total-time-seconds "$TOTAL_TIME" )
 
 echo "=== Evaluation | eval_tasks=${EVAL_TASKS} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="

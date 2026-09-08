@@ -101,7 +101,11 @@ NNODES="${SLURM_NNODES:-1}"
 # No worker cap by task count: the draw loop shards at VIDEO granularity, so every
 # allocated GPU gets work regardless of EVAL_TASKS.
 
-CAL_ARGS=( --total-time-seconds "$TOTAL_TIME" --eval-tasks "$EVAL_TASKS" --pool-mode "$POOL_MODE"
+# CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
+# re-images the trajectories per condition), so the token is required and forwarded.
+case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
+
+CAL_ARGS=( --condition "$CONDITION" --total-time-seconds "$TOTAL_TIME" --eval-tasks "$EVAL_TASKS" --pool-mode "$POOL_MODE"
            --posterior-samples "$POSTERIOR_SAMPLES" --tests "$TESTS" --stratify "$STRATIFY" )
 [ "${MAX_SIMS:-0}" -gt 0 ] && CAL_ARGS+=( --max-sims "$MAX_SIMS" )
 [ -n "${MIN_STRATUM:-}" ] && CAL_ARGS+=( --min-stratum "$MIN_STRATUM" )

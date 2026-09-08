@@ -31,6 +31,7 @@ import numpy as np
 import torch
 import torch._dynamo
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
@@ -269,7 +270,7 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     )
     data_bank_root = PARAMETERS.machine.data_bank_root
     compress = True  # EVAL video/theta sets are read from .zarr, as in inference
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     eval_cfg = PARAMETERS.inference.evaluation
 
     # ---- Global RNG / precision settings ---------------------------------
@@ -542,6 +543,12 @@ def build_evaluation_parser() -> argparse.ArgumentParser:
     eval_cfg = PARAMETERS.inference.evaluation
     parser = argparse.ArgumentParser(
         description="Evaluate a trained posterior by MAP recovery on the EVAL namespace.",
+    )
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
     )
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,

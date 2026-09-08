@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import estimator_comparison as ecomp
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
@@ -99,7 +100,7 @@ def run_estimator_comparison(cfg: WorkflowConfig, args: argparse.Namespace) -> N
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
-    paths = cfg.paths
+    paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     timing_label = timing.label
     comp_dir = _comparison_dir(paths, data_bank_root, timing_label)
 
@@ -192,6 +193,12 @@ def build_estimator_comparison_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Compare two trained estimators by the paired log-score on the shared "
                     "(task, sim) TEST subset (Diebold-Mariano / Wilcoxon / bootstrap).")
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
+             "condition-specific data and estimator namespace (the condition slot of the "
+             "runtime grammar).",
+    )
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,
         help="Video duration in seconds; selects the timing_label namespace (e.g. 2.0 -> 2S_50FPS).")

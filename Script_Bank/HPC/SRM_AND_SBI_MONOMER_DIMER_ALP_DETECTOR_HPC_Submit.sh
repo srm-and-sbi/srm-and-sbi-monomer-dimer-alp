@@ -22,13 +22,16 @@
 #   <stage> = simulation | inference | evaluation | experiment
 #   KEY=VALUE pairs are the stage's --export knobs (see each stage script header);
 #   anything not passed falls back to that stage script's own default:
-#     simulation  : SPLIT TASK_OFFSET TASK_COUNT TASK_SIMS TOTAL_TIME
-#     inference   : TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH NUM_WORKERS LR HEARTBEAT RESURRECT
+#     simulation  : SPLIT CONDITION TASK_OFFSET TASK_COUNT TASK_SIMS TOTAL_TIME VIDEO_DTYPE_BITS
+#                   (a DLI-only pass over the SHARED trajectory tier, which the biology
+#                   dispatcher's RDS-only simulation generates -- the detector has no RDS
+#                   stage; CONDITION = FAB|INLB, the labeling law, is always required)
+#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH NUM_WORKERS LR HEARTBEAT RESURRECT
 #                   (RESURRECT=1 continues training from the existing checkpoint;
 #                   LR = per-run starting/peak learning rate, unset = the stage
 #                   script's default peak)
-#     evaluation  : EVAL_TASKS SUMMARY POOL_MODE TOTAL_TIME
-#     experiment  : KINDS MAX_CELLS CHUNK_STEP SUMMARY POOL_MODE TOTAL_TIME
+#     evaluation  : CONDITION EVAL_TASKS SUMMARY POOL_MODE TOTAL_TIME
+#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP SUMMARY POOL_MODE TOTAL_TIME
 #
 # sbatch-level overrides (env, optional -- unset = the stage script's baked #SBATCH):
 #   PART      CPU partition for Simulation (its baked --partition is a placeholder,
@@ -54,12 +57,12 @@
 # KINDS through the exported environment via ALL, never inside the explicit --export.
 #
 # Examples (all DRY-RUN by default -- print the sbatch line, submit nothing):
-#   bash .../Submit.sh inference TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
-#   DRYRUN=0 GPU_PART=gpu bash .../Submit.sh inference TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
-#   DRYRUN=0 GPU_PART=gpu_test bash .../Submit.sh inference TOTAL_TIME=5.0 TRAIN_TASKS=100 EPOCHS=10 RESURRECT=1  # continue a wall-stopped run
-#   PART=test bash .../Submit.sh simulation SPLIT=train TASK_COUNT=16 TASK_SIMS=10 TOTAL_TIME=2.0  # smoke on the check partition (see VALIDATION.md section 2.5)
-#   bash .../Submit.sh evaluation TOTAL_TIME=5.0 EVAL_TASKS=20 POOL_MODE=bounded
-#   bash .../Submit.sh experiment TOTAL_TIME=2.0 SUMMARY=both KINDS=ALP,BET
+#   bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
+#   DRYRUN=0 GPU_PART=gpu bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
+#   DRYRUN=0 GPU_PART=gpu_test bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=100 EPOCHS=10 RESURRECT=1  # continue a wall-stopped run
+#   PART=test bash .../Submit.sh simulation CONDITION=FAB SPLIT=train TASK_COUNT=16 TASK_SIMS=10 TOTAL_TIME=2.0  # DLI over an existing tier; smoke on the check partition (see VALIDATION.md section 2.5)
+#   bash .../Submit.sh evaluation CONDITION=FAB TOTAL_TIME=5.0 EVAL_TASKS=20 POOL_MODE=bounded
+#   bash .../Submit.sh experiment CONDITION=INLB TOTAL_TIME=2.0 SUMMARY=both
 # =============================================================================
 set -uo pipefail
 
@@ -112,6 +115,14 @@ export REPO   # also carried by ALL; listed explicitly in --export for clarity
 declare -a EXPORT_PARTS=( "ALL" "REPO=$REPO" )
 _add(){ local k="$1"; [ -n "${!k:-}" ] && EXPORT_PARTS+=( "$k=${!k}" ); }
 
+# CONDITION (FAB|INLB): the condition slot of the runtime grammar. Every Detector stage's products
+# are condition-specific -- the Simulation stage is a DLI pass over the shared trajectory tier under
+# the condition's labeling law (the detector has no RDS stage) -- so the token is always required
+# and forwarded. It enters the job name right after the qualified alias:
+# <alias>_DETECTOR_<CONDITION>_<timing>_<Stage>.
+case "${CONDITION:-}" in FAB|INLB) export CONDITION ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB; required for every Detector stage)." >&2; exit 1 ;; esac
+cond_slot="_${CONDITION}"
+
 declare -a SB=()          # sbatch flags
 SUBMIT_SCRIPT=""
 JOBNAME=""
@@ -123,8 +134,8 @@ case "$STAGE" in
     SPLIT="${SPLIT:-train}"; export SPLIT
     case "$SPLIT" in train|test|eval) ;; *) echo "FATAL: SPLIT='$SPLIT' (use train|test|eval)." >&2; exit 1 ;; esac
     split_uc="$(echo "$SPLIT" | tr '[:lower:]' '[:upper:]')"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_${timing_label}_Simulation_${split_uc}"
-    _add SPLIT; _add TASK_OFFSET; _add TASK_COUNT; _add TASK_SIMS; _add TOTAL_TIME
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}_Simulation_${split_uc}"
+    _add SPLIT; _add CONDITION; _add TASK_OFFSET; _add TASK_COUNT; _add TASK_SIMS; _add TOTAL_TIME; _add VIDEO_DTYPE_BITS
     SB+=( --array="${ARRAY:-0-0}" )   # always array-submit so %a is a clean node number
     [ -n "${NTPN:-}" ] && SB+=( --ntasks-per-node="$NTPN" )
     [ -n "${CPT:-}" ]  && SB+=( --cpus-per-task="$CPT" )
@@ -138,8 +149,8 @@ case "$STAGE" in
     ;;
   inference)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_${timing_label}_Inference"
-    _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add NUM_WORKERS; _add LR; _add HEARTBEAT; _add RESURRECT
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}_Inference"
+    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add NUM_WORKERS; _add LR; _add HEARTBEAT; _add RESURRECT
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
@@ -147,8 +158,8 @@ case "$STAGE" in
     ;;
   evaluation)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_${timing_label}_Evaluation"
-    _add EVAL_TASKS; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}_Evaluation"
+    _add CONDITION; _add EVAL_TASKS; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
@@ -156,9 +167,9 @@ case "$STAGE" in
     ;;
   experiment)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_${timing_label}_Experiment"
-    _add MAX_CELLS; _add CHUNK_STEP; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME
-    # KINDS may be multi-value (ALP,BET); Slurm splits --export on commas, so carry
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}_Experiment"
+    _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME
+    # KINDS may be multi-value (FAB,INLB, a deliberate cross-condition application); Slurm splits --export on commas, so carry
     # it via the exported environment (ALL) rather than the explicit --export list.
     if [ -n "${KINDS:-}" ]; then export KINDS; KINDS_NOTE="KINDS=$KINDS (carried via ALL, comma-safe)"; fi
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )

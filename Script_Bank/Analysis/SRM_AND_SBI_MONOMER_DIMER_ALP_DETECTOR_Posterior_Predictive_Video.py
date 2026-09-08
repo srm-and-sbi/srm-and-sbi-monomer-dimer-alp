@@ -4,7 +4,7 @@ Takes the six imaging parameters INFERRED from one real MET recording, simulates
 that recording's own length, and puts the two side by side -- the direct visual test of whether the
 calibrated imaging model reproduces the appearance of real data. The reaction-diffusion block is a
 marginalized nuisance here (drawn per render, or pinned with --fixed-nuisance-RDS), and the system is
-built diffusion-only because the detector's physics model has no reactions. The five SCOPE camera
+built with its full reaction network, the same simulator the detector was calibrated against. The five SCOPE camera
 parameters are pinned to their MET values rather than drawn, since the comparison is against one
 specific acquisition.
 

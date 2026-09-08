@@ -21,7 +21,7 @@ figures/experiment_<KEY>.png + the combined ``_MAP_Experiment.npz`` + progress.l
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment.py \\
-        --total-time-seconds 2.0 --kinds ALP,BET --max-cells 2 --pool-mode unrestricted
+        --condition FAB --total-time-seconds 2.0 --max-cells 2 --pool-mode unrestricted
 """
 
 import sys

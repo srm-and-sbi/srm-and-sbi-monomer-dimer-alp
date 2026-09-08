@@ -95,7 +95,11 @@ SPAN="${SPAN:-20}"
 GPUS="${SRM_AND_SBI_GPUS:-${SLURM_GPUS_ON_NODE:-1}}"
 NNODES="${SLURM_NNODES:-1}"
 NDLI_PY="$REPO/Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py"
-NDLI_ARGS=( --emit-template --pool-mode "$POOL_MODE"
+# CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
+# re-images the trajectories per condition), so the token is required and forwarded.
+case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
+
+NDLI_ARGS=( --condition "$CONDITION" --emit-template --pool-mode "$POOL_MODE"
             --total-time-seconds "$TOTAL_TIME" --experiment-span-seconds "$SPAN" )
 
 echo "=== Nuisance_DLI (emit-template) | pool=${POOL_MODE} time=${TOTAL_TIME}s span=${SPAN}s nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) | node $(hostname) ==="

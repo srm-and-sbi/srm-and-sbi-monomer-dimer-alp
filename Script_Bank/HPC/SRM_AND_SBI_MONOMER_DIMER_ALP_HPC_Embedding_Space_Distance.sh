@@ -65,7 +65,7 @@ export MACHINE_PROFILE="${MACHINE_PROFILE:?set MACHINE_PROFILE (via hpc_local.en
 WORKFLOW="${WORKFLOW:-biology}"
 EVAL_TASKS="${EVAL_TASKS:-10}"
 TOTAL_TIME="${TOTAL_TIME:-2.0}"
-KINDS="${KINDS:-MET-FAB,MET-INLB}"
+KINDS="${KINDS:-}"   # default (empty): the run's CONDITION; set only for a deliberate cross-condition embedding
 N_PERMUTATIONS="${N_PERMUTATIONS:-1000}"
 SPAN="${SPAN:-20}"
 
@@ -78,13 +78,19 @@ case "$WORKFLOW" in
     *) echo "FATAL: WORKFLOW must be 'biology' or 'detector', got '$WORKFLOW'." >&2; exit 1 ;;
 esac
 
-echo "=== Embedding_Space_Distance | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} time=${TOTAL_TIME}s kinds=${KINDS} span=${SPAN}s perms=${N_PERMUTATIONS} | node $(hostname) ==="
+echo "=== Embedding_Space_Distance | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} time=${TOTAL_TIME}s condition=${CONDITION} kinds=${KINDS:-<condition>} span=${SPAN}s perms=${N_PERMUTATIONS} | node $(hostname) ==="
 echo "    single-GPU engine on a whole-node allocation (gres=gpu:4); no sharding, no merge."
 
+# CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
+# re-images the trajectories per condition), so the token is required and forwarded.
+case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
+
+KINDS_ARG=(); [ -n "$KINDS" ] && KINDS_ARG=( --kinds "$KINDS" )
 python -u "$SCRIPT" \
+    --condition "$CONDITION" \
     --total-time-seconds "$TOTAL_TIME" \
     --eval-tasks "$EVAL_TASKS" \
-    --kinds "$KINDS" \
+    "${KINDS_ARG[@]}" \
     --experiment-span-seconds "$SPAN" \
     --n-permutations "$N_PERMUTATIONS" \
     ${EXTRA:-}

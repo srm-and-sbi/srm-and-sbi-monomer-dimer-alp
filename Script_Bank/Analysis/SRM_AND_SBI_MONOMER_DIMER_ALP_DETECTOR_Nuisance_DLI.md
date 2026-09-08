@@ -81,7 +81,7 @@ few *whole* real MAP vectors and REUSES already-computed data — the Detector E
 (`selection_source = "experiment"`, the default), or the labeled posterior pool via its per-window SGM
 (`"window-sgm"`) — so it runs on the **CPU**. Running it therefore presupposes the Detector Experiment
 stage has run. Three fields govern it: `percentiles` (a list; default `[50]`), `condition`
-(`pooled`/`ALP` = MET-FAB/`BET` = MET-INLB), and `selection_source`. The construction is a **signed
+(`FAB` = MET-FAB or `INLB` = MET-INLB; default the artifact's own condition), and `selection_source`. The construction is a **signed
 distance-to-SGM** coordinate, computed in prior-range-normalized absolute space (where the renderer
 consumes the values):
 
@@ -126,7 +126,8 @@ Arguments:
   timing knob every pipeline stage takes; the label is always derived from it, never set by hand.
 - `--experiment-span-seconds` — the duration of the real recordings to read (the files are named
   `Experiment_<KIND>_Cell_<n>_<span>S_RAW.tif`); default `20`.
-- `--kinds` — comma-separated recording kinds to pool (default `ALP,BET`). The construction always pools
+- `--condition` — the run's experimental condition (`FAB` or `INLB`); selects the condition-specific detector calibration and Nuisance_DLI namespace.
+- `--kinds` — comma-separated recording kinds to pool (default: the run's condition). The construction pools
   across kinds; a by-kind split is only ever a diagnostic, never the constructed artifact, because the
   imaging is a property of the microscope, not the biological condition.
 - `--chunk-step-seconds` — the sliding-window step; default is the model window (non-overlapping

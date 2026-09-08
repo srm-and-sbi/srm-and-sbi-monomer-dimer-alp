@@ -20,7 +20,7 @@ a stage's engine lands in both, and neither can silently drift from the other.
 The genuine per-workflow differences are only: which parameterization module
 supplies the tables/bounds/keys, the alias-qualified ``paths``, and a workflow
 ``tag``. Each stage runner resolves its own stage-specific specializations
-(e.g. the RDS reactive-vs-diffusion-only simulation builder) from this config in
+(e.g. the RDS parameter source: learnable theta versus RDS nuisance) from this config in
 one localized place; the shared engine body itself carries no workflow branch.
 """
 

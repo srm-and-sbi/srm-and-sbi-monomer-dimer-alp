@@ -87,7 +87,7 @@ read or written without loading or computing anything.
     MACHINE_PROFILE=<profile> python \
       Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI_Sample_Geometric_Median.py \
       --total-time-seconds 2.0 [--collection map|posterior] [--map-source experiment|window-sgm] \
-      [--condition pooled|MET-FAB|MET-INLB] [--pool-source artifact|cache] [--dry-run]
+      --condition FAB|INLB [--pool-source artifact|cache] [--dry-run]
 
 Arguments:
 
@@ -108,10 +108,10 @@ Arguments:
   (the medoid of each window's posterior draws), an explicit samples-derived estimate computed CPU-only
   from the posterior-sample pool. (This `window-sgm` is the SGM applied per window; it was previously a
   silent fallback and is now an explicit, named choice.)
-- `--condition` (`pooled` default, or `MET-FAB`/`MET-INLB`) — restrict the collection to one
-  experimental condition before summarizing: `pooled` both, `MET-FAB` the monomer control,
-  `MET-INLB` the dimer condition. (The stored per-row labels use the schema tokens `ALP`/`BET`;
-  the scientific names are translated at the boundary.) The restriction reads the collection's
+- `--condition` (`FAB` or `INLB`, required) — the run's experimental condition: it selects the
+  condition-specific `Nuisance_DLI` namespace (the condition slot of the runtime grammar) and
+  restricts the collection to that condition's rows (`FAB` = MET-FAB, the monomer control;
+  `INLB` = MET-INLB, the dimer condition). The restriction reads the collection's
   own per-row condition labels, so it needs a labeled
   pool (a fresh build writes them; migrate a legacy pool with the Nuisance_DLI build's
   `--migrate-pool-labels`) or the labeled experiment MAP; a real condition on an unlabeled collection

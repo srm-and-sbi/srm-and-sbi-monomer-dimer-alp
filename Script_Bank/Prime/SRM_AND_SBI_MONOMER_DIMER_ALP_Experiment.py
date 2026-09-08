@@ -28,7 +28,7 @@ Outputs (under <data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Exp
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py \\
-        --total-time-seconds 2.0 --kinds ALP,BET --max-cells 2 --pool-mode bounded
+        --condition FAB --total-time-seconds 2.0 --max-cells 2 --pool-mode bounded
 """
 
 import sys

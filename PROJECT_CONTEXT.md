@@ -6,17 +6,19 @@ question, the molecular system, the two-stage inference architecture, the data
 and computational flow, the inference network, the validation methodology, and
 the design rationale that shapes the implementation.
 
-**Repository status.** In development (0.1.0). The codebase begins as a copy of
+**Repository status.** In development (0.1.1). The codebase began as a copy of
 the tracked tree of `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release
-`v0.4.23` and implements the MONOMER_DIMER model family on top of it: the
-DOL-explicit observation layer (measured degree of labeling, per-subunit label
-draws, probe occupancy), the reparameterized counts (true receptor abundance
-N_R and composition, in place of visible-spot counts), and the condition axis
-(MET-FAB and MET-INLB as two frozen configurations of one codebase). The
-`Nuisance_DLI` imaging recalibration under the stationary brightness model is
-carried out here, under the DOL-explicit observation model. Until those changes
-land, the pipeline behaves as the copied reference implementation, and the
-scientific sections below describe the copied state where not yet rewritten.
+`v0.4.23` and implements the MONOMER_DIMER model family on top of it. Landed:
+the DOL-explicit observation layer (the measured degree of labeling as a static
+per-subunit dye draw carried through the reactions, emitters that are dyes, an
+optional probe-occupancy multiplier), the condition axis (MET-FAB and MET-INLB
+as two frozen configurations of one codebase, entering at the DLI stage and
+carried by a condition slot in every downstream name), and a detector
+calibration that marginalizes the full reactive biology prior. Pending: the
+reparameterized counts (true receptor abundance N_R and composition, in place
+of per-species counts) and the `Nuisance_DLI` imaging recalibration per
+condition under the DOL-explicit observation model. The scientific sections
+below describe the implemented state.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the
 Fab-labeled monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer
@@ -116,6 +118,10 @@ for molecular inference; see §3):
   amplitude), so each is drawn from an a-priori box and integrated over
   (`DETECTOR_WORKFLOW.md` §9.3); `g` and `C` are fixed nominal spec metadata for the
   `gamma` drift check.
+- Labeling (the degree of labeling): **measured, fixed, never inferred** — the
+  per-subunit dye-count law of the condition (MET-INLB: Bernoulli with labeling
+  probability 0.5; MET-FAB: Poisson at the measured mean of 1.64 dyes per probe),
+  drawn once per recording at the DLI stage (§4, *DLI Imaging*).
 - Video frame rate: 50 Hz (20 ms per frame) — a fixed sampling cadence.
 - Recording length: supplied per run via `total_time_seconds` (commonly 2 s,
   5 s, or 10 s)
@@ -125,31 +131,42 @@ for molecular inference; see §3):
 ## §3. Inference Pipeline: Two-Stage Architecture
 
 The full program separates detector inference from molecular-parameter
-inference. The detector is characterized first, on a simpler system, and then
-marginalized — drawn per simulation from its calibrated nuisance — while the
-molecular parameters are inferred. This disentangles
+inference. The detector is characterized first, with the biology marginalized, and then
+marginalized in turn — drawn per simulation from its calibrated nuisance — while
+the molecular parameters are inferred. This disentangles
 optical and sensor effects from the biological reaction-diffusion parameters,
 reduces the dimensionality of each inference problem, improves posterior
 geometry, and speeds convergence.
 
 ### Stage 1: Detector Parameters (this repository — the Detector calibration workflow)
 
-**Input:** Synthetic videos from a diffusion-only model (reactions disabled;
-pure Brownian motion), rendered through the same imaging model.
+**Input:** Synthetic videos rendered from the SAME reactive trajectory tier the
+biology workflow uses — one shared tier, generated once under the bare alias,
+whose ten-parameter `Theta_Set` is the biology's learnable label and, to the
+detector, the record of the reaction-diffusion nuisance it marginalizes —
+re-imaged per condition through the same imaging and labeling model, with the
+imaging drawn from the detector prior. The detector has no RDS stage of its own.
+The reactions are kept because the labeling model makes them observable: a
+dissociating one-dye dimer leaves one visible and one invisible daughter, a track
+disappearance that a detector trained on static composition could only explain as
+photobleaching.
 
 **Objective:** Infer the six learnable imaging parameters (`β`) — the PSF-width
 lognormal (`mu_r`, `sigma_r`), the emitter-brightness lognormal (`mu_pc`,
 `sigma_pc`), the photobleaching probability `prob_photo_bleach`, and the flicker
-rate `lambda_rate` — with the physics frozen so the imaging model is
-identifiable. The EMCCD camera chain (`gamma`, `kappa_o`, `kappa_b`, `kappa_s`,
-`kappa_q`) is **not** inferred: it is marginalized as the SCOPE camera nuisance,
-each value drawn per simulation from its a-priori box (§2).
+rate `lambda_rate` — with the biology marginalized over its full prior, so the
+imaging estimate is conditioned on no particular kinetics. The EMCCD camera
+chain (`gamma`, `kappa_o`, `kappa_b`, `kappa_s`, `kappa_q`) is **not** inferred:
+it is marginalized as the SCOPE camera nuisance, each value drawn per simulation
+from its a-priori box (§2). The calibration is per condition, because the
+labeling law that shapes the videos is.
 
 **Output:** A posterior over `β` and a versioned, provenanced imaging-parameter
 artifact. This calibration is a complete workflow parallel to the biology
 pipeline, run in this repository with its own committed submission machinery,
 separate from — never wired into — the biology `Submit.sh` dispatcher and its
-stage wrappers.
+stage wrappers; its Simulation stage is a DLI-only pass over the shared trajectory
+tier that the RDS-only biology simulation generates.
 The calibrated values are the basis for the detector parameters Stage 2 applies;
 the mechanism that seeds them into production is developed alongside this
 workflow.
@@ -195,9 +212,23 @@ train/test set sizes, epochs, and test loss. See the HPC operations runbook
 2. Initialize a ReaDDy system: particles (A, B, C), diffusion coefficients,
    reaction rates, simulation box, and observables.
 3. Evolve the system for the recording length (`total_time_seconds`).
-4. Record particle trajectories (positions, species, time) to an `.h5` file
-   (HDF5, the ReaDDy convention), and the sampled theta set to a compressed
-   `.zarr` array.
+4. Record particle trajectories (positions, species, time) together with the
+   reaction records (educt and product particle ids per event — the RDS/DLI
+   handoff the labeling model needs) to an `.h5` file (HDF5, the ReaDDy
+   convention), and the sampled theta set to a compressed `.zarr` array.
+
+**One tier, shared.** This is the only RDS entry point. The trajectories and the
+ten-parameter `Theta_Set` carry the bare sibling alias — no workflow qualifier, no
+condition token — because both workflows and both conditions re-image them at the
+DLI stage: the biology reads the `Theta_Set` as its learnable label, the detector
+reads the same file as the record of the reaction-diffusion nuisance it
+marginalizes, and each condition's labeling law thins the same receptors. The
+detector therefore has no RDS stage, no separate nuisance draw, and no copy of the
+biology ranges to keep equal: it marginalizes the biology prior by construction.
+Because the tier is shared, regenerating it silently mislabels every video already
+rendered from it, so the dataset orchestrator refuses to run the RDS stage over an
+existing tier unless told to overwrite, and re-images an existing tier with
+`--reuse-rds`.
 
 **Example quantities:** Particle count per species over time, mean
 inter-particle distances, reaction-event counts.
@@ -224,7 +255,7 @@ speedup, while the physics is untouched (reactions still fire only at the true
 reaction radius; the skin only widens which particles are considered as
 candidates). It is exposed as `SimulationRDS.neighbor_list_skin_factor` — a
 **multiple of the particle diameter** (default `10×` = 100 nm) — overridable per run
-via `--skin-factor` (RDS entry points, `Generate_Datasets.py`) or the `SKIN_FACTOR`
+via `--skin-factor` (the RDS entry point, `Generate_Datasets.py`) or the `SKIN_FACTOR`
 batch knob. The cost is U-shaped: too small leaves the empty-cell sweep, too large
 collapses the box toward one cell and degrades the candidate search to O(N²); the
 default sits on the broad fast plateau and clears the worst-case per-step
@@ -235,58 +266,84 @@ displacement (~47 nm at max diffusivity) with margin, so no reaction is missed.
 **Script:** `Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py`
 
 **Process:**
-1. Read the RDS trajectory from `.h5` and extract per-frame poses (and a dimer
-   mask).
-2. Render particles as Gaussian-PSF-convolved objects on a 2D detector grid,
-   accumulating each emitter's PSF integral across pixel boundaries.
-3. Apply Poisson photon noise (mean = intensity × photon-conversion factor).
-4. Apply EMCCD readout noise.
+1. Read the RDS trajectory from `.h5`: extract per-frame poses and replay the
+   reaction records into the **subunit lineage** — which particle hosts each
+   receptor subunit at each frame (fusion concatenates, fission distributes,
+   conversion preserves). ReaDDy assigns a new particle id to every reaction
+   product, including plain species conversions, so the lineage is what lets a
+   static per-subunit quantity follow its subunit through the reactions.
+2. Draw the **static dye count** of every subunit once, from the condition's
+   labeling law composed with the probe-occupancy multiplier (default 1).
+3. Render every **dye** as an emitter at the position of the particle hosting its
+   subunit: Gaussian PSF (one width per subunit, carried by its dyes), per-dye
+   stationary OU brightness with absorbing photobleaching, and PSF integrals
+   accumulated over the pixel grid — co-located dyes' photons add.
+4. Apply the corrected EMCCD chain (Poisson photoelectrons, stochastic Gamma
+   multiplication, gain-independent read noise, bias).
 5. Discretize to an integer pixel count (8- or 16-bit) and save a compressed
-   `.zarr` video set.
+   `.zarr` video set, plus the per-simulation `Labeling_Set` record.
 
-**Dimer brightness model:** A dimer is two labels within one point-spread function,
-so single-emitter fitting (ThunderSTORM, or the eye) records **one** spot whose
-photons combine. The model combines the two labels by the **sum** of two independent
-monomer brightness draws (`dimer_model="sum"`, the default): each label is drawn from
-the same per-monomer brightness log-normal (`mu_pc`, `sigma_pc`) with its own
-independent flicker trajectory, and their photon counts **add**. This is the
-physically grounded combination for two independent, always-on labels — an *n*-mer's
-brightness distribution is the *n*-fold convolution of the monomer's (Mutch et al.
-2007; Digman & Gratton number-and-brightness) — giving a dimer a mean of `~2×` a
-monomer with a lighter upper tail than rigidly doubling one draw. It is corroborated
-by the data: the fitted per-spot intensity is `~1.8×` between the monomer-dominated
-MET-FAB and the dimer-rich MET-INLB condition (a lower bound, given the analysis
-intensity-range clip; see `DETECTOR_WORKFLOW.md` §6.4–§6.5).
+**Emitters are dyes (the DOL-explicit observation layer).** Every receptor subunit
+carries an integer dye count `kappa` drawn once per recording from the condition's
+labeling law and held fixed: dye conjugation happened during sample preparation.
+A subunit with no dye has no emitter and never renders; a dimer renders the dyes
+of both subunits at one position, so its brightness is the sum of independent
+per-dye processes — an *n*-dye spot's brightness distribution is the *n*-fold
+convolution of the single-dye law (Mutch et al. 2007; Digman & Gratton 2008
+number-and-brightness) — with no brightness multiplier anywhere. The laws are
+measured or preparation-level inputs, fixed and never inferred: from the video
+alone the labeling probability is nearly degenerate with the receptor counts.
 
-The retained alternative, `dimer_model="multiply"` (a non-default mode of the shared
-renderer `render_dli_video`, which reads `dimer_mule` from the biology parameter table),
-rigidly scales a single monomer draw by `dimer_mule` — a
-per-dataset photophysical constant in `[1, 2]`: **`2`** for two permanently-on,
-both-present labels (the MET ATTO 647N default); **`√2 ≈ 1.41`** when only ~one label
-is visible on average (a photoswitching dye, whose time-averaged brightness is the
-geometric mean `GM(1×, 2×) = √2`, or ~50% labeling). It shares the `~2×` mean but
-has a heavier upper tail, and is kept for sensitivity checks.
+| condition | law per subunit | invisible monomers | invisible dimers |
+|---|---|---|---|
+| MET-INLB | Bernoulli, `q = 0.5` — one engineered attachment site; the labeling probability measured for this preparation (reported by the collaborating laboratory, 2026; not in the source publications) | 50% | 25% |
+| MET-FAB | Poisson at the measured ensemble mean `DOL = 1.64` (Harwardt et al. 2017) — the working preparation-level model, with matched-mean binomial and negative-binomial alternatives registered for sensitivity runs | 19.4% | 3.8% |
 
-**Label occupancy (measured degrees of labeling):** The MET probes are not fully labeled.
-The Fab preparation carries an average of 1.64 dyes per fragment (an ensemble average;
-Harwardt et al. 2017). The InlB321-K280C construct has a single engineered
-dye-attachment site — at most one dye per ligand — and its degree of labeling is
-approximately 50%, measured by the data-owning laboratory (personal communication,
-2026-09-01) and not reported in the source publications. Under 50% occupancy, dye
-counts on a dimer are binomial: 25% two dyes, 50% one dye, 25% dark. Among visible
-dimers, two thirds carry one dye and one third carries two, so the visible-dimer mean
-brightness is 4/3× a single label rather than 2×. Both combination modes above describe
-fully labeled dimers; the measured occupancy therefore bounds how much of the
-MET-FAB → MET-INLB intensity ratio dimer composition alone can explain, and it renders
-unlabeled ligands and fully dark dimers invisible to the pipeline. A label-occupancy
-layer in the renderer is a candidate observation-model extension, deferred to a future
-sibling.
+Three consequences follow from the draw, none an extra assumption. The visible
+fraction differs by species (a dimer is visible when either subunit is), so the
+visible population is dimer-enriched relative to the true composition, and the
+count parameters are **true receptor abundances**: the RDS stage simulates every
+receptor, labeled or not, because the reacting population sets the encounter
+rates, and the observation layer decides which of them render. Among visible
+MET-INLB dimers two thirds carry one dye and one third two, so the visible-dimer
+brightness is a `2:1` mixture of one-dye and two-dye emission rather than a
+doubled monomer. And because the dye count travels with its subunit, a one-dye
+dimer that dissociates leaves one visible daughter and one permanently invisible
+one — an observable signature of the labeling statistics, reproduced by the
+lineage bookkeeping and erased by any renderer that redrew labels per frame or
+per particle. The `labeling` module holds the laws (`LABELING_LAWS`), the draw,
+the optional static occupancy multiplier (`--occupancy`: a sensitivity knob for
+the effective labeling probability or for a species-dependent probe selection;
+inert at its default), and the `Labeling_Set` columns recorded per simulation
+(the true and visible initial composition).
 
-The condition difference (MET-FAB vs MET-INLB) is carried by the **dimer fraction** (the
-species counts), with the combination model and the per-monomer brightness `mu_pc`
-shared across conditions — not by a per-condition brightness.
+**The condition axis.** The condition (MET-FAB or MET-INLB) enters here and only
+here: the same condition-free trajectories are re-imaged per condition under its
+labeling law and its own detector calibration, so every DLI product and every
+downstream product carries the condition token (`--condition`, required), while
+the RDS products do not (*Condition slot in the naming grammar*, below). MET-FAB
+and MET-INLB are two frozen configurations of one codebase, trained and
+validated separately.
 
-**Photobleaching model:** Each emitter can irreversibly transition to a dark
+**Probe kinetics: the stated assumption.** The dye count of a subunit is fixed for
+the whole recording, so the simulator removes a dye only by photobleaching and
+never adds one. Ligand binding and unbinding within a recording are therefore not
+in the model, and for MET-INLB the probe is the ligand. The unbinding channel is
+absorbed by construction: the detector calibrates the bleach parameter on the INLB
+recordings, so the calibrated value is photobleaching plus first-order unbinding,
+and the biology DLI draws that value — a first-order, state-independent unbinding
+is statistically indistinguishable from the modeled bleaching. Two residuals are
+not absorbed and are declared here rather than modeled: a labeled InlB binding
+from solution during a recording would create a spot the simulator never creates,
+which matters only if free labeled ligand was present during imaging (a property
+of the source acquisition); and a ligand affinity that differs between monomeric
+and dimeric MET would make disappearances stoichiometry-dependent, which a
+state-independent bleach cannot absorb. Partial ligand occupancy, the static part
+of the same question, is the `--occupancy` multiplier, inert at its default of
+one. The posterior-predictive video check is where a violated assumption shows:
+appearances in the experimental video with none in the synthetic one.
+
+**Photobleaching model:** Each dye can irreversibly transition to a dark
 (bleached) state, applied per frame through a two-state transition matrix. The
 per-frame bleach probability is
 `prob_1 = 1 − (1 − prob_photo_bleach)^(1 / numb_photo_bleach)`, where
@@ -474,6 +531,30 @@ enforcing the sizing rule:
 
 A `--dry-run` flag previews the sizing plan without generating anything.
 
+### Condition slot in the naming grammar
+
+The runtime grammar is `[program]_[sibling]_[iter][_qualifier]_[condition]_[timing]_[stage]`:
+the workflow qualifier (`_DETECTOR`) and the experimental-condition token (`FAB` or
+`INLB`) sit between the iteration and the timing label. The condition enters at the
+DLI stage, so the products it namespaces are exactly the DLI-side and inference-side
+ones, while the RDS products form one shared tier — free of qualifier and condition,
+re-imaged by both workflows and per condition:
+
+| product | alias | example |
+|---|---|---|
+| trajectories (one tier, shared by both workflows and both conditions) | bare sibling alias: no qualifier, no condition | `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_TASK_0_SIM_0_TRAIN.h5` |
+| the tier's ten-parameter `Theta_Set` (the biology labels; the detector's RDS-nuisance record) | bare sibling alias | `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr` |
+| `Video_Set`, `Labeling_Set`, `Nuisance_SCOPE_Theta_Set`, biology `Nuisance_DLI_Theta_Set`, detector `Theta_Set` (the imaging labels) | conditioned | `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Video_Set_TASK_0_TRAIN.zarr` |
+| estimator, checkpoints, recovery and experiment reports, analyses, the `Nuisance_DLI` artifact | conditioned | `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz` |
+
+Every stage past RDS takes `--condition`; `Paths.with_condition` appends the token to
+the alias, and the trajectory and theta-set builders resolve the shared tier's bare
+alias (`Paths.rds_alias`) where a product belongs to it. HPC job and log names follow
+the same slot (`SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Inference`,
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_Experiment`); an RDS-only
+simulation job carries neither qualifier nor condition, and the detector's Simulation
+job — a DLI-only pass over the tier — always carries both.
+
 ### Non-deterministic generation and task-index provenance
 
 Generation passes no random seed by default: prior sampling, particle placement,
@@ -534,7 +615,10 @@ rather than a single monolithic support file. The modules and their roles:
   `_<stage>_spec(cfg)` resolver rather than duplicated across entry points. In
   particular, `simulation_dli_runner`'s per-stage spec resolver resolves the DLI
   imaging source — the `Nuisance_DLI` artifact for biology, the imaging prior
-  box for detector.
+  box for detector. `simulation_rds_runner` is the one runner without a workflow
+  fork: it generates the shared trajectory tier once, under the bare alias, and
+  refuses a detector config, since the detector re-images that tier rather than
+  simulating its own.
 - **`parameterization.py`** — the single source of truth for configuration. It
   loads the per-machine profile, holds the sibling-wide defaults as frozen
   dataclasses (path conventions, simulation geometry and timing, RDS/DLI
@@ -544,20 +628,23 @@ rather than a single monolithic support file. The modules and their roles:
   and validates the configuration at import time.
 - **`detector_parameterization.py`** — the detector workflow's parameter
   contract (value-based roles): the six learnable imaging parameters' priors,
-  with the reaction-diffusion block and the SCOPE camera marginalized as
-  nuisances; deliberately decoupled from `parameterization.py`, since the two
-  workflows' roles and ranges differ by design.
+  with the reaction-diffusion block marginalized as a nuisance supplied by the
+  shared trajectory tier (nuisance-from-object: the rows declare the role and
+  carry no ranges of their own) and the SCOPE camera as a nuisance drawn from its
+  box; deliberately decoupled from `parameterization.py`, since the two
+  workflows' roles differ by design.
 - **`simulation_rds_support.py`** — the ReaDDy primitives: system builder,
-  simulation builder, and trajectory-pose extraction (the extractor is reused by
-  the imaging stage, which also requests a dimer mask).
-- **`detector_simulation_rds_support.py`** — the detector RDS forward model:
-  reuses the canonical `build_system` (with `pure_diffusion=True`) and
-  `build_simulation` by import, and draws the six reaction-diffusion nuisance
-  values (three species counts, three diffusivities) per simulation.
+  simulation builder (which registers the reaction-record observable),
+  trajectory-pose extraction, and the subunit-lineage extraction that replays
+  the reaction records into a per-frame subunit-to-particle table with a
+  conservation check (the RDS/DLI handoff of the labeling model).
+- **`labeling.py`** — the static labeling stoichiometry: the per-condition
+  dye-count laws and their registry, the once-per-recording draw with the
+  optional occupancy multiplier, and the `Labeling_Set` provenance columns.
 - **`simulation_dli_support.py`** — the imaging pipeline: Gaussian PSF, EMCCD
   detector, intensity accumulation, the brightness photo-physics (stationary OU
-  ln-brightness flicker with absorbing photobleaching), and the top-level
-  imaging orchestrator.
+  ln-brightness flicker with absorbing photobleaching), the dye-track builder,
+  and the top-level dye-centric renderer.
 - **`detector_simulation_dli_support.py`** — the detector DLI forward model:
   re-exports the shared, source-agnostic renderer `render_dli_video` under the
   detector-facing name `render_detector_video`, so both DLI stages render
@@ -794,29 +881,32 @@ shared runner, and produces a defined on-disk artifact. Module paths are relativ
 | Scientific concept / stage | Code (module → function/class) | On-disk artifact |
 | --- | --- | --- |
 | DIMER reaction system (`A + A ↔ B`, `B ↔ C`): species, diffusion coefficients, reaction rates, simulation box | `simulation_rds_support.py` → `build_system()`; the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
-| RDS trajectory recording (particle positions, species, time over the recording length) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py` (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
-| Trajectory extraction (per-frame poses and the dimer mask) | `simulation_rds_support.py` → `extract_trajectory_poses()` (reused by the imaging stage, which requests the dimer mask) | (per-frame pose arrays passed to imaging) |
-| Diffraction-limited imaging forward model: Gaussian PSF, Poisson + EMCCD readout noise, dimer-brightness scaling, photobleaching | `simulation_dli_support.py` → `render_dli_video()` (source-agnostic renderer of an assembled 11-key imaging vector; shared by both DLI stages), with `Gaussian` / `sample_psf_width()` (PSF), `compute_intensity()` + `add_pixel_counts()` (intensity accumulation), `generate_brightness_photons()` (brightness photo-physics: stationary OU ln-brightness flicker + absorbing photobleaching), `EMCCD` / `add_noise()` / `generate_frames()` (detector noise) | (noised video array passed to writer below) |
-| DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (drives `extract_trajectory_poses()` → `render_dli_video()`, with the imaging block marginalized from `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
+| RDS trajectory recording (particle positions, species, time over the recording length) — the one shared tier, bare alias, for both workflows and both conditions | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`, the only RDS entry point (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
+| Trajectory extraction (per-frame poses) and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `extract_subunit_lineage()` | (pose arrays and the lineage table passed to imaging) |
+| Static labeling stoichiometry: the condition's dye-count law, the once-per-recording draw, the occupancy multiplier | `labeling.py` → `LABELING_LAWS`, `resolve_labeling_law()`, `draw_dye_counts()`, `labeling_summary()` | `Labeling_Set` `.zarr` per task (one `LABELING_SET_COLUMNS` row per simulation) |
+| Diffraction-limited imaging forward model: dyes as emitters following their subunit's host particle, Gaussian PSF, per-dye brightness photo-physics with photobleaching, Poisson + EMCCD readout noise | `simulation_dli_support.py` → `render_dli_video()` (dye-centric, source-agnostic renderer of the poses, the lineage, the dye counts, and an assembled 11-key imaging vector; shared by both DLI stages), with `build_dye_tracks()` (per-dye emitter tracks), `Gaussian` / `sample_psf_width()` (PSF), `compute_intensity()` + `add_pixel_counts()` (intensity accumulation), `generate_brightness_photons()` (brightness photo-physics: stationary OU ln-brightness flicker + absorbing photobleaching), `EMCCD` / `add_noise()` / `generate_frames()` (detector noise) | (noised video array passed to writer below) |
+| DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (per `--condition`; drives `extract_trajectory_poses()` + `extract_subunit_lineage()` → `draw_dye_counts()` → `render_dli_video()`, with the imaging block marginalized from the condition's `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
 | Parameter prior and specification (ranges, log flags, units, labels; log-uniform prior and bounds) | `parameterization.py` → `PARAMETERS` (a `Parameters` singleton) with `build_prior()`, `theta_lower_bound()`, `theta_upper_bound()`, `parameter_find()` | (configuration in code; sampled theta persisted in the RDS theta-set `.zarr`) |
 | NPE + MAF estimator with 3D-CNN + temporal-transformer embedding | `inference_network.py` → `Complex3DCNN` (video encoder), `TemporalTransformer` (with `AttentionBlock`, `PositionalEncoding`); training wired in `inference_support.py` → `setup_training()`, `train_loop()` (with the resurrect branch) | (in-memory network; checkpoint + posterior written below) |
-| Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` (runs RDS → DLI per split with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
+| Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` (runs the shared RDS tier once per split, then one DLI pass per `--workflows` × `--conditions`, with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing; refuses to regenerate an existing tier and checks the biology's `Nuisance_DLI` artifacts up front); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
 | Posterior training run (gradient updates on TRAIN, selection on TEST) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py` (drives `build_datasets()` → `setup_training()` → `train_loop()`, then `artifacts.save_estimator()`) | version-portable estimator artifact (`Estimator.npz`, via `artifacts.py` → `save_estimator()`), loaded downstream as a `DirectPosterior`; network checkpoint at each new optimum |
 | MAP recovery and calibration on held-out EVAL | `evaluation.py` → `map_estimate()` (seed-then-optimize: `collect_theta_prex()`, `collect_score_prex()`, `extract_elite_prex()`, `optimize_elite()`), `posterior_summary()`, `recovery_stats()`, `recovery_table()`, `posterior_coverage_table()`; driven by entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py` | recovery report (figures + tables + arrays + a live `progress.log`) under the validation output directory |
 | Real-data application (no ground truth) | same `evaluation.py` estimator (`map_estimate()`, `experiment_table()`); driven by entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py` | per-condition inferred-parameter report under the validation output directory |
 | Configuration, paths, storage routing, and file I/O | `parameterization.py` → `Paths`, `MachineProfile` / `load_machine_profile()`, `FrameConfig`, `RunTiming`; `io.py` → `load_data()`, `save_video_set()`, `save_theta_set()`, `convert_video_dtype()` | resolved absolute paths (per-machine `machine_profiles.toml`); all artifacts above land under the configured roots |
 
 The five pipeline stages are RDS, DLI, Inference, Evaluation, and Experiment.
-Each stage has one shared runner (`<stage>_runner.py` → `run_<stage>()`) and two
-thin Prime entry-point shims over it: the unqualified biology entry point
-(`SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`,
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py`, `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py`,
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py`, `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py`) and
-its `_DETECTOR`-qualified detector counterpart. Each shim parses arguments,
+Each stage has one shared runner (`<stage>_runner.py` → `run_<stage>()`). Every stage
+past RDS has two thin Prime entry-point shims over it: the unqualified biology entry
+point (`SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py`,
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py`, `SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py`,
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py`) and its `_DETECTOR`-qualified detector
+counterpart. The RDS stage has one shim only, `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`,
+because its trajectory tier is shared by both workflows. Each shim parses arguments,
 builds a `WorkflowConfig`, and calls the shared runner, which drives the package
 functions above and writes outputs to the configuration-defined paths.
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` orchestrates the generation pair
-(RDS → DLI) across all three splits in one command.
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` orchestrates the shared tier and the
+DLI passes of every requested workflow and condition across all three splits in one
+command.
 
 ---
 

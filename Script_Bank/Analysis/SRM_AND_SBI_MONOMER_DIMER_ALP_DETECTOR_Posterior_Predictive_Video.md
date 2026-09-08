@@ -11,8 +11,8 @@ authoritative companion:
 
 Read that note's table *"One engine, two workflows"* first: for this workflow the MAP supplies the
 six imaging parameters, the reaction-diffusion block is a marginalized nuisance (drawn per render, or
-pinned with `--fixed-nuisance-RDS`), and the system is built **diffusion-only** because the detector's
-physics model has no reactions. Biology inverts all three. MET camera provenance:
+pinned with `--fixed-nuisance-RDS`), and the system is built with its **full reaction network** — the
+same simulator the detector was calibrated against. Biology inverts the first two. MET camera provenance:
 `REFERENCE_EMCCD_NOISE_MODEL.md` Sec. 6 and `DETECTOR_WORKFLOW.md` Sec. 6.5.
 
 Outputs land under `<data_bank>/<posit>/<alias>_<timing_label>_Posterior_Predictive_Video/`, where

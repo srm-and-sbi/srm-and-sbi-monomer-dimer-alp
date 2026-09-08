@@ -16,12 +16,15 @@ half is held fixed**:
 | | MAP supplies | held fixed | system built |
 |---|---|---|---|
 | **biology** (`..._Posterior_Predictive_Video.py`) | the **10 reaction-diffusion** parameters | imaging, at the calibrated `Nuisance_DLI` vector + MET SCOPE camera | **full reactive** system |
-| **detector** (`..._DETECTOR_Posterior_Predictive_Video.py`) | the **6 imaging** parameters | the reaction-diffusion block, drawn or pinned as a nuisance | **diffusion-only** |
+| **detector** (`..._DETECTOR_Posterior_Predictive_Video.py`) | the **6 imaging** parameters | the reaction-diffusion block, drawn from the biology prior or pinned as a nuisance | **full reactive** system |
 
-This is not cosmetic. Building biology's system with `pure_diffusion=True` would silently delete the
-very reactions the MAP describes, and the comparison figure labels each block by the role it plays in
-the run that produced it — labeling a fixed block "INFERRED" (or an inferred one "NUISANCE") would
-invert the reader's conclusion about what any visible mismatch implies.
+This is not cosmetic: the comparison figure labels each block by the role it plays in the run that
+produced it — labeling a fixed block "INFERRED" (or an inferred one "NUISANCE") would invert the
+reader's conclusion about what any visible mismatch implies. Both workflows build the same reactive
+system; only the source of its ten parameters differs. The recording's condition (`--kind`) selects
+the condition-specific estimator namespace, the condition's calibrated `Nuisance_DLI` on the biology
+path, and the static labeling law the render uses (`--labeling-law` overrides it for a sensitivity
+render).
 
 In both workflows the five SCOPE camera parameters are pinned to their MET values rather than drawn:
 the comparison is against one specific real acquisition, so a random camera draw would inject

@@ -85,6 +85,11 @@ def console_log_context(args, stage: str, paths=None, data_bank_root=None):
     # Imported here (not at module top) to avoid a circular import at load time.
     from .parameterization import PARAMETERS, RunTiming
     paths = paths if paths is not None else PARAMETERS.paths
+    # Condition-specific stages pass --condition; the transcript then lands under the
+    # conditioned run label, exactly where that stage's DiagnosticReporter dumps.
+    condition = getattr(args, "condition", None)
+    if condition and getattr(paths, "condition", None) is None:
+        paths = paths.with_condition(condition)
     split = getattr(args, "split", None)
     split = split.upper() if split else None
     if data_bank_root is None:
