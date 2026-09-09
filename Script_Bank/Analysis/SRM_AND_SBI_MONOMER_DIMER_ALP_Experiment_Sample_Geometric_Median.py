@@ -2,9 +2,9 @@
 
 ROLE. Reduce the Experiment stage's cloud of MAP estimates -- one per analyzed window of real MET
 single-particle-tracking recording -- to a single representative parameter vector, without inventing
-a configuration no recording supported. The ten reaction-diffusion parameters are correlated: the
-species counts constrain one another through the reactions that interconvert them, and abundance
-trades off against the rates that produce it. Summarizing such a cloud by taking each dimension's
+a configuration no recording supported. The twelve reaction-diffusion parameters are correlated: the
+receptor total and the initial dimer fraction constrain one another through the visible-spot count,
+and the dimer fraction trades off against the association and dissociation rates that produce it. Summarizing such a cloud by taking each dimension's
 median independently composes a vector whose coordinates never co-occurred, and which for a
 multimodal cloud lands in the low-density valley between the modes. This analysis instead reports the
 Sample Geometric Median (SGM): the actual member minimizing the summed normalized distance to the

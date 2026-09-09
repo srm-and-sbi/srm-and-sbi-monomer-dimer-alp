@@ -35,6 +35,7 @@ import numpy as np
 import torch
 
 from .inference_support import normalize_video
+from .parameterization import entry_to_physical
 # band_label lives in the temporal-dynamics kernel (pure numpy, no machine profile) so the
 # recovery tolerances render identically wherever they are reported -- one definition, not two.
 from .temporal_dynamics import band_label
@@ -231,9 +232,10 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
                 f"optimal_log_prob={optimal_score:.3f}")
     if show:
         print(f"  [optim] {stop_msg}", flush=True)
-        print(f"          optimal theta [LOG] {_theta_repr(optimal_np)}", flush=True)
-        print(f"          optimal theta [ABS] {_theta_repr(np.power(10.0, optimal_np))}",
-              flush=True)
+        # Estimator-space coordinates only: this function has no parameter table, and the
+        # per-row scale (a linear initial dimer fraction beside log rows) forbids a blanket
+        # 10**theta; callers print physical values through parameterization.to_physical.
+        print(f"          optimal theta [estimator space] {_theta_repr(optimal_np)}", flush=True)
     if log_fn is not None:
         log_fn(stop_msg)
     return optimal_score, optimal_np
@@ -434,7 +436,7 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
                 q1, q3 = np.quantile(col, [0.25, 0.75])
                 rows.append([para["KEY"], para.get("LABEL") or "-", kind,
                              str(col.size), f"{med:+.3f}", f"{q3 - q1:.3f}",
-                             f"{10 ** med:.4g}"])
+                             f"{float(entry_to_physical(para, med)):.4g}"])
             else:
                 rows.append([para["KEY"], para.get("LABEL") or "-", kind,
                              "0", "nan", "nan", "nan"])

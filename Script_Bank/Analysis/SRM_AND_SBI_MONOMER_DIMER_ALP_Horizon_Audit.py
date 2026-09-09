@@ -2,7 +2,8 @@
 recording break the estimator's reset assumption?
 
 ROLE. The estimator trains on independently initialized model-window simulations: every training
-video starts with freshly placed particles at the drawn counts. The experimental analysis slices
+video starts with freshly placed particles at the drawn stoichiometry (receptor total N_R, initial
+dimer fraction x_B). The experimental analysis slices
 each continuous 20 s recording into consecutive model-length windows and runs the estimator on
 every window -- silently assuming that a window whose past evolved for many seconds is
 distributed like a reset training simulation of the same length. This audit tests that assumption
@@ -20,10 +21,12 @@ to a real-versus-simulator discrepancy rather than to the slicing itself.
 
 TWO KINDS OF ESTIMAND, AUDITED DIFFERENTLY. Rates and diffusivities are constant parameters:
 their truth is the drawn theta in every window, so positional structure in their errors is
-spurious by definition. The species counts are initial conditions of a dynamic state: after the
-first window the population has evolved, so the composition readout is audited against the ACTUAL
-population of each window, extracted per frame from the continuous trajectory -- comparing counts
-against theta instead would measure state drift, which is dynamics, not estimator error.
+spurious by definition. The stoichiometry coordinates are initial conditions of a dynamic state:
+after the first window the population has evolved (the receptor total is conserved, the dimer
+fraction is not), so the composition readout (the dimer-complex fraction f_B) is audited against the
+ACTUAL population of each window, extracted per frame from the continuous trajectory as species
+counts summed over the mobility modes -- comparing against theta instead would measure state drift,
+which is dynamics, not estimator error.
 
 FOUR PHASES (CPU generation and GPU inference split cleanly, both resumable and parallel over
 disjoint --theta-start/--theta-stop ranges; per-theta output files, skip-if-present):

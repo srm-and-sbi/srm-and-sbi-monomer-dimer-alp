@@ -21,7 +21,7 @@ half is held fixed**:
 This is not cosmetic: the comparison figure labels each block by the role it plays in the run that
 produced it — labeling a fixed block "INFERRED" (or an inferred one "NUISANCE") would invert the
 reader's conclusion about what any visible mismatch implies. Both workflows build the same reactive
-system; only the source of its ten parameters differs. The recording's condition (`--kind`) selects
+system; only the source of its twelve reaction-diffusion parameters differs. The recording's condition (`--kind`) selects
 the condition-specific estimator namespace, the condition's calibrated `Nuisance_DLI` on the biology
 path, and the static labeling law the render uses (`--labeling-law` overrides it for a sensitivity
 render).

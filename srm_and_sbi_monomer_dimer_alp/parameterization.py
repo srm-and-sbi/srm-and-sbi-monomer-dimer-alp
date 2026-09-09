@@ -15,9 +15,29 @@ Public interface:
     PARAMETER_RAW_FIND          -- dict[KEY -> index in PARAMETERIZATION_RAW]
     PARAMETER_FIND              -- dict[KEY -> index in PARAMETERIZATION]
     parameter_find(key)         -- index lookup for learnable parameters
-    build_prior(device)         -- construct the BoxUniform log-uniform prior
-    theta_lower_bound()         -- lower bounds of the log-uniform prior
-    theta_upper_bound()         -- upper bounds of the log-uniform prior
+    build_prior(device)         -- construct the BoxUniform prior over the estimator space
+    theta_lower_bound()         -- lower bounds of the prior box (estimator space)
+    theta_upper_bound()         -- upper bounds of the prior box (estimator space)
+    to_physical(theta_flow)     -- the ONE conversion estimator space -> physical values
+    to_flow(theta_physical)     -- its inverse (physical -> estimator space)
+    prior_center(entry)         -- physical value at the center of a ranged row
+    realize_initial_composition -- integer (n_A, n_B) from the sampled (N_R, x_B)
+
+Model blocks (the declarative records the reaction-diffusion generator is built from):
+    StoichiometryBlock          -- molecular species A (1 subunit) and B (2), association
+                                   and dissociation channels and their parameter keys
+    MobilityBlock               -- mobility modes, their diffusion-ratio keys, the sequential
+                                   switching chain and its rate keys, the inheritance rule
+    PARAMETERS.simulation.rds   -- carries both blocks and derives the PARTICLE TYPES
+                                   (species x mode), their subunit counts and the maps
+                                   type -> species / mode
+
+The estimator space ("flow space"). Every ranged row declares its scale: LOG_FLAG True means
+the prior box and the estimator coordinate are log10 of the physical value; LOG_FLAG False
+means the coordinate IS the physical value (a linear row). `to_physical` / `to_flow` apply
+the per-row rule and are the only sanctioned conversion -- no consumer exponentiates or
+log-transforms a theta vector by hand, because the initial dimer fraction is linear on
+[0, 1] and a blanket ``10 ** theta`` would silently corrupt it.
 """
 
 import os
@@ -25,6 +45,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import torch
 from sbi.utils import BoxUniform
 
@@ -209,7 +230,7 @@ class Paths:
     a detector product of the MET-FAB condition. The condition enters at the DLI
     stage (the static labeling law re-images the trajectories per condition), so
     every DLI-side and inference-side product carries it, while the RDS products --
-    the trajectory tier and its ten-parameter ``Theta_Set`` -- form ONE shared tier:
+    the trajectory tier and its twelve-parameter ``Theta_Set`` -- form ONE shared tier:
     generated once under the bare sibling alias (``sibling_alias``, exposed as
     ``rds_alias``), free of both the qualifier and the condition, and re-imaged by
     both workflows and per condition at the DLI stage. A stage applies its condition
@@ -240,7 +261,7 @@ class Paths:
     compressed_ext: str = "zarr"
     uncompressed_ext: str = "npy"
     # The bare sibling alias every RDS product carries. The trajectory tier and its
-    # ten-parameter ``Theta_Set`` are generated once and shared by both workflows and both
+    # twelve-parameter ``Theta_Set`` are generated once and shared by both workflows and both
     # conditions, so they never take the workflow qualifier or the condition token that
     # ``project_alias`` may carry (``rds_alias`` returns this).
     sibling_alias: str = "SRM_AND_SBI_MONOMER_DIMER_ALP"
@@ -278,7 +299,7 @@ class Paths:
 
     @property
     def rds_alias(self) -> str:
-        """The alias of the shared RDS tier (trajectories and the ten-parameter ``Theta_Set``):
+        """The alias of the shared RDS tier (trajectories and the twelve-parameter ``Theta_Set``):
         the bare sibling alias, whatever qualifier or condition these Paths carry."""
         if not self.project_alias.startswith(self.sibling_alias):
             raise ValueError(
@@ -289,7 +310,7 @@ class Paths:
     @property
     def theta_set_alias(self) -> str:
         """Alias of this workflow's ``Theta_Set``: the shared RDS tier's bare alias for an RDS
-        product (biology: the ten reaction-diffusion labels), the qualified and conditioned
+        product (biology: the twelve reaction-diffusion labels), the qualified and conditioned
         alias for a DLI product (detector: the six imaging labels)."""
         return self.rds_alias if self.theta_set_is_rds_product else self.project_alias
 
@@ -548,6 +569,21 @@ class SimulationStem:
     length_unit: str = "nanometer"
     time_unit: str = "nanosecond"
     particle_diameter_nm: int = 10
+    # Fission products are placed at fission_product_distance_factor x the reaction distance
+    # (2 x 10 nm = 20 nm), i.e. OUTSIDE the fusion radius. Declared convention (2026-09-09):
+    # at the 2 ms sub-step the per-step reaction probability of an eligible pair is ~1 for
+    # every D_A in range, so daughters placed AT the reaction distance would re-fuse at the
+    # next step unless they diffused apart within one step -- ~3% for fast daughters but
+    # ~50% per step for immobile ones, which would make the effective unbinding rate mode
+    # dependent (immobile dimers effectively never dissociating). Starting the daughters
+    # outside the radius removes that deterministic rebinding; diffusive re-encounter remains.
+    # Both the reaction distance and this factor are declared conventions, not measurements.
+    fission_product_distance_factor: int = 2
+
+    @property
+    def fission_product_distance_nm(self) -> float:
+        """Distance (nm) at which the two fission daughters are placed: factor x reaction distance."""
+        return float(self.fission_product_distance_factor * self.particle_diameter_nm)
 
     @property
     def box_size(self) -> tuple[float, float, float]:
@@ -643,19 +679,209 @@ class RunTiming:
         return f"{duration}S_{self.frames.fps}FPS"
 
 
+# =============================================================================
+# Model blocks: the declarative records the reaction-diffusion generator reads
+# =============================================================================
+#
+# Three layers, separately declared, interacting at named points (the model specification's
+# state-ownership table): the STOICHIOMETRY block owns association and dissociation, the
+# MOBILITY block owns the diffusion modes and the switching between them, and the VISIBILITY
+# block (labeling.py) owns occupancy and dye counts. The reaction-diffusion stage simulates
+# PARTICLE TYPES = molecular species x mobility modes; six computational types represent two
+# molecular species. Every operation the network needs -- type-specific diffusion, unimolecular
+# conversion, fusion, fission -- is a ReaDDy primitive; the network itself is GENERATED from
+# these records (simulation_rds_support.reaction_channels), never written by hand.
+
+@dataclass(frozen=True)
+class MolecularSpecies:
+    """A molecular species of the stoichiometry layer: its name and its receptor-subunit count."""
+    name: str
+    subunits: int
+
+
+@dataclass(frozen=True)
+class ParticleType:
+    """One computational particle type = (molecular species, mobility mode)."""
+    name: str
+    species: str
+    mode: str
+    subunits: int
+
+
+@dataclass(frozen=True)
+class StoichiometryBlock:
+    """Reversible monomer-dimer association, A + A <-> B, and the parameter keys it reads.
+
+    - ``count_total_key``: the conserved receptor-subunit total N_R = n_A + 2 n_B (a count).
+    - ``fraction_dimer_key``: the REQUESTED initial fraction of receptors in dimers, x_B in
+      [0, 1]; realized as integers by ``realize_initial_composition``.
+    - ``association_ratio_key``: R_ON, the dimensionless association ratio. The microscopic
+      association rate is lambda_on = R_ON * lambda_ref with the COMPATIBILITY NORMALIZATION
+      lambda_ref = 6 D_A / r^2 (units 1/s; depends on the monomer scale coefficient D_A and the
+      reaction distance r). lambda_ref is NOT a physical upper bound on association -- the
+      diffusion-limited regime is the large-intensity limit of the spatial rule -- it is a
+      declared reference that keeps the parameter dimensionless. The same lambda_on applies to
+      every association channel (one per unordered pair of monomer modes).
+    - ``dissociation_rate_key``: kappa_OFF, the dimer unbinding rate (1/s), one for every
+      dimer mode; dissociation is not governed by contact.
+    Association needs an encounter within ``reaction distance`` (one particle diameter, the
+    Smoluchowski contact distance) followed by the reaction; no degradation, internalization,
+    or synthesis occurs within a recording, so N_R is conserved by construction.
+    """
+    monomer: MolecularSpecies = MolecularSpecies("A", 1)
+    dimer: MolecularSpecies = MolecularSpecies("B", 2)
+    count_total_key: str = "count_total"
+    fraction_dimer_key: str = "fraction_dimer_initial"
+    association_ratio_key: str = "relative_rate_dimerization"
+    dissociation_rate_key: str = "rate_dissociation"
+
+    def __post_init__(self):
+        if self.monomer.subunits != 1 or self.dimer.subunits != 2:
+            raise ValueError("StoichiometryBlock: the monomer carries one subunit and the dimer two.")
+        if self.monomer.name == self.dimer.name:
+            raise ValueError("StoichiometryBlock: monomer and dimer need distinct names.")
+
+    @property
+    def species(self) -> tuple:
+        """The molecular species in declaration order (monomer, dimer)."""
+        return (self.monomer, self.dimer)
+
+    @property
+    def species_names(self) -> tuple:
+        return tuple(s.name for s in self.species)
+
+    @property
+    def parameter_keys(self) -> tuple:
+        return (self.count_total_key, self.fraction_dimer_key,
+                self.association_ratio_key, self.dissociation_rate_key)
+
+
+@dataclass(frozen=True)
+class MobilityBlock:
+    """Mobility modes shared by both molecular species, and the sequential switching chain.
+
+    Modes are values on the diffusion-coefficient axis, Brownian within a mode, with no
+    mechanism of their own (a slow or immobile mode represents reduced motion, not the
+    membrane structure that may cause it). The diffusion coefficient of particle type
+    (species, mode) is
+
+        D[species, mode] = D_A * species_factor(species) * mode_factor(mode)
+
+    with ``diffusivity_key`` -> D_A (the monomer scale), ``mode_ratio_keys`` -> the per-mode
+    factor (None for the reference mode, i.e. factor 1), and ``dimer_ratio_key`` -> R_B, the
+    dimer's factor within a mode (0 < R_B <= 1: at R_B = 1 dimerization adds no slowdown).
+    The modes are declared fastest first; the ordering R_immobile < R_slow <= 1 is enforced
+    by the DISJOINT declared ranges of their keys (checked at import, see
+    ``_validate_model_blocks``).
+
+    ``switching`` lists the conversions (from_mode, to_mode, rate_key); the chain is
+    sequential (only adjacent modes are connected: f <-> s <-> i, so k_fi = k_if = 0) and the
+    four rates are SHARED across species -- the working hypothesis that switching is a
+    membrane-environment process independent of stoichiometric state.
+
+    ``inheritance`` names the rule for the mode of a newly formed dimer: ``"slower_parent"``
+    (the declared working hypothesis; alternatives are comparators, not built here).
+    Dissociation conserves the mode: both daughters keep the dimer's mode. The initial mode
+    of every particle is drawn from the stationary law of the isolated switching chain.
+    """
+    modes: tuple = ("f", "s", "i")
+    mode_ratio_keys: tuple = (None, "relative_diffusivity_slow", "relative_diffusivity_immobile")
+    diffusivity_key: str = "diffusivity_alp"
+    dimer_ratio_key: str = "relative_diffusivity_dimer"
+    switching: tuple = (("f", "s", "rate_fast_slow"),
+                        ("s", "f", "rate_slow_fast"),
+                        ("s", "i", "rate_slow_immobile"),
+                        ("i", "s", "rate_immobile_slow"))
+    inheritance: str = "slower_parent"
+
+    def __post_init__(self):
+        if len(set(self.modes)) != len(self.modes) or not self.modes:
+            raise ValueError(f"MobilityBlock: modes must be unique and non-empty (got {self.modes}).")
+        if len(self.mode_ratio_keys) != len(self.modes) or self.mode_ratio_keys[0] is not None:
+            raise ValueError("MobilityBlock: one ratio key per mode, None for the first (reference) mode.")
+        seen = set()
+        for frm, to, key in self.switching:
+            if frm not in self.modes or to not in self.modes or frm == to:
+                raise ValueError(f"MobilityBlock: switching {frm}->{to} names an unknown mode.")
+            if abs(self.mode_index(frm) - self.mode_index(to)) != 1:
+                raise ValueError(f"MobilityBlock: the chain is sequential; {frm}->{to} skips a mode.")
+            if (frm, to) in seen:
+                raise ValueError(f"MobilityBlock: duplicate switching channel {frm}->{to}.")
+            seen.add((frm, to))
+        if self.inheritance != "slower_parent":
+            raise ValueError(f"MobilityBlock: inheritance rule {self.inheritance!r} is not implemented "
+                             f"(the milestone builds 'slower_parent'; alternatives are comparators).")
+
+    def mode_index(self, mode: str) -> int:
+        return self.modes.index(mode)
+
+    def slower(self, mode_1: str, mode_2: str) -> str:
+        """The slower of two modes (modes are declared fastest first)."""
+        return mode_1 if self.mode_index(mode_1) >= self.mode_index(mode_2) else mode_2
+
+    def inherited_mode(self, mode_1: str, mode_2: str) -> str:
+        """Mode of the dimer formed from monomers in ``mode_1`` and ``mode_2``."""
+        if self.inheritance == "slower_parent":
+            return self.slower(mode_1, mode_2)
+        raise NotImplementedError(self.inheritance)
+
+    @property
+    def parameter_keys(self) -> tuple:
+        keys = [self.diffusivity_key, self.dimer_ratio_key]
+        keys += [k for k in self.mode_ratio_keys if k is not None]
+        keys += [k for _, _, k in self.switching]
+        return tuple(keys)
+
+
 @dataclass(frozen=True)
 class SimulationRDS:
-    """RDS-stage runtime defaults."""
+    """RDS-stage runtime defaults + the two model blocks the generator reads.
+
+    The particle types are DERIVED here (species x modes, species-major, modes fastest
+    first), as are their subunit counts and the maps back to species and mode; nothing
+    downstream lists them by hand.
+    """
     prior_seed: Optional[int] = None               # None = OS-determined
-    particle_species_names: tuple[str, ...] = ("A", "B", "C")
-    # A = Monomer, B = Mobile Dimer, C = Immobile Dimer
-    # (three-species DIMER model: A+A <-> B and B <-> C reactions)
-    # Receptor subunits per species, aligned with particle_species_names: a monomer is
-    # one subunit, a dimer (mobile or immobile) two. The reaction network conserves the
-    # subunit count, which is what lets the DLI stage attach static per-subunit
-    # quantities (dye counts, PSF widths) and follow them through the reactions
-    # (simulation_rds_support.extract_subunit_lineage).
-    subunit_counts_per_species: tuple[int, ...] = (1, 2, 2)
+    stoichiometry: StoichiometryBlock = field(default_factory=StoichiometryBlock)
+    mobility: MobilityBlock = field(default_factory=MobilityBlock)
+
+    @staticmethod
+    def type_name(species: str, mode: str) -> str:
+        return f"{species}_{mode}"
+
+    @property
+    def particle_types(self) -> tuple:
+        """All particle types: one per (molecular species, mobility mode)."""
+        return tuple(
+            ParticleType(self.type_name(sp.name, mode), sp.name, mode, sp.subunits)
+            for sp in self.stoichiometry.species for mode in self.mobility.modes)
+
+    @property
+    def particle_type_names(self) -> tuple:
+        return tuple(pt.name for pt in self.particle_types)
+
+    @property
+    def subunit_counts_per_type(self) -> tuple:
+        """Receptor subunits per particle type, aligned with ``particle_type_names``."""
+        return tuple(pt.subunits for pt in self.particle_types)
+
+    @property
+    def species_of_type(self) -> dict:
+        """Particle-type name -> molecular species name."""
+        return {pt.name: pt.species for pt in self.particle_types}
+
+    @property
+    def mode_of_type(self) -> dict:
+        """Particle-type name -> mobility mode."""
+        return {pt.name: pt.mode for pt in self.particle_types}
+
+    @property
+    def molecular_species_names(self) -> tuple:
+        return self.stoichiometry.species_names
+
+    @property
+    def monomer_type_names(self) -> tuple:
+        return tuple(pt.name for pt in self.particle_types if pt.subunits == 1)
 
     # ReaDDy neighbor-list (Verlet) skin, expressed as a MULTIPLE of the particle
     # diameter: the actual skin distance is
@@ -948,25 +1174,38 @@ _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
 
 _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
-    # ----- Reaction-Diffusion System -----
-    'count': [  # particle_species_population_counts
-        {'KEY': 'count_alp', 'VALUE': 10**1.25, 'PRIOR_RANGE': (0.0, 2.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$C_{A}$', 'NOTE': 'Learnable Parameter'},
-        {'KEY': 'count_bet', 'VALUE': 10**1.25, 'PRIOR_RANGE': (0.0, 2.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$C_{B}$', 'NOTE': 'Learnable Parameter'},
-        {'KEY': 'count_chi', 'VALUE': 10**1.25, 'PRIOR_RANGE': (0.0, 2.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$C_{C}$', 'NOTE': 'Learnable Parameter'},
-    ],
-    'diffusivity': [  # diffusion_coefficients / diffusion_constants
-        {'KEY': 'diffusivity_alp', 'VALUE': 10**(-0.75), 'PRIOR_RANGE': (-1.25, -0.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Square Micrometer Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$D_{A}$', 'NOTE': 'Learnable Parameter'},
-        {'KEY': 'relative_diffusivity_bet', 'VALUE': 10**(-0.375), 'PRIOR_RANGE': (-0.625, -0.125), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{B}$', 'NOTE': 'Learnable Parameter'},
-        {'KEY': 'relative_diffusivity_chi', 'VALUE': 10**(-1.5), 'PRIOR_RANGE': (-2, -1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{C}$', 'NOTE': 'Learnable Parameter'},
-    ],
-    'dimerization_dissociation': [  # K_ON, K_OFF
-        {'KEY': 'relative_rate_dimerization', 'VALUE': 10**(-1), 'PRIOR_RANGE': (-2, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per (Count*Second)', 'LABEL': r'$R_{ON}$', 'NOTE': 'Learnable Parameter'},
+    # ----- Reaction-Diffusion System: the two model blocks -----
+    # DEVELOPMENT SETTINGS. Every range below is a broad development placeholder for building
+    # and checking the generator; none is a scientifically approved training prior (those are
+    # a later, separate decision recorded in the model specification's decision log).
+    'stoichiometry': [  # StoichiometryBlock: conserved total, requested initial dimer fraction, association, dissociation
+        {'KEY': 'count_total', 'VALUE': 10**1.75, 'PRIOR_RANGE': (0.5, 3.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{R}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the SIMULATED patch (the in-field count is a distinct, time-dependent quantity under the open lateral boundary). Realized as an integer by realize_initial_composition. Development range.'},
+        {'KEY': 'fraction_dimer_initial', 'VALUE': 0.5, 'PRIOR_RANGE': (0.0, 1.0), 'LOG_FLAG': False, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$x_{B}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'REQUESTED initial fraction of receptors belonging to dimers, x_B = 2 n_B(0) / N_R, LINEAR on [0, 1] inclusive (the estimator coordinate is the value itself). Realized as n_B(0) = min(round(N_R x_B / 2), floor(N_R / 2)); the realized fraction is recorded beside the requested one (Labeling_Set). The complex fraction is f_B = x_B / (2 - x_B).'},
+        {'KEY': 'relative_rate_dimerization', 'VALUE': 10**(-1), 'PRIOR_RANGE': (-2, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count Per Second', 'LABEL': r'$R_{ON}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Association ratio: lambda_on = R_ON * lambda_ref with the compatibility normalization lambda_ref = 6 D_A / r^2 (1/s; D_A the monomer scale coefficient, r the reaction distance). lambda_ref is a declared reference, NOT a physical upper bound on association; R_ON above 1 is admissible in principle. One lambda_on for all association channels. Development range.'},
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{CAP}$', 'NOTE': 'Known Parameter'},
-        {'KEY': 'rate_dissociation', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter'},
+        {'KEY': 'rate_dissociation', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Dimer unbinding rate, B_m -> A_m + A_m for every mode m (dissociation conserves the mode). Development range.'},
     ],
-    'immobilization_mobilization': [  # K_B_C, K_C_B
-        {'KEY': 'rate_immobility', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{IMMOBILITY}$', 'NOTE': 'Learnable Parameter'},
-        {'KEY': 'rate_mobility', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{MOBILITY}$', 'NOTE': 'Learnable Parameter'},
+    'mobility': [  # MobilityBlock: monomer scale, dimer factor, mode factors, the four shared switching rates
+        {'KEY': 'diffusivity_alp', 'VALUE': 10**(-0.75), 'PRIOR_RANGE': (-1.25, -0.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Square Micrometer Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$D_{A}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Monomer scale coefficient D_A = D[A, fast]; every other coefficient is a declared ratio of it. Development range.'},
+        {'KEY': 'relative_diffusivity_dimer', 'VALUE': 10**(-0.5), 'PRIOR_RANGE': (-1, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{B}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Dimer factor within a mode: D[B, m] = R_B * D[A, m], 0 < R_B <= 1 (at 1 dimerization adds no slowdown; population-level differences then come from mode occupancy and inheritance). Development range.'},
+        {'KEY': 'relative_diffusivity_slow', 'VALUE': 10**(-0.5), 'PRIOR_RANGE': (-1, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{s}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Slow-mode factor: D[X, s] = R_s * D[X, f]. R_s <= 1 by range; R_s = 1 does NOT reduce the model to two modes (the chain still passes through s). Development range, disjoint from R_i.'},
+        {'KEY': 'relative_diffusivity_immobile', 'VALUE': 10**(-2.15), 'PRIOR_RANGE': (-3.0, -1.3), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{i}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Immobile-mode factor: D[X, i] = R_i * D[X, f]; a practical resolution floor, not zero. R_i < R_s is guaranteed by the disjoint ranges (upper edge 10^-1.3 ~ 0.05 below the slow range). Development range.'},
+        {'KEY': 'rate_fast_slow', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{fs}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Switching fast -> slow, shared by both species. Development range.'},
+        {'KEY': 'rate_slow_fast', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{sf}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Switching slow -> fast, shared by both species. Development range.'},
+        {'KEY': 'rate_slow_immobile', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{si}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Switching slow -> immobile, shared by both species. Development range.'},
+        {'KEY': 'rate_immobile_slow', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{is}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Switching immobile -> slow, shared by both species. Development range.'},
     ],
     # ----- Diffraction-Limited Imaging -----
     'camera': [  # EMCCD camera chain (REFERENCE_EMCCD_NOISE_MODEL.md): gamma, kappa_o, kappa_b, kappa_s, kappa_q marginalized as the SCOPE camera nuisance (non-identifiable; DETECTOR_WORKFLOW.md sec. 9.3, marginalized in both workflows); kappa_g, kappa_c fixed nominal spec metadata (gamma = kappa_g/kappa_c).
@@ -999,28 +1238,7 @@ _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
     ],
 }
 
-# Validation: species count must match parameter count for 'count' and 'diffusivity'
-_species_count = len(PARAMETERS.simulation.rds.particle_species_names)
-# Explicit raises, not asserts: a count/diffusivity table misaligned with the species list
-# would silently misalign every theta column downstream, and `python -O` strips asserts.
-if len(_PARAMETERIZATION_RAW_NESTED['count']) != _species_count:
-    raise ValueError(
-        f"_PARAMETERIZATION_RAW_NESTED['count'] has "
-        f"{len(_PARAMETERIZATION_RAW_NESTED['count'])} entries; "
-        f"expected {_species_count} (one per particle species)."
-    )
-if len(_PARAMETERIZATION_RAW_NESTED['diffusivity']) != _species_count:
-    raise ValueError(
-        f"_PARAMETERIZATION_RAW_NESTED['diffusivity'] has "
-        f"{len(_PARAMETERIZATION_RAW_NESTED['diffusivity'])} entries; "
-        f"expected {_species_count} (one per particle species)."
-    )
-if len(PARAMETERS.simulation.rds.subunit_counts_per_species) != _species_count:
-    raise ValueError(
-        f"SimulationRDS.subunit_counts_per_species has "
-        f"{len(PARAMETERS.simulation.rds.subunit_counts_per_species)} entries; "
-        f"expected {_species_count} (one per particle species)."
-    )
+# (Model-block validation runs below, once the learnable subset exists: _validate_model_blocks.)
 
 
 # Flat list (raw): all parameters in declaration order, regardless of group
@@ -1097,6 +1315,164 @@ PARAMETER_KEYS: list[str] = [para['KEY'] for para in PARAMETERIZATION]
 
 
 # =============================================================================
+# The one parameter-conversion rule (estimator space <-> physical values)
+# =============================================================================
+
+def is_log_row(entry: dict) -> bool:
+    """True for a ranged row whose estimator coordinate is log10 of the physical value."""
+    return bool(entry.get('LOG_FLAG'))
+
+
+def to_physical(theta_flow, parameterization=None):
+    """Map estimator-space coordinates to physical values, row by row.
+
+    ``theta_flow`` has the learnable parameters on its LAST axis, in the order of
+    ``parameterization`` (default: ``PARAMETERIZATION``). Log rows are exponentiated
+    (``10 ** u``); linear rows pass through. Returns a float64 array of the same shape.
+    This is the only sanctioned conversion; a blanket ``10 ** theta`` corrupts the linear
+    initial dimer fraction.
+    """
+    table = PARAMETERIZATION if parameterization is None else parameterization
+    arr = np.array(theta_flow, dtype=float, copy=True)
+    if arr.shape[-1] != len(table):
+        raise ValueError(f"to_physical: last axis has {arr.shape[-1]} entries; the table has {len(table)}.")
+    for j, entry in enumerate(table):
+        if is_log_row(entry):
+            arr[..., j] = np.power(10.0, arr[..., j])
+    return arr
+
+
+def to_flow(theta_physical, parameterization=None):
+    """Map physical values to estimator-space coordinates (inverse of ``to_physical``).
+
+    Log rows become ``log10`` (a non-positive physical value on a log row is an error, not a
+    NaN, because it can only come from a corrupted table or a mis-scaled input); linear rows
+    pass through. Returns a float64 array of the same shape.
+    """
+    table = PARAMETERIZATION if parameterization is None else parameterization
+    arr = np.array(theta_physical, dtype=float, copy=True)
+    if arr.shape[-1] != len(table):
+        raise ValueError(f"to_flow: last axis has {arr.shape[-1]} entries; the table has {len(table)}.")
+    for j, entry in enumerate(table):
+        if is_log_row(entry):
+            col = arr[..., j]
+            if np.any(col <= 0):
+                raise ValueError(f"to_flow: parameter {entry['KEY']!r} is a log row but received a "
+                                 f"non-positive physical value.")
+            arr[..., j] = np.log10(col)
+    return arr
+
+
+def entry_to_physical(entry: dict, value_flow):
+    """Scalar (or array) conversion of ONE row's estimator coordinate to its physical value."""
+    value_flow = np.asarray(value_flow, dtype=float)
+    return np.power(10.0, value_flow) if is_log_row(entry) else value_flow
+
+
+def entry_to_flow(entry: dict, value_physical):
+    """Scalar (or array) conversion of ONE row's physical value to its estimator coordinate."""
+    value_physical = np.asarray(value_physical, dtype=float)
+    return np.log10(value_physical) if is_log_row(entry) else value_physical
+
+
+def prior_center(entry: dict) -> float:
+    """Physical value at the center of a ranged row's prior box (its nominal)."""
+    lo, hi = entry['PRIOR_RANGE']
+    return float(entry_to_physical(entry, (lo + hi) / 2.0))
+
+
+# =============================================================================
+# Initial composition: integer realization of the sampled (N_R, x_B)
+# =============================================================================
+
+@dataclass(frozen=True)
+class InitialComposition:
+    """The realized initial state of the stoichiometry layer for one simulation.
+
+    ``n_total`` is the integer receptor-subunit total actually placed (N_R rounded, at least
+    one); ``n_dimers`` and ``n_monomers`` the particles placed; ``fraction_requested`` the
+    sampled x_B and ``fraction_realized`` = 2 n_dimers / n_total, which differs from it by
+    rounding and by the cap n_dimers <= floor(n_total / 2). Every derived fraction is
+    computed from the realized counts.
+    """
+    n_total: int
+    n_monomers: int
+    n_dimers: int
+    fraction_requested: float
+    fraction_realized: float
+
+    @property
+    def n_complexes(self) -> int:
+        return self.n_monomers + self.n_dimers
+
+    @property
+    def complex_fraction(self) -> float:
+        """f_B = n_B / (n_A + n_B), the fraction of complexes that are dimers."""
+        return self.n_dimers / self.n_complexes if self.n_complexes else float("nan")
+
+
+def realize_initial_composition(count_total: float, fraction_dimer: float) -> InitialComposition:
+    """Integer (n_A, n_B) from the sampled receptor total and requested dimer fraction.
+
+    n_total = max(1, round(N_R));  n_B = min(round(n_total * x_B / 2), floor(n_total / 2));
+    n_A = n_total - 2 n_B.  Conservation N_R = n_A + 2 n_B holds exactly for the realized
+    integers; an odd total at x_B = 1 leaves one monomer.
+    """
+    if not np.isfinite(count_total) or not np.isfinite(fraction_dimer):
+        raise ValueError(f"realize_initial_composition: non-finite input ({count_total}, {fraction_dimer}).")
+    if not 0.0 <= fraction_dimer <= 1.0:
+        raise ValueError(f"realize_initial_composition: x_B must lie in [0, 1] (got {fraction_dimer}).")
+    n_total = int(max(1, round(float(count_total))))
+    n_dimers = int(min(round(n_total * float(fraction_dimer) / 2.0), n_total // 2))
+    n_monomers = n_total - 2 * n_dimers
+    return InitialComposition(n_total, n_monomers, n_dimers, float(fraction_dimer),
+                              2.0 * n_dimers / n_total)
+
+
+# =============================================================================
+# Model-block validation (import time, fail fast)
+# =============================================================================
+
+def _validate_model_blocks() -> None:
+    rds = PARAMETERS.simulation.rds
+    learnable = set(PARAMETER_KEYS)
+    for key in rds.stoichiometry.parameter_keys + rds.mobility.parameter_keys:
+        if key not in learnable:
+            raise ValueError(f"model block references parameter {key!r}, which is not a learnable row.")
+    for entry in PARAMETERIZATION:
+        lo, hi = entry['PRIOR_RANGE']
+        if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
+            raise ValueError(f"parameter {entry['KEY']!r}: invalid PRIOR_RANGE {entry['PRIOR_RANGE']}.")
+        if entry['LOG_FLAG'] not in (True, False):
+            raise ValueError(f"parameter {entry['KEY']!r}: a ranged row declares LOG_FLAG True or False.")
+        if is_log_row(entry) and entry['LOG_BASE'] != 10:
+            raise ValueError(f"parameter {entry['KEY']!r}: log rows are base 10.")
+    frac = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.fraction_dimer_key]]
+    if is_log_row(frac) or frac['PRIOR_RANGE'][0] < 0.0 or frac['PRIOR_RANGE'][1] > 1.0:
+        raise ValueError("the initial dimer fraction is a LINEAR row on a sub-range of [0, 1].")
+    # Mobility ordering R_immobile < R_slow <= 1 and 0 < R_dimer <= 1, by the declared ranges.
+    def phys_range(key):
+        e = PARAMETERIZATION[PARAMETER_FIND[key]]
+        return float(entry_to_physical(e, e['PRIOR_RANGE'][0])), float(entry_to_physical(e, e['PRIOR_RANGE'][1]))
+    ratio_keys = [k for k in rds.mobility.mode_ratio_keys if k is not None]
+    previous_low = 1.0 + 1e-12
+    for key in ratio_keys:                      # slow, then immobile: each range strictly below the last
+        lo, hi = phys_range(key)
+        if not (0.0 < lo and hi <= 1.0):
+            raise ValueError(f"{key}: mode ratio range must lie in (0, 1] (got [{lo}, {hi}]).")
+        if hi >= previous_low:
+            raise ValueError(f"{key}: its range [{lo}, {hi}] must lie strictly below the previous mode's "
+                             f"lower edge {previous_low} so the mode ordering holds for every draw.")
+        previous_low = lo
+    lo, hi = phys_range(rds.mobility.dimer_ratio_key)
+    if not (0.0 < lo and hi <= 1.0):
+        raise ValueError(f"{rds.mobility.dimer_ratio_key}: range must lie in (0, 1] (got [{lo}, {hi}]).")
+
+
+_validate_model_blocks()
+
+
+# =============================================================================
 # Helpers
 # =============================================================================
 
@@ -1117,20 +1493,21 @@ def parameter_find(key: str) -> int:
 
 
 def theta_lower_bound() -> list[float]:
-    """Lower bounds of the log-uniform prior, in log10 space."""
+    """Lower bounds of the prior box in estimator space (log10 for log rows, the value for linear rows)."""
     return [para['PRIOR_RANGE'][0] for para in PARAMETERIZATION]
 
 
 def theta_upper_bound() -> list[float]:
-    """Upper bounds of the log-uniform prior, in log10 space."""
+    """Upper bounds of the prior box in estimator space (log10 for log rows, the value for linear rows)."""
     return [para['PRIOR_RANGE'][1] for para in PARAMETERIZATION]
 
 
 def build_prior(device: str = "cpu") -> BoxUniform:
-    """Construct the BoxUniform log-uniform prior over learnable parameters.
+    """Construct the BoxUniform prior over the learnable parameters, in estimator space.
 
-    Sampled theta values are in log10 space; consumers exponentiate via 10**theta
-    to obtain physical values (i.e. `theta_sets = np.power(10, _theta_sets)`).
+    Sampled theta live in estimator space: log10 for log rows (a log-uniform prior on the
+    physical value) and the value itself for linear rows (a uniform prior). Consumers map
+    to physical values with ``to_physical`` -- never with a blanket ``10 ** theta``.
     """
     return BoxUniform(
         low=torch.tensor(theta_lower_bound()),

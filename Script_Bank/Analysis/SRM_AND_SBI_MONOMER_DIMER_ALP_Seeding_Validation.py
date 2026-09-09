@@ -35,6 +35,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
     RunTiming,
     theta_lower_bound,
     theta_upper_bound,
+    to_physical,
 )
 
 PATHS = PARAMETERS.paths
@@ -143,8 +144,10 @@ def main(args):
     D = len(LOW)
 
     def sample(seed, nrows, sims):
-        return np.power(10, np.random.default_rng(seed).uniform(low=LOW, high=HIGH,
-                                                                size=(nrows, sims, D)))
+        # Estimator-space draw -> physical values through the ONE conversion rule (log rows
+        # exponentiated, the linear initial dimer fraction passed through).
+        return to_physical(np.random.default_rng(seed).uniform(low=LOW, high=HIGH,
+                                                                 size=(nrows, sims, D)))
     a, b = sample(None, 2, 3), sample(None, 2, 3)
     check("D. theta: seed=None differs across runs (non-deterministic)",
           not np.array_equal(a, b))

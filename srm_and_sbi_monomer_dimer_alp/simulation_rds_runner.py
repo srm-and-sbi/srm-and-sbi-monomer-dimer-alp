@@ -7,7 +7,7 @@ build+run with the kernel-leak mitigation, and the end-of-task report. The singl
 entry-point script (``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py``) shrinks to:
 build the biology ``WorkflowConfig``, parse args, and call ``run_rds``.
 
-The RDS tier is shared. The ten reaction-diffusion parameters are drawn from the
+The RDS tier is shared. The twelve reaction-diffusion parameters are drawn from the
 biology prior once per simulation and persisted as the ``Theta_Set``; the trajectories
 and that ``Theta_Set`` carry the bare sibling alias (``Paths.rds_alias``) -- no workflow
 qualifier, no condition token -- because both workflows and both conditions re-image
@@ -42,10 +42,14 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
     PARAMETERIZATION_RAW,
     PARAMETERS,
     RunTiming,
+    is_log_row,
     theta_lower_bound,
     theta_upper_bound,
+    to_physical,
 )
-from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import build_simulation, build_system
+from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
+    build_simulation, build_system, initial_composition_of,
+)
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
 )
@@ -74,7 +78,7 @@ def _build_sim(theta, seed, skin_factor, verbose):
 
 def _require_shared_tier_config(cfg: WorkflowConfig) -> None:
     """The RDS tier is generated once, through the biology config, whose ``Paths`` carry
-    the bare sibling alias and whose parameter table is the ten-parameter prior the tier
+    the bare sibling alias and whose parameter table is the twelve-parameter prior the tier
     samples. A detector config here would only re-generate the same tier under a
     qualified name, so it is refused."""
     if cfg.tag != "biology":
@@ -152,9 +156,11 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  box_size_nm          : {geom.box_size}")
     print(f"  particle_diameter_nm : {geom.particle_diameter_nm}")
 
-    print("\nParticle species:")
-    print(f"  {rds_cfg.particle_species_names}   "
-          f"A=Monomer, B=Mobile Dimer, C=Immobile Dimer")
+    print("\nParticle types (molecular species x mobility mode):")
+    print(f"  {rds_cfg.particle_type_names}")
+    print(f"  species {rds_cfg.molecular_species_names} = (monomer, dimer); "
+          f"modes {rds_cfg.mobility.modes} = (fast, slow, immobile); "
+          f"inheritance: {rds_cfg.mobility.inheritance}")
 
     timing_label = timing.label
     print("\nOutput destinations:")
@@ -168,14 +174,16 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     if args.verbose:
         print(f"\nLearnable theta prior spec ({len(PARAMETERIZATION)} parameters, "
-              f"sampled in log10 then exponentiated):")
+              f"sampled in estimator space, mapped to physical values by to_physical; "
+              f"DEVELOPMENT ranges):")
         for para in PARAMETERIZATION:
             lo, hi = para["PRIOR_RANGE"]
             unit = _UNIT_DISPLAY.get(para["UNIT"], para["UNIT"])
             derived = para.get("DERIVED_UNIT")
             derived_str = (f"   derived: {_UNIT_DISPLAY.get(derived, derived)}"
                            if derived else "")
-            print(f"  {para['KEY']:<32}  log10 ∈ [{lo:+6.2f}, {hi:+6.2f}]   "
+            scale = "log10" if is_log_row(para) else "linear"
+            print(f"  {para['KEY']:<32}  {scale:<6} ∈ [{lo:+6.2f}, {hi:+6.2f}]   "
                   f"units: {unit}{derived_str}")
 
     print(f"\n{div}\n")
@@ -218,7 +226,8 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         print("[DRY RUN] no trajectories generated.")
         return
 
-    # ---- Sample the parameter sets in log space, exponentiate to physical space --
+    # ---- Sample the parameter sets in estimator space, map to physical values ----
+    # (the one shared rule: log rows exponentiated, the linear initial dimer fraction as is)
     low = np.array(theta_lower_bound())
     high = np.array(theta_upper_bound())
     rng = np.random.default_rng(args.seed)
@@ -226,7 +235,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         low=low, high=high,
         size=(n_rows, args.task_simulations, len(low)),
     )
-    theta_sets = np.power(10, theta_log10)
+    theta_sets = to_physical(theta_log10)
 
     run_start = time.time()
 
@@ -285,8 +294,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 print(f"\n  Sampled theta (sim {sim + 1}|{args.task_simulations}):")
                 for i, para in enumerate(PARAMETERIZATION):
                     val = theta[i]
+                    scale = "log10" if is_log_row(para) else "linear"
                     print(f"    {para['KEY']:<32}  =  {val:10.4g}   "
-                          f"(log10 = {np.log10(val):+.3f})")
+                          f"({scale} coordinate = {theta_log10[task][sim][i]:+.3f})")
 
             # Placement RNG follows --seed (default None -> non-deterministic).
             # Generation is non-deterministic by design: ReaDDy's stepper is
@@ -314,12 +324,8 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
             # ---- Sim-0 diagnostics (debug mode) -----------------------
             if reporter.enabled and sim == 0:
-                theta_by_key = {p["KEY"]: theta[i]
-                                for i, p in enumerate(PARAMETERIZATION)}
-                counts = [theta_by_key.get("count_alp", float("nan")),
-                          theta_by_key.get("count_bet", float("nan")),
-                          theta_by_key.get("count_chi", float("nan"))]
-                total_initial = int(sum(round(c) for c in counts))
+                composition = initial_composition_of(theta)
+                total_initial = composition.n_monomers + composition.n_dimers
                 theta_log10_sim = theta_log10_task[sim]
                 in_bounds = bool(np.all(theta_log10_sim >= low)
                                  and np.all(theta_log10_sim <= high))
@@ -331,9 +337,18 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 reporter.check(
                     "theta_in_prior_bounds", in_bounds,
-                    "all log10 values within the prior box",
-                    note="the sampled parameters lie inside the log-uniform "
-                         "prior bounds they were drawn from.",
+                    "all estimator-space values within the prior box",
+                    note="the sampled parameters lie inside the prior box they were "
+                         "drawn from (log10 for log rows, linear for the dimer fraction).",
+                )
+                reporter.stat(
+                    "initial_composition",
+                    f"N_R={composition.n_total}: {composition.n_monomers} monomers + "
+                    f"{composition.n_dimers} dimers",
+                    note=f"integer realization of the sampled total and requested dimer "
+                         f"fraction x_B={composition.fraction_requested:.4f} (realized "
+                         f"{composition.fraction_realized:.4f}); conservation "
+                         f"N_R = n_A + 2 n_B holds for the realized integers.",
                 )
                 reporter.check(
                     "initial_particles_positive", total_initial > 0,
@@ -346,10 +361,10 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 headers, prior_rows = prior_sampling_table(PARAMETERIZATION, theta)
                 reporter.table(
                     "Prior sampling (sim 0)", headers, prior_rows,
-                    note="Log-uniform prior bounds and the value drawn for this "
-                         "simulation. count_alp/bet/chi are the initial A/B/C "
-                         "particle numbers the run was seeded with -- cross-check "
-                         "against the rendered video.",
+                    note="Prior box (estimator space) and the value drawn for this "
+                         "simulation. count_total and fraction_dimer_initial fix the "
+                         "initial monomer/dimer numbers the run was seeded with (see "
+                         "initial_composition) -- cross-check against the rendered video.",
                 )
                 fixed_headers, fixed_rows = fixed_parameters_table(PARAMETERIZATION_RAW)
                 reporter.table(
@@ -361,8 +376,8 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 reporter.stat(
                     "total_initial_particles", total_initial,
-                    note="sum of the sampled A/B/C counts; total particles placed "
-                         "at t=0.",
+                    note="monomer + dimer particles placed at t=0 (the receptor-subunit "
+                         "total N_R counts each dimer twice).",
                 )
 
                 # Read the trajectory back for reaction-event diagnostics.
@@ -386,8 +401,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     )
                     reporter.save_figure(
                         "reaction_events", figure_reaction_events(reaction_counts),
-                        caption="Total firings of each reaction channel over the "
-                                "trajectory (fusion, fission, (im)mobilization).",
+                        caption="Total firings of each of the seventeen reaction channels "
+                                "over the trajectory (association fusions, dissociation "
+                                "fissions, mobility-switching conversions).",
                     )
                     poses = collapse_species_axis(extract_trajectory_poses(tray))
                     # Replay the reaction records into the subunit lineage the DLI stage

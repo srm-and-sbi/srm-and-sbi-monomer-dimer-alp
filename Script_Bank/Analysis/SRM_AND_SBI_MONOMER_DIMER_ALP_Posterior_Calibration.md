@@ -120,8 +120,11 @@ that accept pre-drawn inputs (`check_sbc`, `check_tarp`, `LC2ST`, the samples-ba
 `_run_tarp`); the only hand-written pieces are the trivial rank definitions
 (`#{samples < truth}`), which are definitions, not algorithms.
 
-All theta live in log10 space (the flow's and the prior's space); the ground-truth theta
-sets are stored linear, so calibration is scored on `log10(theta_true)`.
+All theta live in the estimator space (the flow's and the prior's space: `log10` of the
+physical value for a log row, the value itself for a linear row such as the biology's initial
+dimer fraction `x_B`); the ground-truth theta sets are stored as physical values, so calibration
+is scored on `to_flow(theta_true)` — the workflow table's one sanctioned conversion, never a
+blanket `log10`.
 
 ## Stratification — by the inferred value, not the truth
 
@@ -151,7 +154,7 @@ no parameter of either workflow and the two never appear in the same report.
 
 ### The digest, and why the profile shape is the point
 
-With `--n-strata=10`, four diagnostics and a six- or ten-parameter target vector, the
+With `--n-strata=10`, four diagnostics and a six- or twelve-parameter target vector, the
 per-bin results number in the hundreds. Tabulating them one bin per row is the wrong
 presentation twice over: no reader holds hundreds of rows, and the thing the stratification
 exists to reveal — *how* the statistic varies across a parameter's range — is exactly what a

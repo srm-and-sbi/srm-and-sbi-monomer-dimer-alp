@@ -3,30 +3,40 @@
 This module wraps the ReaDDy 2 particle-based reaction-diffusion solver
 (Hoffmann et al., 2019, "ReaDDy 2: Fast and flexible software framework
 for interacting particle reaction dynamics", PLoS Comp Bio.
-https://doi.org/10.1371/journal.pcbi.1006830) for the three-species DIMER
-model used by this sibling.
+https://doi.org/10.1371/journal.pcbi.1006830) for the separated
+stoichiometry-mobility model of this sibling.
 
-Three molecular species:
-    A = Monomer
-    B = Mobile Dimer
-    C = Immobile Dimer
+Two molecular species, three mobility modes, six particle types
+(``PARAMETERS.simulation.rds.particle_types``; species x mode, species-major):
+    A_f, A_s, A_i = monomer, fast / slow / immobile
+    B_f, B_s, B_i = dimer,   fast / slow / immobile
 
-Two reactions:
-    A + A <-> B    (dimerization / dissociation; the forward rate is
-                    parameterized relative to the diffusion-limited cap)
-    B    <-> C    (immobilization / mobilization)
+Seventeen reaction channels, GENERATED from the two model blocks by ``reaction_channels``:
+    association    A_m + A_m' -> B_{slower(m, m')}   six fusions, one per unordered pair of
+                                                    monomer modes, all at the same lambda_on
+    dissociation   B_m -> A_m + A_m                 three fissions at kappa_OFF (mode conserved)
+    switching      X_f <-> X_s <-> X_i               eight conversions: the four shared rates,
+                                                    once per species
+
+Diffusion: D[X, m] = D_A * (R_B if X is the dimer else 1) * (1, R_s, R_i)[m].
 
 Functions:
+    reaction_channels(theta)
+        The declarative list of the seventeen channels (kind, educts, products, rate)
+        derived from the model blocks; ``build_system`` registers exactly these, and the
+        structure audit checks them without ReaDDy.
+
     build_system(theta, ...)
-        Builds the ReaDDy ReactionDiffusionSystem: registers species with
-        their diffusion constants and adds the four reactions. Returns the
-        configured system, ready to be wrapped in a Simulation.
+        Builds the ReaDDy ReactionDiffusionSystem: registers the six particle types with
+        their diffusion constants and adds the seventeen channels. Returns the configured
+        system, ready to be wrapped in a Simulation.
 
     build_simulation(stem, theta, ...)
         Wraps the system in a Simulation, registers observables (per-frame
         particle positions, per-step reaction counts, per-step reaction
-        records), and places initial particles uniformly in the box. Returns
-        the runnable Simulation.
+        records), and places the initial particles uniformly in the box: the integer
+        composition from (N_R, x_B) and each particle's mode from the stationary law of
+        the switching chain. Returns the runnable Simulation.
 
     extract_trajectory_poses(tray, ...)
         Reads a saved .h5 trajectory file and produces a dense
@@ -55,160 +65,197 @@ import numpy as np
 import readdy
 
 from .parameterization import (
+    PARAMETERIZATION,
     PARAMETERS,
     parameter_find,
+    realize_initial_composition,
 )
 
 
 # =============================================================================
-# Reaction-diffusion system builder
+# The reaction network, generated from the model blocks
 # =============================================================================
 
+class ReactionChannel(NamedTuple):
+    """One channel of the generated network.
+
+    ``kind`` is the ReaDDy primitive (``fusion`` / ``fission`` / ``conversion``); ``educts``
+    and ``products`` are particle-type names; ``rate`` is the rate handed to ReaDDy in 1/s
+    (the microscopic association rate for fusions); ``rate_key`` names the parameter it came
+    from. ``name`` is the ReaDDy reaction label (also the key of the reaction-count records).
+    """
+    kind: str
+    name: str
+    educts: Tuple[str, ...]
+    products: Tuple[str, ...]
+    rate: float
+    rate_key: str
+
+
+def theta_by_key(theta: np.ndarray) -> dict:
+    """Physical parameter values keyed by parameter KEY (``theta`` in canonical order)."""
+    theta = np.asarray(theta, dtype=float)
+    if theta.shape != (len(PARAMETERIZATION),):
+        raise ValueError(f"theta has shape {theta.shape}; expected ({len(PARAMETERIZATION)},).")
+    return {para["KEY"]: float(theta[i]) for i, para in enumerate(PARAMETERIZATION)}
+
+
+def diffusion_coefficients(theta: np.ndarray) -> dict:
+    """Diffusion coefficient of every particle type, um^2/s: D[X, m] = D_A * species * mode factor."""
+    rds = PARAMETERS.simulation.rds
+    values = theta_by_key(theta)
+    d_a = values[rds.mobility.diffusivity_key]
+    mode_factor = {mode: (1.0 if key is None else values[key])
+                   for mode, key in zip(rds.mobility.modes, rds.mobility.mode_ratio_keys)}
+    species_factor = {rds.stoichiometry.monomer.name: 1.0,
+                      rds.stoichiometry.dimer.name: values[rds.mobility.dimer_ratio_key]}
+    return {pt.name: d_a * species_factor[pt.species] * mode_factor[pt.mode]
+            for pt in rds.particle_types}
+
+
+def association_reference_rate(diffusivity_um2_s: float, reaction_distance_nm: float) -> float:
+    """The compatibility normalization lambda_ref = 6 D_A / r^2, in 1/s.
+
+    Equal to the Smoluchowski encounter rate of two monomers, 4 pi (2 D_A) r, divided by the
+    reaction volume (4/3) pi r^3. It is a declared reference with units of inverse time that
+    depends on D_A and on the reaction distance; it is NOT a physical upper bound on the
+    association rate (the diffusion-limited regime is the large-intensity limit of the spatial
+    rule), so R_ON = lambda_on / lambda_ref is a dimensionless parameterization convenience.
+    """
+    r_um = float(reaction_distance_nm) * 1e-3
+    return 6.0 * float(diffusivity_um2_s) / (r_um * r_um)
+
+
+def reaction_channels(theta: np.ndarray) -> Tuple[ReactionChannel, ...]:
+    """The seventeen channels of the network for one theta, derived from the two blocks.
+
+    Order: the association fusions (unordered pairs of monomer modes, fastest first), the
+    dissociation fissions (one per dimer mode), then the switching conversions (per species,
+    in the block's switching order). Every channel is unique by construction; the structure
+    audit asserts the count, the products, and the inherited modes.
+    """
+    rds = PARAMETERS.simulation.rds
+    sto, mob = rds.stoichiometry, rds.mobility
+    values = theta_by_key(theta)
+    mono, dim = sto.monomer.name, sto.dimer.name
+    d_a = values[mob.diffusivity_key]
+    reaction_distance_nm = PARAMETERS.simulation.stem.particle_diameter_nm
+    lamb_on = values[sto.association_ratio_key] * association_reference_rate(d_a, reaction_distance_nm)
+    kappa_off = values[sto.dissociation_rate_key]
+
+    channels = []
+    for i, m1 in enumerate(mob.modes):
+        for m2 in mob.modes[i:]:
+            product_mode = mob.inherited_mode(m1, m2)
+            e1, e2, pr = rds.type_name(mono, m1), rds.type_name(mono, m2), rds.type_name(dim, product_mode)
+            channels.append(ReactionChannel(
+                "fusion", f"{e1} + {e2} => {pr}", (e1, e2), (pr,), lamb_on, sto.association_ratio_key))
+    for m in mob.modes:
+        ed, pr = rds.type_name(dim, m), rds.type_name(mono, m)
+        channels.append(ReactionChannel(
+            "fission", f"{ed} => {pr} + {pr}", (ed,), (pr, pr), kappa_off, sto.dissociation_rate_key))
+    for species in sto.species_names:
+        for frm, to, key in mob.switching:
+            ed, pr = rds.type_name(species, frm), rds.type_name(species, to)
+            channels.append(ReactionChannel("conversion", f"{ed} => {pr}", (ed,), (pr,), values[key], key))
+    return tuple(channels)
+
+
+def stationary_mode_law(theta: np.ndarray) -> np.ndarray:
+    """Stationary occupancies of the isolated switching chain, one probability per mode.
+
+    For the sequential chain the detailed-balance ratio pi[m+1] / pi[m] equals the forward
+    over the backward rate of the link between them, so pi_f : pi_s : pi_i =
+    1 : k_fs/k_sf : (k_fs/k_sf)(k_si/k_is). This is the initial-mode law for every particle;
+    it is NOT the steady state of the reactive system (reactions with inheritance disturb it).
+    """
+    mob = PARAMETERS.simulation.rds.mobility
+    values = theta_by_key(theta)
+    forward = {(frm, to): values[key] for frm, to, key in mob.switching}
+    weights = [1.0]
+    for i in range(len(mob.modes) - 1):
+        a, b = mob.modes[i], mob.modes[i + 1]
+        weights.append(weights[-1] * forward[(a, b)] / forward[(b, a)])
+    weights = np.asarray(weights, dtype=float)
+    return weights / weights.sum()
+
+
 def build_system(theta: np.ndarray,
-                 particle_species_names: Optional[Tuple[str, ...]] = None,
                  verbose: bool = False) -> "readdy.ReactionDiffusionSystem":
-    """Build a ReaDDy ReactionDiffusionSystem for the three-species DIMER model.
+    """Build a ReaDDy ReactionDiffusionSystem for the separated stoichiometry-mobility model.
 
     Args:
-        theta: Learnable-parameter values (physical units, exp-transformed from
-            the log-space prior). 1D numpy array of length `len(PARAMETERIZATION)`
-            (currently 7), in the order defined by `parameter_find`.
-        particle_species_names: Optional override for the species names.
-            Defaults to `PARAMETERS.simulation.rds.particle_species_names` —
-            the standard ('A', 'B', 'C').
-        verbose: If True, print diffusion constants and reaction rates to stdout.
+        theta: Learnable-parameter values in PHYSICAL units (``parameterization.to_physical``
+            of an estimator-space sample), 1D of length ``len(PARAMETERIZATION)`` in the
+            canonical order.
+        verbose: If True, print the per-type diffusion constants and every channel's rate.
 
     Returns:
-        A configured `readdy.ReactionDiffusionSystem`, ready to be passed to
-        `build_simulation`.
+        A configured ``readdy.ReactionDiffusionSystem`` ready for ``build_simulation``.
 
-    Diffusion model:
-        - The monomer diffusion `D_A` is the learnable parameter `diffusivity_alp`.
-        - Dimer diffusions are specified RELATIVE to `D_A`:
-              `D_B = R_B * D_A`,  `D_C = R_C * D_A`,
-          where `R_B` and `R_C` are the learnable parameters
-          `relative_diffusivity_bet` and `relative_diffusivity_chi`.
-          The prior samples these ratios directly. Storing relative values
-          guarantees `D_B` and `D_C` track the magnitude of `D_A` without
-          requiring the prior to encode their joint dependence.
+    The particle types, their diffusion constants, and the seventeen channels come from
+    ``PARAMETERS.simulation.rds`` through ``diffusion_coefficients`` and
+    ``reaction_channels`` (module docstring). Association fires within the reaction distance
+    (one particle diameter, the Smoluchowski contact distance, derived from
+    ``SimulationStem.particle_diameter_nm``); fission products are placed OUTSIDE that distance,
+    at ``SimulationStem.fission_product_distance_nm`` (2 x the reaction distance), so that a
+    freshly dissociated pair is not re-fused deterministically at the next sub-step (see the
+    field's comment in ``parameterization.py``).
 
-    Reaction model — dimerization:
-        Dimerization (A + A -> B) is parameterized by `R_ON`, a dimensionless
-        ratio in (0, 1] of the macroscopic rate to the diffusion-limited cap:
-
-              kappa_ON = R_ON * kappa_ON_CAP
-              kappa_ON_CAP = 4 * pi * D_R * rho_CAP      (Smoluchowski)
-
-        with `D_R = 2 * D_A` (relative diffusion coefficient of two A particles)
-        and `rho_CAP = capture_radius` (in micrometres, converted from nm).
-        The microscopic ReaDDy rate is then:
-
-              lamb_ON = kappa_ON / V_CAP
-              V_CAP = (4/3) * pi * rho_CAP^3            (effective capture volume)
-
-        Parameterizing via R_ON instead of an absolute kappa_ON guarantees
-        the macroscopic rate never exceeds the physically attainable
-        diffusion-limited rate, regardless of how the prior is sampled.
-
-    Reaction model — other reactions:
-        Dissociation (B -> A + A), immobilization (B -> C), and mobilization
-        (C -> B) are parameterized by absolute macroscopic rates in counts
-        per second. The corresponding microscopic rates are just the
-        macroscopic rates with ReaDDy's per-second unit attached.
-
-    Boundary conditions:
-        [False, False, True] — the simulation box is open in xy (the
-        observation plane) and periodic in z (the thin direction
-        perpendicular to the membrane).
+    Boundary conditions: ``[False, False, True]`` -- open in x and y (the observation plane)
+    and periodic in z (the thin membrane normal). No potential confines the particles, so a
+    receptor that diffuses beyond the imaged field stays simulated, keeps reacting and
+    switching, and may return; it is simply not rendered while outside. The conserved
+    receptor total N_R therefore refers to the simulated patch, and the in-field count is a
+    distinct, time-dependent quantity.
     """
-    if particle_species_names is None:
-        particle_species_names = PARAMETERS.simulation.rds.particle_species_names
-
-    # --- Extract parameter values from theta -------------------------------
-    diffusion_keys = ("diffusivity_alp", "relative_diffusivity_bet", "relative_diffusivity_chi")
-    theta_diffusion = theta[[parameter_find(k) for k in diffusion_keys]]
-    diffusion_rates = np.empty(3)
-    diffusion_rates[0] = theta_diffusion[0]                       # D_A (monomer)
-    diffusion_rates[1] = theta_diffusion[1] * theta_diffusion[0]  # D_B = R_B * D_A
-    diffusion_rates[2] = theta_diffusion[2] * theta_diffusion[0]  # D_C = R_C * D_A
-
-    # Smoluchowski reaction radius = the center-to-center contact distance of two
-    # monomers (2 * monomer_radius = 1 * diameter), derived from the physical
-    # particle diameter so it tracks the per-dataset geometry. particle_diameter_nm
-    # is the single physical input; the table's capture_radius entry is display-only.
-    capture_radius = PARAMETERS.simulation.stem.particle_diameter_nm  # nm
-
-    reaction_keys = ("relative_rate_dimerization", "rate_dissociation",
-                     "rate_immobility", "rate_mobility")
-    theta_reaction = theta[[parameter_find(k) for k in reaction_keys]]
-    R_ON = theta_reaction[0]               # dimerization ratio (0, 1]; relative to diffusion-limited cap
-    kappa_OFF = theta_reaction[1]          # dissociation rate (1/s)
-    kappa_IMMOBILITY = theta_reaction[2]   # B -> C rate (1/s)
-    kappa_MOBILITY = theta_reaction[3]     # C -> B rate (1/s)
-
-    # --- Build the system --------------------------------------------------
+    rds = PARAMETERS.simulation.rds
     stem_geometry = PARAMETERS.simulation.stem
+    reaction_distance_nm = stem_geometry.particle_diameter_nm
+    product_distance_nm = stem_geometry.fission_product_distance_nm
+    coefficients = diffusion_coefficients(theta)
+    channels = reaction_channels(theta)
+
     stem = readdy.ReactionDiffusionSystem(
         box_size=stem_geometry.box_size,
         unit_system=stem_geometry.unit_dict,
     )
     stem.periodic_boundary_conditions = [False, False, True]
 
-    # Add species with diffusion constants (in um^2/s, attached to ReaDDy units).
-    for idx, species_name in enumerate(particle_species_names):
-        diffusion_constant = (
-            diffusion_rates[idx]
-            * pow(readdy.units.micrometer, 2)
-            / readdy.units.second
+    for type_name in rds.particle_type_names:
+        stem.add_species(
+            name=type_name,
+            diffusion_constant=coefficients[type_name] * pow(readdy.units.micrometer, 2) / readdy.units.second,
         )
-        stem.add_species(name=species_name, diffusion_constant=diffusion_constant)
 
-    # --- Diffusion-limited dimerization rate ---------------------------
-    D_R = 2 * diffusion_rates[0]                          # um^2 / s
-    rho_CAP_um = capture_radius * 1e-3                    # nm -> um
-    kappa_ON_CAP = 4 * np.pi * D_R * rho_CAP_um           # um^3 / s
-    kappa_ON = R_ON * kappa_ON_CAP                        # um^3 / s
-    V_CAP = (4 / 3) * np.pi * pow(rho_CAP_um, 3)          # um^3
-    lamb_ON = (kappa_ON / V_CAP) / readdy.units.second    # 1/s
-    lamb_OFF = kappa_OFF / readdy.units.second
-    lamb_IMMOBILITY = kappa_IMMOBILITY / readdy.units.second
-    lamb_MOBILITY = kappa_MOBILITY / readdy.units.second
-
-    # --- Add the four reactions ----------------------------------------
-    # The four channels implement the reversible dimerization / mobilization
-    # scheme: A + A <-> B (dimerization / dissociation) and B <-> C
-    # (immobilization / mobilization). A=monomer, B=mobile dimer, C=immobile
-    # dimer. See the DIMER reaction model in PROJECT_CONTEXT.md.
-
-    # A + A -> B : forward dimerization (microscopic rate lamb_ON, derived from
-    # R_ON relative to the diffusion-limited Smoluchowski cap).
-    stem.reactions.add_fusion(
-        name="A + A => B", type_from1="A", type_from2="A", type_to="B",
-        rate=lamb_ON, educt_distance=capture_radius, weight1=0.5, weight2=0.5,
-    )
-    # B -> A + A : reverse dissociation (macroscopic rate kappa_OFF).
-    stem.reactions.add_fission(
-        name="B => A + A", type_from="B", type_to1="A", type_to2="A",
-        rate=lamb_OFF, product_distance=capture_radius, weight1=0.5, weight2=0.5,
-    )
-    # B -> C : immobilization, mobile dimer becomes immobile (rate kappa_IMMOBILITY).
-    stem.reactions.add_conversion(
-        name="B => C", type_from="B", type_to="C", rate=lamb_IMMOBILITY,
-    )
-    # C -> B : mobilization, immobile dimer becomes mobile again (rate kappa_MOBILITY).
-    stem.reactions.add_conversion(
-        name="C => B", type_from="C", type_to="B", rate=lamb_MOBILITY,
-    )
+    for ch in channels:
+        rate = ch.rate / readdy.units.second
+        if ch.kind == "fusion":
+            stem.reactions.add_fusion(
+                name=ch.name, type_from1=ch.educts[0], type_from2=ch.educts[1], type_to=ch.products[0],
+                rate=rate, educt_distance=reaction_distance_nm, weight1=0.5, weight2=0.5)
+        elif ch.kind == "fission":
+            stem.reactions.add_fission(
+                name=ch.name, type_from=ch.educts[0], type_to1=ch.products[0], type_to2=ch.products[1],
+                rate=rate, product_distance=product_distance_nm, weight1=0.5, weight2=0.5)
+        elif ch.kind == "conversion":
+            stem.reactions.add_conversion(
+                name=ch.name, type_from=ch.educts[0], type_to=ch.products[0], rate=rate)
+        else:  # pragma: no cover -- reaction_channels emits the three kinds only
+            raise ValueError(f"unknown channel kind {ch.kind!r}")
 
     if verbose:
-        rates_by_species = dict(zip(particle_species_names, diffusion_rates))
-        print(f"  Diffusion rates per species (um^2/s): {rates_by_species}")
-        print("  Reaction rates:")
-        print(f"    A+A -> B (dimerization):     macroscopic={kappa_ON:.6g} um^3/s "
-              f"(cap={kappa_ON_CAP:.6g}, R_ON={R_ON:.6g})")
-        print(f"    B   -> A+A (dissociation):   macroscopic={kappa_OFF:.6g} 1/s")
-        print(f"    B   -> C (immobilization):   macroscopic={kappa_IMMOBILITY:.6g} 1/s")
-        print(f"    C   -> B (mobilization):     macroscopic={kappa_MOBILITY:.6g} 1/s")
+        values = theta_by_key(theta)
+        d_a = values[rds.mobility.diffusivity_key]
+        print("  Diffusion coefficients per particle type (um^2/s): "
+              + ", ".join(f"{k}={v:.4g}" for k, v in coefficients.items()))
+        print(f"  Association reference lambda_ref = 6 D_A / r^2 = "
+              f"{association_reference_rate(d_a, reaction_distance_nm):.6g} 1/s "
+              f"(compatibility normalization, not a bound); R_ON = "
+              f"{values[rds.stoichiometry.association_ratio_key]:.6g}")
+        print(f"  Reaction channels ({len(channels)}):")
+        for ch in channels:
+            print(f"    {ch.kind:<10} {ch.name:<22} rate={ch.rate:.6g} 1/s   [{ch.rate_key}]")
 
     return stem
 
@@ -219,70 +266,50 @@ def build_system(theta: np.ndarray,
 
 def build_simulation(stem: "readdy.ReactionDiffusionSystem",
                      theta: np.ndarray,
-                     particle_species_names: Optional[Tuple[str, ...]] = None,
                      seed: Optional[int] = None,
                      skin_factor: Optional[float] = None,
                      verbose: bool = False) -> "readdy.Simulation":
-    """Wrap the ReactionDiffusionSystem in a Simulation, register observables,
-    and place initial particles uniformly in the box.
+    """Wrap the ReactionDiffusionSystem in a Simulation, register observables, and place
+    the initial particles.
 
     Args:
-        stem: ReactionDiffusionSystem from `build_system`.
-        theta: Learnable-parameter values (same vector as passed to `build_system`).
-            Used to extract per-species initial particle counts.
-        particle_species_names: Optional override; defaults to
-            `PARAMETERS.simulation.rds.particle_species_names`.
-        seed: RNG seed for initial particle placement. If None, the placement
-            is non-deterministic (different on every call); pass an integer
-            for reproducible runs. Note: this seed only controls the NumPy
-            RNG for particle positions; ReaDDy's internal RNG (used for
-            reaction events and diffusion steps during `simulation.run`)
-            has its own seeding mechanism.
-        skin_factor: ReaDDy neighbor-list (Verlet) skin as a MULTIPLE of the
-            particle diameter (skin = skin_factor * particle_diameter_nm, in nm).
-            A PURE PERFORMANCE knob -- it coarsens the cell-linked-list grid in the
-            large, dilute imaging box without changing the physics (reactions still
-            fire only at the true reaction radius; the skin only widens which
-            particles are considered as candidates). If None (default), the
-            configured `PARAMETERS.simulation.rds.neighbor_list_skin_factor` is used.
-            See that field for the full rationale and the U-shaped cost curve.
-        verbose: If True, print the per-species and total initial particle counts.
+        stem: ReactionDiffusionSystem from ``build_system``.
+        theta: The same physical parameter vector passed to ``build_system``; supplies the
+            receptor total N_R, the requested initial dimer fraction x_B, and the switching
+            rates whose stationary law draws each particle's initial mode.
+        seed: RNG seed for the initial composition's mode draw and the placement. None ->
+            non-deterministic. Note: this seed only controls the NumPy RNG; ReaDDy's own
+            RNG for reactions and diffusion has its own mechanism.
+        skin_factor: ReaDDy neighbor-list (Verlet) skin as a MULTIPLE of the particle
+            diameter -- a PURE PERFORMANCE knob (see ``SimulationRDS.neighbor_list_skin_factor``).
+            None -> the configured default.
+        verbose: If True, print the realized composition and the per-type initial counts.
 
     Returns:
-        A `readdy.Simulation` with:
-            - 'particles' observable at the per-frame stride
-              (PARAMETERS.simulation.timing.steps_per_frame),
+        A ``readdy.Simulation`` with:
+            - 'particles' observable at the per-frame stride,
             - 'reaction_counts' observable at every step (stride=1),
-            - 'reactions' observable at every step (stride=1): one record per
-              reaction event with its educt and product particle ids, read back
-              by `extract_subunit_lineage` (the DLI stage's subunit bookkeeping),
-            - initial particles placed uniformly in the box for each species.
-
-    Implementation notes:
-        - Particle counts are rounded from the continuous theta sample
-          (which lives in log-space and was exp-transformed before being
-          passed here) to int32.
-        - Particles are placed uniformly in [-box/2, +box/2] in each
-          spatial dimension, ignoring the periodic z boundary for initial
-          placement.
-        - The simulation runs on the CPU kernel.
+            - 'reactions' observable at every step (stride=1): one record per event with
+              its educt and product particle ids, read back by ``extract_subunit_lineage``,
+            - the initial particles: ``realize_initial_composition(N_R, x_B)`` gives the
+              integer monomer and dimer counts (requested vs realized fraction recorded by
+              the DLI stage's Labeling_Set), each particle's mode is drawn from
+              ``stationary_mode_law``, positions are uniform in the box.
     """
-    if particle_species_names is None:
-        particle_species_names = PARAMETERS.simulation.rds.particle_species_names
-
-    count_keys = ("count_alp", "count_bet", "count_chi")
-    theta_counts = np.round(theta[[parameter_find(k) for k in count_keys]]).astype(np.int32)
+    rds = PARAMETERS.simulation.rds
+    values = theta_by_key(theta)
+    composition = realize_initial_composition(
+        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.fraction_dimer_key])
+    mode_law = stationary_mode_law(theta)
 
     smut = stem.simulation(kernel="CPU")
 
-    # Neighbor-list (Verlet) skin, as a MULTIPLE of the particle diameter. Pure
-    # performance knob: it enlarges ReaDDy's cell-linked-list cells (cell edge =
-    # reaction_radius + skin) so the huge, dilute imaging box is not partitioned into
-    # ~16 million mostly-empty cells whose per-step management dominates the runtime.
-    # It never changes the physics -- reactions still fire only at the true reaction
-    # radius; the skin only widens which particles are considered as CANDIDATES. See
-    # PARAMETERS.simulation.rds.neighbor_list_skin_factor for the rationale and the
-    # U-shaped cost curve. None -> the configured default.
+    # Neighbor-list (Verlet) skin, as a MULTIPLE of the particle diameter. Pure performance
+    # knob: it enlarges ReaDDy's cell-linked-list cells (cell edge = reaction_radius + skin) so
+    # the huge, dilute imaging box is not partitioned into ~16 million mostly-empty cells whose
+    # per-step management dominates the runtime. It never changes the physics -- reactions
+    # still fire only at the true reaction radius; the skin only widens which particles are
+    # considered as CANDIDATES. See PARAMETERS.simulation.rds.neighbor_list_skin_factor.
     if skin_factor is None:
         skin_factor = PARAMETERS.simulation.rds.neighbor_list_skin_factor
     if skin_factor < 0:
@@ -304,19 +331,36 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
     lo = [-box_size[0] / 2, -box_size[1] / 2, -box_size[2] / 2]
     hi = [box_size[0] / 2, box_size[1] / 2, box_size[2] / 2]
 
-    # Single RNG controls placement across all species (reproducible if seed is set).
     rng = np.random.default_rng(seed)
-    for idx, species_name in enumerate(particle_species_names):
-        n_particles = int(theta_counts[idx])
-        positions = rng.uniform(low=lo, high=hi, size=(n_particles, 3))
-        smut.add_particles(type=species_name, positions=positions)
+    initial_counts = {}
+    for species, n_particles in ((rds.stoichiometry.monomer.name, composition.n_monomers),
+                                 (rds.stoichiometry.dimer.name, composition.n_dimers)):
+        modes = rng.choice(len(rds.mobility.modes), size=n_particles, p=mode_law)
+        for mode_index, mode in enumerate(rds.mobility.modes):
+            n_type = int(np.sum(modes == mode_index))
+            type_name = rds.type_name(species, mode)
+            initial_counts[type_name] = n_type
+            if n_type:
+                positions = rng.uniform(low=lo, high=hi, size=(n_type, 3))
+                smut.add_particles(type=type_name, positions=positions)
 
     if verbose:
-        counts_by_species = dict(zip(particle_species_names, theta_counts.tolist()))
-        total = int(np.sum(theta_counts))
-        print(f"  Initial particle counts: {counts_by_species} (total = {total})")
+        print(f"  Initial composition: N_R={composition.n_total} subunits -> "
+              f"{composition.n_monomers} monomers + {composition.n_dimers} dimers "
+              f"(x_B requested {composition.fraction_requested:.4f}, realized "
+              f"{composition.fraction_realized:.4f})")
+        print("  Stationary mode law (f, s, i): " + ", ".join(f"{p:.4f}" for p in mode_law))
+        print(f"  Initial particle counts per type: {initial_counts}")
 
     return smut
+
+
+def initial_composition_of(theta: np.ndarray):
+    """The ``InitialComposition`` a simulation of ``theta`` (physical) is seeded with."""
+    rds = PARAMETERS.simulation.rds
+    values = theta_by_key(theta)
+    return realize_initial_composition(
+        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.fraction_dimer_key])
 
 
 # =============================================================================
@@ -358,9 +402,9 @@ def extract_trajectory_poses(tray, verbose: bool = False) -> np.ndarray:
           `_soul_index` (sorted unique ids). ReaDDy gives every reaction product a
           new id, so one receptor subunit visits several particle indices over a
           recording; `extract_subunit_lineage` maps subunits onto these indices.
-        - The "rank" axis of `tray_poses` is the species index assigned by
-          ReaDDy (from `tray.particle_types`). For the standard species
-          order ('A', 'B', 'C'), rank 0 is A, rank 1 is B, rank 2 is C.
+        - The "rank" axis of `tray_poses` is the PARTICLE-TYPE index assigned by
+          ReaDDy (from `tray.particle_types`, one rank per (species, mode) type);
+          `rank_to_species` maps it back to the molecular species.
         - The last frame in the ReaDDy trajectory is dropped (the
           `n_frames - 1` slice) because ReaDDy writes an extra final
           observable that doesn't correspond to a fully evolved frame.
@@ -416,11 +460,34 @@ def extract_trajectory_poses(tray, verbose: bool = False) -> np.ndarray:
     return tray_poses
 
 
+def rank_to_species(tray) -> dict:
+    """Particle-type rank (``tray.particle_types`` order) -> MOLECULAR SPECIES name.
+
+    The observation layer selects and counts by molecular species (occupancy per species,
+    monomer versus dimer), never by mobility mode, so every consumer of ``host_rank`` maps
+    through this table rather than reading the type name.
+    """
+    species_of_type = PARAMETERS.simulation.rds.species_of_type
+    out = {}
+    for name, rank in tray.particle_types.items():
+        if name not in species_of_type:
+            raise ValueError(f"trajectory particle type {name!r} is not a configured particle type "
+                             f"{tuple(species_of_type)}; the trajectory was generated by another model.")
+        out[int(rank)] = species_of_type[name]
+    return out
+
+
+def monomer_ranks(tray) -> list:
+    """Particle-type ranks whose particles carry a single subunit (the monomer types)."""
+    monomer_types = set(PARAMETERS.simulation.rds.monomer_type_names)
+    return sorted(int(rank) for name, rank in tray.particle_types.items() if name in monomer_types)
+
+
 def collapse_species_axis(tray_poses: np.ndarray) -> np.ndarray:
-    """Collapse the species-rank axis: `(n_frames, n_particles, 3, n_species)` ->
+    """Collapse the particle-type rank axis: `(n_frames, n_particles, 3, n_types)` ->
     `(n_frames, n_particles, 3)`.
 
-    A particle is exactly one species per frame, so at most one rank holds a
+    A particle is exactly one type per frame, so at most one rank holds a
     non-NaN coordinate and the max over the rank axis selects it. The result is
     NaN wherever the particle is absent from the frame. The all-NaN-slice
     RuntimeWarning that `nanmax` emits for absent particles is benign and
@@ -437,9 +504,9 @@ class SubunitLineage(NamedTuple):
     """Which particle hosts each receptor subunit at each frame.
 
     The receptor SUBUNIT is the persistent physical object of the model: the reaction
-    network (A + A <-> B, B <-> C) conserves the number of subunits, while ReaDDy
-    assigns a NEW particle id to every reaction product -- including the product of a
-    plain species conversion (B -> C keeps the molecule, not the id). Static
+    network (association, dissociation, mobility switching) conserves the number of
+    subunits, while ReaDDy assigns a NEW particle id to every reaction product -- including
+    the product of a plain type conversion (a mobility switch keeps the molecule, not the id). Static
     per-subunit quantities of the DLI stage (dye counts, PSF widths) therefore attach
     to subunits, and this table maps them onto the particle that carries them in each
     frame. It is built by `extract_subunit_lineage` from the reaction records with the
@@ -451,9 +518,10 @@ class SubunitLineage(NamedTuple):
         host_index: int array `(n_frames, n_subunits)`; the particle index (the
             `extract_trajectory_poses` particle order) of the particle hosting the
             subunit at that frame. Every entry is valid: subunits are conserved.
-        host_rank: int array `(n_frames, n_subunits)`; the species rank
-            (`tray.particle_types` order) of that host, i.e. the subunit's
-            molecular state at that frame.
+        host_rank: int array `(n_frames, n_subunits)`; the PARTICLE-TYPE rank
+            (`tray.particle_types` order) of that host, i.e. the subunit's molecular
+            species AND mobility mode at that frame; map ranks to molecular species with
+            `rank_to_species`.
         soul_ids: int array `(n_particles,)`; the ReaDDy particle ids in
             particle-index order (provenance only).
     """
@@ -506,7 +574,7 @@ def _apply_reaction_record(record, subunits_of_soul: dict, counts: dict) -> None
         else:
             raise NotImplementedError(
                 f"reaction record type {kind!r} ({record.reaction_label!r}) has no subunit "
-                f"bookkeeping rule; the DIMER network has fusion, fission, and conversion only.")
+                f"bookkeeping rule; the network has fusion, fission, and conversion only.")
     except KeyError as exc:
         raise ValueError(
             f"{kind} record {record.reaction_label!r}: educt particle {exc.args[0]} has no "
@@ -543,8 +611,9 @@ def extract_subunit_lineage(tray, verbose: bool = False) -> SubunitLineage:
           `part_spans[f] >= t`. Several records inside one frame interval are
           replayed in file order; each is a single dictionary update.
         - Frame 0 seeds the lineage: every initial particle receives fresh
-          subunit ids, one per subunit of its species
-          (`PARAMETERS.simulation.rds.subunit_counts_per_species`).
+          subunit ids, one per subunit of its particle type
+          (`PARAMETERS.simulation.rds.subunit_counts_per_type`; a monomer type
+          carries one subunit, a dimer type two, whatever its mobility mode).
     """
     part_spans, ranks, souls, _ = tray.read_observable_particles()
     n_frames = int(part_spans.shape[0]) - 1
@@ -553,7 +622,7 @@ def extract_subunit_lineage(tray, verbose: bool = False) -> SubunitLineage:
     rds = PARAMETERS.simulation.rds
     species_to_rank = tray.particle_types
     subunits_of_rank = {}
-    for name, n_sub in zip(rds.particle_species_names, rds.subunit_counts_per_species):
+    for name, n_sub in zip(rds.particle_type_names, rds.subunit_counts_per_type):
         if name in species_to_rank:
             subunits_of_rank[int(species_to_rank[name])] = int(n_sub)
 
@@ -577,7 +646,7 @@ def extract_subunit_lineage(tray, verbose: bool = False) -> SubunitLineage:
         except KeyError as exc:
             raise ValueError(
                 f"extract_subunit_lineage: species rank {int(rank)} has no subunit count "
-                f"(configured species {rds.particle_species_names}).") from exc
+                f"(configured particle types {rds.particle_type_names}).") from exc
         subunits_of_soul[int(soul)] = tuple(range(next_subunit, next_subunit + n_sub))
         next_subunit += n_sub
     n_subunits = next_subunit

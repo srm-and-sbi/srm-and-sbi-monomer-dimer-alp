@@ -199,7 +199,7 @@ coefficients, and the per-window temporal behavior — see
 - **First-pass posteriors.** Current short-duration posteriors from interrupted training
   give provisional absolute values; the numbers will sharpen with the full production
   posteriors. Re-run this analysis on those for the definitive figures.
-- **Relative parameters** (R_B, R_C, R_ON) are reported as the dimensionless ratios the
+- **Relative parameters** (R_B, R_s, R_i, R_ON) are reported as the dimensionless ratios the
   model samples.
 
 ## Reference

@@ -5,7 +5,8 @@ from real recordings, which single vector represents them without inventing a co
 never occurred?* The engine is therefore identical for both, and the genuine per-workflow
 differences are carried by :class:`SGMSpec` and resolved once in :func:`_sgm_spec`:
 
-* the **parameterization module** supplying the parameter keys and the log10 prior box;
+* the **parameterization module** supplying the parameter keys, the estimator-space prior box and
+  the table-bound estimator-to-physical conversion;
 * the **alias-qualified paths** locating the Experiment MAP output and naming the report;
 * the **collection sources** available -- both workflows expose the real optimized MAPs from the
   Experiment stage; the detector additionally exposes the Nuisance_DLI pool and its caches, which
@@ -41,8 +42,11 @@ class SGMSpec:
     """Everything about this analysis that differs between the two workflows."""
 
     parameter_keys: list[str]
-    theta_low: np.ndarray                 # log10 prior lower bounds
-    theta_high: np.ndarray                # log10 prior upper bounds
+    theta_low: np.ndarray                 # prior lower bounds, estimator space
+    theta_high: np.ndarray                # prior upper bounds, estimator space
+    to_physical: Callable                 # (..., D) estimator space -> physical, bound to the table
+    to_flow: Callable                     # its inverse
+    log_rows: np.ndarray                  # (D,) bool: log rows (a log axis is meaningful for them)
     posit_dir: object                     # pathlib.Path to the workflow's Posit namespace
     alias: str                            # project alias (carries _DETECTOR for that workflow)
     timing_label: str
@@ -102,20 +106,23 @@ def apply_condition(condition, vecs, labels):
 
 # ---- figures (object API; each returns a Figure, never saves) ----------------------------------
 
-def _figure_plane(pool_log, results, keys, xi, yi, rng):
+def _figure_plane(pool_log, results, keys, xi, yi, rng, to_physical, log_rows):
     idx = (np.arange(pool_log.shape[0]) if pool_log.shape[0] <= sgm.FIGURE_SUBSAMPLE
            else rng.choice(pool_log.shape[0], sgm.FIGURE_SUBSAMPLE, replace=False))
+    pool_abs = np.asarray(to_physical(pool_log[idx]), dtype=float)     # physical, per-row rule
     fig = Figure(figsize=(7, 6), layout="constrained")
     ax = fig.add_subplot(1, 1, 1)
-    ax.scatter(10.0 ** pool_log[idx, xi], 10.0 ** pool_log[idx, yi], s=8, c="0.6", alpha=0.35,
+    ax.scatter(pool_abs[:, xi], pool_abs[:, yi], s=8, c="0.6", alpha=0.35,
                edgecolors="none", label="collection members")
     ur = next(r for r in results if r["variant"] == "unrestricted")
     ax.scatter(ur["sgm_abs"][xi], ur["sgm_abs"][yi], marker="*", s=420, c="gold",
                edgecolors="k", linewidths=1.2, zorder=6, label="SGM (real sample)")
     ax.scatter(ur["vom_abs"][xi], ur["vom_abs"][yi], marker="X", s=210, c="magenta",
                edgecolors="k", linewidths=1.2, zorder=6, label="vector of medians")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
+    # A log axis only for a log row; a linear row (the initial dimer fraction on [0, 1]) is drawn
+    # on a linear axis, since zero has no logarithm and its prior is uniform in the value itself.
+    ax.set_xscale("log" if log_rows[xi] else "linear")
+    ax.set_yscale("log" if log_rows[yi] else "linear")
     ax.set_xlabel(keys[xi])
     ax.set_ylabel(keys[yi])
     ax.legend(loc="best", frameon=False, fontsize=9)
@@ -198,7 +205,7 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
     frac_above = (pool_log > high).mean(0)
     reporter.table(
         "Out-of-prior mass (per parameter)",
-        ["parameter", "box low (log10)", "box high (log10)", "below %", "above %"],
+        ["parameter", "box low (estimator space)", "box high (estimator space)", "below %", "above %"],
         [[keys[i], f"{low[i]:.3f}", f"{high[i]:.3f}", f"{100 * frac_below[i]:.2f}",
           f"{100 * frac_above[i]:.2f}"] for i in range(len(keys))],
         note="Fraction of members outside the prior box per dimension. On real recordings this is a "
@@ -217,13 +224,16 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
         reporter.table(
             f"Sample Geometric Median vs vector of medians - {res['variant']} "
             f"(n={res['n']}, method={res['method']})",
-            ["parameter", "SGM (abs)", "vector-of-medians (abs)", "SGM (log10)", "VoM (log10)"], rows,
+            ["parameter", "SGM (abs)", "vector-of-medians (abs)", "SGM (estimator space)",
+             "VoM (estimator space)"], rows,
             note="SGM = the median VECTOR (a real collection member, correlations intact); "
                  "vector-of-medians = the per-dimension composite, which need not correspond to any "
                  "member. Read the two columns against each other per parameter: where they agree the "
                  "choice does not matter, and where they diverge the composite is asserting a "
                  "combination nothing in the collection realized. "
-                 f"SGM in-box: {res['sgm_in_box']}; vector-of-medians in-box: {res['vom_in_box']}.")
+                 f"SGM in-box: {res['sgm_in_box']}; vector-of-medians in-box: {res['vom_in_box']}. "
+                 f"Estimator space is log10 for log rows and the value itself for a linear row "
+                 f"(the initial dimer fraction).")
 
     reporter.table(
         "Typicality of the vector of medians versus the SGM",
@@ -241,7 +251,7 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
 
     corr = np.corrcoef(pool_log, rowvar=False)
     reporter.table(
-        "Joint correlation matrix (Pearson, log10)",
+        "Joint correlation matrix (Pearson, estimator space)",
         ["parameter"] + keys,
         [[keys[a]] + [f"{corr[a, b]:+.3f}" for b in range(len(keys))] for a in range(len(keys))],
         note="The cross-parameter correlations the SGM preserves and the vector of medians discards. "
@@ -254,12 +264,15 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
     reporter.stat("condition", args.condition,
                   note="MET-FAB is the monomer control; MET-INLB is the dimer condition")
     reporter.stat("collection size (vectors)", str(n), note=f"in-box: {int(in_box.sum())} / {n}")
-    reporter.stat("space", "absolute (10**theta), normalized by the absolute prior range")
+    reporter.stat("space", "absolute (parameterization.to_physical of the estimator-space vectors: "
+                           "10**theta for log rows, the value itself for the linear initial dimer "
+                           "fraction), normalized by the absolute prior range")
     for row in spec.extra_stats:
         reporter.stat(*row)
 
     xi, yi, plane_caption = spec.plane
-    reporter.save_figure("sgm_plane", _figure_plane(pool_log, results, keys, xi, yi, rng),
+    reporter.save_figure("sgm_plane", _figure_plane(pool_log, results, keys, xi, yi, rng,
+                                                    spec.to_physical, spec.log_rows),
                          caption=plane_caption)
     n_plot = min(n, sgm.FIGURE_SUBSAMPLE)
     n_bins = int(min(40, max(8, round(np.sqrt(n_plot)))))
@@ -295,8 +308,8 @@ def run_sample_geometric_median(cfg, args):
         for name, loader in spec.collections.items():
             marker = " <- selected" if name == args.collection else ""
             print(f"    source[{name}] {loader.describe(args)}{marker}")
-        print(f"    prior box  : log10 low {low.tolist()}")
-        print(f"                            high {high.tolist()}")
+        print(f"    prior box  : estimator-space low {low.tolist()}")
+        print(f"                                high {high.tolist()}")
         print(f"    method     : Sample Geometric Median in absolute space (exact medoid up to "
               f"{sgm.EXACT_MEDOID_CAPACITY} members, else Weiszfeld + snap); full collection and "
               f"in-box subcollection")
@@ -313,7 +326,7 @@ def run_sample_geometric_median(cfg, args):
     if args.max_samples and vecs.shape[0] > args.max_samples:
         vecs = vecs[rng.choice(vecs.shape[0], args.max_samples, replace=False)]
 
-    results, in_box = sgm.summary_vectors(vecs, low, high, rng)
+    results, in_box = sgm.summary_vectors(vecs, low, high, rng, spec.to_physical, spec.to_flow)
     report_dir = _write_report(args, spec, vecs, results, in_box, rng, source + suffix)
 
     ur = next(r for r in results if r["variant"] == "unrestricted")
@@ -358,8 +371,8 @@ class _Source:
 
 def _sgm_spec(cfg, args):
     """Resolve the workflow-specific half of the analysis."""
-    from .parameterization import PARAMETERS, RunTiming
-    from .workflow import parameter_keys as _wf_keys
+    from .parameterization import PARAMETERS, RunTiming, is_log_row, to_flow, to_physical
+    from .workflow import parameter_keys as _wf_keys, parameter_table
 
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
@@ -371,6 +384,7 @@ def _sgm_spec(cfg, args):
                                                         timing_label=timing.label)
     exp_path = posit_dir / exp_stem / f"{exp_stem}.npz"
     keys = _wf_keys(cfg)
+    table = parameter_table(cfg)
 
     collections = {
         "experiment-map": _Source(
@@ -391,18 +405,24 @@ def _sgm_spec(cfg, args):
             "composite built from each dimension independently can sit off the ridge the real "
             "configurations occupy.")
     else:
-        xi, yi = keys.index("count_chi"), keys.index("relative_rate_dimerization")
+        xi, yi = keys.index("fraction_dimer_initial"), keys.index("relative_rate_dimerization")
         plane_caption = (
-            "Dimer abundance versus dimerization rate. The collection members (grey) with the SGM "
-            "(gold star, a real sample) and the per-dimension vector of medians (magenta X). These "
-            "two are the coupled pair at the center of the biological question -- how much dimer is "
-            "present and how fast it forms -- and they trade off against each other, so a composite "
-            "built per dimension can assert an abundance/rate combination no recording supported.")
+            "Initial dimer fraction versus association ratio. The collection members (grey) with "
+            "the SGM (gold star, a real sample) and the per-dimension vector of medians (magenta "
+            "X). These two are the coupled pair at the center of the biological question -- how "
+            "much of the receptor population is dimeric and how fast dimers form -- and they trade "
+            "off against each other, so a composite built per dimension can assert a "
+            "fraction/rate combination no recording supported. The fraction is a linear coordinate "
+            "on [0, 1] and is drawn on a linear axis; the ratio is a log row on a log axis.")
     plane = (xi, yi, plane_caption)
     return SGMSpec(
         parameter_keys=keys,
         theta_low=np.array(para.theta_lower_bound(), dtype=float),
         theta_high=np.array(para.theta_upper_bound(), dtype=float),
+        # The ONE conversion rule, bound to this workflow's table (all-log for the detector).
+        to_physical=lambda u: to_physical(u, table),
+        to_flow=lambda x: to_flow(x, table),
+        log_rows=np.array([is_log_row(e) for e in table], dtype=bool),
         posit_dir=posit_dir, alias=alias, timing_label=timing.label,
         report_stem="Experiment_Sample_Geometric_Median",
         stage="Experiment_Sample_Geometric_Median",

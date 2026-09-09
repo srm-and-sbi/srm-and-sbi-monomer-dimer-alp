@@ -1,9 +1,11 @@
 """Temporal-dynamics kernel: how inferred parameters behave across one recording.
 
 Workflow-agnostic numerics shared by the biology and detector temporal analyses. Nothing here knows
-which parameters it is describing: every function takes arrays, a prior box, and a time axis. Pure
-numpy (plus the shared geometric-median kernel and a lazy scipy import for the sign test), so it
-imports and unit-tests without a machine profile.
+which parameters it is describing: every function takes arrays, a prior box, a time axis, and --
+wherever estimator-space values must become physical ones -- the ``to_physical`` callable the runner
+binds to its parameter table (``parameterization.to_physical``), plus a per-row ``log_rows`` mask
+where a statistic is only defined for log rows. Pure numpy (plus the shared geometric-median kernel
+and a lazy scipy import for the sign test), so it imports and unit-tests without a machine profile.
 
 WHAT THE ANALYSIS ASKS. The Experiment stage estimates the parameters independently in every
 non-overlapping window of every recording, reporting one MAP estimate per window. Stacking those
@@ -13,7 +15,8 @@ real dynamics or an acquisition confound, and one workflow's estimates cannot di
 
 THE ONE ARRAY EVERYTHING STARTS FROM. All functions here operate on the MAP grid
 
-    G[k, c, t, p]   MAP estimate in log10 space
+    G[k, c, t, p]   MAP estimate in estimator space (log10 for log rows; the value itself for
+                    the linear initial dimer fraction)
       k = condition        c = cell (recording)
       t = chunk (window)   p = parameter
 
@@ -37,11 +40,11 @@ the joint structure is intact (Ramirez Sierra & Sokolowski, Mach. Learn.: Sci. T
 2025). The two `*-window` functions produce a timeseries; the two `*-trajectory` functions produce a
 single vector, and they pair with their window counterpart so a figure never mixes estimators.
 
-DISTANCES. Both realized estimates use the same metric: absolute (physical) values ``10**G``, each
-parameter divided by its absolute prior width ``10**high - 10**low`` so no parameter dominates,
-Euclidean, exact medoid. Selection is on ALL parameters jointly, so a selected vector is internally
-coherent -- and consequently the value it reports for one parameter is that jointly-central window's
-value, not that parameter's own median.
+DISTANCES. Both realized estimates use the same metric: physical values ``to_physical(G)``, each
+parameter divided by its physical prior width ``to_physical(high) - to_physical(low)`` so no
+parameter dominates, Euclidean, exact medoid. Selection is on ALL parameters jointly, so a selected
+vector is internally coherent -- and consequently the value it reports for one parameter is that
+jointly-central window's value, not that parameter's own median.
 """
 from __future__ import annotations
 
@@ -58,6 +61,9 @@ MATERIAL_DRIFT_DEX = 0.3
 # stage reports. Kept separate from MATERIAL_DRIFT_DEX even though the wider one coincides
 # numerically: one is a tolerance on recovery against known truth, the other a threshold on drift
 # across a recording, and conflating them would tie two unrelated decisions to one constant.
+# Both are DEX quantities and therefore apply to LOG rows only: for a linear row (the initial dimer
+# fraction) a dex band is meaningless, so every band-based statistic below reports NaN for it and
+# the runner says so instead of silently applying log arithmetic to a linear coordinate.
 RECOVERY_BANDS_DEX = (0.3, 0.15)
 
 
@@ -73,13 +79,21 @@ def band_label(dex):
     return f"[{lo:.2f}x, {hi:.2f}x]"
 
 
-def recovery_fractions(true_log10, inferred_log10, bands=RECOVERY_BANDS_DEX):
+def recovery_fractions(true_flow, inferred_flow, log_rows, bands=RECOVERY_BANDS_DEX):
     """Fraction of held-out videos recovered inside each nested tolerance band, per parameter.
 
-    Returns a list of ``(dex, fractions)`` pairs, one per band, with ``fractions`` shaped ``(D,)``.
+    ``true_flow`` / ``inferred_flow`` are ``(N, D)`` in estimator space; ``log_rows`` is the
+    ``(D,)`` boolean mask of log rows. The bands are dex half-widths, so a LINEAR row gets NaN:
+    its estimator-space error is an absolute difference, not a dex, and a dex tolerance does not
+    apply to it. Returns a list of ``(dex, fractions)`` pairs, one per band, ``fractions`` ``(D,)``.
     """
-    err = np.abs(np.asarray(inferred_log10, dtype=float) - np.asarray(true_log10, dtype=float))
-    return [(float(b), np.mean(err <= float(b), axis=0)) for b in bands]
+    err = np.abs(np.asarray(inferred_flow, dtype=float) - np.asarray(true_flow, dtype=float))
+    log_rows = np.asarray(log_rows, dtype=bool)
+    out = []
+    for b in bands:
+        frac = np.mean(err <= float(b), axis=0)
+        out.append((float(b), np.where(log_rows, frac, np.nan)))
+    return out
 
 CENTRAL_FAMILIES = ("sgm", "mean")
 
@@ -104,11 +118,16 @@ def reshape_to_grid(values, kind_index, cell, chunk, n_kinds):
     return grid, n_cells, n_chunks
 
 
-def _range_abs(prior_low, prior_high):
-    """Absolute prior width per parameter -- the normalizer for every distance here."""
+def _range_abs(prior_low, prior_high, to_physical):
+    """Physical prior width per parameter -- the normalizer for every distance here.
+
+    The bounds are in estimator space; ``to_physical`` (the runner's table-bound conversion) maps
+    them row by row, so a log row's width is ``10**high - 10**low`` and a linear row's is
+    ``high - low``.
+    """
     lo = np.asarray(prior_low, dtype=float)
     hi = np.asarray(prior_high, dtype=float)
-    span = 10.0 ** hi - 10.0 ** lo
+    span = np.asarray(to_physical(hi), dtype=float) - np.asarray(to_physical(lo), dtype=float)
     span[span <= 0] = 1.0
     return span
 
@@ -117,19 +136,19 @@ def _range_abs(prior_low, prior_high):
 # The four central estimates
 # =============================================================================
 
-def mean_window(grid_log10):
+def mean_window(grid_flow, to_physical):
     """**mean-window**: mean value vector, aggregated across cells for a given chunk.
 
     For each condition, chunk, and parameter independently, the arithmetic mean over cells of the
-    absolute MAP values. Each parameter is averaged on its own, so the resulting vector's
-    coordinates need not have co-occurred in any recording.
+    physical MAP values (``to_physical`` of the estimator-space grid). Each parameter is averaged
+    on its own, so the resulting vector's coordinates need not have co-occurred in any recording.
 
-    Returns ``(n_kinds, n_chunks, D)`` in ABSOLUTE units.
+    Returns ``(n_kinds, n_chunks, D)`` in PHYSICAL units.
     """
-    return np.nanmean(10.0 ** np.asarray(grid_log10, dtype=float), axis=1)
+    return np.nanmean(to_physical(np.asarray(grid_flow, dtype=float)), axis=1)
 
 
-def sgm_window(grid_log10, prior_low, prior_high):
+def sgm_window(grid_flow, prior_low, prior_high, to_physical):
     """**sgm-window**: realized value vector, aggregated across cells for a given chunk.
 
     At each chunk independently, the exact medoid among that chunk's cell vectors: the cell whose
@@ -140,12 +159,12 @@ def sgm_window(grid_log10, prior_low, prior_high):
     resulting series can be a change of cell rather than a change in time, and the caller must show
     the selections wherever it shows the curve.
 
-    Returns ``(series_abs, cells)`` -- ``(n_kinds, n_chunks, D)`` in ABSOLUTE units and
+    Returns ``(series_abs, cells)`` -- ``(n_kinds, n_chunks, D)`` in PHYSICAL units and
     ``(n_kinds, n_chunks)`` selected cell indices (-1 where a chunk has no complete cell).
     """
-    grid = np.asarray(grid_log10, dtype=float)
+    grid = np.asarray(grid_flow, dtype=float)
     n_kinds, n_cells, n_chunks, dim = grid.shape
-    span = _range_abs(prior_low, prior_high)
+    span = _range_abs(prior_low, prior_high, to_physical)
     out = np.full((n_kinds, n_chunks, dim), np.nan)
     picked = np.full((n_kinds, n_chunks), -1, dtype=int)
     for k in range(n_kinds):
@@ -153,27 +172,27 @@ def sgm_window(grid_log10, prior_low, prior_high):
             rows = [c for c in range(n_cells) if np.isfinite(grid[k, c, t]).all()]
             if not rows:
                 continue
-            block = 10.0 ** np.stack([grid[k, c, t] for c in rows], axis=0)
+            block = to_physical(np.stack([grid[k, c, t] for c in rows], axis=0))
             idx, _method = sample_geometric_median(block, span)
             picked[k, t] = rows[idx]
             out[k, t] = block[idx]
     return out, picked
 
 
-def mean_trajectory(grid_log10):
+def mean_trajectory(grid_flow, to_physical):
     """**mean-trajectory**: mean value vector, aggregated across chunks and cells.
 
     For each condition and parameter independently, the arithmetic mean over every (cell, chunk)
-    window of the absolute MAP values -- the grand mean over both axes. This is the single-vector
+    window of the physical MAP values -- the grand mean over both axes. This is the single-vector
     counterpart of :func:`mean_window`.
 
-    Returns ``(n_kinds, D)`` in ABSOLUTE units.
+    Returns ``(n_kinds, D)`` in PHYSICAL units.
     """
-    g = 10.0 ** np.asarray(grid_log10, dtype=float)
+    g = to_physical(np.asarray(grid_flow, dtype=float))
     return np.nanmean(g.reshape(g.shape[0], -1, g.shape[3]), axis=1)
 
 
-def sgm_trajectory(grid_log10, prior_low, prior_high):
+def sgm_trajectory(grid_flow, prior_low, prior_high, to_physical):
     """**sgm-trajectory**: realized value vector, aggregated across chunks and cells.
 
     The exact medoid among ALL (cell, chunk) window vectors of a condition: the single window whose
@@ -184,12 +203,12 @@ def sgm_trajectory(grid_log10, prior_low, prior_high):
     This is the same quantity the standalone sample-geometric-median analysis reports over the same
     pooled windows, so the two analyses agree by construction.
 
-    Returns ``(vector_abs, picks)`` -- ``(n_kinds, D)`` in ABSOLUTE units and a list of
+    Returns ``(vector_abs, picks)`` -- ``(n_kinds, D)`` in PHYSICAL units and a list of
     ``(cell, chunk)`` tuples naming the selected window per condition (``(-1, -1)`` if none).
     """
-    grid = np.asarray(grid_log10, dtype=float)
+    grid = np.asarray(grid_flow, dtype=float)
     n_kinds, n_cells, n_chunks, dim = grid.shape
-    span = _range_abs(prior_low, prior_high)
+    span = _range_abs(prior_low, prior_high, to_physical)
     out = np.full((n_kinds, dim), np.nan)
     picks = []
     for k in range(n_kinds):
@@ -197,7 +216,7 @@ def sgm_trajectory(grid_log10, prior_low, prior_high):
         for c in range(n_cells):
             for t in range(n_chunks):
                 if np.isfinite(grid[k, c, t]).all():
-                    rows.append(10.0 ** grid[k, c, t])
+                    rows.append(to_physical(grid[k, c, t]))
                     labels.append((c, t))
         if not rows:
             picks.append((-1, -1))
@@ -213,12 +232,12 @@ def sgm_trajectory(grid_log10, prior_low, prior_high):
 # Drift statistics -- fit per cell, so independent of the central-estimate choice
 # =============================================================================
 
-def pooled_cloud(cloud_log10, kind_index, n_kinds):
+def pooled_cloud(cloud_flow, kind_index, n_kinds):
     """Pool every window's posterior draws within each condition, collapsing the time axis.
 
-    ``cloud_log10`` is ``(N, S, D)``: for each of the ``N`` (recording, window) pairs, the ``S``
-    draws the Experiment stage took from that window's posterior. Selecting one condition and
-    flattening the leading two axes gives ``(n_windows * S, D)`` draws.
+    ``cloud_flow`` is ``(N, S, D)`` in estimator space: for each of the ``N`` (recording, window)
+    pairs, the ``S`` draws the Experiment stage took from that window's posterior. Selecting one
+    condition and flattening the leading two axes gives ``(n_windows * S, D)`` draws.
 
     WHAT THIS IS. The pooled set is the equal-weight MIXTURE of the per-window posteriors, so its
     density answers: for a 2 s window drawn at random from this condition, what values are
@@ -233,13 +252,13 @@ def pooled_cloud(cloud_log10, kind_index, n_kinds):
     analysis's central estimate: that remains the trajectory-level medoid, which is one jointly
     realized vector rather than a per-parameter summary of pooled marginals.
 
-    Returns a list of ``n_kinds`` arrays, each ``(n_windows_k * S, D)`` in log10 units.
+    Returns a list of ``n_kinds`` arrays, each ``(n_windows_k * S, D)`` in estimator space.
     """
-    cloud_log10 = np.asarray(cloud_log10, dtype=float)
+    cloud_flow = np.asarray(cloud_flow, dtype=float)
     kind_index = np.asarray(kind_index, dtype=int)
     out = []
     for e in range(n_kinds):
-        sel = cloud_log10[kind_index == e]                     # (n_windows_k, S, D)
+        sel = cloud_flow[kind_index == e]                      # (n_windows_k, S, D)
         out.append(sel.reshape(-1, sel.shape[-1]) if sel.size else sel.reshape(0, 0))
     return out
 
@@ -256,8 +275,8 @@ def cloud_interval(pooled, quantiles=(0.05, 0.50, 0.95)):
     return np.quantile(pooled, list(quantiles), axis=0)         # (len(quantiles), D)
 
 
-def pooled_summary(pooled, statistic="median"):
-    """Marginal central value of a pooled mixture, per parameter, in ABSOLUTE units.
+def pooled_summary(pooled, to_physical, statistic="median"):
+    """Marginal central value of a pooled mixture, per parameter, in PHYSICAL units.
 
     The 2x2 of central estimates -- ``{mean, sgm} x {window, trajectory}`` -- all summarize the set
     of per-window MAP vectors. This summarizes the pooled posterior DRAWS instead, which is a
@@ -279,44 +298,47 @@ def pooled_summary(pooled, statistic="median"):
 
     ``statistic``:
         ``"median"``  the marginal median. Equivariant under monotone transformation, so the median
-                      in absolute units and ``10 ** median(log10)`` are the SAME number and the
-                      answer does not depend on the space it was computed in. This is the default
-                      for that reason.
-        ``"mean"``    the arithmetic mean in absolute units. NOT equivariant: it differs from the
-                      geometric mean ``10 ** mean(log10)`` by a factor that grows with the spread,
-                      and for a log-uniform prior that factor is large. Provided because it is what
-                      "the mean of the posterior" usually names, but it reports a property of the
-                      chosen basis as much as of the posterior.
-        ``"geometric-mean"`` ``10 ** mean(log10)``, the mean in the space the prior is uniform in.
+                      in physical units and ``to_physical(median(estimator))`` are the SAME number
+                      and the answer does not depend on the space it was computed in. This is the
+                      default for that reason.
+        ``"mean"``    the arithmetic mean in physical units. NOT equivariant for a log row: it
+                      differs from the geometric mean ``10 ** mean(log10)`` by a factor that grows
+                      with the spread, and for a log-uniform prior that factor is large. Provided
+                      because it is what "the mean of the posterior" usually names, but it reports
+                      a property of the chosen basis as much as of the posterior.
+        ``"geometric-mean"`` ``to_physical(mean(estimator))``: the mean in the space the prior is
+                      uniform in -- the geometric mean for a log row, and simply the arithmetic mean
+                      for a linear row, where the two coincide.
 
-    Returns an ``(n_kinds, D)`` array in absolute units.
+    Returns an ``(n_kinds, D)`` array in physical units.
     """
     if statistic not in ("median", "mean", "geometric-mean"):
         raise ValueError(f"statistic={statistic!r}; expected 'median', 'mean' or 'geometric-mean'.")
     out = []
-    for draws_log10 in pooled:
-        if draws_log10.size == 0:
-            out.append(np.full(draws_log10.shape[-1:], np.nan))
+    for draws_flow in pooled:
+        if draws_flow.size == 0:
+            out.append(np.full(draws_flow.shape[-1:], np.nan))
             continue
         if statistic == "median":
-            out.append(np.median(10.0 ** draws_log10, axis=0))
+            out.append(np.median(to_physical(draws_flow), axis=0))
         elif statistic == "mean":
-            out.append(np.mean(10.0 ** draws_log10, axis=0))
+            out.append(np.mean(to_physical(draws_flow), axis=0))
         else:
-            out.append(10.0 ** np.mean(draws_log10, axis=0))
+            out.append(to_physical(np.mean(draws_flow, axis=0)))
     return np.asarray(out)
 
 
-def drift_statistics(grid_log10, times, threshold=MATERIAL_DRIFT_DEX):
+def drift_statistics(grid_flow, times, to_physical, log_rows, threshold=MATERIAL_DRIFT_DEX):
     """Per-cell linear drift of each parameter across the recording, aggregated per condition.
 
-    For every (condition, cell, parameter) an ordinary least-squares line is fit to the stored log10
-    MAP estimate against time -- log10 because drift is multiplicative -- giving a slope and hence a
-    fitted start and end value:
+    For every (condition, cell, parameter) an ordinary least-squares line is fit to the stored
+    estimator-space MAP estimate against time -- log10 for log rows, because their drift is
+    multiplicative; the value itself for the linear initial dimer fraction -- giving a slope and
+    hence a fitted start and end value:
 
-        change_dex = slope * (t_last - t_first)
-        start      = 10 ** intercept_at_t_first
-        end        = 10 ** (intercept_at_t_first + change_dex)
+        change     = slope * (t_last - t_first)           (dex for a log row; absolute for a linear row)
+        start      = to_physical(fitted value at t_first)
+        end        = to_physical(fitted value at t_last)
 
     Every reported statistic aggregates those per-cell fits, so **none of them depends on which
     central estimate the figures display**: swapping a mean for a medoid changes what is drawn, not
@@ -325,21 +347,26 @@ def drift_statistics(grid_log10, times, threshold=MATERIAL_DRIFT_DEX):
         drift_absolute          median across cells of (end - start), in the parameter's own units
         drift_sign_consistency  fraction of cells whose change shares the median's sign
         drift_fold              median across cells of (end / start), a multiplicative factor
-        drift_dex               median across cells of change_dex, in log10 units
-        drift_material_fraction fraction of cells whose |change_dex| exceeds ``threshold``
-        drift_wilcoxon_p        two-sided signed-rank p that per-cell change_dex is centered at
+        drift_dex               median across cells of change, in log10 units -- LOG ROWS ONLY
+                                (NaN for a linear row, whose change is drift_absolute already)
+        drift_material_fraction fraction of cells whose |change| exceeds ``threshold`` dex -- LOG
+                                ROWS ONLY (NaN for a linear row: a dex threshold does not apply)
+        drift_wilcoxon_p        two-sided signed-rank p that the per-cell change is centered at
                                 zero -- a DETECTABILITY statement, not a magnitude; NaN when scipy
                                 is unavailable or fewer than six cells contribute
-        start_median, end_median  median across cells of the fitted endpoints, absolute units
-        change_dex_per_cell     ``(n_kinds, n_cells, D)`` the underlying per-cell changes
+        start_median, end_median  median across cells of the fitted endpoints, physical units
+        change_dex_per_cell     ``(n_kinds, n_cells, D)`` the underlying per-cell changes, in
+                                estimator-space units (dex for log rows, absolute for linear rows)
+        log_rows                the ``(D,)`` mask that says which rows the dex statistics cover
     """
-    grid = np.asarray(grid_log10, dtype=float)
+    grid = np.asarray(grid_flow, dtype=float)
     t = np.asarray(times, dtype=float)
+    log_rows = np.asarray(log_rows, dtype=bool)
     n_kinds, n_cells, n_chunks, dim = grid.shape
     span = float(t[-1] - t[0]) if n_chunks > 1 else 0.0
     change = np.full((n_kinds, n_cells, dim), np.nan)
-    start = np.full((n_kinds, n_cells, dim), np.nan)
-    end = np.full((n_kinds, n_cells, dim), np.nan)
+    fit_start = np.full((n_kinds, n_cells, dim), np.nan)     # fitted endpoints, estimator space
+    fit_end = np.full((n_kinds, n_cells, dim), np.nan)
     for k in range(n_kinds):
         for c in range(n_cells):
             for p in range(dim):
@@ -350,13 +377,20 @@ def drift_statistics(grid_log10, times, threshold=MATERIAL_DRIFT_DEX):
                 slope, intercept = np.polyfit(t[ok], y[ok], 1)
                 d = slope * span
                 change[k, c, p] = d
-                start[k, c, p] = 10.0 ** (intercept + slope * t[0])
-                end[k, c, p] = 10.0 ** (intercept + slope * t[0] + d)
+                fit_start[k, c, p] = intercept + slope * t[0]
+                fit_end[k, c, p] = intercept + slope * t[0] + d
+    # The endpoints are converted as whole D-vectors so the per-row rule comes from the table.
+    start = to_physical(fit_start)
+    end = to_physical(fit_end)
     median_dex = np.nanmedian(change, axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
         sign = np.nanmean(np.sign(change) == np.sign(median_dex)[:, None, :], axis=1)
         material = np.nanmean(np.abs(change) > threshold, axis=1)
         fold = np.nanmedian(end / start, axis=1)
+    # Dex statistics are undefined for a linear row: flag with NaN rather than report a number that
+    # only looks like a dex.
+    median_dex = np.where(log_rows, median_dex, np.nan)
+    material = np.where(log_rows, material, np.nan)
     pvals = np.full((n_kinds, dim), np.nan)
     try:
         from scipy.stats import wilcoxon
@@ -379,10 +413,11 @@ def drift_statistics(grid_log10, times, threshold=MATERIAL_DRIFT_DEX):
         "end_median": np.nanmedian(end, axis=1),
         "change_dex_per_cell": change,
         "threshold": float(threshold),
+        "log_rows": log_rows,
     }
 
 
-def within_window_interval(quant_grid_log10):
+def within_window_interval(quant_grid_flow):
     """Median across cells, per chunk, of the stored per-window posterior quantile levels.
 
     Summarizes how uncertain a TYPICAL SINGLE window's estimate is: for each condition, chunk, and
@@ -393,6 +428,6 @@ def within_window_interval(quant_grid_log10):
     This is an interval WIDTH summary of the stored five-quantile record, not a posterior density:
     a density pooled over windows would require the per-window sample clouds.
 
-    Returns ``(n_kinds, n_chunks, D, Q)`` in log10 space.
+    Returns ``(n_kinds, n_chunks, D, Q)`` in estimator space (the caller converts).
     """
-    return np.nanmedian(np.asarray(quant_grid_log10, dtype=float), axis=1)
+    return np.nanmedian(np.asarray(quant_grid_flow, dtype=float), axis=1)

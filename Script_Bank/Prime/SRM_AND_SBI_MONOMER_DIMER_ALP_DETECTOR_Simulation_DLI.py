@@ -9,7 +9,7 @@ imaging prior box (the training label) -- whereas the biology stage marginalizes
 The five SCOPE camera parameters are still marginalized (recorded as ``Nuisance_SCOPE``). The
 trajectories consumed here are the SHARED RDS tier -- the reactive trajectories the single RDS
 entry point (``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py``) generates once under the bare
-alias for both workflows; their ten-parameter ``Theta_Set`` is, to this workflow, the record of
+alias for both workflows; their twelve-parameter ``Theta_Set`` is, to this workflow, the record of
 the reaction-diffusion nuisance it marginalizes. The detector has no RDS stage of its own. Every
 product this stage writes namespaces under the ``_DETECTOR`` qualifier and the condition token,
 so nothing collides with biology.

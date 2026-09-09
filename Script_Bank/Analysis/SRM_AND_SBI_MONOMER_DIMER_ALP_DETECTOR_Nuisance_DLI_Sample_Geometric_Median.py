@@ -61,7 +61,7 @@ from srm_and_sbi_monomer_dimer_alp import detector_nuisance_dli as ndli
 from srm_and_sbi_monomer_dimer_alp import sample_geometric_median as sgm_kernel
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow, to_physical
 
 # Tractability / rendering knobs (not scientific parameters).
 _KDE_SUBSAMPLE = 50000           # cap on points used to estimate local density for the typicality read
@@ -487,7 +487,12 @@ def _run(args, R):
     if args.max_samples and pool_log.shape[0] > args.max_samples:
         pool_log = pool_log[rng.choice(pool_log.shape[0], args.max_samples, replace=False)]
 
-    results, in_box = _summary_vectors(pool_log, low, high, rng)
+    # The kernel takes the table-bound conversions (the ONE conversion rule); every imaging row is a
+    # log row, so this is 10**theta / log10 for the detector table.
+    results, in_box = _summary_vectors(
+        pool_log, low, high, rng,
+        lambda u: to_physical(u, det.DETECTOR_PARAMETERIZATION),
+        lambda x: to_flow(x, det.DETECTOR_PARAMETERIZATION))
     report_dir = _write_report(args, R, pool_log, keys, choice, mode, n_source, low, high,
                                results, in_box, rng, collection_label)
 

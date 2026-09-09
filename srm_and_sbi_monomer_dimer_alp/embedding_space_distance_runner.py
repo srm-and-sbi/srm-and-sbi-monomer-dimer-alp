@@ -684,21 +684,26 @@ def build_parser(description):
 # ---- the one place the two workflows differ ----------------------------------------------------
 
 # Concise report-facing descriptions. The detector's are distilled from the long-form NOTE fields of
-# detector_parameterization; the biology entries state each parameter's role in the A/B/C reaction
-# scheme documented in PROJECT_CONTEXT.md (A monomer, B mobile dimer, C immobile dimer).
+# detector_parameterization; the biology entries state each parameter's role in the separated
+# stoichiometry-mobility model documented in PROJECT_CONTEXT.md (two molecular species, A monomer
+# and B dimer, each in three mobility modes f / s / i; six particle types).
 _PARAM_MEANING_DETECTOR = _PARAM_MEANING
 
 _PARAM_MEANING_BIOLOGY = {
-    "count_alp": "abundance: initial monomer (A) count in the simulated region",
-    "count_bet": "abundance: initial mobile-dimer (B) count",
-    "count_chi": "abundance: initial immobile-dimer (C) count",
-    "diffusivity_alp": "mobility: monomer diffusion coefficient D_A (um^2/s)",
-    "relative_diffusivity_bet": "mobility ratio: mobile-dimer diffusivity as a fraction of D_A",
-    "relative_diffusivity_chi": "mobility ratio: immobile-dimer diffusivity as a fraction of D_A",
-    "relative_rate_dimerization": "association: monomer-monomer dimerization rate (A + A -> B)",
-    "rate_dissociation": "dissociation: mobile dimer breaks into two monomers (B -> A + A), per second",
-    "rate_immobility": "immobilization: mobile dimer enters the immobile state (B -> C), per second",
-    "rate_mobility": "remobilization: immobile dimer returns to the mobile state (C -> B), per second",
+    # stoichiometry block
+    "count_total": "stoichiometry: conserved receptor-subunit total N_R = n_A + 2 n_B of the simulated patch",
+    "fraction_dimer_initial": "stoichiometry: initial fraction of receptors in dimers x_B = 2 n_B / N_R (linear on [0, 1])",
+    "relative_rate_dimerization": "association: ratio R_ON of the association rate to the reference 6 D_A / r^2 (A + A -> B, all monomer-mode pairs)",
+    "rate_dissociation": "dissociation: dimer unbinding rate kappa_OFF (B -> A + A, mode conserved), per second",
+    # mobility block
+    "diffusivity_alp": "mobility: monomer scale diffusion coefficient D_A = D[A, fast] (um^2/s)",
+    "relative_diffusivity_dimer": "mobility ratio: dimer factor R_B within a mode, D[B, m] = R_B D[A, m]",
+    "relative_diffusivity_slow": "mobility ratio: slow-mode factor R_s, D[X, s] = R_s D[X, f]",
+    "relative_diffusivity_immobile": "mobility ratio: immobile-mode factor R_i, D[X, i] = R_i D[X, f] (resolution floor, not zero)",
+    "rate_fast_slow": "switching: fast -> slow rate k_fs, shared by both species, per second",
+    "rate_slow_fast": "switching: slow -> fast rate k_sf, shared by both species, per second",
+    "rate_slow_immobile": "switching: slow -> immobile rate k_si, shared by both species, per second",
+    "rate_immobile_slow": "switching: immobile -> slow rate k_is, shared by both species, per second",
 }
 
 

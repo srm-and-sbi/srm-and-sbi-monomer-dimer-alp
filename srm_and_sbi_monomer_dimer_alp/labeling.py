@@ -15,7 +15,8 @@ it, never an extra assumption:
   parameters of the RDS stage are TRUE receptor abundances;
 - the dye count travels with its subunit through fusion, fission, and conversion
   (``simulation_rds_support.extract_subunit_lineage``): a one-dye dimer that dissociates
-  leaves one visible daughter and one permanently invisible one.
+  leaves one visible daughter and one permanently invisible one; a mobility switch (a
+  type conversion) changes nothing about the labels.
 
 The laws are fixed measured (or preparation-level) inputs and are never inferred: from the
 video alone the labeling probability is nearly degenerate with the receptor counts
@@ -218,8 +219,9 @@ Occupancy = Union[float, Dict[str, float]]
 
 
 def parse_occupancy(text: str) -> Occupancy:
-    """Parse ``--occupancy``: a single probability (``"1.0"``) or per-species
-    ``"A=1.0,B=0.8,C=0.8"``. Every value must lie in [0, 1]."""
+    """Parse ``--occupancy``: a single probability (``"1.0"``) or per MOLECULAR species
+    ``"A=1.0,B=0.8"`` (monomer A, dimer B; never a mobility mode). Every value must lie in
+    [0, 1]."""
     text = text.strip()
     if "=" not in text:
         value = float(text)
@@ -279,7 +281,7 @@ LABELING_SET_COLUMNS: Tuple[str, ...] = (
     "n_labeled_subunits",    # subunits with kappa >= 1
     "monomers_0",            # monomer particles at frame 0
     "monomers_visible_0",    # ... of which labeled
-    "dimers_0",              # dimer particles (B or C) at frame 0
+    "dimers_0",              # dimer particles (any mobility mode) at frame 0
     "dimers_visible_0",      # ... with at least one labeled subunit
     "dimers_two_labeled_0",  # ... with both subunits labeled
 )
@@ -292,7 +294,8 @@ def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank
     Args:
         dye_counts: per-subunit dye counts ``(n_subunits,)``.
         host_index_0, host_rank_0: frame-0 rows of the subunit lineage.
-        monomer_ranks: species ranks whose particles are single subunits.
+        monomer_ranks: particle-type ranks whose particles are single subunits (all
+            monomer modes; see ``simulation_rds_support.monomer_ranks``).
     """
     dye_counts = np.asarray(dye_counts)
     labeled = dye_counts >= 1

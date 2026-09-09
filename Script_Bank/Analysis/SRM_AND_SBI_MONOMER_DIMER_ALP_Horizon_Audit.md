@@ -9,11 +9,12 @@ reverse-engineering the code.
 ## The question
 
 The estimator is trained on **independently initialized model-window simulations**: every training
-video begins with freshly placed particles whose species counts are the drawn theta. The
+video begins with freshly placed particles whose composition (the receptor total `N_R`, the
+initial dimer fraction `x_B`, and the stationary mode occupancies) is set by the drawn theta. The
 experimental analysis, however, slices each **continuous 20 s recording** into consecutive
 model-length windows and runs the estimator on every window. Equal window length does not
 guarantee equal observation distributions: a later window of a continuous recording inherits the
-latent state its past evolved into — species populations relaxed away from their initial values,
+latent state its past evolved into — the monomer–dimer composition and mode occupancies relaxed away from their initial values,
 spatial organization, and accumulated photophysics (the imaging model's photobleaching survives
 across a continuous render, exactly as it does across a real acquisition). Applying the estimator
 window-by-window therefore assumes, without testing, that inherited state does not make later

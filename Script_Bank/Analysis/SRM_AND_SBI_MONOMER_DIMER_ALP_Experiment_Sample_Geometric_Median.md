@@ -1,5 +1,7 @@
 # Experiment Sample Geometric Median
 
+> **Note (2026-09-09).** The results quoted in this note were produced under the ten-parameter three-species model of 0.1.1 (A monomer, B mobile dimer, C immobile dimer; per-species initial counts). Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes, twelve learnable parameters), and the readout definitions changed with it: the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B`, with the complex fraction `f_B = x_B / (2 − x_B)` and the receptor-level dimer fraction `f_R = x_B`; mobility (fast / slow / immobile) is a mode of either species, not a species of its own. The numbers below are kept as the record of that earlier run and are not re-derived here.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Sample_Geometric_Median.py`. It reduces the
 Experiment stage's cloud of MAP estimates on real MET single-particle-tracking recordings to a
 single representative parameter vector, and reports how that vector differs from the naive
@@ -9,9 +11,10 @@ per-dimension summary.
 
 Given many estimated parameter vectors, the obvious summary is to take the median of each
 dimension separately. That composite is not a member of the collection, and nothing guarantees it
-is even a configuration the system can occupy. The ten reaction-diffusion parameters are
-correlated — the species counts constrain one another through the reactions that interconvert
-them, and abundance trades off against the rates producing it — so a coordinate taken from one
+is even a configuration the system can occupy. The twelve reaction-diffusion parameters are
+correlated — the receptor total and the initial dimer fraction constrain one another through the
+reactions that interconvert monomers and dimers, and abundance trades off against the rates
+producing it — so a coordinate taken from one
 recording and another taken from a different recording need never have co-occurred. For a
 multimodal cloud the composite is actively misleading: it lands in the low-density valley
 *between* the modes, the one configuration the data most clearly rules out.

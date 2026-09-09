@@ -1,5 +1,7 @@
 # Control-receptor temporal-dynamics analysis — interpretation
 
+> **Note (2026-09-09).** The readout definitions in this note (`D_mix_mobile` from the mobile counts `C_A`, `C_B`, the mobile-dimer diffusivity `D_B = R_B · D_A`, the mobile split `f_B`, and the excluded immobile class C) were written against the ten-parameter three-species model of 0.1.1. Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes, twelve learnable parameters): the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B` (`f_B = x_B / (2 − x_B)`, `f_R = x_B`), immobility is a mode of either species (`R_i`) rather than a species, and the dimer factor `R_B` applies within a mode. Results quoted from earlier runs are kept as their record and are not re-derived here.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls_Temporal_Dynamics.py`.
 The script applies the DIMER-ALP posterior — trained on the MET single-particle-tracking
 regime — to two control receptors and tracks each inferred parameter over their
@@ -28,7 +30,7 @@ statistics of a molecule *while it is visible*, so it is insensitive to how many
 molecules are lit at once and transfers across the mismatch. Counts and rates depend on
 the number of co-visible emitters and on track continuity — both corrupted by blinking —
 so they are not interpreted here. The controls are also constitutive states, not the
-dynamic A + A ⇌ B ⇌ C dimerization mechanism the posterior encodes; they bracket the
+dynamic A + A ⇌ B dimerization mechanism with mobility switching the posterior encodes; they bracket the
 diffusion scale and stress-test transferability, they do not exercise the kinetic model.
 
 ## The headline figure — mobile mixture diffusivity
@@ -123,7 +125,7 @@ be.
   permanent-label training regime. Diffusion transfers; counts and rates (C_*, κ_*,
   R_ON) do not and are not read quantitatively.
 - **Not the trained mechanism.** CD86 and CTLA-4 are constitutive monomer / dimer
-  controls, not the dynamic A + A ⇌ B ⇌ C mechanism the posterior encodes. They bracket
+  controls, not the dynamic A + A ⇌ B mechanism with mobility switching the posterior encodes. They bracket
   the diffusion scale and stress-test transferability; they do not exercise the kinetics.
 - **D_mix weights are the fragile quantity.** D_mix is count-weighted, and the counts
   are label-fragile; read D_mix between D_A and D_B (in either order), not as a resolved
@@ -138,7 +140,7 @@ be.
 - **First-pass posteriors.** The current 2 s / 5 s posteriors come from interrupted
   training; the absolute values will sharpen with the full production posteriors. Re-run
   this analysis on those for the definitive numbers.
-- **Relative parameters** (R_B, R_C, R_ON) are plotted as dimensionless ratios.
+- **Relative parameters** (R_B, R_s, R_i, R_ON) are plotted as dimensionless ratios.
 
 ## Not yet implemented: aggregated posterior distributions
 

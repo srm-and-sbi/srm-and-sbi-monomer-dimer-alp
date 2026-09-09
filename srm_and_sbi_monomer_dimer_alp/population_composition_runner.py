@@ -14,12 +14,13 @@ tools with different run stamps.
 
 ONE WORKFLOW. Unlike the mirrored stage runners, this analysis exists for the **biology** workflow
 only, and the asymmetry is scientific rather than incidental: the composition is a function of the
-three inferred species counts, and the detector workflow infers imaging parameters and no counts at
-all -- it treats the population implicitly, as part of what it marginalizes. There is therefore no
+two inferred stoichiometry coordinates (the receptor total N_R and the initial dimer fraction x_B),
+and the detector workflow infers imaging parameters and no stoichiometry at all -- it treats the
+population implicitly, as part of what it marginalizes. There is therefore no
 detector composition to compute, in the same way the detector's ``Nuisance_DLI`` pool has no biology
 counterpart. The engine is nonetheless written in the shared shape -- a ``CompositionSpec`` resolved
 once in :func:`_population_composition_spec` -- so that everything workflow-specific stays in one
-place and a future workflow carrying species counts plugs in without touching the body.
+place and a future workflow carrying a stoichiometry plugs in without touching the body.
 
 INPUTS, AND WHAT EACH ONE COSTS IF ABSENT.
   * the Experiment MAP output **with per-window posterior draws** (``--dump-posterior-samples``):
@@ -56,9 +57,10 @@ class CompositionSpec:
     """Everything about this analysis that a workflow supplies."""
 
     parameter_keys: list
-    count_index: tuple                    # theta indices of the three species counts, in A, B, C order
-    prior_low: np.ndarray                 # log10 prior lower bounds (all parameters)
-    prior_high: np.ndarray                # log10 prior upper bounds (all parameters)
+    count_index: tuple                    # theta indices of (receptor total N_R, initial dimer fraction x_B)
+    to_physical: object                   # (..., 2) estimator-space stoichiometry -> physical (N_R, x_B)
+    prior_low: np.ndarray                 # prior lower bounds, estimator space (all parameters)
+    prior_high: np.ndarray                # prior upper bounds, estimator space (all parameters)
     experiment_npz: object
     recovery_npz: object
     report_dir: object
@@ -241,18 +243,21 @@ def _pct(value):
     return "-" if not np.isfinite(value) else f"{100.0 * value:.1f}"
 
 
+_COUNT_NAMES = {"total_complexes": "total complexes", "total_receptors": "total receptors"}
+
+
 def _quantity_name(index):
-    """Table label for one quantity: the symbol for a share, spelled out for the total."""
+    """Table label for one quantity: the symbol for a share, spelled out for the totals."""
     q = pc.COMPOSITION[int(index)]
-    return q.symbol if q.is_fraction else "total complexes"
+    return q.symbol if q.is_fraction else _COUNT_NAMES.get(q.key, q.key)
 
 
 def _quantity_value(index, value):
     """Format a value in the units of its quantity.
 
     One formatter for every table, because the alternative is what this replaced: a percent
-    formatter applied to the total-complexes row, which multiplied a count by a hundred and printed
-    a plausible-looking number two orders of magnitude wrong. A share and a count cannot share a
+    formatter applied to a total (a count), which multiplied it by a hundred and printed a
+    plausible-looking number two orders of magnitude wrong. A share and a count cannot share a
     formatter, so the quantity decides.
     """
     if not np.isfinite(value):
@@ -272,7 +277,7 @@ def _write_report(args, spec, data, rng):
                    f"{data['n_windows']} windows x {data['n_draws']} draws x "
                    f"{len(spec.parameter_keys)} parameters")
     reporter.check("composition_closure", data["closure"] < 1e-9,
-                   f"max |f_A + f_B + f_C - 1| = {data['closure']:.2e} over every draw")
+                   f"max |f_A + f_B - 1| = {data['closure']:.2e} over every draw")
     reporter.check("no_nan_inf(posterior draws)", data["draws_finite"],
                    "clean" if data["draws_finite"] else "NaN/Inf present in the stored draws")
     reporter.check("replicate_unit_is_recording", True,
@@ -283,18 +288,20 @@ def _write_report(args, spec, data, rng):
     # -- experimental half -----------------------------------------------------------------------
     reporter.table(
         "Population composition, span-averaged (percent, mean ± SEM over recordings)",
-        ["condition"] + [f"{q.symbol} ({q.formula})" for _i, q in rows] + ["total complexes"],
+        ["condition"] + [f"{q.symbol} ({q.formula})" for _i, q in rows]
+        + [_quantity_name(i) for i in pc.COUNT_INDICES],
         [[condition_display(kind)]
          + [f"{_pct(mean[k, i])} ± {_pct(sem[k, i])}" for i, _q in rows]
-         + [f"{mean[k, pc.TOTAL_INDEX]:.0f} ± {sem[k, pc.TOTAL_INDEX]:.0f}"]
+         + [f"{mean[k, i]:.0f} ± {sem[k, i]:.0f}" for i in pc.COUNT_INDICES]
          for k, kind in enumerate(kinds)],
         note="Each value is the mean over recordings of the mean over that recording's windows of "
              "the mean over that window's posterior draws of the fraction -- formed inside each draw, "
-             "so the correlations between the three counts are carried through. The error is the "
-             "standard error across RECORDINGS, which is cell-to-cell biological spread; it is not "
-             "the within-window posterior width, and it is deliberately not divided by the number of "
-             "windows, since ten windows of one recording are not ten independent measurements. "
-             "The shares f_A + f_B + f_C close to 100% exactly; f_D = 1 - f_A by definition.")
+             "so the correlation between the receptor total and the dimer fraction is carried "
+             "through. The error is the standard error across RECORDINGS, which is cell-to-cell "
+             "biological spread; it is not the within-window posterior width, and it is deliberately "
+             "not divided by the number of windows, since ten windows of one recording are not ten "
+             "independent measurements. The shares f_A + f_B close to 100% exactly; f_B = 1 - f_A "
+             "by definition, and f_R (the share of RECEPTORS in dimers) is the inferred x_B itself.")
 
     reporter.table(
         f"Population composition, first window only (0-{spec.window_seconds:g} s)",
@@ -322,7 +329,7 @@ def _write_report(args, spec, data, rng):
 
     reporter.table(
         "Sensitivity: does the headline survive the choices that could have driven it?",
-        ["variant", "condition", "f_D %", "shift vs headline (pp)", "draws retained %",
+        ["variant", "condition", "f_B %", "shift vs headline (pp)", "draws retained %",
          "windows left empty"],
         [[v["name"], condition_display(kind), _pct(v["mean"][k, pc.DIMER_INDEX]),
           f"{100.0 * (v['mean'][k, pc.DIMER_INDEX] - mean[k, pc.DIMER_INDEX]):+.1f}",
@@ -330,14 +337,13 @@ def _write_report(args, spec, data, rng):
           f"{v['empty'][k]} / {v['windows'][k]}" if v["empty"] is not None else "-"]
          for v in data["variants"] for k, kind in enumerate(kinds)],
         note="Two independent challenges to the headline. (1) Support: the posterior places mass "
-             "beyond the box the estimator was trained on, most of all in the counts, so the "
+             "beyond the box the estimator was trained on, most of all in the receptor total, so the "
              "composition is recomputed from progressively more restricted draws. Because the "
-             "composition is a ratio, out-of-support mass may inflate the counts together and "
-             "largely cancel -- the table measures whether it does, and at what cost in discarded "
-             "windows. (2) Center: the compositional (closed geometric) center replaces the "
-             "arithmetic mean, which is the natural center on the simplex. Read the spread of f_D "
-             "across these variants as the model-conditional bracket on the value, and lead with the "
-             "most conservative one.")
+             "composition is a ratio, out-of-support mass in the total largely cancels -- the table "
+             "measures whether it does, and at what cost in discarded windows. (2) Center: the "
+             "compositional (closed geometric) center replaces the arithmetic mean, which is the "
+             "natural center on the simplex. Read the spread of f_B across these variants as the "
+             "model-conditional bracket on the value, and lead with the most conservative one.")
 
     reporter.table(
         "Per-recording spread of the monomer share",
@@ -362,7 +368,7 @@ def _write_report(args, spec, data, rng):
           f"{m[k]['spearman_median']:+.2f}", f"{m[k]['wilcoxon_p']:.3g}", m[k]["n_cells"]]
          for qi, m in data["monotonicity"] for k in range(len(kinds))],
         note="The two endpoint columns are condition MEANS across recordings, matching every other "
-             "table here (shares in percent, the total as a count). "
+             "table here (shares in percent, the totals as counts). "
              "Spearman rho is computed per recording against the window index and then median-ed, so "
              "it is a direction and strength robust to a single outlying window; the signed-rank p "
              "pairs each recording's last window against its own first, so between-cell spread "
@@ -394,34 +400,34 @@ def _write_report(args, spec, data, rng):
             f"Synthetic validation: the same readout where the truth is known "
             f"(n = {rec['rows'][0]['n']:,} held-out videos)",
             ["quantity", "definition", "MAE", "p95 abs. error", "bias", "r"],
-            [[q.symbol if q.is_fraction else "total complexes", q.formula,
+            [[q.symbol if q.is_fraction else _COUNT_NAMES.get(q.key, q.key), q.formula,
               f"{r['mae']:.3g} {r['unit']}", f"{r['p95']:.3g} {r['unit']}",
               f"{r['bias']:+.3g} {r['unit']}", f"{r['r']:.4f}"]
              for q, r in zip(pc.COMPOSITION, rec["rows"])],
             note="The identical function of the identical estimator, applied to videos whose "
-                 "parameters are known. Fractions are compared in percentage points, the total in "
+                 "parameters are known. Fractions are compared in percentage points, the totals in "
                  "dex (a count's error is multiplicative). This is POINT-ESTIMATE accuracy: whether "
                  "the posterior INTERVAL of a fraction covers truth at its nominal rate is a "
                  "different question, and it is not computable from a recovery artifact that stores "
                  "only per-parameter marginal quantiles -- it needs joint posterior draws on the "
-                 "held-out set. The f_A and f_D rows are necessarily identical, since f_D = 1 - f_A "
+                 "held-out set. The f_A and f_B rows are necessarily identical, since f_B = 1 - f_A "
                  "makes their errors equal in magnitude; the agreement is an internal check, not two "
                  "independent results.")
         reporter.table(
             "Why the composition is better identified than the counts it is built from",
-            ["quantity", "MAE (dex)", "r"],
-            [[r["key"], f"{r['mae']:.4f}", f"{r['r']:.4f}"] for r in rec["parts"]],
-            note="Individual species counts against their sum, both from the same posterior and the "
-                 "same videos. The sum being recovered far better than any part means the parts' "
-                 "errors are strongly anti-correlated -- they trade off inside the posterior -- and "
-                 "any quantity that divides one part by the total inherits that cancellation. This "
-                 "is the whole reason a composition can be reported from counts that individually "
-                 "cannot be.")
+            ["quantity", "MAE (dex)", "r", "n"],
+            [[r["key"], f"{r['mae']:.4f}", f"{r['r']:.4f}", f"{r['n']:,}"] for r in rec["parts"]],
+            note="The species counts n_A = N_R (1 - x_B) and n_B = N_R x_B / 2 against their sum, "
+                 "all from the same posterior and the same videos. The sum being recovered far "
+                 "better than either part means the parts' errors are strongly anti-correlated -- "
+                 "they trade off inside the posterior -- and any quantity that divides one part by "
+                 "the total inherits that cancellation. This is the whole reason a composition can "
+                 "be reported from counts that individually cannot be.")
         if rec["stratum"].get("n"):
             reporter.stat(
                 "recovery in the dimer-rich region", f"MAE {rec['stratum']['mae']:.1f} pp, "
                 f"bias {rec['stratum']['bias']:+.1f} pp (n = {rec['stratum']['n']:,})",
-                note=f"restricted to held-out videos whose TRUE f_D exceeds "
+                note=f"restricted to held-out videos whose TRUE f_B exceeds "
                      f"{100 * rec['stratum']['threshold']:.0f}% -- the corner the activated condition "
                      f"occupies. Selection is on truth, never on the estimate, so it is independent "
                      f"of the estimator's own error. A mean over the whole prior could hide a weak "
@@ -435,11 +441,15 @@ def _write_report(args, spec, data, rng):
                   f"({len(kinds)} conditions x {data['n_cells_grid']} recordings x "
                   f"{data['n_chunks']} windows)")
     reporter.stat("posterior draws per window", f"{data['n_draws']:,}")
-    reporter.stat("species mapping", "A = monomer, B = mobile dimer, C = immobile dimer",
-                  note="the three counted states of the reaction-diffusion model; a dimer holds two "
-                       "receptors, which is what separates f_D (a share of complexes) from f_R (a "
+    reporter.stat("species mapping", "A = monomer (one receptor), B = dimer (two receptors)",
+                  note="the two molecular species of the reaction-diffusion model, each present in "
+                       "the fast / slow / immobile mobility modes; the modes are particle TYPES, "
+                       "not species, and do not enter the composition. A dimer holds two "
+                       "receptors, which is what separates f_B (a share of complexes) from f_R (a "
                        "share of receptors)")
-    reporter.stat("space", "absolute counts (10**theta), fractions formed per draw")
+    reporter.stat("space", "physical stoichiometry (N_R, x_B) via parameterization.to_physical "
+                           "(log row for the total, linear row for the fraction), fractions formed "
+                           "per draw")
 
     # -- figures ---------------------------------------------------------------------------------
     rec_rows = None if data["recovery"] is None else data["recovery"]["rows"]
@@ -506,8 +516,8 @@ def run_population_composition(cfg, args):
               f"[{'OK' if spec.experiment_npz.exists() else 'MISSING'}]")
         print(f"  recovery .npz   : {spec.recovery_npz}  "
               f"[{'OK' if spec.recovery_npz.exists() else 'absent (validation half skipped)'}]")
-        print(f"  species counts  : "
-              f"{', '.join(spec.parameter_keys[i] for i in spec.count_index)}")
+        print(f"  stoichiometry   : "
+              f"{', '.join(spec.parameter_keys[i] for i in spec.count_index)}  (N_R, x_B)")
         print(f"  quantities      : "
               f"{', '.join(q.symbol + ' = ' + q.formula for q in pc.COMPOSITION)}")
         print(f"  bootstrap       : {args.bootstrap:,} resamples of recordings"
@@ -520,7 +530,7 @@ def run_population_composition(cfg, args):
     kinds = labels["kinds"]
     n_kinds = len(kinds)
 
-    window_comp = pc.window_composition(cloud, spec.count_index)
+    window_comp = pc.window_composition(cloud, spec.count_index, spec.to_physical)
     grid, n_cells_grid, n_chunks = pc.composition_grid(
         window_comp, labels["kind_index"], labels["cell"], labels["chunk"], n_kinds)
     cell_values = pc.per_cell(grid)
@@ -534,7 +544,7 @@ def run_population_composition(cfg, args):
     variants = []
     for name, mask, note in pc.support_masks(cloud, spec.prior_low, spec.prior_high,
                                              spec.count_index):
-        wc = pc.window_composition(cloud, spec.count_index, draw_mask=mask)
+        wc = pc.window_composition(cloud, spec.count_index, spec.to_physical, draw_mask=mask)
         g, _c, _t = pc.composition_grid(wc, labels["kind_index"], labels["cell"], labels["chunk"],
                                         n_kinds)
         cv = pc.per_cell(g)
@@ -561,10 +571,11 @@ def run_population_composition(cfg, args):
     if loaded is not None:
         true_log10, inferred_log10 = loaded
         rows, true_comp, inf_comp = pc.recovery_statistics(true_log10, inferred_log10,
-                                                           spec.count_index)
+                                                           spec.count_index, spec.to_physical)
         recovery = dict(
             rows=rows, true_comp=true_comp, inferred_comp=inf_comp,
-            parts=pc.parts_versus_whole(true_log10, inferred_log10, spec.count_index),
+            parts=pc.parts_versus_whole(true_log10, inferred_log10, spec.count_index,
+                                        spec.to_physical),
             stratum=pc.recovery_stratum(true_comp, inf_comp, pc.DIMER_INDEX, args.stratum_threshold))
 
     data = dict(
@@ -572,7 +583,8 @@ def run_population_composition(cfg, args):
         tc_mean=tc_mean, tc_sem=tc_sem, cell_values=cell_values, boot_lo=boot_lo, boot_hi=boot_hi,
         variants=variants, monotonicity=monotonic, contrast=contrast, recovery=recovery,
         heterogeneity=pc.heterogeneity(cell_values, pc.COMPOSITION_KEYS.index("monomer_fraction")),
-        closure=pc.closure_residual(pc.composition(10.0 ** cloud[..., list(spec.count_index)])),
+        closure=pc.closure_residual(
+            pc.composition(spec.to_physical(cloud[..., list(spec.count_index)]))),
         draws_finite=bool(np.isfinite(cloud).all()),
         n_windows=int(cloud.shape[0]), n_draws=int(cloud.shape[1]),
         n_cells_grid=int(n_cells_grid), n_chunks=int(n_chunks))
@@ -582,10 +594,10 @@ def run_population_composition(cfg, args):
     for k, kind in enumerate(kinds):
         print(f"  {condition_display(kind):9s}: "
               + ", ".join(f"{pc.COMPOSITION[i].symbol} {_pct(mean[k, i])}%" for i in pc.FRACTION_INDICES)
-              + f", total {mean[k, pc.TOTAL_INDEX]:.0f}")
+              + f", T {mean[k, pc.TOTAL_INDEX]:.0f}, N_R {mean[k, pc.RECEPTORS_INDEX]:.0f}")
     print(f"  synthetic validation : "
           + ("off (no MAP_Recovery)" if recovery is None else
-             f"on — f_D MAE {recovery['rows'][pc.DIMER_INDEX]['mae']:.1f} pp over "
+             f"on — f_B MAE {recovery['rows'][pc.DIMER_INDEX]['mae']:.1f} pp over "
              f"{recovery['rows'][0]['n']:,} held-out videos"))
     print(f"  sensitivity variants : {', '.join(v['name'] for v in variants)}\n")
 
@@ -636,22 +648,30 @@ def build_parser(description):
 def _population_composition_spec(cfg, args) -> CompositionSpec:
     """Resolve the workflow-specific half of the analysis.
 
-    Raises for a workflow that infers no species counts, which is the honest outcome: the detector
+    Raises for a workflow that infers no stoichiometry, which is the honest outcome: the detector
     workflow treats the population implicitly and has nothing to compose, so a composition computed
     from its six imaging coordinates would be a well-formatted meaningless number.
     """
-    from .parameterization import PARAMETERS, RunTiming
-    from .workflow import parameter_keys as _wf_keys
+    from .parameterization import PARAMETERS, RunTiming, to_physical
+    from .workflow import parameter_keys as _wf_keys, parameter_table
 
     keys = _wf_keys(cfg)
-    count_keys = ("count_alp", "count_bet", "count_chi")
+    rds = PARAMETERS.simulation.rds.stoichiometry
+    count_keys = (rds.count_total_key, rds.fraction_dimer_key)     # (N_R, x_B)
     missing = [k for k in count_keys if k not in keys]
     if missing:
         raise SystemExit(
-            f"the population composition needs the three species-count parameters "
-            f"{count_keys}, and the {cfg.tag} workflow does not infer {missing}. This analysis is "
-            f"biology-only by construction: the detector workflow infers imaging parameters and "
-            f"treats the population implicitly, so it has no composition to report.")
+            f"the population composition needs the two stoichiometry parameters "
+            f"{count_keys} (receptor total, initial dimer fraction), and the {cfg.tag} workflow "
+            f"does not infer {missing}. This analysis is biology-only by construction: the detector "
+            f"workflow infers imaging parameters and treats the population implicitly, so it has no "
+            f"composition to report.")
+    table = parameter_table(cfg)
+    count_index = tuple(keys.index(k) for k in count_keys)
+    # The ONE conversion rule, bound to the two stoichiometry rows: the receptor total is a log row,
+    # the fraction a linear one, and only the table knows that -- the kernel never exponentiates.
+    count_rows = [table[i] for i in count_index]
+    stoichiometry_to_physical = lambda u: to_physical(u, count_rows)   # noqa: E731
 
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
@@ -663,7 +683,8 @@ def _population_composition_spec(cfg, args) -> CompositionSpec:
     alias = paths.project_alias
     return CompositionSpec(
         parameter_keys=keys,
-        count_index=tuple(keys.index(k) for k in count_keys),
+        count_index=count_index,
+        to_physical=stoichiometry_to_physical,
         prior_low=np.array(cfg.param_module.theta_lower_bound(), dtype=float),
         prior_high=np.array(cfg.param_module.theta_upper_bound(), dtype=float),
         experiment_npz=exp_dir / (exp_dir.name + ".npz"),

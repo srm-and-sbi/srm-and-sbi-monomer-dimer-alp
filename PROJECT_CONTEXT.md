@@ -6,19 +6,23 @@ question, the molecular system, the two-stage inference architecture, the data
 and computational flow, the inference network, the validation methodology, and
 the design rationale that shapes the implementation.
 
-**Repository status.** In development (0.1.1). The codebase began as a copy of
+**Repository status.** In development (0.1.2). The codebase began as a copy of
 the tracked tree of `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release
 `v0.4.23` and implements the MONOMER_DIMER model family on top of it. Landed:
 the DOL-explicit observation layer (the measured degree of labeling as a static
 per-subunit dye draw carried through the reactions, emitters that are dyes, an
 optional probe-occupancy multiplier), the condition axis (MET-FAB and MET-INLB
 as two frozen configurations of one codebase, entering at the DLI stage and
-carried by a condition slot in every downstream name), and a detector
-calibration that marginalizes the full reactive biology prior. Pending: the
-reparameterized counts (true receptor abundance N_R and composition, in place
-of per-species counts) and the `Nuisance_DLI` imaging recalibration per
-condition under the DOL-explicit observation model. The scientific sections
-below describe the implemented state.
+carried by a condition slot in every downstream name), a detector calibration
+that marginalizes the full reactive biology prior, and the separated
+stoichiometry–mobility model of §2 (two molecular species × three mobility
+modes, seventeen generated reaction channels, twelve learnable parameters led by
+the conserved receptor total `N_R` and the initial dimer fraction `x_B`, one
+shared parameter-conversion rule). Every reaction-diffusion parameter range is a
+development setting for building and checking the generator, not a
+scientifically approved training prior. Pending: the `Nuisance_DLI` imaging
+recalibration per condition under the DOL-explicit observation model. The
+scientific sections below describe the implemented state.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the
 Fab-labeled monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer
@@ -57,51 +61,172 @@ autoregressive flow) from simulated (RDS, video) pairs.
 
 ---
 
-## §2. System: MET-Receptor Dimerization (DIMER Model)
+## §2. System: MET-Receptor Dimerization (the separated stoichiometry–mobility model)
 
-**Molecular system:** A simplified, receptor-agnostic model of receptor
-dimerization and internalization on the plasma membrane (the generic
-monomer/dimer species A/B/C below). The pipeline is applied to
-single-particle-tracking microscopy of the **MET receptor** (c-Met /
-hepatocyte growth factor receptor); the Experiment stage consumes the real
-recordings under `Experiment/SPT_Data_MET_FAB_INLB_S-BSST712` (BioStudies
-accession S-BSST712).
+**Molecular system:** A simplified, receptor-agnostic model of reversible
+receptor dimerization on the plasma membrane, in which the *stoichiometric*
+state of a receptor (monomer or dimer) and its *mobility* (fast, slow, or
+immobile) are declared as two separate layers that interact only at named
+points. The pipeline is applied to single-particle-tracking microscopy of the
+**MET receptor** (c-Met / hepatocyte growth factor receptor); the Experiment
+stage consumes the real recordings under
+`Experiment/SPT_Data_MET_FAB_INLB_S-BSST712` (BioStudies accession S-BSST712).
 
-**Three molecular species:**
-- **A (monomer):** Single receptor. Diffuses freely (diffusion coefficient `D_A`).
-- **B (mobile dimer):** Two receptors bound, still mobile. Diffuses at rate
-  `D_B` (typically slower than `D_A`).
-- **C (immobile dimer):** Two receptors bound and immobilized. Diffuses slowly:
-  `D_C = R_C · D_A`, where the learnable relative diffusivity `R_C`
-  (`relative_diffusivity_chi`) is sampled over log10 [−2, −1] — 1% to 10% of the
-  monomer diffusivity.
+**Two molecular species (the stoichiometry layer):**
+- **A (monomer):** a single receptor subunit.
+- **B (dimer):** two receptor subunits bound.
 
-**Reactions:**
-- **`A + A ↔ B`:** Two monomers associate at rate `k_on`; the dimer dissociates
-  at rate `k_off`.
-- **`B ↔ C`:** Mobile dimer immobilizes at rate `k_imm` (`rate_immobility`);
-  the immobile dimer remobilizes at rate `k_mob` (`rate_mobility`) — a
-  reversible mobility switch, with both directions learnable reaction channels.
-- **Future extension:** **`C → ∅`:** degradation/recycling of the immobile
-  dimer, a biological extension reserved for future work.
+The receptor-subunit total `N_R = n_A + 2 n_B` is conserved within a recording:
+no receptor synthesis, degradation, or internalization occurs during the
+recorded window (a deferred biological extension). There is no immobile-dimer
+species; immobility is a mobility mode available to monomers and dimers alike.
 
-**Parameters to infer (θ) — the ten learnables**, each sampled log-uniformly
-(prior ranges in log10 space, from the parameter table in `parameterization.py`):
-- `count_alp`, `count_bet`, `count_chi`: initial particle counts of A, B, and C
-  (counts; log10 prior [0, 2.5] each, i.e. 1 to ~316 particles)
-- `diffusivity_alp` (`D_A`): monomer diffusion coefficient (μm²/s; log10 prior
-  [−1.25, −0.25])
-- `relative_diffusivity_bet` (`R_B`): dimensionless mobile-dimer diffusivity
-  ratio, `D_B = R_B · D_A` (log10 prior [−0.625, −0.125])
-- `relative_diffusivity_chi` (`R_C`): dimensionless immobile-dimer diffusivity
-  ratio, `D_C = R_C · D_A` (log10 prior [−2, −1])
-- `relative_rate_dimerization` (`R_ON`): dimensionless dimerization rate as a
-  fraction of the diffusion-limited Smoluchowski cap (log10 prior [−2, 0])
-- `rate_dissociation` (`k_off`): dissociation rate, B → A + A (1/s; log10 prior
-  [−1, 1])
-- `rate_immobility` (`k_imm`): immobilization rate, B → C (1/s; log10 prior
-  [−1, 1])
-- `rate_mobility` (`k_mob`): mobilization rate, C → B (1/s; log10 prior [−1, 1])
+**Three mobility modes (the mobility layer):** **f** (fast), **s** (slow), and
+**i** (immobile). A mode is a value on the diffusion-coefficient axis — Brownian
+motion within the mode, with no mechanism of its own (a slow or immobile mode
+represents reduced motion, not the membrane structure that may cause it). The
+modes are shared by both species.
+
+**Six particle types.** The reaction-diffusion stage simulates *particle types*
+= molecular species × mobility mode: `A_f`, `A_s`, `A_i`, `B_f`, `B_s`, `B_i`.
+They are derived by `PARAMETERS.simulation.rds` from two declarative model
+blocks in `parameterization.py` — `StoichiometryBlock` (the species, their
+subunit counts, the association and dissociation channels and their parameter
+keys) and `MobilityBlock` (the modes, their diffusion-ratio keys, the sequential
+switching chain and its rate keys, the inheritance rule) — together with each
+type's subunit count and the maps type → species / mode. Nothing downstream
+lists the types by hand.
+
+**Diffusion.** The diffusion coefficient of particle type `(X, m)` is
+
+    D[X, m] = D_A × (R_B if X = B else 1) × (1, R_s, R_i)[m]
+
+with `D_A` the monomer scale coefficient (`D[A, f]`), `R_B` the dimer factor
+within a mode (`0 < R_B ≤ 1`; at `R_B = 1` dimerization adds no slowdown and
+population-level differences come from mode occupancy and inheritance alone),
+and `R_s`, `R_i` the slow and immobile mode factors. The ordering
+`R_i < R_s ≤ 1` is enforced by the *disjoint declared ranges* of the two keys,
+checked at import (`_validate_model_blocks`), so it holds for every draw; `R_i`
+is a practical resolution floor, not zero.
+
+**Seventeen reaction channels**, generated from the two blocks by
+`simulation_rds_support.reaction_channels()` and registered verbatim by
+`build_system()` — never written by hand:
+- **Association (six fusions):** `A_m + A_m' → B_slower(m, m')`, one channel per
+  unordered pair of monomer modes, all at the same microscopic rate `λ_on`. The
+  dimer inherits the *slower parent's* mode (the declared working hypothesis;
+  alternatives are comparators, not built here).
+- **Dissociation (three fissions):** `B_m → A_m + A_m` at `κ_OFF`, one per dimer
+  mode; the mode is conserved (both daughters keep the dimer's mode).
+  Dissociation is not governed by contact.
+- **Switching (eight conversions):** `X_f ↔ X_s ↔ X_i` for `X ∈ {A, B}` — the
+  four rates `k_fs`, `k_sf`, `k_si`, `k_is` are shared by both species (the
+  working hypothesis that switching is a membrane-environment process
+  independent of stoichiometric state). The chain is sequential: there is no
+  direct `f ↔ i` channel.
+
+**Association normalization.** The microscopic association rate is
+`λ_on = R_ON × λ_ref`, with `λ_ref = 6 D_A / r²` (1/s) and `r` the reaction
+distance = one particle diameter (10 nm, `SimulationStem.particle_diameter_nm`).
+`λ_ref` equals the Smoluchowski encounter rate of two monomers, `4π (2 D_A) r`,
+divided by the reaction volume `(4/3) π r³`. It is a *compatibility
+normalization* that keeps `R_ON` dimensionless — a declared reference with units
+of inverse time that depends on `D_A` and on `r` — and explicitly **not** a
+physical upper bound on association (the diffusion-limited regime is the
+large-intensity limit of the spatial rule), so `R_ON > 1` is admissible in
+principle. Association requires an encounter within `r` followed by the
+reaction.
+
+**Fission placement.** The two daughters of a dissociation are placed at
+`SimulationStem.fission_product_distance_nm` = 2 × `r` = 20 nm, *outside* the
+fusion radius. Declared convention (2026-09-09): at the 2 ms sub-step the
+per-step reaction probability of an eligible pair, `1 − exp(−λ_on δt)`, is ≈ 1
+for every `D_A` in range (`λ_on δt` ≈ 7–67), so daughters placed *at* `r`
+would re-fuse at the next step unless they diffused apart within one step —
+≈ 3% for fast daughters but ≈ 50% per step for immobile ones — which would make
+the effective unbinding rate mode dependent (immobile dimers effectively never
+dissociating) and couple the mobility layer to the stoichiometry layer through
+a numerical artifact. Starting the daughters outside the radius removes that
+deterministic rebinding; diffusive re-encounter remains possible, largest for
+slow daughters. The reaction distance and the placement factor are both
+declared conventions, not measurements. The 2 ms sub-step itself is kept as an
+efficiency choice: at this resolution association is contact-detection
+limited ("react when a pair is detected within `r`"), encounters that begin
+and end between two sub-steps are not seen, and `R_ON` is not lowered to
+satisfy a numerical criterion (that would change the biological assumption
+without recovering missed encounters).
+
+**Boundary behavior.** The simulation box is open laterally (`x`, `y`, the
+observation plane) and periodic axially (`z`, the thin membrane normal), with
+no confining potential. A receptor that diffuses beyond the imaged field stays
+simulated — it keeps reacting and switching and may return — and is simply not
+rendered while outside. The conserved total `N_R` therefore refers to the
+*simulated patch*; the in-field count is a distinct, time-dependent quantity.
+
+**Parameters to infer (θ) — the twelve learnables.** The table below reproduces
+the ranged rows of `parameterization.py` (groups `stoichiometry` and
+`mobility`). Every range is a **development setting** — a broad placeholder for
+building and checking the generator — and none is a scientifically approved
+training prior; those are a later, separate decision recorded in the model
+specification's decision log. The *scale* column is the row's `LOG_FLAG`: a log
+row's estimator coordinate is `log10` of the physical value (a log-uniform
+prior on the physical value); the one linear row's coordinate *is* the value
+(a uniform prior).
+
+| key | symbol | meaning | scale | development range (estimator coordinate) | physical |
+|---|---|---|---|---|---|
+| `count_total` | `N_R` | conserved receptor-subunit total of the simulated patch, `n_A + 2 n_B` | log10 | [0.5, 3.0] | ~3–1000 subunits |
+| `fraction_dimer_initial` | `x_B` | *requested* initial fraction of receptors in dimers, `2 n_B(0) / N_R` | **linear** | [0, 1] | 0–1 |
+| `relative_rate_dimerization` | `R_ON` | association ratio, `λ_on = R_ON × 6 D_A / r²` | log10 | [−2, 0] | 0.01–1 |
+| `rate_dissociation` | `κ_OFF` | dimer unbinding rate, `B_m → A_m + A_m` (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `diffusivity_alp` | `D_A` | monomer scale coefficient `D[A, f]` (µm²/s) | log10 | [−1.25, −0.25] | 0.056–0.562 µm²/s |
+| `relative_diffusivity_dimer` | `R_B` | dimer factor within a mode, `D[B, m] = R_B · D[A, m]` | log10 | [−1, 0] | 0.1–1 |
+| `relative_diffusivity_slow` | `R_s` | slow-mode factor, `D[X, s] = R_s · D[X, f]` | log10 | [−1, 0] | 0.1–1 |
+| `relative_diffusivity_immobile` | `R_i` | immobile-mode factor, `D[X, i] = R_i · D[X, f]` (disjoint from `R_s`) | log10 | [−3.0, −1.3] | 0.001–0.05 |
+| `rate_fast_slow` | `k_fs` | switching f → s, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_slow_fast` | `k_sf` | switching s → f, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_slow_immobile` | `k_si` | switching s → i, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_immobile_slow` | `k_is` | switching i → s, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+
+The fixed `capture_radius` row (10 nm, display-only; `build_system` derives the
+active reaction distance from `particle_diameter_nm`) is the Smoluchowski
+contact distance of two monomers.
+
+**Initial state.** `parameterization.realize_initial_composition(N_R, x_B)`
+turns the sampled pair into integers: `n_total = max(1, round(N_R))`,
+`n_B = min(round(n_total · x_B / 2), floor(n_total / 2))`, `n_A = n_total − 2 n_B`,
+so conservation holds exactly for the realized integers (an odd total at
+`x_B = 1` leaves one monomer). The *requested* `x_B` and the *realized*
+`2 n_B / n_total` are distinguished, and the realized composition is recorded
+per simulation in the `Labeling_Set`. Derived readouts follow from the realized
+counts: the complex fraction `f_B = n_B / (n_A + n_B)` (`= x_B / (2 − x_B)` in
+the continuum) and the receptor-level dimer fraction `f_R = x_B`. Each
+particle's initial mode is drawn from the stationary law of the *isolated*
+switching chain, `π_f : π_s : π_i = 1 : k_fs/k_sf : (k_fs/k_sf)(k_si/k_is)`
+(`simulation_rds_support.stationary_mode_law`; this is not the steady state of
+the reactive system, which inheritance disturbs), and positions are uniform in
+the box.
+
+**The one parameter-conversion rule.** Each ranged row declares its scale
+(`LOG_FLAG` True = log10 coordinate; False = linear). `parameterization.to_physical`
+and `to_flow` are the only sanctioned conversions between the estimator's space
+and physical values: the RDS sampling, the training dataset
+(`inference_support.VideoDataset` takes the workflow's table), evaluation,
+calibration, the diagnostics tables, and every analysis use them, and no
+consumer writes `10**theta` by hand — a blanket exponentiation would silently
+corrupt the linear `x_B`. `Theta_Set` files store **physical** values. Datasets
+and estimators carrying the earlier ten-parameter schema are rejected by the
+existing schema guard (`artifacts.assert_schema_compatible` / the theta-width
+guard), and trajectories or `Theta_Set`s generated by the earlier three-species
+model are rejected at the DLI stage by `rank_to_species` (unknown particle types
+`A`/`B`/`C`) — never overwritten or reinterpreted. A deterministic structure
+audit (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Model_Structure_Audit.py`,
+with its companion note) checks the seventeen channels, the transform round
+trips, the initial compositions at `x_B = 0` and `1` with odd totals, and
+occupancy by species without ReaDDy; its run tier (`--run`, small-scale
+generation checks: subunit conservation, stationary mode occupancies, visible
+fractions, both-condition generation, the lateral boundary) is gated behind
+explicit approval.
 
 **Detector parameters — calibrated, not free constants** (inferred in the
 Stage-1 detector workflow, then marginalized as the calibrated-imaging nuisance
@@ -142,7 +267,7 @@ geometry, and speeds convergence.
 
 **Input:** Synthetic videos rendered from the SAME reactive trajectory tier the
 biology workflow uses — one shared tier, generated once under the bare alias,
-whose ten-parameter `Theta_Set` is the biology's learnable label and, to the
+whose twelve-parameter `Theta_Set` is the biology's learnable label and, to the
 detector, the record of the reaction-diffusion nuisance it marginalizes —
 re-imaged per condition through the same imaging and labeling model, with the
 imaging drawn from the detector prior. The detector has no RDS stage of its own.
@@ -174,8 +299,8 @@ workflow.
 ### Stage 2: RDS Parameters (this repository)
 
 **Input:** Synthetic videos generated in two steps:
-1. **RDS simulation:** ReaDDy solves the DIMER reactions and diffusion for the
-   configured recording length.
+1. **RDS simulation:** ReaDDy solves the stoichiometry–mobility model's
+   reactions and diffusion (§2) for the configured recording length.
 2. **DLI imaging:** A Gaussian PSF, Poisson photon noise, and EMCCD readout
    noise are applied. The imaging block is **marginalized** per simulation: the
    six calibrated photophysics parameters are drawn from the persisted
@@ -207,10 +332,14 @@ train/test set sizes, epochs, and test loss. See the HPC operations runbook
 **Script:** `Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`
 
 **Process:**
-1. Sample RDS parameters `θ` from a log-uniform prior over biologically
-   plausible ranges.
-2. Initialize a ReaDDy system: particles (A, B, C), diffusion coefficients,
-   reaction rates, simulation box, and observables.
+1. Sample RDS parameters `θ` from the box-uniform prior in the estimator space
+   (log10 coordinate for log rows, the value itself for the linear initial dimer
+   fraction) over the development ranges of §2, and map them to physical values
+   with `parameterization.to_physical` — the one conversion rule.
+2. Initialize a ReaDDy system: the six particle types (`A_f`, `A_s`, `A_i`,
+   `B_f`, `B_s`, `B_i`) with their diffusion coefficients, the seventeen
+   generated reaction channels, the realized initial composition and stationary
+   initial modes, simulation box, and observables.
 3. Evolve the system for the recording length (`total_time_seconds`).
 4. Record particle trajectories (positions, species, time) together with the
    reaction records (educt and product particle ids per event — the RDS/DLI
@@ -218,7 +347,7 @@ train/test set sizes, epochs, and test loss. See the HPC operations runbook
    convention), and the sampled theta set to a compressed `.zarr` array.
 
 **One tier, shared.** This is the only RDS entry point. The trajectories and the
-ten-parameter `Theta_Set` carry the bare sibling alias — no workflow qualifier, no
+twelve-parameter `Theta_Set` (physical values) carry the bare sibling alias — no workflow qualifier, no
 condition token — because both workflows and both conditions re-image them at the
 DLI stage: the biology reads the `Theta_Set` as its learnable label, the detector
 reads the same file as the record of the reaction-diffusion nuisance it
@@ -230,8 +359,9 @@ rendered from it, so the dataset orchestrator refuses to run the RDS stage over 
 existing tier unless told to overwrite, and re-images an existing tier with
 `--reuse-rds`.
 
-**Example quantities:** Particle count per species over time, mean
-inter-particle distances, reaction-event counts.
+**Example quantities:** Particle count per particle type and per molecular
+species over time, mode occupancies, mean inter-particle distances,
+reaction-event counts per channel.
 
 **Per-simulation kernel release.** The generation loop builds a fresh ReaDDy
 system and simulation for each draw. The CPU compute kernel allocates a
@@ -302,7 +432,7 @@ alone the labeling probability is nearly degenerate with the receptor counts.
 Three consequences follow from the draw, none an extra assumption. The visible
 fraction differs by species (a dimer is visible when either subunit is), so the
 visible population is dimer-enriched relative to the true composition, and the
-count parameters are **true receptor abundances**: the RDS stage simulates every
+receptor total `N_R` is a **true receptor abundance**: the RDS stage simulates every
 receptor, labeled or not, because the reacting population sets the encounter
 rates, and the observation layer decides which of them render. Among visible
 MET-INLB dimers two thirds carry one dye and one third two, so the visible-dimer
@@ -313,9 +443,14 @@ one — an observable signature of the labeling statistics, reproduced by the
 lineage bookkeeping and erased by any renderer that redrew labels per frame or
 per particle. The `labeling` module holds the laws (`LABELING_LAWS`), the draw,
 the optional static occupancy multiplier (`--occupancy`: a sensitivity knob for
-the effective labeling probability or for a species-dependent probe selection;
-inert at its default), and the `Labeling_Set` columns recorded per simulation
-(the true and visible initial composition).
+the effective labeling probability or for a species-dependent probe selection,
+given as one scalar or per molecular species as `A=1.0,B=0.8`; inert at its
+default), and the `Labeling_Set` columns recorded per simulation (the requested
+and realized initial dimer fraction, the true and visible initial composition).
+Occupancy and labeling act by *molecular species*, never by mobility mode:
+`simulation_rds_support.rank_to_species` maps the trajectory's particle-type
+ranks to species, and the lineage extractor reads subunit counts per particle
+type.
 
 **The condition axis.** The condition (MET-FAB or MET-INLB) enters here and only
 here: the same condition-free trajectories are re-imaged per condition under its
@@ -543,7 +678,7 @@ re-imaged by both workflows and per condition:
 | product | alias | example |
 |---|---|---|
 | trajectories (one tier, shared by both workflows and both conditions) | bare sibling alias: no qualifier, no condition | `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_TASK_0_SIM_0_TRAIN.h5` |
-| the tier's ten-parameter `Theta_Set` (the biology labels; the detector's RDS-nuisance record) | bare sibling alias | `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr` |
+| the tier's twelve-parameter `Theta_Set` (the biology labels; the detector's RDS-nuisance record) | bare sibling alias | `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr` |
 | `Video_Set`, `Labeling_Set`, `Nuisance_SCOPE_Theta_Set`, biology `Nuisance_DLI_Theta_Set`, detector `Theta_Set` (the imaging labels) | conditioned | `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Video_Set_TASK_0_TRAIN.zarr` |
 | estimator, checkpoints, recovery and experiment reports, analyses, the `Nuisance_DLI` artifact | conditioned | `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz` |
 
@@ -603,7 +738,7 @@ rather than a single monolithic support file. The modules and their roles:
   `detector_workflow()` that build it. The config carries the genuine
   per-workflow differences — the workflow tag, the alias-qualified paths, the
   parameterization module, and the console-log paths — so one engine serves
-  both the biology workflow (infers the ten reaction-diffusion parameters and
+  both the biology workflow (infers the twelve reaction-diffusion parameters and
   marginalizes the imaging block) and the detector workflow (infers the six
   imaging parameters and marginalizes the reaction-diffusion domain and the
   camera).
@@ -698,7 +833,7 @@ rather than a single monolithic support file. The modules and their roles:
   reads a best-epoch per-example NLL artifact and produces the distribution shape, the
   uniform-prior NLL reference (the no-information baseline), and the tail-vs-parameter
   identifiability read — which learnable parameters, and which end of their range, mark
-  the hardest examples (for biology the species counts, whose low end yields
+  the hardest examples (for biology the receptor total `N_R`, whose low end yields
   uninformative videos). Everything is read from the artifact manifest, so it is
   workflow-agnostic; the runner resolves the artifact through `cfg.paths` (or an ad-hoc
   `--tld-path`) and reports; its two namespaced Analysis shims share it. No GPU.
@@ -738,13 +873,12 @@ rather than a single monolithic support file. The modules and their roles:
   biological drift, and the two read the same recordings — each is the other's
   control, and neither attributes a cause alone.
 - **`population_composition.py`** — the workflow-agnostic population-composition
-  kernel: relative species abundance derived from JOINT posterior count draws. It
-  forms each fraction inside a draw and only then averages, because a ratio of
-  correlated coordinates is not a function of their marginals; the three counts
-  trade off inside the posterior, so the composition is a far better identified
-  function of the same estimates than the counts individually are (on held-out
-  data the total is recovered to 0.012 dex against 0.117—0.158 dex for each count
-  separately). It carries the aggregation ladder (draws to window, windows to
+  kernel: the monomer–dimer composition derived from JOINT posterior draws of the
+  stoichiometry coordinates — the receptor total `N_R` and the initial dimer
+  fraction `x_B`, from which `f_R = x_B`, `f_B = x_B / (2 − x_B)`, and the
+  realized integer counts follow (§2). It forms each readout inside a draw and
+  only then averages, because a function of correlated coordinates is not a
+  function of their marginals. It carries the aggregation ladder (draws to window, windows to
   recording, recordings to condition, with the recording as the replicate unit),
   the prior-support and compositional-center sensitivity variants, the
   recording-level rank tests, and the same readout's recovery on held-out
@@ -752,11 +886,12 @@ rather than a single monolithic support file. The modules and their roles:
 - **`population_composition_runner.py`** — the shared engine for the
   population-composition analysis, reporting the experimental composition and its
   measured in-model error in one document. Biology only, and the asymmetry is
-  scientific: the composition is a function of the three inferred species counts,
-  and the detector workflow infers imaging parameters and treats the population
-  implicitly, so it has nothing to compose — as the detector's `Nuisance_DLI`
-  pool has no biology counterpart. The spec resolver fails loudly for a workflow
-  without count parameters rather than composing unrelated coordinates. It
+  scientific: the composition is a function of the inferred stoichiometry
+  coordinates (`N_R`, `x_B`), and the detector workflow infers imaging parameters
+  and treats the population implicitly, so it has nothing to compose — as the
+  detector's `Nuisance_DLI` pool has no biology counterpart. The spec resolver
+  fails loudly for a workflow without stoichiometry parameters rather than
+  composing unrelated coordinates. It
   requires the Experiment stage's raw per-window draws
   (`--dump-posterior-samples`); the stored marginal quantiles cannot substitute,
   since a fraction of marginals is a different quantity rather than a coarser one.
@@ -789,24 +924,30 @@ chunk → time), overlays the experimental range for the parameters the source p
 constrains (Li et al. 2026, doi:10.1002/smll.202507115), annotates each figure with
 its held-out recovery quality, and writes figures plus a self-contained `report.md`;
 its companion `Experiment_Temporal_Dynamics.md` gives the full interpretation.
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.py` reports the relative
-abundance of the three modeled species across the experimental recordings — the share of
-the population that is monomer, mobile dimer, and immobile dimer — formed inside each
-posterior draw so the count-to-count correlations are carried through, aggregated with the
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.py` reports the
+monomer–dimer composition across the experimental recordings — the share of receptors in
+dimers `f_R = x_B`, the share of complexes that are dimers `f_B`, and the receptor total
+`N_R` — formed inside each posterior draw so the correlations between the stoichiometry
+coordinates are carried through, aggregated with the
 recording as the replicate unit, and reported beside the same readout's error on held-out
 synthetic videos with known truth, so an experimental value never appears without the
 measured accuracy of the instrument that produced it. It reports the span-averaged and
 first-window compositions, the within-recording time course, the per-recording spread, a
 bootstrap check of the error bars, the sensitivity of the headline to prior-support
 restriction and to the choice of compositional center, and the recording-level condition
-contrast. Biology only: the detector workflow infers no species counts and so has no
-composition to report. Its companion
+contrast. Biology only: the detector workflow infers no stoichiometry parameters and so
+has no composition to report. Its companion
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.md` documents the derivation, what
 the result does and does not establish, and how it relates to the published
 trajectory-classification and photobleaching-stoichiometry measurements of the same receptor
 system.
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.py` checks the RNG / non-determinism
 behavior of the generation stack.
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Model_Structure_Audit.py` is the deterministic structure
+audit of the stoichiometry–mobility model (§2): the seventeen generated channels, the
+`to_physical` / `to_flow` round trips, the integer initial compositions at the edges of
+`x_B`, and occupancy by molecular species, with an approval-gated `--run` tier of
+small-scale generation checks; its companion `.md` documents the checks and the verdict.
 
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py` and its
 `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Calibration.py` twin score how
@@ -880,13 +1021,13 @@ shared runner, and produces a defined on-disk artifact. Module paths are relativ
 
 | Scientific concept / stage | Code (module → function/class) | On-disk artifact |
 | --- | --- | --- |
-| DIMER reaction system (`A + A ↔ B`, `B ↔ C`): species, diffusion coefficients, reaction rates, simulation box | `simulation_rds_support.py` → `build_system()`; the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
-| RDS trajectory recording (particle positions, species, time over the recording length) — the one shared tier, bare alias, for both workflows and both conditions | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`, the only RDS entry point (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
-| Trajectory extraction (per-frame poses) and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `extract_subunit_lineage()` | (pose arrays and the lineage table passed to imaging) |
+| The separated stoichiometry–mobility model (§2): the two model blocks `StoichiometryBlock` / `MobilityBlock` and the derived six particle types; the seventeen generated channels; per-type diffusion; the association normalization; the realized initial composition and stationary initial modes | `parameterization.py` → `PARAMETERS.simulation.rds` (blocks, `particle_types`), `realize_initial_composition()`; `simulation_rds_support.py` → `reaction_channels()`, `diffusion_coefficients()`, `association_reference_rate()`, `stationary_mode_law()`, `build_system()` (registers exactly the generated channels); the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
+| RDS trajectory recording (particle positions, particle type, time over the recording length) — the one shared tier, bare alias, for both workflows and both conditions | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`, the only RDS entry point (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
+| Trajectory extraction (per-frame poses), the type-rank → molecular-species map the visibility layer selects by, and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records, subunit counts read per particle type) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `rank_to_species()`, `monomer_ranks()`, `extract_subunit_lineage()` | (pose arrays and the lineage table passed to imaging) |
 | Static labeling stoichiometry: the condition's dye-count law, the once-per-recording draw, the occupancy multiplier | `labeling.py` → `LABELING_LAWS`, `resolve_labeling_law()`, `draw_dye_counts()`, `labeling_summary()` | `Labeling_Set` `.zarr` per task (one `LABELING_SET_COLUMNS` row per simulation) |
 | Diffraction-limited imaging forward model: dyes as emitters following their subunit's host particle, Gaussian PSF, per-dye brightness photo-physics with photobleaching, Poisson + EMCCD readout noise | `simulation_dli_support.py` → `render_dli_video()` (dye-centric, source-agnostic renderer of the poses, the lineage, the dye counts, and an assembled 11-key imaging vector; shared by both DLI stages), with `build_dye_tracks()` (per-dye emitter tracks), `Gaussian` / `sample_psf_width()` (PSF), `compute_intensity()` + `add_pixel_counts()` (intensity accumulation), `generate_brightness_photons()` (brightness photo-physics: stationary OU ln-brightness flicker + absorbing photobleaching), `EMCCD` / `add_noise()` / `generate_frames()` (detector noise) | (noised video array passed to writer below) |
 | DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (per `--condition`; drives `extract_trajectory_poses()` + `extract_subunit_lineage()` → `draw_dye_counts()` → `render_dli_video()`, with the imaging block marginalized from the condition's `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
-| Parameter prior and specification (ranges, log flags, units, labels; log-uniform prior and bounds) | `parameterization.py` → `PARAMETERS` (a `Parameters` singleton) with `build_prior()`, `theta_lower_bound()`, `theta_upper_bound()`, `parameter_find()` | (configuration in code; sampled theta persisted in the RDS theta-set `.zarr`) |
+| Parameter prior and specification (development ranges, per-row scale `LOG_FLAG`, units, labels; box-uniform prior in the estimator space) and the one conversion rule between estimator space and physical values | `parameterization.py` → `PARAMETERS` (a `Parameters` singleton) with `build_prior()`, `theta_lower_bound()`, `theta_upper_bound()`, `parameter_find()`, `to_physical()` / `to_flow()`, `prior_center()` | (configuration in code; sampled theta persisted in the RDS theta-set `.zarr`) |
 | NPE + MAF estimator with 3D-CNN + temporal-transformer embedding | `inference_network.py` → `Complex3DCNN` (video encoder), `TemporalTransformer` (with `AttentionBlock`, `PositionalEncoding`); training wired in `inference_support.py` → `setup_training()`, `train_loop()` (with the resurrect branch) | (in-memory network; checkpoint + posterior written below) |
 | Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` (runs the shared RDS tier once per split, then one DLI pass per `--workflows` × `--conditions`, with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing; refuses to regenerate an existing tier and checks the biology's `Nuisance_DLI` artifacts up front); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
 | Posterior training run (gradient updates on TRAIN, selection on TEST) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py` (drives `build_datasets()` → `setup_training()` → `train_loop()`, then `artifacts.save_estimator()`) | version-portable estimator artifact (`Estimator.npz`, via `artifacts.py` → `save_estimator()`), loaded downstream as a `DirectPosterior`; network checkpoint at each new optimum |

@@ -6,7 +6,7 @@ requested workflow and condition over that tier. The three splits are independen
 that never mix: by default no seed is passed, so each split draws fresh entropy
 (non-deterministic).
 
-The RDS tier is shared. Its trajectories and ten-parameter ``Theta_Set`` carry the bare
+The RDS tier is shared. Its trajectories and twelve-parameter ``Theta_Set`` carry the bare
 sibling alias and serve both workflows (the biology's learnable labels are the detector's
 marginalized reaction-diffusion nuisance) and both conditions, so RDS runs at most once per
 split here, and the DLI passes -- condition-specific (the static labeling law of MET-FAB or

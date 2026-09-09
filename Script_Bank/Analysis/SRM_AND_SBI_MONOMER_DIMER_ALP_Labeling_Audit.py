@@ -10,7 +10,7 @@ implementation realizes the labeling model it documents (`labeling`,
     Level 2 (lineage)   On a reactive trajectory simulated at the biology prior center, the
                         reaction records replay into a subunit lineage that covers every
                         subunit exactly once per frame, agrees with the particles observable
-                        (host present, species matches, multiplicity matches), and shows the
+                        (host present, particle type matches, multiplicity matches), and shows the
                         particle-id churn the design relies on (a subunit visits several ids).
     Level 3 (draw)      Repeated static draws on that lineage reproduce the visible fractions
                         and, for the MET-INLB law, the two-thirds one-dye share among visible
@@ -50,12 +50,12 @@ import readdy  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
-    PARAMETERIZATION, PARAMETERS, RunTiming,
+    PARAMETERIZATION, PARAMETERS, RunTiming, prior_center,
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (  # noqa: E402
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
-    extract_trajectory_poses,
+    extract_trajectory_poses, monomer_ranks,
 )
 
 assert os.path.abspath(lab.__file__).startswith(REPO_ROOT), (
@@ -118,7 +118,7 @@ def laws() -> dict:
 # ----------------------------------------------------------------------------------------------
 
 def reactive_lineage(workdir: str) -> dict:
-    theta = np.array([p["VALUE"] for p in PARAMETERIZATION], dtype=float)   # prior center
+    theta = np.array([p["VALUE"] for p in PARAMETERIZATION], dtype=float)   # prior center (VALUE is physical)
     timing = RunTiming(total_time_seconds=2.0, frames=PARAMETERS.simulation.timing)
     stem = build_system(theta)
     smut = build_simulation(stem, theta, seed=SEED)
@@ -134,8 +134,9 @@ def reactive_lineage(workdir: str) -> dict:
     # Independent cross-check against the particles observable.
     _, types, ids, _ = tray.read_observable_particles()
     rank_of = {name: int(rank) for name, rank in tray.particle_types.items()}
-    subunits_of_rank = {rank_of[n]: k for n, k in zip(PARAMETERS.simulation.rds.particle_species_names,
-                                                     PARAMETERS.simulation.rds.subunit_counts_per_species)}
+    # One rank per PARTICLE TYPE (species x mode); the subunit count is the type's species' count.
+    subunits_of_rank = {rank_of[n]: k for n, k in zip(PARAMETERS.simulation.rds.particle_type_names,
+                                                     PARAMETERS.simulation.rds.subunit_counts_per_type)}
     consistent, finite = True, True
     for f in range(lineage.n_frames):
         present = {int(i): int(t) for i, t in zip(ids[f], types[f])}
@@ -152,13 +153,14 @@ def reactive_lineage(workdir: str) -> dict:
     visits = np.array([np.unique(lineage.host_index[:, s]).shape[0] for s in range(lineage.n_subunits)])
     _, recs = tray.read_observable_reactions()
     n_records = int(sum(len(r) for r in recs))
+    mono_ranks = monomer_ranks(tray)          # every single-subunit type (all monomer modes)
     del tray, smut, stem
     return dict(
         n_subunits=lineage.n_subunits, n_particle_ids=int(lineage.soul_ids.shape[0]),
         n_frames=lineage.n_frames, n_records=n_records,
         cover_consistent=bool(consistent), host_positions_finite=bool(finite),
         max_ids_per_subunit=int(visits.max()), mean_ids_per_subunit=float(visits.mean()),
-        monomer_rank=rank_of["A"], theta_center=theta.tolist(),
+        monomer_ranks=mono_ranks, theta_center=theta.tolist(),
         _lineage=lineage,
     )
 
@@ -167,14 +169,14 @@ def reactive_lineage(workdir: str) -> dict:
 # Level 3: repeated static draws on the reactive lineage
 # ----------------------------------------------------------------------------------------------
 
-def draws(lineage, monomer_rank: int) -> dict:
+def draws(lineage, monomer_ranks_list: list) -> dict:
     rng = np.random.default_rng(SEED + 1)
     out = {}
     for condition in lab.LABELING_CONDITIONS:
         name, law = lab.resolve_labeling_law(condition)
         rows = np.stack([
             lab.labeling_summary(lab.draw_dye_counts(law, lineage.n_subunits, rng),
-                                 lineage.host_index[0], lineage.host_rank[0], [monomer_rank])
+                                 lineage.host_index[0], lineage.host_rank[0], list(monomer_ranks_list))
             for _ in range(N_DRAWS)])
         col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
         mono_vis = rows[:, col["monomers_visible_0"]].sum() / max(rows[:, col["monomers_0"]].sum(), 1)
@@ -200,7 +202,7 @@ def draws(lineage, monomer_rank: int) -> dict:
 def renders() -> dict:
     stem_geometry = PARAMETERS.simulation.stem
     pix = stem_geometry.pixel_size_nm
-    imaging = np.array([10 ** ((e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2) for e in det.DETECTOR_IMAGING])
+    imaging = np.array([prior_center(e) for e in det.DETECTOR_IMAGING])   # physical prior-center nominals
     keys = det.DETECTOR_IMAGING_KEYS
     imaging[keys.index("prob_photo_bleach")] = 0.0          # bleaching off: the mean check is a brightness check
     img = dict(zip(keys, imaging))
@@ -285,7 +287,7 @@ def write_report(law_out, lin, drw, ren, verdicts) -> None:
     add("**Level 2 (lineage).** A 2 s reactive trajectory at the biology prior center is simulated in "
         "a temporary directory, its reaction records replayed into the subunit lineage, and the lineage "
         "checked independently against the particles observable: every host present in its frame with "
-        "the recorded species, every particle covered by exactly its species' subunit count, every host "
+        "the recorded particle type, every particle covered by exactly its type's subunit count, every host "
         "position finite. The particle-id churn (ids visited per subunit) documents why the lineage is "
         "needed: ReaDDy mints a new id at every reaction, conversions included.")
     add("")
@@ -369,7 +371,7 @@ def main() -> None:
         lin = reactive_lineage(workdir)
     lineage = lin.pop("_lineage")
     print("Level 3: repeated draws ...")
-    drw = draws(lineage, lin["monomer_rank"])
+    drw = draws(lineage, lin["monomer_ranks"])
     print("Level 4: renders ...")
     ren = renders()
 

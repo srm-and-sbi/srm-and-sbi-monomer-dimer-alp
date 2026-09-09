@@ -4,7 +4,7 @@ This module is the parameter contract for the Detector calibration workflow — 
 special-situation entry point that infers the diffraction-limited-imaging (DLI)
 model with the reaction-diffusion biology marginalized over its full prior: the
 detector re-images the shared reactive trajectory tier the biology prior generates
-once, so the ten reaction-diffusion parameters are a nuisance SUPPLIED by that tier,
+once, so the twelve reaction-diffusion parameters are a nuisance SUPPLIED by that tier,
 never drawn here. It is deliberately DECOUPLED
 from the canonical ``parameterization.py``: the detector-calibration system is
 similar to but distinct from the production system, its parameter roles differ
@@ -122,40 +122,40 @@ _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
 _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
     # ----- RDS nuisance: biology marginalized during detector calibration -----
-    # Nuisance-from-object (VALUE = NUISANCE, PRIOR_RANGE = None): the ten reaction-diffusion
+    # Nuisance-from-object (VALUE = NUISANCE, PRIOR_RANGE = None): the twelve reaction-diffusion
     # parameters are SUPPLIED by the shared RDS trajectory tier, which the biology prior
     # (`parameterization.PARAMETERIZATION`) generates once and both workflows re-image at the
     # DLI stage -- the tier's `Theta_Set` is the detector's record of this nuisance. Nothing
     # is drawn here and no range is duplicated, so the detector marginalizes the biology
     # prior by construction; these rows declare the role and label the provenance tables.
     # The ranges live only in the biology table (DETECTOR_WORKFLOW.md sec. 6.1 points there).
-    'count': [
-        {'KEY': 'count_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$C_{A}$',
-         'NOTE': 'Initial molecule count of species A (monomer), C_A. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-        {'KEY': 'count_bet', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$C_{B}$',
-         'NOTE': 'Initial molecule count of species B (mobile dimer), C_B. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-        {'KEY': 'count_chi', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$C_{C}$',
-         'NOTE': 'Initial molecule count of species C (immobile dimer), C_C. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-    ],
-    'diffusivity': [
-        {'KEY': 'diffusivity_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Square Micrometer Per Second', 'LABEL': r'$D_{A}$',
-         'NOTE': 'Monomer (species A) diffusion coefficient D_A, absolute; sets the scale the dimer species are specified relative to. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-        {'KEY': 'relative_diffusivity_bet', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{B}$',
-         'NOTE': 'Mobile-dimer (species B) diffusion RELATIVE to D_A: D_B = R_B * D_A. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-        {'KEY': 'relative_diffusivity_chi', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{C}$',
-         'NOTE': 'Immobile-dimer (species C) diffusion RELATIVE to D_A: D_C = R_C * D_A. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-    ],
-    'dimerization_dissociation': [
+    'stoichiometry': [
+        {'KEY': 'count_total', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$N_{R}$',
+         'NOTE': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the simulated patch. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'fraction_dimer_initial', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$x_{B}$',
+         'NOTE': 'Requested initial fraction of receptors in dimers, x_B in [0, 1] (a LINEAR row in the biology table). RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
         {'KEY': 'relative_rate_dimerization', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{ON}$',
-         'NOTE': 'Dimerization rate R_ON (A + A -> B) as a fraction of the diffusion-limited Smoluchowski cap. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+         'NOTE': 'Association ratio R_ON: lambda_on = R_ON * 6 D_A / r^2 (compatibility normalization, not a physical bound); one rate for all six association channels. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
         {'KEY': 'rate_dissociation', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{OFF}$',
-         'NOTE': 'Dissociation rate kappa_OFF (B -> A + A), 1/s. Under the labeling model a dissociating one-dye dimer leaves one visible and one invisible daughter -- a signature the detector must see during calibration so it is not absorbed into photobleaching. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+         'NOTE': 'Dimer unbinding rate kappa_OFF (B_m -> A_m + A_m, every mode), 1/s. Under the labeling model a dissociating one-dye dimer leaves one visible and one invisible daughter -- a signature the detector must see during calibration. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
     ],
-    'immobilization_mobilization': [
-        {'KEY': 'rate_immobility', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{IMMOBILITY}$',
-         'NOTE': 'Immobilization rate kappa_IMMOBILITY (B -> C), 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
-        {'KEY': 'rate_mobility', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{MOBILITY}$',
-         'NOTE': 'Mobilization rate kappa_MOBILITY (C -> B), 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; ranges in parameterization.py).'},
+    'mobility': [
+        {'KEY': 'diffusivity_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Square Micrometer Per Second', 'LABEL': r'$D_{A}$',
+         'NOTE': 'Monomer scale coefficient D_A = D[A, fast]; every other coefficient is a ratio of it. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'relative_diffusivity_dimer', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{B}$',
+         'NOTE': 'Dimer factor within a mode: D[B, m] = R_B * D[A, m], 0 < R_B <= 1. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'relative_diffusivity_slow', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{s}$',
+         'NOTE': 'Slow-mode factor: D[X, s] = R_s * D[X, f]. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'relative_diffusivity_immobile', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{i}$',
+         'NOTE': 'Immobile-mode factor: D[X, i] = R_i * D[X, f]; a resolution floor, not zero. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'rate_fast_slow', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{fs}$',
+         'NOTE': 'Mobility switching fast -> slow, shared by both species, 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'rate_slow_fast', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{sf}$',
+         'NOTE': 'Mobility switching slow -> fast, shared by both species, 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'rate_slow_immobile', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{si}$',
+         'NOTE': 'Mobility switching slow -> immobile, shared by both species, 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
+        {'KEY': 'rate_immobile_slow', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{is}$',
+         'NOTE': 'Mobility switching immobile -> slow, shared by both species, 1/s. RDS nuisance supplied by the shared trajectory tier (the biology prior; development ranges in parameterization.py).'},
     ],
     # ----- Fixed geometry -----
     'geometry': [
@@ -295,11 +295,11 @@ DETECTOR_PARAMETER_KEYS: list[str] = [entry['KEY'] for entry in DETECTOR_PARAMET
 
 # The nuisance parameters form two blocks with different media (DETECTOR_WORKFLOW.md
 # sec. 7 / 9.3): the RDS biology (nuisance-from-object, supplied by the shared RDS tier,
-# whose ten-parameter Theta_Set is its record) and the SCOPE camera (nuisance-from-spec,
+# whose twelve-parameter Theta_Set is its record) and the SCOPE camera (nuisance-from-spec,
 # drawn at the DLI stage and recorded as Nuisance_SCOPE). They are grouped by the
 # nested-dict category, so flipping the camera rows to a nuisance does not pull them
 # into the RDS block.
-_RDS_NUISANCE_GROUPS = ('count', 'diffusivity', 'dimerization_dissociation', 'immobilization_mobilization')
+_RDS_NUISANCE_GROUPS = ('stoichiometry', 'mobility')
 _SCOPE_NUISANCE_GROUPS = ('camera',)
 
 # RDS biology nuisance subset (marginalized during calibration; supplied by the shared RDS tier).

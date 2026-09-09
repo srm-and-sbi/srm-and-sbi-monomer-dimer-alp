@@ -1,7 +1,8 @@
 """Horizon-audit kernel: does inherited latent state break the reset assumption?
 
 The estimator is trained on independently initialized model-window simulations: every training
-video begins with freshly placed particles whose species counts are the drawn theta. The
+video begins with freshly placed particles whose stoichiometry (receptor total N_R, initial dimer
+fraction x_B) is the drawn theta. The
 experimental analysis, however, slices each long continuous recording into consecutive
 model-length windows and runs the estimator on every window. Those two ensembles are equal in
 window length but not necessarily in distribution: a later window of a continuous recording
@@ -14,8 +15,8 @@ machinery for testing that assumption under the simulator itself, where the trut
 THE CONTROLLED CONTRAST. For one theta, two ensembles of equal-length windows are compared:
 
     reset      -- independent model-window simulations, each freshly initialized at theta's
-                  counts. This is the training factorization; the estimator sees exactly the
-                  distribution it was fitted to.
+                  stoichiometry. This is the training factorization; the estimator sees exactly
+                  the distribution it was fitted to.
     continuous -- one uninterrupted long simulation at the same theta, sliced into consecutive
                   non-overlapping model-length windows, exactly as the experimental recordings
                   are sliced.
@@ -29,14 +30,16 @@ experimental window drift, only whether this mechanism reproduces it.
 
 TWO KINDS OF ESTIMAND. Rates and diffusivities are constant model parameters: their truth is the
 drawn theta in every window, so window dependence in their estimates is spurious by definition.
-The species counts are initial conditions of a dynamic state: after the first window the
-population has evolved, so a later window's inferred counts must be compared against the actual
-population in that window (extracted from the trajectory), not against theta -- comparing against
-theta instead measures how far the state has drifted, which is a property of the dynamics, not an
-estimator error. The state truth is the WINDOW-START population: the estimator's count labels are
-the initial populations of its training windows, so the start state is what it was trained to
-report; the within-window mean and end populations are kept as explicitly secondary sensitivity
-references (judging against them manufactures an estimand mismatch that can dwarf the real error).
+The stoichiometry coordinates are initial conditions of a dynamic state: after the first window
+the population has evolved (the receptor total is conserved, the dimer fraction is not), so a later
+window's inferred composition must be compared against the actual population in that window
+(extracted from the trajectory as species counts), not against theta -- comparing against theta
+instead measures how far the state has drifted, which is a property of the dynamics, not an
+estimator error. The state truth is the WINDOW-START population: the estimator's stoichiometry
+labels are the initial populations of its training windows, so the start state is what it was
+trained to report; the within-window mean and end populations are kept as explicitly secondary
+sensitivity references (judging against them manufactures an estimand mismatch that can dwarf the
+real error).
 
 THE STATISTICAL UNIT. The windows of one continuous trajectory share their history and are
 correlated; the trajectory (one theta, one continuous run plus its resets) is the independent
@@ -57,19 +60,51 @@ import numpy as np
 # =============================================================================
 
 def species_counts_per_frame(tray_poses):
-    """Per-frame species populations from a dense pose tensor.
+    """Per-frame PARTICLE-TYPE populations from a dense pose tensor.
 
-    ``tray_poses`` is the ``(n_frames, n_particles, 3, n_species)`` tensor of
+    ``tray_poses`` is the ``(n_frames, n_particles, 3, n_types)`` tensor of
     ``extract_trajectory_poses``: a particle's coordinates are finite exactly where it exists as
-    that species in that frame, NaN elsewhere. The count of species ``s`` in frame ``f`` is the
-    number of particles with a finite entry at ``[f, :, :, s]``.
+    that particle type (one rank per (species, mode) type, in ``tray.particle_types`` order) in
+    that frame, NaN elsewhere. The count of type rank ``r`` in frame ``f`` is the number of
+    particles with a finite entry at ``[f, :, :, r]``.
 
-    Returns ``(n_frames, n_species)`` int64. For the standard species order this is the A, B, C
-    population trace -- the ground truth the continuous windows are audited against.
+    Returns ``(n_frames, n_types)`` int64 -- one column per particle-type rank (six for the
+    two-species, three-mode model). Aggregate over the modes with
+    :func:`species_counts_from_type_counts` to obtain the molecular-species trace ``[A, B]`` the
+    continuous windows are audited against.
     """
     tray_poses = np.asarray(tray_poses)
-    present = np.isfinite(tray_poses).any(axis=2)          # (n_frames, n_particles, n_species)
+    present = np.isfinite(tray_poses).any(axis=2)          # (n_frames, n_particles, n_types)
     return present.sum(axis=1).astype(np.int64)
+
+
+def species_counts_from_type_counts(type_counts, rank_to_species, species_order=("A", "B")):
+    """Sum per-type counts over the mobility modes into per-species counts.
+
+    ``type_counts`` is ``(..., n_types)`` with the particle-type rank on the last axis (the output
+    of :func:`species_counts_per_frame`); ``rank_to_species`` maps each rank to its molecular
+    species name (``simulation_rds_support.rank_to_species(tray)``); ``species_order`` fixes the
+    output column order, monomer first. Returns ``(..., len(species_order))`` of the same dtype:
+    ``[n_A, n_B]`` per frame for the default order. Every rank must map to one of the requested
+    species and every requested species must own at least one rank, so a trajectory generated by
+    another model is refused rather than silently miscounted.
+    """
+    type_counts = np.asarray(type_counts)
+    n_types = type_counts.shape[-1]
+    if set(rank_to_species) != set(range(n_types)):
+        raise ValueError(f"rank_to_species covers ranks {sorted(rank_to_species)} but the counts "
+                         f"carry {n_types} type columns.")
+    unknown = sorted(set(rank_to_species.values()) - set(species_order))
+    if unknown:
+        raise ValueError(f"particle types map to species {unknown}, not among {species_order}.")
+    orphan = sorted(set(species_order) - set(rank_to_species.values()))
+    if orphan:
+        raise ValueError(f"no particle type maps to species {orphan}; the trajectory was generated "
+                         f"by another model.")
+    out = np.zeros(type_counts.shape[:-1] + (len(species_order),), dtype=type_counts.dtype)
+    for rank, species in rank_to_species.items():
+        out[..., species_order.index(species)] += type_counts[..., rank]
+    return out
 
 
 def window_starts(total_frames, window_frames, step_frames):
@@ -87,11 +122,11 @@ def window_starts(total_frames, window_frames, step_frames):
 def window_true_counts(counts, starts, window_frames):
     """The true species populations of each window, in three references.
 
-    ``counts`` is the ``(n_frames, n_species)`` trace; ``starts`` the window start indices.
-    Returns a dict of ``(n_windows, n_species)`` float arrays:
+    ``counts`` is the ``(n_frames, n_species)`` trace (``[A, B]`` species counts, modes summed);
+    ``starts`` the window start indices. Returns a dict of ``(n_windows, n_species)`` float arrays:
 
         ``start`` -- the population at the window's first frame: the PRIMARY truth. The
-                     estimator's count labels are the initial populations of its training
+                     estimator's stoichiometry labels are the initial populations of its training
                      windows, so the start state is the quantity it was trained to report;
                      judging it against any other reference manufactures an estimand mismatch.
         ``mean``  -- the within-window mean population (sensitivity reference).
@@ -108,20 +143,22 @@ def window_true_counts(counts, starts, window_frames):
 # Per-window error and coverage against a truth
 # =============================================================================
 
-def quantile_errors(post_q, true_log10):
+def quantile_errors(post_q, true_flow):
     """Median error and credible-interval coverage of per-window posterior quantiles.
 
     ``post_q`` is ``(N, D, 5)`` holding the ``[Q05, Q25, Q50, Q75, Q95]`` posterior quantiles in
-    log10; ``true_log10`` broadcasts against ``(N, D)`` -- a single constant theta serves every
-    window, a per-window truth (evolved counts) supplies one row per window.
+    estimator space (log10 for log rows, the value itself for the linear dimer fraction);
+    ``true_flow`` broadcasts against ``(N, D)`` in the same space -- a single constant theta
+    serves every window, a per-window truth supplies one row per window.
 
-    Returns ``(errors, cover50, cover90)``: the signed ``Q50 - truth`` in log10 (``(N, D)``
-    float), and boolean coverage indicators of the 50% (IQR) and 90% (Q05-Q95) intervals. A
+    Returns ``(errors, cover50, cover90)``: the signed ``Q50 - truth`` in estimator space
+    (``(N, D)`` float: dex for log rows, an absolute difference for the linear row), and boolean
+    coverage indicators of the 50% (IQR) and 90% (Q05-Q95) intervals. A
     calibrated posterior covers ~50% / ~90%; systematic positional decay of coverage in the
     continuous ensemble only is the horizon signature.
     """
     post_q = np.asarray(post_q, dtype=float)
-    truth = np.broadcast_to(np.asarray(true_log10, dtype=float),
+    truth = np.broadcast_to(np.asarray(true_flow, dtype=float),
                             post_q.shape[:2]).astype(float)
     errors = post_q[:, :, 2] - truth
     cover50 = (truth >= post_q[:, :, 1]) & (truth <= post_q[:, :, 3])
@@ -132,7 +169,8 @@ def quantile_errors(post_q, true_log10):
 def prior_exceedance(draws, lower, upper):
     """Fraction of unrestricted-flow draws outside the training box, per window.
 
-    ``draws`` is ``(N, S, D)`` in log10; ``lower``/``upper`` the log10 training-prior bounds. A
+    ``draws`` is ``(N, S, D)`` in estimator space; ``lower``/``upper`` the training-prior bounds
+    in the same space. A
     draw is outside when ANY coordinate leaves its bound (the joint-box convention of the
     geometric-median analysis). Returns ``(N,)`` float. Named precisely: a bounded-prior Bayesian
     posterior cannot place mass outside its prior -- what this measures is the UNRESTRICTED
@@ -289,16 +327,18 @@ def detectable(lo, hi):
 def stratify_by_true_value(true_values, lower, upper, n_strata=3):
     """Assign each element to a stratum of the PRIOR RANGE, in the prior's own (log) units.
 
-    ``true_values`` are the true parameter values (log10, as drawn); ``(lower, upper)`` the prior
-    bounds for that parameter. Returns ``(labels, edges)`` with ``labels`` an integer array in
+    ``true_values`` are the true parameter values in estimator space (as drawn); ``(lower, upper)``
+    the prior bounds for that parameter in the same space. Returns ``(labels, edges)`` with
+    ``labels`` an integer array in
     ``[0, n_strata)`` (``-1`` where the value is outside the bounds or non-finite) and ``edges``
     the ``n_strata + 1`` cut points.
 
     The strata are FIXED thirds of the prior range, NOT data-dependent quantiles: the geometry is
     prespecified by the prior alone, so the same cuts apply to any set of draws from it (the audit
     cohort, the reset arm, the held-out recovery set) and no stratum boundary is chosen after
-    seeing an effect. Because the prior is uniform in log10, equal ranges carry equal expected
-    mass. The top stratum is closed on the right so the prior's upper endpoint is not discarded.
+    seeing an effect. Because the prior is uniform in estimator space, equal ranges carry equal
+    expected mass. The top stratum is closed on the right so the prior's upper endpoint is not
+    discarded.
     """
     values = np.asarray(true_values, dtype=float)
     edges = np.linspace(float(lower), float(upper), int(n_strata) + 1)
@@ -316,8 +356,8 @@ def stratified_margin_table(contrast, cohort_labels, recovery_abs_error, recover
     """Per-stratum degradation verdicts against per-stratum, self-calibrated margins.
 
     A single prior-averaged margin can mislead when the estimator's error depends on the true
-    value (it does: sparse counts and slow rates are intrinsically harder than dense counts and
-    fast rates). Judging a prior-averaged contrast against a prior-averaged margin can therefore
+    value (it does: sparse populations and slow rates are intrinsically harder than dense
+    populations and fast rates). Judging a prior-averaged contrast against a prior-averaged margin can therefore
     hide a degradation in one regime behind easy performance in another, or flag one that is
     weightless where the parameter is barely resolvable at all.
 

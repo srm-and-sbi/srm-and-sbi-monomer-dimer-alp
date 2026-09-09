@@ -11,7 +11,7 @@ The two workflows invert which half of the model the MAP supplies and which half
 * **detector** -- the MAP supplies the six IMAGING parameters; the reaction-diffusion block is a
   marginalized nuisance, drawn from the biology prior (or pinned) per render, and the system is
   built with its full reaction network -- the same simulator the detector was calibrated against.
-* **biology** -- the MAP supplies the ten REACTION-DIFFUSION parameters and the system is built
+* **biology** -- the MAP supplies the twelve REACTION-DIFFUSION parameters and the system is built
   with its full reaction network; the imaging block is held fixed at the calibrated vector the
   training videos were generated with, read from the ``Nuisance_DLI`` artifact at run time.
 
@@ -80,10 +80,13 @@ def _build_stem(project_alias, map_label, kind, cell, chunk, map_source, clip_to
             f"{chunk_part}_{clip_token}{label_tok}")
 
 
-def _load_map_theta(map_npz, keys, kind, cell, chunk, source, prior_low, prior_high):
-    """Physical imaging theta for (kind, cell): a single chunk's MAP (``source='chunk'``) or
-    the per-cell median over all of that cell's chunk MAPs (``source='cell-median'``). Fails
-    with guidance listing the available cells/chunks."""
+def _load_map_theta(map_npz, keys, table, kind, cell, chunk, source, prior_low, prior_high):
+    """Physical MAP theta for (kind, cell): a single chunk's MAP (``source='chunk'``) or the
+    per-cell aggregate over all of that cell's chunk MAPs (``source='cell-sgm'`` /
+    ``'cell-median'``). ``table`` is the workflow's parameter table: the stored MAP rows are in
+    estimator space and are mapped to physical values through the ONE conversion rule
+    (``parameterization.to_physical``), never by a blanket ``10 ** theta``. Fails with guidance
+    listing the available cells/chunks."""
     with np.load(str(map_npz), allow_pickle=False) as d:
         inferred_log10 = np.asarray(d["inferred_log10"], dtype=float)
         kind_index = np.asarray(d["kind_index"])
@@ -102,7 +105,7 @@ def _load_map_theta(map_npz, keys, kind, cell, chunk, source, prior_low, prior_h
         raise ValueError(f"no MAP entries for kind={kind} cell={cell} in\n    {map_npz}\n"
                          f"available cells for {kind}: {avail_cells}")
     if source.startswith("cell-"):
-        theta_log10 = _aggregate_cell(inferred_log10[cell_rows], source)
+        theta_log10 = _aggregate_cell(inferred_log10[cell_rows], source, table)
         how = ("Sample Geometric Median (a real chunk's estimate)" if source == "cell-sgm"
                else "per-dimension median (a composite, correlations discarded)")
         print(f"MAP source: {how} over {cell_rows.size} chunk(s) of {kind} cell {cell}.")
@@ -119,10 +122,10 @@ def _load_map_theta(map_npz, keys, kind, cell, chunk, source, prior_low, prior_h
     oob = [keys[i] for i in range(len(keys))
            if theta_log10[i] < plo[i] - 1e-9 or theta_log10[i] > phi[i] + 1e-9]
     if oob:
-        print(f"WARNING: MAP imaging is outside the prior box for {oob}; the render EXTRAPOLATES "
+        print(f"WARNING: the MAP is outside the prior box for {oob}; the render EXTRAPOLATES "
               f"there, so a poor experimental-vs-synthetic match may reflect an out-of-prior MAP rather "
               f"than the calibration itself.")
-    return np.power(10.0, theta_log10)
+    return bio.to_physical(theta_log10, table)
 
 
 # Correct-source MET camera parameters (physical units) for --fixed-imaging-parameters.
@@ -170,33 +173,33 @@ def _fixed_imaging_theta(overrides=None):
     return theta
 
 
-# The detector's RDS nuisance is the biology's ten-parameter prior -- the detector re-images the
+# The detector's RDS nuisance is the biology's twelve-parameter prior -- the detector re-images the
 # shared trajectory tier -- so its keys, order, and ranges are the biology table's.
 _NUISANCE_KEYS = [e["KEY"] for e in bio.PARAMETERIZATION]
 
 
 def _draw_nuisance_physical(rng=None):
-    """One fresh RDS-nuisance draw for a posterior-predictive render: the ten reaction-diffusion
-    parameters from the biology log-uniform prior, exponentiated to physical space, in the
-    canonical ``PARAMETERIZATION`` order -- exactly what the shared RDS tier draws per
-    simulation."""
+    """One fresh RDS-nuisance draw for a posterior-predictive render: the twelve reaction-diffusion
+    parameters from the biology prior (uniform in estimator space), mapped to physical values by
+    the ONE conversion rule (``parameterization.to_physical``: log rows exponentiated, the linear
+    initial dimer fraction passed through), in the canonical ``PARAMETERIZATION`` order -- exactly
+    what the shared RDS tier draws per simulation."""
     rng = np.random.default_rng() if rng is None else rng
     low = np.asarray(bio.theta_lower_bound(), dtype=float)
     high = np.asarray(bio.theta_upper_bound(), dtype=float)
-    return np.power(10.0, rng.uniform(low, high))
+    return bio.to_physical(rng.uniform(low, high))
 
 
 def _fixed_nuisance_physical(overrides=None):
     """Physical RDS-nuisance vector for --fixed-nuisance-RDS: every reaction-diffusion parameter
-    held at its prior-center nominal (the log-midpoint of its biology-prior range), then any
-    ``overrides`` (``{key: physical_value}``) applied last. This replaces the fresh
-    ``_draw_nuisance_physical`` draw with a deterministic, controlled nuisance, so the counts
-    (monomer ``count_alp``, mobile-dimer ``count_bet``, immobile-dimer ``count_chi``),
-    diffusivities, and reaction rates are pinned to condition-appropriate values rather than
-    sampled from a flat prior (whose ~equal expected counts make every render implausibly
-    dimer-heavy). Returns a ``(len(PARAMETERIZATION),)`` array in canonical theta order."""
-    centers = {e["KEY"]: e["LOG_BASE"] ** ((e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2.0)
-               for e in bio.PARAMETERIZATION}
+    held at its prior-center nominal (``parameterization.prior_center``: the physical value at the
+    midpoint of its estimator-space range), then any ``overrides`` (``{key: physical_value}``)
+    applied last. This replaces the fresh ``_draw_nuisance_physical`` draw with a deterministic,
+    controlled nuisance, so the stoichiometry (receptor total ``count_total``, initial dimer
+    fraction ``fraction_dimer_initial``), diffusivities, switching rates, and reaction rates are
+    pinned to condition-appropriate values rather than sampled from a flat prior. Returns a
+    ``(len(PARAMETERIZATION),)`` array in canonical theta order."""
+    centers = {e["KEY"]: bio.prior_center(e) for e in bio.PARAMETERIZATION}
     for key, value in (overrides or {}).items():
         if key not in centers:
             raise ValueError(
@@ -337,15 +340,15 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     phi = np.asarray(det.theta_upper_bound(), dtype=float)
     _short = {"prob_photo_bleach": "p_bleach", "lambda_rate": "lambda"}
     dli = []
-    for i, k in enumerate(ikeys):
-        lv = np.log10(img[i]) if img[i] > 0 else float("-inf")
+    for i, (k, ent) in enumerate(zip(ikeys, det.DETECTOR_PARAMETERIZATION)):
+        lv = float(bio.entry_to_flow(ent, img[i])) if img[i] > 0 else float("-inf")
         mark = "*" if (lv < plo[i] - 1e-9 or lv > phi[i] + 1e-9) else ""
         dli.append(f"{_short.get(k, k)}={img[i]:.3g}{mark}")
     dli_lines = "\n".join("  " + "  ".join(dli[j:j + 3]) for j in range(0, len(dli), 3))
     nuis = np.asarray(nuisance, dtype=float).ravel()
     npart = []
     # The label table must match the block being shown, or zip() silently truncates. Both
-    # workflows' reaction-diffusion vectors are the biology's ten parameters in canonical order
+    # workflows' reaction-diffusion vectors are the biology's twelve parameters in canonical order
     # (the detector's RDS nuisance is that prior, re-imaged from the shared tier), so the biology
     # table labels either; the explicit check keeps a future schema change from truncating.
     table = bio.PARAMETERIZATION if rds_table is None else rds_table
@@ -379,8 +382,8 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
 
 
 
-def _aggregate_cell(rows_log10, source):
-    """Reduce one cell's per-chunk MAP rows to a single vector, in log10 space.
+def _aggregate_cell(rows_log10, source, table):
+    """Reduce one cell's per-chunk MAP rows to a single vector, in estimator space.
 
     ``cell-sgm`` takes the Sample Geometric Median -- an actual chunk's estimate, so the rendered
     video corresponds to a configuration the posterior genuinely produced for this cell.
@@ -390,7 +393,7 @@ def _aggregate_cell(rows_log10, source):
     report names which was used.
     """
     if source == "cell-sgm":
-        a = 10.0 ** rows_log10
+        a = bio.to_physical(rows_log10, table)            # the medoid is defined in physical space
         rng_span = np.ptp(a, axis=0)
         rng_span[rng_span <= 0] = 1.0
         idx, _method = sample_geometric_median(a, rng_span)
@@ -449,7 +452,7 @@ def run_posterior_predictive_video(cfg, args):
 
     map_theta = None
     if needs_map:
-        map_theta = _load_map_theta(map_npz, keys, kind, args.cell, args.chunk,
+        map_theta = _load_map_theta(map_npz, keys, S["table"], kind, args.cell, args.chunk,
                                     args.map_source, S["prior_low"], S["prior_high"])
 
     imaging_physical, imaging_desc = S["imaging_physical"](args, map_theta)
@@ -625,14 +628,17 @@ def biology_fixed_imaging(data_bank_root, map_label, condition):
     nu = require_nuisance_dli(data_bank_root / det_paths.posit_subdir,
                               det_paths.project_alias, map_label)
     emitter_log10 = np.asarray(nu.samples, dtype=float)
+    # Nuisance_DLI samples are in the detector table's estimator space (all-log rows); the same
+    # table-bound conversion applies.
+    emitter_abs = bio.to_physical(emitter_log10, det.DETECTOR_PARAMETERIZATION)
     if emitter_log10.shape[0] != 1:
         # A multi-vector artifact has no single "the" imaging vector; take its SGM so the
         # choice is the correlation-preserving one rather than an arbitrary row.
-        span = np.ptp(10.0 ** emitter_log10, axis=0)
+        span = np.ptp(emitter_abs, axis=0)
         span[span <= 0] = 1.0
-        idx, _m = sample_geometric_median(10.0 ** emitter_log10, span)
-        emitter_log10 = emitter_log10[idx:idx + 1]
-    emitter = 10.0 ** emitter_log10[0]
+        idx, _m = sample_geometric_median(emitter_abs, span)
+        emitter_abs = emitter_abs[idx:idx + 1]
+    emitter = emitter_abs[0]
     vec = np.concatenate([emitter, _scope_met()])
     n_pool = int(np.asarray(nu.samples).shape[0])
     desc = (f"calibrated Nuisance_DLI vector "
@@ -662,6 +668,7 @@ def _ppv_spec(cfg, args):
         out_dir=posit_dir / f"{paths.project_alias}_{map_label}_Posterior_Predictive_Video",
         prior_low=np.asarray(cfg.param_module.theta_lower_bound(), dtype=float),
         prior_high=np.asarray(cfg.param_module.theta_upper_bound(), dtype=float),
+        table=parameter_table(cfg),                          # the MAP block's conversion rule
     )
 
     if cfg.tag == "detector":
@@ -694,7 +701,7 @@ def _ppv_spec(cfg, args):
             return smut, nuisance, desc + " (full reactive system)"
     else:
         S["map_block"] = "rds"
-        S["map_keys"] = _wf_keys(cfg)                       # the 10 learnable RDS parameters
+        S["map_keys"] = _wf_keys(cfg)                       # the 12 learnable RDS parameters
         S["imaging_desc"] = "calibrated Nuisance_DLI vector + MET SCOPE camera"
         S["rds_desc"] = "full reactive system from the MAP reaction-diffusion parameters"
 

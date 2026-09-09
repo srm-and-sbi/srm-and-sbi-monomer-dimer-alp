@@ -56,7 +56,7 @@ from srm_and_sbi_monomer_dimer_alp.inference_support import (
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
 from srm_and_sbi_monomer_dimer_alp.test_loss_distribution import TestLossDistribution
 from srm_and_sbi_monomer_dimer_alp.utils import log_memory_state
-from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
+from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig, parameter_table
 
 
 @dataclass(frozen=True)
@@ -287,14 +287,14 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # build_maf needs a representative (batch_x, batch_y) pair to compute output dims.
     dummy_train, _ = build_datasets(
         train_tasks=1, data_bank_root=train_data_root, timing_label=timing_label,
-        compress=compress, paths=paths,
+        compress=compress, paths=paths, parameterization=parameter_table(cfg),
     )
     dummy_loader = DataLoader(dummy_train, batch_size=2, num_workers=0)
     video_dummy, theta_dummy = next(iter(dummy_loader))
 
     # Theta-width guard: the loaded labels must be exactly the learnable width this
     # workflow infers. A mismatch means the DLI stage wrote the wrong theta labels
-    # (e.g. 10-RDS where 6-imaging was expected, or vice-versa) -- fail loud rather
+    # (e.g. 12-RDS where 6-imaging was expected, or vice-versa) -- fail loud rather
     # than build a MAF at the wrong width.
     if theta_dummy.shape[1] != spec.theta_dim:
         raise ValueError(
@@ -369,6 +369,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         test_tasks=args.test_tasks,
         test_loss_distribution=use_tld,
         paths=paths,
+        parameterization=parameter_table(cfg),
     )
 
     if reporter.enabled:

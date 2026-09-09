@@ -5,11 +5,12 @@ parameters it is summarizing: every function takes vectors, a prior box, and ret
 
 THE METHOD. Given a collection of parameter vectors, the honest single-vector summary is the median
 VECTOR, not the vector of per-dimension medians. Real parameter clouds are correlated -- in imaging a
-spot's peak brightness scales with its width; in the reaction-diffusion model the species counts and
-the rates that interconvert them move together -- so taking each dimension's median independently
-composes a vector whose coordinates never co-occurred. That composite can land in a region of
-parameter space the collection never visited, and for a multimodal cloud it drifts into the
-low-density valley BETWEEN the modes, which is the worst possible representative.
+spot's peak brightness scales with its width; in the reaction-diffusion model the receptor total,
+the initial dimer fraction and the rates that interconvert the species move together -- so taking
+each dimension's median independently composes a vector whose coordinates never co-occurred. That
+composite can land in a region of parameter space the collection never visited, and for a
+multimodal cloud it drifts into the low-density valley BETWEEN the modes, which is the worst
+possible representative.
 
 The Sample Geometric Median (SGM) avoids this by construction: it is the actual collection member
 minimizing the summed normalized Euclidean distance to every other member. Being a real member, its
@@ -17,11 +18,14 @@ joint correlations are intact and it is guaranteed realizable -- some acquisitio
 actually had that configuration. Reference: Ramirez Sierra & Sokolowski, Mach. Learn.: Sci. Technol.
 6, 015004 (2025).
 
-SPACE. All computation is in ABSOLUTE (physical, ``10**theta``) values normalized by the absolute
-prior range. The geometric median is not invariant under the log-to-linear transform, so centrality
-must be defined in the space where the vector is actually used -- the simulator consumes physical
-values. Normalizing by the prior range makes the dimensions commensurable, so no parameter dominates
-the distance merely because its units are larger.
+SPACE. All computation is in ABSOLUTE (physical) values normalized by the absolute prior range. The
+geometric median is not invariant under the estimator-to-physical transform, so centrality must be
+defined in the space where the vector is actually used -- the simulator consumes physical values.
+Normalizing by the prior range makes the dimensions commensurable, so no parameter dominates the
+distance merely because its units are larger. The kernel does not know the per-row conversion rule
+(log10 for log rows, identity for a linear row such as the initial dimer fraction): callers pass the
+``to_physical`` / ``to_flow`` callables bound to their parameter table (``parameterization``), so the
+one conversion rule stays in one place and nothing here exponentiates by hand.
 """
 from __future__ import annotations
 
@@ -87,9 +91,14 @@ def typicality(vecs_abs, range_abs, point_abs, rng):
     return maha, density
 
 
-def summary_vectors(pool_log, low, high, rng):
-    """SGM and vector-of-medians (absolute + log10) for the full collection and its in-box
+def summary_vectors(pool_flow, low, high, rng, to_physical, to_flow):
+    """SGM and vector-of-medians (physical + estimator space) for the full collection and its in-box
     subcollection, plus the typicality of each summary point. Returns ``(variants, in_box_mask)``.
+
+    ``pool_flow`` is ``(N, D)`` in estimator space, ``low`` / ``high`` the prior box in the same
+    space; ``to_physical`` / ``to_flow`` are the table-bound conversions (``parameterization``).
+    The ``*_log`` keys of every variant hold ESTIMATOR-SPACE coordinates (log10 for log rows, the
+    value itself for a linear row); the name is kept for the report tables that read them.
 
     Both variants are reported because they answer different questions. ``unrestricted`` summarizes
     everything the collection contains, including estimates that fell outside the prior box -- the
@@ -98,35 +107,37 @@ def summary_vectors(pool_log, low, high, rng):
     large gap between the two is itself the finding: it says the collection's mass sits substantially
     outside the box it was meant to occupy.
     """
-    pool_log = np.asarray(pool_log, dtype=float)
+    pool_flow = np.asarray(pool_flow, dtype=float)
     low = np.asarray(low, dtype=float)
     high = np.asarray(high, dtype=float)
-    a_range = 10.0 ** high - 10.0 ** low
-    in_box = np.all((pool_log >= low) & (pool_log <= high), axis=1)
-    variants = [("unrestricted", np.ones(pool_log.shape[0], dtype=bool)),
+    a_range = np.asarray(to_physical(high), dtype=float) - np.asarray(to_physical(low), dtype=float)
+    in_box = np.all((pool_flow >= low) & (pool_flow <= high), axis=1)
+    variants = [("unrestricted", np.ones(pool_flow.shape[0], dtype=bool)),
                 ("bounded_in_box", in_box)]
     out = []
     for name, mask in variants:
-        subset_log = pool_log[mask]
-        if subset_log.shape[0] == 0:
+        subset_flow = pool_flow[mask]
+        if subset_flow.shape[0] == 0:
             out.append(dict(variant=name, n=0))
             continue
-        subset_abs = 10.0 ** subset_log
+        subset_abs = np.asarray(to_physical(subset_flow), dtype=float)
         idx, method = sample_geometric_median(subset_abs, a_range)
         sgm_abs = subset_abs[idx]
+        sgm_flow = subset_flow[idx]                       # the same member, estimator space
         vom_abs = np.median(subset_abs, axis=0)
+        vom_flow = np.asarray(to_flow(vom_abs), dtype=float)
         maha_s, dens_s = typicality(subset_abs, a_range, sgm_abs, rng)
         maha_v, dens_v = typicality(subset_abs, a_range, vom_abs, rng)
         out.append(dict(
-            variant=name, n=int(subset_log.shape[0]), method=method,
-            sgm_abs=sgm_abs, sgm_log=np.log10(sgm_abs),
+            variant=name, n=int(subset_flow.shape[0]), method=method,
+            sgm_abs=sgm_abs, sgm_log=sgm_flow,
             # Computed, not asserted: the SGM of the UNRESTRICTED collection is a member of the
             # full pool and can lie outside the prior box (the bounded_in_box variant is inside
             # by construction). A hardcoded True here once printed a false "in-box" line for
             # SGM vectors that were genuinely out of support.
-            sgm_in_box=bool(np.all((np.log10(sgm_abs) >= low) & (np.log10(sgm_abs) <= high))),
-            vom_abs=vom_abs, vom_log=np.log10(vom_abs),
-            vom_in_box=bool(np.all((np.log10(vom_abs) >= low) & (np.log10(vom_abs) <= high))),
+            sgm_in_box=bool(np.all((sgm_flow >= low) & (sgm_flow <= high))),
+            vom_abs=vom_abs, vom_log=vom_flow,
+            vom_in_box=bool(np.all((vom_flow >= low) & (vom_flow <= high))),
             box_dist=float(np.linalg.norm((sgm_abs - vom_abs) / a_range)),
             maha_sgm=maha_s, maha_vom=maha_v,
             density_ratio=(dens_v / dens_s if dens_s and np.isfinite(dens_s) else float("nan"))))

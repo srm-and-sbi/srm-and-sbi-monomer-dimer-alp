@@ -12,8 +12,9 @@ Functions:
         2D spatial-occupancy heatmap of particle (x, y) positions.
 
 Candidate future functions (not implemented yet):
-    - plot_particle_count_traces: counts of A, B, C species over time.
-    - plot_mean_squared_displacement: MSD curves per species.
+    - plot_particle_count_traces: counts of the six particle types (A_f, A_s, A_i,
+      B_f, B_s, B_i) and of the two molecular species (A, B; modes summed) over time.
+    - plot_mean_squared_displacement: MSD curves per particle type.
 """
 
 import numpy as np

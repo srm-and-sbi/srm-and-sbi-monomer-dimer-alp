@@ -1,7 +1,7 @@
 # Experiment temporal dynamics — method and interpretation
 
 Authoritative companion for both workflows' temporal analyses:
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py` (biology, the ten reaction-diffusion
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py` (biology, the twelve reaction-diffusion
 parameters) and `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Temporal_Dynamics.py` (detector, the six
 imaging parameters). Both are thin shims over one shared engine,
 `srm_and_sbi_monomer_dimer_alp.temporal_dynamics_runner`, over the workflow-agnostic kernel
@@ -327,7 +327,7 @@ Written to `<data_bank>/<posit>/<alias>_<timing_label>_MAP_Experiment/temporal_d
 ## How to run
 
 ```bash
-# biology — the ten reaction-diffusion parameters
+# biology — the twelve reaction-diffusion parameters
 MACHINE_PROFILE=<profile> python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py \
     --total-time-seconds 2.0 [--params rate_dissociation,diffusivity_alp] [--dry-run]

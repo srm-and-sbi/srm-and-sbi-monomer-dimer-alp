@@ -122,7 +122,14 @@ class VideoDataset(Dataset):
                  augment: bool = True,
                  split: str = "TRAIN",
                  return_index: bool = False,
-                 paths=None):
+                 paths=None,
+                 parameterization=None):
+        # `parameterization` is the learnable table whose per-row scale converts the stored
+        # PHYSICAL theta to the estimator's space (parameterization.to_flow): the biology
+        # table carries a linear row (the initial dimer fraction), so a blanket log10 would
+        # corrupt it. None -> the biology table.
+        from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERIZATION
+        self.parameterization = PARAMETERIZATION if parameterization is None else parameterization
         # `paths` selects the filename namespace. Default is the canonical
         # PARAMETERS.paths (byte-identical to previous behavior); the Detector
         # workflow passes an aliased Paths (project_alias + "_DETECTOR") so it
@@ -169,12 +176,14 @@ class VideoDataset(Dataset):
         video_array = load_data(self.video_paths[task_index])
         theta_array = load_data(self.theta_paths[task_index])
 
-        # Normalize video to [0, 1] float32; log10-transform theta to match the prior's log-space.
+        # Normalize video to [0, 1] float32; map the stored physical theta to the estimator's
+        # space with the one shared rule (log10 for log rows, identity for linear rows).
+        from srm_and_sbi_monomer_dimer_alp.parameterization import to_flow
         video_normalized = normalize_video(video_array[data_index])
-        theta_log10 = np.log10(theta_array[data_index])
+        theta_flow = to_flow(theta_array[data_index], self.parameterization)
 
         video = torch.tensor(video_normalized, dtype=torch.float32)
-        theta = torch.tensor(theta_log10, dtype=torch.float32)
+        theta = torch.tensor(theta_flow, dtype=torch.float32)
 
         if self.augment:
             video = self._spatial_augment(video)
@@ -362,6 +371,7 @@ def build_datasets(train_tasks: int,
                    test_tasks: int = 0,
                    test_return_index: bool = False,
                    paths=None,
+                   parameterization=None,
                    ) -> tuple:
     """Load the TRAIN and TEST namespaces as separate datasets.
 
@@ -387,7 +397,7 @@ def build_datasets(train_tasks: int,
         tasks=train_tasks, data_bank_root=data_bank_root,
         timing_label=timing_label, compress=compress,
         augment=PARAMETERS.inference.training.augmentation, split="TRAIN",
-        paths=paths,
+        paths=paths, parameterization=parameterization,
     )
     test_dataset = None
     if test_tasks > 0:
@@ -395,7 +405,7 @@ def build_datasets(train_tasks: int,
             tasks=test_tasks, data_bank_root=data_bank_root,
             timing_label=timing_label, compress=compress,
             augment=False, split="TEST", return_index=test_return_index,
-            paths=paths,
+            paths=paths, parameterization=parameterization,
         )
     return train_dataset, test_dataset
 
@@ -534,8 +544,12 @@ def setup_training(estimator: nn.Module,
                    num_workers_override: Optional[int] = None,
                    test_tasks: int = 0,
                    test_loss_distribution: bool = False,
-                   paths=None) -> dict:
+                   paths=None,
+                   parameterization=None) -> dict:
     """Bundle DataLoaders + optimizer + scheduler + device into a dict for `train_loop`.
+
+    ``parameterization`` is the workflow's learnable table (``workflow.parameter_table``),
+    whose per-row scale maps the stored physical theta to the estimator's space.
 
     Args:
         estimator: The posterior estimator to train (an sbi MAF wrapping
@@ -606,6 +620,7 @@ def setup_training(estimator: nn.Module,
         train_tasks=train_tasks, data_bank_root=data_bank_root,
         timing_label=timing_label, compress=compress, test_tasks=test_tasks,
         test_return_index=test_loss_distribution, paths=paths,
+        parameterization=parameterization,
     )
     # ---- DataLoader worker budget (rank- and loader-aware) -------------------
     # Each DDP rank builds its OWN loaders, and persistent_workers keeps the train +

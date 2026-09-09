@@ -79,8 +79,9 @@ _UNIT_DISPLAY = {
 def prior_sampling_table(parameterization, theta):
     """Build (headers, rows) summarizing prior ranges vs sampled values.
 
-    For each learnable parameter, reports the log-uniform prior bounds (log10),
-    the sampled value in log10 and in physical units, and the unit -- so a
+    For each learnable parameter, reports the prior box in estimator space (log10 for
+    log rows, the value for linear rows), the sampled coordinate and physical value,
+    and the unit -- so a
     reader can confirm, for example, that the initial particle counts a
     simulation was seeded with match what the rendered video shows.
 
@@ -92,19 +93,24 @@ def prior_sampling_table(parameterization, theta):
     Returns:
         ``(headers, rows)`` ready to pass to ``DiagnosticReporter.table``.
     """
-    headers = ["parameter", "label", "prior log10", "sampled log10",
-               "sampled value", "units", "derived unit", "kind"]
+    headers = ["parameter", "label", "scale", "prior box (estimator space)",
+               "sampled coordinate", "sampled value", "units", "derived unit", "kind"]
     rows = []
     for i, para in enumerate(parameterization):
         lo, hi = para["PRIOR_RANGE"]
         value = float(theta[i])
-        log10 = np.log10(value) if value > 0 else float("nan")
+        is_log = bool(para.get("LOG_FLAG"))
+        if is_log:
+            log10 = np.log10(value) if value > 0 else float("nan")
+        else:
+            log10 = value
         unit = _UNIT_DISPLAY.get(para.get("UNIT", ""), para.get("UNIT", ""))
         derived = para.get("DERIVED_UNIT")
         derived_disp = _UNIT_DISPLAY.get(derived, derived) if derived else "-"
         rows.append([
             para["KEY"],
             para.get("LABEL") or "-",
+            "log10" if is_log else "linear",
             f"[{lo:+.2f}, {hi:+.2f}]",
             f"{log10:+.3f}",
             f"{value:.4g}",

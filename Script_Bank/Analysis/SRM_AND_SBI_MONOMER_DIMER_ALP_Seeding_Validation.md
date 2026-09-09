@@ -93,13 +93,13 @@ but only the labels are compared.
 
 ## How to read the result
 
-A `PASS` on the A/B/C checks means the label algebra is collision-free for that timing
+A `PASS` on checks A, B, and C means the label algebra is collision-free for that timing
 label and fan-out shape: every task and simulation maps to its own path, the splits are
 namespaced apart, and an incremental append cannot clobber an existing block. This is
 the precondition for launching a fan-out safely — especially a grow, where a label
 collision would silently overwrite already-generated data.
 
-A `FAIL` on any A/B/C check points to a defect in the path builders or the naming
+A `FAIL` on any of checks A, B, or C points to a defect in the path builders or the naming
 pattern (a missing field in a filename template, a split suffix that fails to
 disambiguate, an offset that overlaps) and must be fixed before generating; the detail
 string on the failing line localizes it. A `FAIL` on a D check means the seeding

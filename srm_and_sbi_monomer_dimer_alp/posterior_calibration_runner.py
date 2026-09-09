@@ -48,7 +48,7 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import collect_score_prex, collect
 from srm_and_sbi_monomer_dimer_alp.experiment_support import shard_by_rank
 from srm_and_sbi_monomer_dimer_alp.inference_support import normalize_video, resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow
 from srm_and_sbi_monomer_dimer_alp.visualization_calibration import (
     figure_coverage, figure_pairwise, figure_sbc_ranks, figure_stratified, figure_tarp)
 from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
@@ -751,7 +751,7 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
         for _, sim in task_videos:
             n_task += 1
             video_chunk = np.asarray(video_set[sim])
-            true_log10 = np.log10(np.asarray(theta_set[sim], dtype=float))
+            true_log10 = to_flow(np.asarray(theta_set[sim], dtype=float), spec.draw_spec)
             s, s_lp, t_lp, emb = _draw_video_calibration(
                 posterior, flow, video_chunk, true_log10, device, vista_device,
                 n_samples, eval_cfg.theta_prex_batch_size, eval_cfg.score_prex_batch_size,

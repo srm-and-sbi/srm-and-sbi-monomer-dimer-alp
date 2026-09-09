@@ -1,32 +1,39 @@
-"""Population-composition kernel: relative species abundance derived from joint count draws.
+"""Population-composition kernel: relative species abundance derived from joint stoichiometry draws.
 
 Workflow-agnostic numerics. Nothing here knows that the counted things are receptors: every
-function takes arrays, the indices of the coordinates holding species counts, and a prior box. Pure
-numpy plus a lazy scipy import for the three rank tests, so it imports and unit-tests without a
-machine profile.
+function takes arrays, the indices of the coordinates holding the stoichiometry, a prior box, and --
+where estimator-space draws must become physical values -- the conversion callable the runner binds
+to its parameter table. Pure numpy plus a lazy scipy import for the three rank tests, so it imports
+and unit-tests without a machine profile.
 
-WHAT THE ANALYSIS ASKS. The estimator infers three absolute species counts -- A (monomer), B (mobile
-dimer), C (immobile dimer) -- independently in every window of every recording. Absolute counts are
-the *worst*-identified coordinates the model has, and the reason is information-theoretic rather than
-a defect: counting few emitters in a diffraction-limited scene is a square-root-of-n problem, and the
-three counts additionally trade off against one another because the reactions interconvert them. The
-question this analysis asks is therefore not "how many" but "in what proportion", because the
-proportions are a different -- and far better identified -- function of the same posterior:
+WHAT THE ANALYSIS ASKS. The estimator infers the stoichiometry of the model directly: the conserved
+receptor-subunit total N_R = n_A + 2 n_B (a count) and the initial fraction of receptors belonging to
+dimers, x_B = 2 n_B / N_R (linear on [0, 1]), independently in every window of every recording. The
+absolute total is the *worst*-identified coordinate the model has, and the reason is
+information-theoretic rather than a defect: counting few emitters in a diffraction-limited scene is a
+square-root-of-n problem, and the total trades off against the fraction because the same number of
+visible spots can be few dimers or many monomers. The question this analysis asks is therefore not
+"how many" but "in what proportion", because the proportions are a different -- and far better
+identified -- function of the same posterior. The model parameters ARE the composition:
 
-    monomer fraction        f_A = A / T                     with T = A + B + C
-    mobile-dimer fraction   f_B = B / T
-    immobile-dimer fraction f_C = C / T
-    dimer-complex fraction  f_D = (B + C) / T = 1 - f_A
-    receptors in dimers     f_R = 2(B + C) / (A + 2B + 2C)
-    total complexes         T   = A + B + C
+    monomers                n_A = N_R (1 - x_B)
+    dimer complexes         n_B = N_R x_B / 2
+    total complexes         T   = n_A + n_B = N_R (1 - x_B / 2)
+    monomer fraction        f_A = n_A / T = 2 (1 - x_B) / (2 - x_B)
+    dimer-complex fraction  f_B = n_B / T = x_B / (2 - x_B)
+    receptors in dimers     f_R = 2 n_B / (n_A + 2 n_B) = x_B
+    total receptors         N_R
+
+Mobility (fast / slow / immobile) is a property of particle TYPES, not of molecular species, and the
+composition is a species census: the mobility modes do not enter it.
 
 WHY THE DRAWS MUST BE JOINT. A ratio of correlated coordinates is not a function of their marginals.
-The posterior places B and C in strong negative correlation (the two dimer states absorb the same
-signal), so a fraction built from marginal medians -- median(B) over median(A)+median(B)+median(C) --
-asserts a combination the posterior never drew and inherits none of the cancellation that makes the
-ratio identifiable. Every fraction here is therefore formed WITHIN each posterior draw, and only then
-averaged. That single ordering is what turns three poorly-identified counts into a well-identified
-composition, and reversing it silently discards the effect.
+The posterior places the total and the fraction in correlation (the two coordinates explain the same
+visible-spot count), so a fraction built from marginal medians asserts a combination the posterior
+never drew and inherits none of the cancellation that makes the ratio identifiable. Every derived
+quantity here is therefore formed WITHIN each posterior draw, and only then averaged. That single
+ordering is what turns a poorly-identified total into a well-identified composition, and reversing
+it silently discards the effect.
 
 THE AGGREGATION LADDER. Four levels, each an unweighted mean over the level below:
 
@@ -39,12 +46,19 @@ one cell, so treating them as independent would divide the standard error by the
 window count and manufacture significance out of pseudo-replication. Every interval and every test
 below is computed over recordings for that reason.
 
-CLOSURE. f_A + f_B + f_C = 1 holds for every draw by construction, and |Delta f_D| = |Delta f_A|
+CLOSURE. f_A + f_B = 1 holds for every draw by construction, and |Delta f_B| = |Delta f_A|
 identically, so the monomer and dimer-complex rows of a recovery table are the same number reported
 twice -- an internal consistency check, not two independent results.
 
-WHAT THIS KERNEL DOES NOT CLAIM. The composition is conditional on the three-species model: it is a
-census of the model's states as fitted to the recordings, not a molecular count. Its value is that
+SPACES. The estimator works in its own coordinates ("estimator space": log10 of the receptor total,
+the fraction itself). Every function that receives estimator-space draws takes a ``to_physical``
+callable mapping the ``(..., 2)`` stoichiometry coordinates to physical ``(N_R, x_B)``; the runner
+binds ``parameterization.to_physical`` to the two table rows, so the per-row conversion rule lives in
+one place and this kernel never exponentiates by hand. Species COUNTS extracted from a trajectory
+(``(..., 2)`` = ``[n_A, n_B]``) enter through :func:`composition_from_counts` instead.
+
+WHAT THIS KERNEL DOES NOT CLAIM. The composition is conditional on the monomer-dimer model: it is a
+census of the model's species as fitted to the recordings, not a molecular count. Its value is that
 the same quantity can be computed on held-out synthetic videos where the truth is known, so the
 in-model error of the readout is measured rather than assumed.
 """
@@ -71,7 +85,7 @@ class Quantity:
         symbol: short mathematical name for figure axes and narrow columns.
         formula: the definition, so a report never states a value without its meaning.
         is_fraction: True for the shares of the population (reported in percent, error in percentage
-            points); False for the total, which is a count and whose error is multiplicative and so
+            points); False for the totals, which are counts and whose error is multiplicative and so
             reported in dex.
     """
 
@@ -81,54 +95,82 @@ class Quantity:
     is_fraction: bool
 
 
-# The reported quantities, in table order. The three shares come first because they partition the
-# population; the two derived reads follow; the total closes the list because it is the only row in
-# different units.
+# The reported quantities, in table order. The two shares come first because they partition the
+# complexes; the receptor share follows; the two totals close the list because they are the only rows
+# in different units.
 COMPOSITION = (
-    Quantity("monomer_fraction", "f_A", "A / T", True),
-    Quantity("mobile_dimer_fraction", "f_B", "B / T", True),
-    Quantity("immobile_dimer_fraction", "f_C", "C / T", True),
-    Quantity("dimer_complex_fraction", "f_D", "(B + C) / T", True),
-    Quantity("receptors_in_dimers", "f_R", "2(B + C) / (A + 2B + 2C)", True),
-    Quantity("total_complexes", "T", "A + B + C", False),
+    Quantity("monomer_fraction", "f_A", "n_A / T", True),
+    Quantity("dimer_complex_fraction", "f_B", "n_B / T", True),
+    Quantity("receptors_in_dimers", "f_R", "2 n_B / (n_A + 2 n_B) = x_B", True),
+    Quantity("total_complexes", "T", "n_A + n_B", False),
+    Quantity("total_receptors", "N_R", "n_A + 2 n_B", False),
 )
 COMPOSITION_KEYS = tuple(q.key for q in COMPOSITION)
 FRACTION_INDICES = tuple(i for i, q in enumerate(COMPOSITION) if q.is_fraction)
-PARTS_INDICES = (0, 1, 2)          # the three shares that partition the population, in A, B, C order
-TOTAL_INDEX = len(COMPOSITION) - 1
+COUNT_INDICES = tuple(i for i, q in enumerate(COMPOSITION) if not q.is_fraction)
+PARTS_INDICES = (0, 1)             # the two shares that partition the complexes, in A, B order
 DIMER_INDEX = COMPOSITION_KEYS.index("dimer_complex_fraction")
+RECEPTORS_IN_DIMERS_INDEX = COMPOSITION_KEYS.index("receptors_in_dimers")
+TOTAL_INDEX = COMPOSITION_KEYS.index("total_complexes")
+RECEPTORS_INDEX = COMPOSITION_KEYS.index("total_receptors")
+
+# Labels of the two parts and the whole, shared by the parts-versus-whole table.
+PART_LABELS = ("n_A (monomers)", "n_B (dimer complexes)")
+WHOLE_LABEL = "T = n_A + n_B"
 
 
-def composition(counts_abs):
-    """The six derived quantities from absolute species counts.
-
-    ``counts_abs`` is ``(..., 3)`` holding A, B, C in absolute units (never log10) -- any leading
-    shape is preserved, so the same call serves a single MAP vector, a window's draws, or the whole
-    held-out set. Returns ``(..., 6)`` ordered as :data:`COMPOSITION`.
-
-    The counts are strictly positive (they are ``10 ** theta`` of a log-uniform coordinate), so the
-    denominators cannot vanish and no guard is needed. Should a caller ever pass a zero total, the
-    division yields NaN, which propagates into the nan-aware aggregation rather than raising -- a
-    missing value, which is the truthful outcome, instead of a crash or a fabricated zero.
-    """
-    counts_abs = np.asarray(counts_abs, dtype=float)
-    if counts_abs.shape[-1] != 3:
-        raise ValueError(f"composition() needs three species counts on the last axis, "
-                         f"got shape {counts_abs.shape}.")
-    a, b, c = counts_abs[..., 0], counts_abs[..., 1], counts_abs[..., 2]
-    total = a + b + c
-    dimers = b + c
+def _assemble(n_a, n_b):
+    """The five quantities from monomer and dimer-complex counts (any broadcastable shape)."""
+    total = n_a + n_b
+    receptors = n_a + 2.0 * n_b
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = np.stack([a / total, b / total, c / total, dimers / total,
-                        2.0 * dimers / (a + 2.0 * dimers), total], axis=-1)
+        out = np.stack([n_a / total, n_b / total, 2.0 * n_b / receptors, total, receptors], axis=-1)
     return out
 
 
+def composition(stoichiometry_physical):
+    """The five derived quantities from the PHYSICAL stoichiometry pair ``(N_R, x_B)``.
+
+    ``stoichiometry_physical`` is ``(..., 2)`` holding the receptor total N_R (a count, never its
+    log10) and the initial dimer fraction x_B (on [0, 1]) -- any leading shape is preserved, so the
+    same call serves a single MAP vector, a window's draws, or the whole held-out set. Returns
+    ``(..., 5)`` ordered as :data:`COMPOSITION`.
+
+    The pair is mapped to the species counts n_A = N_R (1 - x_B) and n_B = N_R x_B / 2 and the
+    quantities are formed from those, so this function and :func:`composition_from_counts` share ONE
+    definition of every derived read. N_R is strictly positive (a log-uniform coordinate), so the
+    denominators cannot vanish. Should a caller ever pass a zero total, the division yields NaN, which
+    propagates into the nan-aware aggregation rather than raising -- a missing value, which is the
+    truthful outcome, instead of a crash or a fabricated zero.
+    """
+    pair = np.asarray(stoichiometry_physical, dtype=float)
+    if pair.shape[-1] != 2:
+        raise ValueError(f"composition() needs the (N_R, x_B) pair on the last axis, "
+                         f"got shape {pair.shape}.")
+    n_r, x_b = pair[..., 0], pair[..., 1]
+    return _assemble(n_r * (1.0 - x_b), 0.5 * n_r * x_b)
+
+
+def composition_from_counts(species_counts):
+    """The five derived quantities from SPECIES counts ``[n_A, n_B]`` (e.g. a trajectory's frame).
+
+    ``species_counts`` is ``(..., 2)``: monomers and dimer complexes, already summed over the
+    mobility modes (see ``horizon_audit.species_counts_from_type_counts``). Returns ``(..., 5)``
+    ordered as :data:`COMPOSITION`; a frame with no complexes at all yields NaN shares.
+    """
+    counts = np.asarray(species_counts, dtype=float)
+    if counts.shape[-1] != 2:
+        raise ValueError(f"composition_from_counts() needs [n_A, n_B] on the last axis, "
+                         f"got shape {counts.shape}.")
+    return _assemble(counts[..., 0], counts[..., 1])
+
+
 def closure_residual(comp):
-    """Largest deviation of ``f_A + f_B + f_C`` from one, over every entry of a composition array.
+    """Largest deviation of ``f_A + f_B`` from one, over every entry of a composition array.
 
     Zero to floating-point precision by construction; reported as a check because it is the cheapest
-    possible detection of an index mix-up between the count coordinates and their neighbors in theta.
+    possible detection of an index mix-up between the stoichiometry coordinates and their neighbors
+    in theta.
     """
     comp = np.asarray(comp, dtype=float)
     parts = comp[..., list(PARTS_INDICES)].sum(axis=-1)
@@ -139,13 +181,17 @@ def closure_residual(comp):
 # The aggregation ladder
 # =============================================================================
 
-def window_composition(cloud_log10, count_index, draw_mask=None):
+def window_composition(cloud_flow, count_index, to_physical, draw_mask=None):
     """Per-window posterior mean composition from the stored per-window posterior draws.
 
-    ``cloud_log10`` is ``(N, S, D)``: for each of the ``N`` (recording, window) pairs, the ``S`` draws
-    the Experiment stage took from that window's posterior, in log10 units. ``count_index`` names the
-    three coordinates holding the species counts. The composition is formed inside every draw and
-    then averaged over draws -- the ordering the module docstring insists on.
+    ``cloud_flow`` is ``(N, S, D)``: for each of the ``N`` (recording, window) pairs, the ``S`` draws
+    the Experiment stage took from that window's posterior, in estimator space. ``count_index`` names
+    the two coordinates holding the stoichiometry (receptor total, initial dimer fraction, in that
+    order); ``to_physical`` maps their ``(..., 2)`` estimator-space values to physical ``(N_R, x_B)``
+    (the runner binds ``parameterization.to_physical`` to those two table rows -- the receptor total
+    is a log row, the fraction a linear one, and only the table knows that). The composition is
+    formed inside every draw and then averaged over draws -- the ordering the module docstring
+    insists on.
 
     ``draw_mask`` is an optional ``(N, S)`` boolean selecting which draws contribute (used by the
     support-restriction variants). Windows left with no contributing draw return NaN for every
@@ -153,10 +199,10 @@ def window_composition(cloud_log10, count_index, draw_mask=None):
     caller is expected to report how many windows were lost, because a variant that silently discards
     half the recordings is not the same measurement as one that keeps them.
 
-    Returns ``(N, 6)``.
+    Returns ``(N, 5)``.
     """
-    cloud_log10 = np.asarray(cloud_log10, dtype=float)
-    comp = composition(10.0 ** cloud_log10[..., list(count_index)])       # (N, S, 6)
+    cloud_flow = np.asarray(cloud_flow, dtype=float)
+    comp = composition(to_physical(cloud_flow[..., list(count_index)]))       # (N, S, 5)
     if draw_mask is not None:
         comp = np.where(np.asarray(draw_mask, dtype=bool)[..., None], comp, np.nan)
     with np.errstate(invalid="ignore"):
@@ -176,7 +222,7 @@ def _nanmean_quiet(values, axis):
 
 
 def composition_grid(window_comp, kind_index, cell, chunk, n_kinds):
-    """Scatter per-window compositions into the dense ``(condition, recording, window, 6)`` grid.
+    """Scatter per-window compositions into the dense ``(condition, recording, window, 5)`` grid.
 
     Delegates to the temporal-dynamics kernel's grid builder so the two analyses share ONE definition
     of what a (condition, recording, window) grid is: a change to the layout cannot land in one and
@@ -188,7 +234,7 @@ def composition_grid(window_comp, kind_index, cell, chunk, n_kinds):
 
 
 def per_cell(grid):
-    """Each recording's composition: the mean over its analyzed windows. Returns ``(K, C, 6)``.
+    """Each recording's composition: the mean over its analyzed windows. Returns ``(K, C, 5)``.
 
     This is the replicate-level value -- the unit every interval and test below is computed over.
     """
@@ -202,7 +248,7 @@ def condition_summary(cell_values):
     cell-to-cell biological variability -- the spread that matters for a condition-level claim -- and
     not the within-window posterior width, which is a different quantity and much smaller.
 
-    Returns ``(mean, sem, n)``, each ``(K, 6)`` (``n`` integer).
+    Returns ``(mean, sem, n)``, each ``(K, 5)`` (``n`` integer).
     """
     v = np.asarray(cell_values, dtype=float)
     n = np.sum(~np.isnan(v), axis=1)
@@ -230,7 +276,7 @@ def window_slice_summary(grid, window):
 
 
 def time_course(grid):
-    """Per-window condition means and SEMs across recordings. Returns ``(mean, sem)``, ``(K, T, 6)``.
+    """Per-window condition means and SEMs across recordings. Returns ``(mean, sem)``, ``(K, T, 5)``.
 
     The window axis is kept because a composition that changes across a recording is a finding, and
     an analysis that reported only the span average would hide it inside the average.
@@ -248,45 +294,46 @@ def time_course(grid):
 # Robustness: is the reported composition an artifact of a choice?
 # =============================================================================
 
-def support_masks(cloud_log10, prior_low, prior_high, count_index):
+def support_masks(cloud_flow, prior_low, prior_high, count_index):
     """Draw-level masks for the three support variants, with what each one costs.
 
     A posterior fitted to real recordings can place mass outside the box the estimator was trained
-    on, and absolute counts are exactly where that happens: dense scenes push the count coordinates
-    past the prior ceiling. Since the composition is a ratio, out-of-support mass may inflate all
-    three counts together and largely cancel -- but that is a claim to be measured, not assumed, so
-    the same composition is recomputed under progressively harsher restrictions:
+    on, and the receptor total is exactly where that happens: dense scenes push it past the prior
+    ceiling. Since the composition is a ratio of the two stoichiometry coordinates, out-of-support
+    mass in the total largely cancels -- but that is a claim to be measured, not assumed, so the same
+    composition is recomputed under progressively harsher restrictions. The box is in estimator space
+    (the same space the draws are stored in), so no conversion is needed here:
 
         ``unrestricted``  every draw. The honest description of where the posterior actually is.
-        ``count_box``     draws whose three count coordinates lie inside the trained box.
+        ``count_box``     draws whose two stoichiometry coordinates lie inside the trained box.
         ``full_box``      draws inside the box in ALL coordinates -- the only variant every part of
                           which the estimator was trained to represent, and usually the one that
                           discards the most.
 
-    Returns a list of ``(name, mask, retained_fraction_per_condition_input, note)`` where ``mask`` is
-    ``(N, S)``. Retention and the count of windows left empty are computed by the caller, which knows
-    the condition labels.
+    Returns a list of ``(name, mask, note)`` where ``mask`` is ``(N, S)``. Retention and the count
+    of windows left empty are computed by the caller, which knows the condition labels.
     """
-    cloud_log10 = np.asarray(cloud_log10, dtype=float)
+    cloud_flow = np.asarray(cloud_flow, dtype=float)
     low = np.asarray(prior_low, dtype=float)
     high = np.asarray(prior_high, dtype=float)
-    inside_all = np.all((cloud_log10 >= low) & (cloud_log10 <= high), axis=-1)
+    inside_all = np.all((cloud_flow >= low) & (cloud_flow <= high), axis=-1)
     idx = list(count_index)
-    inside_counts = np.all((cloud_log10[..., idx] >= low[idx])
-                           & (cloud_log10[..., idx] <= high[idx]), axis=-1)
-    ones = np.ones(cloud_log10.shape[:2], dtype=bool)
+    inside_counts = np.all((cloud_flow[..., idx] >= low[idx])
+                           & (cloud_flow[..., idx] <= high[idx]), axis=-1)
+    ones = np.ones(cloud_flow.shape[:2], dtype=bool)
     return [
         ("unrestricted", ones,
          "every posterior draw, including mass beyond the trained support"),
         ("count_box", inside_counts,
-         "draws whose three species counts lie inside the trained prior box"),
+         "draws whose stoichiometry coordinates (receptor total, dimer fraction) lie inside the "
+         "trained prior box"),
         ("full_box", inside_all,
          "draws inside the trained prior box in every coordinate"),
     ]
 
 
 def compositional_center(cell_values):
-    """The closed geometric mean of the three shares across recordings -- the compositional center.
+    """The closed geometric mean of the two shares across recordings -- the compositional center.
 
     An arithmetic mean of fractions ignores that a composition lives on the simplex, where the
     natural geometry is multiplicative: differences are ratios between parts, not differences of
@@ -296,21 +343,20 @@ def compositional_center(cell_values):
     than as the headline because it is not the mean of anything a reader is likely to have in mind,
     and because whichever of the two is smaller is the conservative one to lead with.
 
-    Returns ``(K, 6)`` with the three shares recomposed and the two derived reads rebuilt from them;
-    the total column is NaN, since a count has no compositional center.
+    Returns ``(K, 5)`` with the two shares recomposed and the receptor share rebuilt from them; the
+    total columns are NaN, since a count has no compositional center.
     """
     v = np.asarray(cell_values, dtype=float)
     parts = v[:, :, list(PARTS_INDICES)]
     with np.errstate(invalid="ignore", divide="ignore"):
         # Geometric mean over recordings, per part, then closed to sum to one.
         log_parts = np.log(np.where(parts > 0, parts, np.nan))
-        g = np.exp(_nanmean_quiet(log_parts, axis=1))                      # (K, 3)
+        g = np.exp(_nanmean_quiet(log_parts, axis=1))                      # (K, 2)
         g = g / g.sum(axis=1, keepdims=True)
     out = np.full((v.shape[0], len(COMPOSITION)), np.nan)
     out[:, list(PARTS_INDICES)] = g
-    a, b, c = g[:, 0], g[:, 1], g[:, 2]
-    out[:, DIMER_INDEX] = b + c
-    out[:, COMPOSITION_KEYS.index("receptors_in_dimers")] = 2.0 * (b + c) / (a + 2.0 * (b + c))
+    a, b = g[:, 0], g[:, 1]
+    out[:, RECEPTORS_IN_DIMERS_INDEX] = 2.0 * b / (a + 2.0 * b)
     return out
 
 
@@ -322,7 +368,7 @@ def bootstrap_interval(cell_values, n_resamples, rng, level=0.95):
     not depend on that assumption. Disagreement would say the cell-to-cell distribution is skewed
     enough that the SEM misstates it.
 
-    Returns ``(lo, hi)``, each ``(K, 6)``.
+    Returns ``(lo, hi)``, each ``(K, 5)``.
     """
     v = np.asarray(cell_values, dtype=float)
     n_kinds, n_cells, dim = v.shape
@@ -336,7 +382,7 @@ def bootstrap_interval(cell_values, n_resamples, rng, level=0.95):
         if rows.shape[0] < 2:
             continue
         pick = rng.integers(0, rows.shape[0], size=(int(n_resamples), rows.shape[0]))
-        means = _nanmean_quiet(rows[pick], axis=1)                          # (n_resamples, 6)
+        means = _nanmean_quiet(rows[pick], axis=1)                          # (n_resamples, 5)
         lo[k] = np.nanquantile(means, alpha, axis=0)
         hi[k] = np.nanquantile(means, 1.0 - alpha, axis=0)
     return lo, hi
@@ -451,13 +497,15 @@ def monotonicity(grid, quantity_index):
 # Synthetic validation: the same readout where the truth is known
 # =============================================================================
 
-def recovery_statistics(true_log10, inferred_log10, count_index):
+def recovery_statistics(true_flow, inferred_flow, count_index, to_physical):
     """In-model error of the composition readout on held-out videos with known ground truth.
 
     This is what makes the experimental composition interpretable: the identical function of the
-    identical estimator, applied where the answer is known. Fractions are compared in PERCENTAGE
-    POINTS (an absolute difference of two bounded quantities); the total is compared in DEX (a
-    multiplicative error, the natural scale of a count spanning orders of magnitude).
+    identical estimator, applied where the answer is known. ``true_flow`` and ``inferred_flow`` are
+    ``(N, D)`` in estimator space; ``to_physical`` converts the two stoichiometry coordinates (see
+    :func:`window_composition`). Fractions are compared in PERCENTAGE POINTS (an absolute difference
+    of two bounded quantities); the totals are compared in DEX (a multiplicative error, the natural
+    scale of a count spanning orders of magnitude).
 
     Reported per quantity: mean absolute error, its 95th percentile, the signed bias, and the
     correlation between truth and estimate. Both arrays are MAP point estimates, so this is
@@ -467,8 +515,9 @@ def recovery_statistics(true_log10, inferred_log10, count_index):
 
     Returns ``(rows, true_comp, inferred_comp)``.
     """
-    true_comp = composition(10.0 ** np.asarray(true_log10, dtype=float)[:, list(count_index)])
-    inf_comp = composition(10.0 ** np.asarray(inferred_log10, dtype=float)[:, list(count_index)])
+    idx = list(count_index)
+    true_comp = composition(to_physical(np.asarray(true_flow, dtype=float)[:, idx]))
+    inf_comp = composition(to_physical(np.asarray(inferred_flow, dtype=float)[:, idx]))
     rows = []
     for i, q in enumerate(COMPOSITION):
         t, e = true_comp[:, i], inf_comp[:, i]
@@ -479,6 +528,9 @@ def recovery_statistics(true_log10, inferred_log10, count_index):
             scale = 100.0
             corr_t, corr_e = t[ok], e[ok]
         else:
+            # A count compared in dex; a zero count (n_A = 0 at x_B = 1 exactly) has no logarithm
+            # and is dropped from this row as a missing value rather than poisoning the mean.
+            ok &= (t > 0) & (e > 0)
             with np.errstate(invalid="ignore", divide="ignore"):
                 err = np.log10(e[ok]) - np.log10(t[ok])
             unit = "dex"
@@ -486,9 +538,9 @@ def recovery_statistics(true_log10, inferred_log10, count_index):
             corr_t, corr_e = np.log10(t[ok]), np.log10(e[ok])
         rows.append(dict(
             key=q.key, unit=unit, n=int(ok.sum()),
-            mae=float(np.mean(np.abs(err)) * scale),
-            p95=float(np.quantile(np.abs(err), 0.95) * scale),
-            bias=float(np.mean(err) * scale),
+            mae=float(np.mean(np.abs(err)) * scale) if ok.any() else float("nan"),
+            p95=float(np.quantile(np.abs(err), 0.95) * scale) if ok.any() else float("nan"),
+            bias=float(np.mean(err) * scale) if ok.any() else float("nan"),
             r=float(np.corrcoef(corr_t, corr_e)[0, 1]) if ok.sum() > 2 else float("nan")))
     return rows, true_comp, inf_comp
 
@@ -512,24 +564,33 @@ def recovery_stratum(true_comp, inferred_comp, quantity_index, threshold, above=
                 threshold=float(threshold), above=bool(above))
 
 
-def parts_versus_whole(true_log10, inferred_log10, count_index):
-    """Per-count error in dex beside the total's, the comparison the composition argument rests on.
+def parts_versus_whole(true_flow, inferred_flow, count_index, to_physical):
+    """Per-species-count error in dex beside the total's, the comparison the composition rests on.
 
-    The individual counts and their sum are recovered from the same posterior by the same estimator;
-    if the sum is recovered far better than any part, the parts' errors are substantially
-    anti-correlated -- they trade off inside the posterior -- and any quantity that divides one part
-    by the total inherits that cancellation. Returns one row per count plus the total.
+    The species counts n_A = N_R (1 - x_B) and n_B = N_R x_B / 2 and their sum T are recovered from
+    the same posterior by the same estimator; if the sum is recovered far better than either part,
+    the parts' errors are substantially anti-correlated -- they trade off inside the posterior -- and
+    any quantity that divides one part by the total inherits that cancellation. Inputs are in
+    estimator space (see :func:`recovery_statistics`). Returns one row per part plus the total; a
+    zero count (possible at x_B = 0 or 1 exactly) has no logarithm and is dropped from its row.
     """
-    t = np.asarray(true_log10, dtype=float)[:, list(count_index)]
-    e = np.asarray(inferred_log10, dtype=float)[:, list(count_index)]
+    idx = list(count_index)
+    true_comp = composition(to_physical(np.asarray(true_flow, dtype=float)[:, idx]))
+    inf_comp = composition(to_physical(np.asarray(inferred_flow, dtype=float)[:, idx]))
+    # Recover the two counts from the shares and the total: n_A = f_A T, n_B = f_B T.
+    t_parts = true_comp[:, list(PARTS_INDICES)] * true_comp[:, TOTAL_INDEX:TOTAL_INDEX + 1]
+    e_parts = inf_comp[:, list(PARTS_INDICES)] * inf_comp[:, TOTAL_INDEX:TOTAL_INDEX + 1]
     rows = []
-    for j, label in enumerate(("A (monomer)", "B (mobile dimer)", "C (immobile dimer)")):
-        err = e[:, j] - t[:, j]
-        rows.append(dict(key=label, mae=float(np.mean(np.abs(err))),
-                         r=float(np.corrcoef(t[:, j], e[:, j])[0, 1])))
-    with np.errstate(invalid="ignore", divide="ignore"):
-        lt = np.log10((10.0 ** t).sum(axis=1))
-        le = np.log10((10.0 ** e).sum(axis=1))
-    rows.append(dict(key="T = A + B + C", mae=float(np.mean(np.abs(le - lt))),
-                     r=float(np.corrcoef(lt, le)[0, 1])))
+
+    def _dex_row(label, t, e):
+        ok = np.isfinite(t) & np.isfinite(e) & (t > 0) & (e > 0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            lt, le = np.log10(t[ok]), np.log10(e[ok])
+        return dict(key=label, n=int(ok.sum()),
+                    mae=float(np.mean(np.abs(le - lt))) if ok.any() else float("nan"),
+                    r=float(np.corrcoef(lt, le)[0, 1]) if ok.sum() > 2 else float("nan"))
+
+    for j, label in enumerate(PART_LABELS):
+        rows.append(_dex_row(label, t_parts[:, j], e_parts[:, j]))
+    rows.append(_dex_row(WHOLE_LABEL, true_comp[:, TOTAL_INDEX], inf_comp[:, TOTAL_INDEX]))
     return rows

@@ -21,28 +21,35 @@ HEADLINE READOUT -- mobile mixture diffusivity  (read this first)
 =============================================================================
 The transferable quantity across the label / model mismatch (below) is the diffusion
 coefficient. The posterior cannot reliably separate monomer from dimer for these
-controls, so the headline is the count-weighted mean diffusivity of the MOBILE
-populations (monomer A + mobile dimer B), excluding the immobile class C:
+controls, so the headline is the number-weighted mean diffusivity of the MOBILE
+population: both molecular species (A monomer, B dimer) in the mobile modes (fast f and
+slow s), excluding the immobile mode i:
 
-    D_mix_mobile = (C_A * D_A + C_B * D_B) / (C_A + C_B)   [um^2/s]
+    D_mix_mobile = sum_X sum_{m in {f,s}} n_X pi_m D[X, m] / sum_X sum_{m in {f,s}} n_X pi_m   [um^2/s]
 
-with D_A the monomer diffusivity, D_B = R_B * D_A the mobile-dimer diffusivity, and
-C_A, C_B the mobile counts. D_mix lies between D_A and D_B (in either order); the
-headline figure compares, per receptor, the inferred D_mix (solid, condition color)
-against the experimental D_mobile (solid, a separate per-condition color, so experiment
-and inference never share a color); D_A, D_B and the mobile split f_B = C_B / (C_A + C_B)
-are reported in the run's report table, not drawn on the figure. On these
-out-of-distribution controls the model's A / B
-assignment is not physically ordered -- the relative dimer diffusivity R_B can exceed 1
-(mobile dimer "faster" than monomer), and under unrestricted pooling D_A / R_B can even
-leave their training priors -- which is exactly why the count-weighted D_mix, robust to
-the A / B mis-assignment, is the readout rather than D_A or D_B alone. D_mix is read as a
-point between D_A and D_B, not as a resolved mixture unless f_B is informative.
+with n_A = N_R (1 - x_B), n_B = N_R x_B / 2 the species composition from the inferred
+receptor total N_R and initial dimer fraction x_B, pi_m the stationary occupancy of mode m
+under the inferred switching rates (the initial-mode law the simulator seeds with), and
+D[X, m] = D_A * (R_B if X = B) * (1, R_s)[m] the per-type diffusion coefficients. Because
+the switching rates are shared by both species the mode weights cancel in the species
+split, and the formula reduces to D_mix = (n_A D_A' + n_B D_B') / (n_A + n_B) with
+D_A', D_B' the mode-averaged mobile diffusivities of monomer and dimer (D_B' = R_B D_A').
+D_mix lies between D_A' and D_B'; the headline figure compares, per receptor, the
+inferred D_mix (solid, condition color) against the experimental D_mobile (solid, a
+separate per-condition color, so experiment and inference never share a color); D_A',
+D_B' and the dimer-complex split f_B = n_B / (n_A + n_B) are reported in the run's report
+table, not drawn on the figure. On these out-of-distribution controls the model's A / B
+assignment is not physically ordered -- under unrestricted pooling the dimer factor R_B
+can leave its (0, 1] prior (dimer "faster" than monomer) and D_A can leave its training
+prior -- which is exactly why the number-weighted D_mix, robust to the A / B
+mis-assignment, is the readout rather than D_A' or D_B' alone. D_mix is read as a point
+between D_A' and D_B', not as a resolved mixture unless f_B is informative.
 
-D_A is stored in um^2/s directly (10**theta), so D_mix_mobile is directly comparable
-to an experimental mobile-fraction diffusion coefficient D_mobile with no unit
-conversion. The comparison is quantitatively valid because the acquisition geometry
-matches: 50 FPS, 256^2 pixels, ~157 nm/px.
+D_A is stored in um^2/s (the estimator-space value mapped through
+parameterization.to_physical), so D_mix_mobile is directly comparable to an experimental
+mobile-fraction diffusion coefficient D_mobile with no unit conversion. The comparison is
+quantitatively valid because the acquisition geometry matches: 50 FPS, 256^2 pixels,
+~157 nm/px.
 
 Experimental reference (per condition; drawn as a colored band value +/- SD + a line):
     CD86 [Monomer]  : D_mobile = 0.319 +/- 0.010 um^2/s
@@ -58,16 +65,17 @@ The posterior was trained on always-visible permanent-label emitters; the contro
 recordings use an exchangeable, blinking SiR-S5 HaloTag probe. The diffusion
 coefficient is a per-track property read from the displacement statistics of a
 molecule while it is visible, so it is robust to how many molecules are lit at once
-and survives the mismatch. Counts and rates (C_*, kappa_*, R_ON) instead depend on
-the number of co-visible emitters and on track continuity, both corrupted by
-blinking, so they are NOT read quantitatively here. The controls are also constitutive
-monomer / dimer references, not the dynamic A + A <=> B <=> C dimerization mechanism
-the posterior encodes: they bracket the diffusion scale and stress-test
-transferability, they do not exercise the kinetic model.
+and survives the mismatch. The stoichiometry and the rates (N_R, x_B, kappa_OFF, the
+switching rates k_*, R_ON) instead depend on the number of co-visible emitters and on
+track continuity, both corrupted by blinking, so they are NOT read quantitatively here.
+The controls are also constitutive monomer / dimer references, not the dynamic
+A + A <=> B dimerization with fast / slow / immobile mobility switching the posterior
+encodes: they bracket the diffusion scale and stress-test transferability, they do not
+exercise the kinetic model.
 
-The per-parameter temporal figures (counts, rates, ratios) are still produced -- their
-downward count drift makes the blinking / bleaching confound visible -- but only the
-mobile-diffusion headline carries an experimental comparison.
+The per-parameter temporal figures (stoichiometry, rates, ratios) are still produced --
+a downward drift of the receptor total makes the blinking / bleaching confound visible
+-- but only the mobile-diffusion headline carries an experimental comparison.
 
 =============================================================================
 NOT IMPLEMENTED YET -- aggregated posterior distributions  (documented on purpose)
@@ -91,7 +99,7 @@ INPUTS / OUTPUTS
 =============================================================================
 Reads  <data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Experiment_CD86_CTLA-4_CONTROLS/
          <same>.npz
-       arrays used: inferred_log10 (N,10) log10 MAP, kind_index (N,), cell (N,),
+       arrays used: inferred_log10 (N,12) estimator-space MAP, kind_index (N,), cell (N,),
        chunk (N,), kinds (2,) = ['CD86','CTLA-4']. Optionally the sibling MAP_Recovery
        .npz (same timing) annotates each parameter with its ground-truth recovery
        quality on simulated EVAL data (a property of the posterior, so it applies
@@ -127,7 +135,12 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, PARAMETERIZATION, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import (
+    PARAMETERS, PARAMETERIZATION, RunTiming, entry_to_physical, is_log_row, to_physical,
+)
+from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
+    diffusion_coefficients, stationary_mode_law, theta_by_key,
+)
 
 # ---------------------------------------------------------------------------
 # Condition mapping. The control Experiment .npz stores the raw kind strings
@@ -152,7 +165,7 @@ CONTROLS_RECOVERY_PATTERN = "{project_alias}_{timing_label}_MAP_Experiment_CD86_
 # Experimental mobile-fraction diffusion coefficients D_mobile per control receptor
 # (Catapano et al., Angew. Chem. Int. Ed. 2025, 64, e202413117; BioImage Archive
 # S-BIAD1369; SiR-S5 / HaloTag single-color tracking at 50 FPS / 256^2 / ~157 nm/px,
-# matching the training geometry). Compared against the count-weighted mobile mixture
+# matching the training geometry). Compared against the number-weighted mobile mixture
 # diffusivity D_mix_mobile (see _mobile_mixture / _dmix_figure). CD86 (monomer) sits
 # above CTLA-4 (dimer): the two bracket the mobile-diffusion scale. Values in um^2/s.
 # ---------------------------------------------------------------------------
@@ -180,16 +193,20 @@ EXPERIMENTAL_REFERENCE = {}
 # Short human-readable name per parameter KEY (titles); the LaTeX symbol comes from
 # PARAMETERIZATION[...]['LABEL'] and the unit from ['UNIT'].
 PARAM_DISPLAY_NAME = {
-    "count_alp": "Initial monomer count",
-    "count_bet": "Initial mobile-dimer count",
-    "count_chi": "Initial immobile-dimer count",
-    "diffusivity_alp": "Monomer diffusivity",
-    "relative_diffusivity_bet": "Rel. mobile-dimer diffusivity",
-    "relative_diffusivity_chi": "Rel. immobile-dimer diffusivity",
-    "relative_rate_dimerization": "Rel. dimerization rate",
+    # stoichiometry block
+    "count_total": "Receptor total",
+    "fraction_dimer_initial": "Initial dimer fraction",
+    "relative_rate_dimerization": "Association ratio",
     "rate_dissociation": "Dissociation rate",
-    "rate_immobility": "Immobilization rate",
-    "rate_mobility": "Mobilization rate",
+    # mobility block
+    "diffusivity_alp": "Monomer diffusivity",
+    "relative_diffusivity_dimer": "Rel. dimer diffusivity",
+    "relative_diffusivity_slow": "Rel. slow-mode diffusivity",
+    "relative_diffusivity_immobile": "Rel. immobile-mode diffusivity",
+    "rate_fast_slow": "Switching rate fast->slow",
+    "rate_slow_fast": "Switching rate slow->fast",
+    "rate_slow_immobile": "Switching rate slow->immobile",
+    "rate_immobile_slow": "Switching rate immobile->slow",
 }
 
 # Compact axis unit from the PARAMETERIZATION 'UNIT' string.
@@ -201,15 +218,15 @@ UNIT_SHORT = {
 }
 
 
-def _abs(map_log10):
-    """Convert a stored log10 MAP value to its absolute (linear) value.
+def _abs(map_flow):
+    """Convert stored estimator-space MAP values (last axis = PARAMETERIZATION order) to physical.
 
-    Every learnable parameter has LOG_FLAG=True, LOG_BASE=10 in PARAMETERIZATION,
-    so the stored theta is log10(value) and the physical value is 10**theta. The
-    relative-diffusivity / relative-rate parameters (R_B, R_C, R_ON) are stored as
-    dimensionless ratios; 10**theta is therefore the ratio itself.
+    The ONE conversion rule (``parameterization.to_physical``): log rows are exponentiated
+    (10**theta), the linear initial dimer fraction passes through unchanged. The
+    relative-diffusivity / relative-rate parameters (R_B, R_s, R_i, R_ON) are dimensionless
+    ratios, so their physical value is the ratio itself.
     """
-    return np.power(10.0, map_log10)
+    return to_physical(map_flow)
 
 
 def _reference_band(ref):
@@ -244,11 +261,13 @@ def _reshape_to_grid(inferred_log10, kind_index, cell, chunk, n_kinds):
 
 
 def _recovery_within_band(recovery_npz_path, band=0.3):
-    """Per-parameter fraction of EVAL videos recovered within +/- `band` log10.
+    """Per-parameter fraction of EVAL videos recovered within +/- `band` dex (log rows only).
 
     Reads the sibling MAP_Recovery .npz (true_log10 + inferred_log10) if present, so
     each temporal figure can be annotated with how well that parameter is even
-    recoverable on ground-truth data. Returns None if absent or lacking the arrays.
+    recoverable on ground-truth data. A dex band is a multiplicative tolerance and does
+    not apply to the linear initial dimer fraction, whose entry is NaN (flagged, not
+    silently computed). Returns None if absent or lacking the arrays.
     """
     try:
         if not recovery_npz_path.exists():
@@ -257,7 +276,8 @@ def _recovery_within_band(recovery_npz_path, band=0.3):
             if "true_log10" not in d.files or "inferred_log10" not in d.files:
                 return None
             err = np.abs(d["inferred_log10"] - d["true_log10"])
-            return np.mean(err <= band, axis=0)   # (n_param,) fraction in band
+            log_rows = np.array([is_log_row(p) for p in PARAMETERIZATION], dtype=bool)
+            return np.where(log_rows, np.mean(err <= band, axis=0), np.nan)   # (n_param,)
     except Exception:
         return None
 
@@ -338,8 +358,10 @@ def _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac=None):
     ax.set_xticks(x)
     ax.set_ylabel(f"inferred [{UNIT_SHORT.get(unit, unit)}]")
     title = f"Mean MAP over time — {name} ({label})"
-    if recovery_frac is not None:
-        title += f"\nEVAL recovery within ±0.3 log10: {recovery_frac[p_index] * 100:.0f}%"
+    if recovery_frac is not None and np.isfinite(recovery_frac[p_index]):
+        title += f"\nEVAL recovery within ±0.3 dex: {recovery_frac[p_index] * 100:.0f}%"
+    elif recovery_frac is not None:
+        title += "\nEVAL recovery: dex band not applicable (linear row)"
     ax.set_title(title, fontsize=11)
     ax.legend(fontsize=8, framealpha=0.9)
     fig.tight_layout()
@@ -362,33 +384,57 @@ def _prior_bounds(key):
     """
     p = PARAMETERIZATION[_key_index(key)]
     lo, hi = p["PRIOR_RANGE"]
-    if p.get("LOG_FLAG"):
-        base = p.get("LOG_BASE", 10)
-        lo, hi = base ** lo, base ** hi
-    return float(lo), float(hi)
+    return float(entry_to_physical(p, lo)), float(entry_to_physical(p, hi))
 
 
 def _mobile_mixture(abs_grid):
-    """Count-weighted mobile mixture diffusivity D_mix_mobile (+ its bracket), per (kind, cell, chunk).
+    """Number-weighted mobile mixture diffusivity D_mix_mobile (+ its bracket), per (kind, cell, chunk).
 
-    From the absolute-unit grid reads C_A (count_alp), C_B (count_bet), D_A
-    (diffusivity_alp, um^2/s) and R_B (relative_diffusivity_bet); forms the mobile-dimer
-    diffusivity D_B = R_B * D_A and the number-weighted mean over the MOBILE populations
-    (monomer A + mobile dimer B), excluding the immobile class C:
-        D_mix_mobile = (C_A*D_A + C_B*D_B) / (C_A + C_B)   [um^2/s]
+    From the physical-unit grid (last axis = PARAMETERIZATION order) reads, per window:
+      * the species composition n_A = N_R (1 - x_B), n_B = N_R x_B / 2 from the receptor
+        total (count_total) and the initial dimer fraction (fraction_dimer_initial);
+      * the per-type diffusion coefficients D[X, m] = D_A * (R_B if X = B) * (1, R_s, R_i)[m]
+        (simulation_rds_support.diffusion_coefficients, the generator's own definition);
+      * the stationary occupancy pi_m of the isolated switching chain
+        (simulation_rds_support.stationary_mode_law), the initial-mode law every particle
+        is seeded with.
+    The MOBILE population is both species in every mode but the immobile one (the last
+    declared mode, a resolution floor rather than motion). The number-weighted mean is
+        D_mix_mobile = sum_X sum_{m mobile} n_X pi_m D[X, m] / sum_X sum_{m mobile} n_X pi_m
+    and because the switching rates are shared by both species the mode weights cancel in
+    the species split, so D_mix = (n_A d_A + n_B d_B) / (n_A + n_B) with the mode-averaged
+    mobile diffusivities d_X = sum_{m mobile} pi_m D[X, m] / sum_{m mobile} pi_m.
     Returns (d_mix, d_a, d_b, f_b), each shaped (n_kinds, n_cells, n_chunks), where
-    f_b = C_B/(C_A+C_B) is the mobile-dimer fraction. D_A and D_B (which bracket D_mix,
-    in either order -- on out-of-distribution controls R_B can exceed 1, so D_B > D_A)
-    and f_b are reported alongside D_mix because the weights (the counts) are the
-    label-fragile quantity while D_A, D_B are robust.
+    f_b = n_B / (n_A + n_B) is the dimer-complex fraction (equal among the mobile complexes
+    and overall, since the modes are shared). d_a and d_b bracket D_mix (within the prior
+    d_b = R_B d_a <= d_a; on out-of-distribution controls under unrestricted pooling R_B can
+    leave (0, 1], flipping the bracket) and are reported alongside because the weights (the
+    composition) are the label-fragile quantity while d_a, d_b are robust. Windows with any
+    non-finite parameter yield NaN.
     """
-    c_a = abs_grid[..., _key_index("count_alp")]
-    c_b = abs_grid[..., _key_index("count_bet")]
-    d_a = abs_grid[..., _key_index("diffusivity_alp")]
-    d_b = abs_grid[..., _key_index("relative_diffusivity_bet")] * d_a
-    mobile = c_a + c_b
-    d_mix = (c_a * d_a + c_b * d_b) / mobile
-    f_b = c_b / mobile
+    grid = np.asarray(abs_grid, dtype=float)
+    rds = PARAMETERS.simulation.rds
+    mono, dim = rds.stoichiometry.monomer.name, rds.stoichiometry.dimer.name
+    mobile_modes = list(rds.mobility.modes[:-1])           # all but the (last, immobile) mode
+    n_r_index = _key_index(rds.stoichiometry.count_total_key)
+    x_b_index = _key_index(rds.stoichiometry.fraction_dimer_key)
+    shape = grid.shape[:-1]
+    d_mix, d_a, d_b, f_b = (np.full(shape, np.nan) for _ in range(4))
+    for index in np.ndindex(*shape):
+        theta = grid[index]
+        if not np.isfinite(theta).all():
+            continue
+        coeff = diffusion_coefficients(theta)                    # {type_name: D}
+        pi = dict(zip(rds.mobility.modes, stationary_mode_law(theta)))
+        w = sum(pi[m] for m in mobile_modes)
+        da = sum(pi[m] * coeff[rds.type_name(mono, m)] for m in mobile_modes) / w
+        db = sum(pi[m] * coeff[rds.type_name(dim, m)] for m in mobile_modes) / w
+        n_r, x_b = theta[n_r_index], theta[x_b_index]
+        n_a, n_b = n_r * (1.0 - x_b), 0.5 * n_r * x_b
+        total = n_a + n_b
+        d_a[index], d_b[index] = da, db
+        d_mix[index] = (n_a * da + n_b * db) / total if total > 0 else np.nan
+        f_b[index] = n_b / total if total > 0 else np.nan
     return d_mix, d_a, d_b, f_b
 
 
@@ -402,7 +448,7 @@ def _dmix_figure(d_mix, d_a, d_b, f_b, x, kinds):
       * experimental D_mobile per condition -- a separate per-condition color
         (EXPERIMENTAL_CONDITION_COLOR), a flat reference line with a value +/- SD band.
     Experiment and inference never share a color, and the two experimental references
-    stay distinguishable. D_A, D_B and the mobile split f_B are intentionally NOT drawn
+    stay distinguishable. d_A, d_B and the dimer-complex split f_B are intentionally NOT drawn
     (they are in the report table) so the figure stays uncluttered.
     Returns (Figure, {display: {'dmix','d_a','d_b','f_b'}}).
     """
@@ -485,16 +531,20 @@ def _write_report(fig_dir, meta, results):
     L.append("## Diffusion readout vs experiment (headline)")
     L.append("")
     L.append("`dmix_mobile_temporal.png` compares, per receptor, the inferred "
-             "count-weighted mobile mixture diffusivity "
-             "**D_mix_mobile = (C_A·D_A + C_B·D_B) / (C_A + C_B)** (µm²/s, in the condition "
+             "number-weighted mobile mixture diffusivity "
+             "**D_mix_mobile = (n_A·d_A + n_B·d_B) / (n_A + n_B)** (µm²/s, in the condition "
              "color) against the experimental mobile-fraction diffusion coefficient "
-             "D_mobile (in a separate per-condition color). D_A (monomer), D_B = R_B·D_A "
-             "(mobile dimer) — which bracket D_mix in either order — and the mobile split "
-             "f_B = C_B / (C_A + C_B) are given in the table below rather than on the "
+             "D_mobile (in a separate per-condition color). Here n_A = N_R (1 − x_B) and "
+             "n_B = N_R x_B / 2 are the species composition from the inferred receptor total "
+             "and initial dimer fraction, and d_A, d_B = R_B·d_A are the monomer and dimer "
+             "diffusivities averaged over the MOBILE modes (fast, slow) with the stationary "
+             "occupancies of the inferred switching chain; the immobile mode is excluded. "
+             "d_A, d_B — which bracket D_mix in either order — and the dimer-complex split "
+             "f_B = n_B / (n_A + n_B) are given in the table below rather than on the "
              "figure. D_A is stored in µm²/s, so the comparison needs no unit conversion, "
              "and the acquisition geometry matches (50 FPS, 256² px, ~157 nm/px).")
     L.append("")
-    L.append("| Condition | D_mix_mobile | D_A (monomer) | D_B (mobile dimer) | f_B | "
+    L.append("| Condition | D_mix_mobile | d_A (monomer, mobile modes) | d_B (dimer, mobile modes) | f_B | "
              "Experimental D_mobile |")
     L.append("|---|---|---|---|---|---|")
     for k, d in zip(meta["kinds"], displays):
@@ -506,7 +556,7 @@ def _write_report(fig_dir, meta, results):
     L.append("")
     # Flag conditions whose MAP left the training prior (unrestricted pooling on OOD data).
     da_lo, da_hi = _prior_bounds("diffusivity_alp")
-    rb_lo, rb_hi = _prior_bounds("relative_diffusivity_bet")
+    rb_lo, rb_hi = _prior_bounds("relative_diffusivity_dimer")
     flags = []
     for k, d in zip(meta["kinds"], displays):
         s = dmix.get(d, {})
@@ -514,7 +564,8 @@ def _write_report(fig_dir, meta, results):
         rb = (s["d_b"] / s["d_a"]) if s.get("d_a") else None
         out = []
         if da is not None and not (da_lo <= da <= da_hi):
-            out.append(f"D_A = {da:.3f} outside [{da_lo:.3g}, {da_hi:.3g}]")
+            out.append(f"d_A = {da:.3f} outside the D_A box [{da_lo:.3g}, {da_hi:.3g}] "
+                       f"(d_A is the mode-averaged mobile value, at most D_A)")
         if rb is not None and not (rb_lo <= rb <= rb_hi):
             out.append(f"R_B = {rb:.2f} outside [{rb_lo:.3g}, {rb_hi:.3g}]")
         if out:
@@ -527,7 +578,7 @@ def _write_report(fig_dir, meta, results):
                  "readout, but read it as bracketed, not a resolved mixture.")
         L.append("")
     L.append("All diffusivities in µm²/s (time-averaged over cells × windows). Read "
-             "D_mix_mobile as a point between D_A and D_B (in either order); treat it as "
+             "D_mix_mobile as a point between d_A and d_B (in either order); treat it as "
              "a resolved monomer / dimer mixture only where f_B has an informative "
              "(non-edge) posterior. These controls bracket the experimental scale, but "
              "this readout does not by itself resolve monomer (CD86) from dimer (CTLA-4).")
@@ -558,7 +609,8 @@ def _write_report(fig_dir, meta, results):
     L.append("|" + "---|" * (1 + len(displays) + 1))
     for r in results:
         tavgs = " | ".join(f"{r['time_avgs'].get(d, float('nan')):.3g}" for d in displays)
-        rec = "—" if r["recovery"] is None else f"{r['recovery'] * 100:.0f}%"
+        rec = ("—" if r["recovery"] is None else
+               ("n/a (linear row)" if not np.isfinite(r["recovery"]) else f"{r['recovery'] * 100:.0f}%"))
         L.append(f"| {r['name']} ({r['label']}) | {tavgs} | {rec} |")
     L.append("")
     L.append("## Caveats")
@@ -566,26 +618,29 @@ def _write_report(fig_dir, meta, results):
     L.append("- **Label / model mismatch.** The posterior was trained on always-visible "
              "permanent-label emitters; these controls use an exchangeable, blinking "
              "SiR-S5 HaloTag probe. Diffusion (D) is a per-track property and transfers; "
-             "counts and rates (C_*, κ_*, R_ON) depend on co-visible-emitter numbers and "
-             "track continuity and are **not** read quantitatively here.")
+             "the stoichiometry and the rates (N_R, x_B, κ_OFF, the switching rates k_*, "
+             "R_ON) depend on co-visible-emitter numbers and track continuity and are "
+             "**not** read quantitatively here.")
     L.append("- **Not the trained mechanism.** CD86 (monomer) and CTLA-4 (dimer) are "
-             "constitutive oligomeric-state controls, not the dynamic A + A ⇌ B ⇌ C "
-             "dimerization mechanism the posterior encodes. They bracket the diffusion "
-             "scale and stress-test transferability; they do not exercise the kinetics.")
+             "constitutive oligomeric-state controls, not the dynamic A + A ⇌ B "
+             "dimerization with fast / slow / immobile mobility switching the posterior "
+             "encodes. They bracket the diffusion scale and stress-test transferability; "
+             "they do not exercise the kinetics.")
     L.append("- **Why the D comparison is still quantitative.** The acquisition geometry "
              "matches the training regime (50 FPS, 256² px, ~157 nm/px) and D_A is stored "
              "in µm²/s, so D_mix_mobile is directly comparable to the experimental "
              "D_mobile with no conversion.")
-    L.append("- **D_mix weights are the fragile quantity.** D_mix is count-weighted and "
-             "the counts are label-fragile; if f_B collapses toward 0 or 1, D_mix "
-             "approaches D_A or D_B. Read it within the [D_B, D_A] bracket, not as a "
+    L.append("- **D_mix weights are the fragile quantity.** D_mix is number-weighted and "
+             "the composition (N_R, x_B) is label-fragile; if f_B collapses toward 0 or 1, "
+             "D_mix approaches d_A or d_B. Read it within the [d_B, d_A] bracket, not as a "
              "resolved mixture, unless f_B is informative.")
-    L.append("- **Blinking / photobleaching** drives the downward drift of the count "
-             "parameters (fewer visible emitters in later windows) — a real "
-             "non-stationarity in a confounded parameter, not receptor loss.")
+    L.append("- **Blinking / photobleaching** drives a downward drift of the receptor "
+             "total (fewer visible emitters in later windows) — a real non-stationarity "
+             "in a confounded parameter, not receptor loss.")
     L.append("- **First-pass posteriors** (interrupted training) — absolute values will "
              "sharpen with the production posteriors; re-run this analysis on those.")
-    L.append("- Relative parameters (R_B, R_C, R_ON) are shown as dimensionless ratios.")
+    L.append("- Relative parameters (R_B, R_s, R_i, R_ON) are shown as dimensionless ratios; "
+             "the initial dimer fraction x_B is a linear coordinate on [0, 1].")
     L.append("- The pooled **posterior-distribution** panels are a documented, "
              "not-yet-implemented extension (they need the full per-window sample pool, "
              "not the stored quantiles).")
@@ -667,7 +722,7 @@ def main(args):
 
     fig_dir.mkdir(parents=True, exist_ok=True)
 
-    # Headline: count-weighted mobile mixture diffusivity D_mix_mobile per condition,
+    # Headline: number-weighted mobile mixture diffusivity D_mix_mobile per condition,
     # against the experimental mobile-fraction D_mobile (the transferable observable).
     d_mix, d_a, d_b, f_b = _mobile_mixture(abs_grid)
     dmix_fig, dmix_summary = _dmix_figure(d_mix, d_a, d_b, f_b, x, kinds)

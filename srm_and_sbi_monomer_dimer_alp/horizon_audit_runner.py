@@ -26,8 +26,9 @@ CLI subcommand so the expensive stages can be split across machines and resumed:
 
 DESIGN DECISIONS.
 
-* STATE TRUTH = THE WINDOW-START POPULATION. The estimator's count labels are the initial
-  populations of its training windows, so the start state is what it was trained to report.
+* STATE TRUTH = THE WINDOW-START POPULATION. The estimator's stoichiometry labels (receptor total
+  N_R, initial dimer fraction x_B) are the initial populations of its training windows, so the
+  start state is what it was trained to report.
   The within-window mean and end populations, and the unrounded theta label, are retained as
   explicitly secondary sensitivity references -- judging against them manufactures an estimand
   mismatch that can dwarf the real error (measured on the smoke: 36 pp fake vs ~1 pp real).
@@ -39,13 +40,13 @@ DESIGN DECISIONS.
   (default: the estimator's own in-model error on the 10,000-video held-out recovery -- a
   degradation smaller than the instrument's own error is practically negligible), and the
   verdict is degraded / equivalent / inconclusive from the trajectory-bootstrap CI.
-* PRIMARY ESTIMANDS ARE PREDECLARED: the dimer-complex fraction f_D (state, judged against the
-  start truth), D_A and kappa_OFF (constants, judged against theta). Every other parameter is
-  exploratory: reported, never verdicted (multiplicity).
+* PRIMARY ESTIMANDS ARE PREDECLARED: the dimer-complex fraction f_B = n_B / (n_A + n_B) (state,
+  judged against the start truth), D_A and kappa_OFF (constants, judged against theta). Every
+  other parameter is exploratory: reported, never verdicted (multiplicity).
 * COVERAGE IS NEVER POOLED ACROSS ESTIMAND KINDS. Constants (R_ON excluded -- already known
-  unidentified) are reported separately from the counts, whose "coverage" against the stale t=0
-  truth measures state drift, not calibration; f_D coverage is computed from the within-draw
-  fraction distribution against the start truth.
+  unidentified) are reported separately from the stoichiometry coordinates, whose "coverage"
+  against the stale t=0 truth measures state drift, not calibration; f_B coverage is computed
+  from the within-draw fraction distribution against the start truth.
 * SEEDS ARE SPAWNED, PERSISTED, AND NEVER SHARED. A master seed (drawn and persisted at prepare
   when not supplied) derives one placement seed and one render seed per (theta, arm, replicate)
   via ``numpy.random.SeedSequence`` -- resets are independently randomized, not copies of one
@@ -84,21 +85,26 @@ import numpy as np
 from . import horizon_audit as ha
 from . import population_composition as pc
 from .diagnostics import DiagnosticReporter
-from .parameterization import PARAMETERS, RunTiming
+from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical
 from .labeling import LABELING_CONDITIONS, resolve_labeling_law
 from .simulation_rds_support import (
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
-    extract_trajectory_poses,
+    extract_trajectory_poses, rank_to_species,
 )
 from .workflow import parameter_table
 
-_COUNT_KEYS = ("count_alp", "count_bet", "count_chi")     # A, B, C -- the species-rank order
+# The stoichiometry coordinates, in the order the composition kernel expects: the receptor total
+# N_R (a log row) and the initial dimer fraction x_B (a linear row on [0, 1]).
+_COUNT_KEYS = (PARAMETERS.simulation.rds.stoichiometry.count_total_key,
+               PARAMETERS.simulation.rds.stoichiometry.fraction_dimer_key)
+# Species-count column order of every per-frame trace: monomer first, dimer second.
+_SPECIES_ORDER = PARAMETERS.simulation.rds.molecular_species_names
 
 # Predeclared primary estimands and their default equivalence margins: the estimator's own
 # in-model error on the 10,000-video held-out recovery (report Experimental_Synthetic_Comparison
 # sections 3.1-3.2) -- a degradation smaller than the instrument's own error is practically
-# negligible. f_D in percentage points; the constants in dex. CLI-overridable.
-_DEFAULT_MARGINS = {"f_D": 2.8, "diffusivity_alp": 0.023, "rate_dissociation": 0.177}
+# negligible. f_B in percentage points; the constants in dex. CLI-overridable.
+_DEFAULT_MARGINS = {"f_B": 2.8, "diffusivity_alp": 0.023, "rate_dissociation": 0.177}
 
 
 # =============================================================================
@@ -109,8 +115,9 @@ def _horizon_audit_spec(cfg, args):
     """Resolve paths, keys and timings for the audit; biology-only by construction.
 
     The audit needs the full reactive system (the inherited state IS the reaction state) and the
-    species counts among the learnable parameters; the detector workflow has neither, so it is
-    refused explicitly rather than producing a meaningless run.
+    stoichiometry coordinates (receptor total, initial dimer fraction) among the learnable
+    parameters; the detector workflow has neither, so it is refused explicitly rather than
+    producing a meaningless run.
     """
     if cfg.tag != "biology":
         raise SystemExit(
@@ -120,8 +127,8 @@ def _horizon_audit_spec(cfg, args):
     keys = list(cfg.param_module.PARAMETER_KEYS)
     missing = [k for k in _COUNT_KEYS if k not in keys]
     if missing:
-        raise SystemExit(f"parameterization lacks the species-count keys {missing}; "
-                         f"the audit's dynamic-state comparison needs all three.")
+        raise SystemExit(f"parameterization lacks the stoichiometry keys {missing}; "
+                         f"the audit's dynamic-state comparison needs both.")
     window = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     continuous = RunTiming(total_time_seconds=args.continuous_seconds,
@@ -404,7 +411,9 @@ def _simulate_and_render(theta_physical, timing, imaging_physical, traj_path,
     stream, and ``labeling_seed`` the static per-subunit dye draw under the labeling ``law``
     -- all distinct per (theta, arm, replicate), so replicates are independently randomized.
     ReaDDy's internal dynamics RNG is not seedable through this interface and stays OS-seeded.
-    Returns ``(video_uint8, counts)``; the trajectory file is the caller's to keep or delete.
+    Returns ``(video_uint8, counts)`` with ``counts`` the ``(n_frames, 2)`` per-frame SPECIES
+    populations ``[A, B]`` (particle-type counts summed over the mobility modes); the trajectory
+    file is the caller's to keep or delete.
     """
     import readdy
     from .io import convert_video_dtype
@@ -426,7 +435,10 @@ def _simulate_and_render(theta_physical, timing, imaging_physical, traj_path,
     if tray_poses.shape[0] != timing.frame_count:
         raise RuntimeError(f"trajectory holds {tray_poses.shape[0]} frames but the run "
                            f"declares {timing.frame_count}.")
-    counts = ha.species_counts_per_frame(tray_poses)
+    # Per-type counts (one column per (species, mode) rank) -> per-species counts [A, B]: the
+    # composition is a species census and the mobility modes do not enter it.
+    counts = ha.species_counts_from_type_counts(
+        ha.species_counts_per_frame(tray_poses), rank_to_species(tray), _SPECIES_ORDER)
     soul_poses = collapse_species_axis(tray_poses)
     # Static labeling draw (the DOL-explicit observation layer): one dye count per subunit,
     # carried through the reactions by the lineage; only dyes render.
@@ -482,7 +494,7 @@ def _phase_generate(spec, args):
                 print(f"[{index:04d}] exists (cohort verified), skipping "
                       f"(pass --overwrite to redo).")
                 continue
-        theta_physical = np.power(10.0, theta_log10[index])
+        theta_physical = to_physical(theta_log10[index], spec["table"])
         seeds = _spawn_seeds(cohort["master_seed"], index, n_resets)
         t0 = time.time()
         traj_path = traj_dir / f"theta_{index:04d}_continuous.h5"
@@ -510,9 +522,9 @@ def _phase_generate(spec, args):
         np.savez_compressed(
             str(out_path),
             cont_video=cont_video,                                  # (F, H, W) uint8
-            cont_counts=cont_counts.astype(np.int32),               # (F, 3) A,B,C per frame
+            cont_counts=cont_counts.astype(np.int32),               # (F, 2) species A, B per frame (modes summed)
             reset_videos=np.stack(reset_videos),                    # (R, f, H, W) uint8
-            reset_counts=np.stack(reset_counts).astype(np.int32),   # (R, f, 3)
+            reset_counts=np.stack(reset_counts).astype(np.int32),   # (R, f, 2)
             theta_log10=theta_log10[index],
             imaging_physical=imaging_physical,
             imaging_desc=str(imaging_desc),
@@ -595,8 +607,8 @@ def _phase_infer(spec, args):
             draw_rows.append(cloud)
         np.savez_compressed(
             str(out_path),
-            post_q=np.stack(quantile_rows).astype(np.float32),      # (N, D, 5) log10
-            draws=np.stack(draw_rows).astype(np.float32),           # (N, S, D) log10
+            post_q=np.stack(quantile_rows).astype(np.float32),      # (N, D, 5) estimator space
+            draws=np.stack(draw_rows).astype(np.float32),           # (N, S, D) estimator space
             which=which, position=position,
             theta_log10=theta_log10[index],
             cohort_id=cohort["cohort_id"],
@@ -691,19 +703,33 @@ def _recovery_artifact_path(spec, args):
 
 
 def _fd_of_counts(counts):
-    """Dimer-complex fraction from a (..., 3) counts array, via the shared composition kernel."""
-    return pc.composition(counts)[..., pc.DIMER_INDEX]
+    """Dimer-complex fraction n_B / (n_A + n_B) from a ``(..., 2)`` SPECIES-count array
+    ``[A, B]`` (a trajectory's population), via the shared composition kernel."""
+    return pc.composition_from_counts(counts)[..., pc.DIMER_INDEX]
 
 
-def _fd_draw_stats(draws, count_index):
-    """Per-window f_D mean and quantiles from the within-draw fraction distribution.
+def _fd_of_parameters(theta_flow, count_index, table):
+    """Dimer-complex fraction from estimator-space theta rows ``(..., D)`` (draws, labels, MAPs).
 
-    ``draws`` is ``(N, S, D)`` log10. The fraction is formed INSIDE each draw (correlations
-    intact), giving an ``(N, S)`` distribution; returns its mean and the [5, 25, 75, 95]
-    percentile bands -- the f_D credible intervals whose coverage is judged against the
-    start-state truth.
+    Selects the two stoichiometry coordinates, maps them to physical ``(N_R, x_B)`` with the ONE
+    conversion rule bound to their table rows (the total is a log row, the fraction a linear one),
+    and forms the fraction through the same kernel definition the trajectory path uses.
     """
-    fd = _fd_of_counts(10.0 ** np.asarray(draws)[..., list(count_index)])    # (N, S)
+    idx = list(count_index)
+    rows = [table[i] for i in idx]
+    pair = to_physical(np.asarray(theta_flow, dtype=float)[..., idx], rows)
+    return pc.composition(pair)[..., pc.DIMER_INDEX]
+
+
+def _fd_draw_stats(draws, count_index, table):
+    """Per-window f_B mean and quantiles from the within-draw fraction distribution.
+
+    ``draws`` is ``(N, S, D)`` in estimator space. The fraction is formed INSIDE each draw
+    (correlations intact), giving an ``(N, S)`` distribution; returns its mean and the
+    [5, 25, 75, 95] percentile bands -- the f_B credible intervals whose coverage is judged
+    against the start-state truth.
+    """
+    fd = _fd_of_parameters(draws, count_index, table)                        # (N, S)
     q = np.percentile(fd, [5, 25, 75, 95], axis=-1)                          # (4, N)
     return fd.mean(axis=-1), q
 
@@ -732,16 +758,17 @@ def _figure_error_vs_position(table, keys, cont_abs, reset_abs, count_index):
         ax.axhline(float(r_mean[0]), color="tab:gray", lw=1.0)
         ax.fill_between(x, lo, hi, color="tab:blue", alpha=0.2)
         ax.plot(x, mean, "-o", ms=3, color="tab:blue", label="continuous")
-        marker = " (count: vs t=0 label, reads state drift)" if i in count_index else ""
+        marker = " (stoichiometry: vs t=0 label, reads state drift)" if i in count_index else ""
         ax.set_title(labels.get(key, key) + marker, fontsize=8)
         ax.tick_params(labelsize=7)
         if i == 0:
             ax.legend(fontsize=6)
     for j in range(n_params, n_rows * n_cols):
         axes[j // n_cols, j % n_cols].axis("off")
-    fig.suptitle("ABSOLUTE posterior-median error (log10) vs window position -- truth = drawn "
-                 "theta\n(count panels read STATE DRIFT against the stale t=0 label, not "
-                 "estimator error; the state audit is the f_D figure)", fontsize=9)
+    fig.suptitle("ABSOLUTE posterior-median error (estimator space: dex for log rows, absolute "
+                 "for the linear dimer fraction) vs window position -- truth = drawn theta\n"
+                 "(stoichiometry panels read STATE DRIFT against the stale t=0 label, not "
+                 "estimator error; the state audit is the f_B figure)", fontsize=9)
     fig.supxlabel("window position", fontsize=9)
     fig.tight_layout()
     return fig
@@ -749,7 +776,7 @@ def _figure_error_vs_position(table, keys, cont_abs, reset_abs, count_index):
 
 def _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
                                  fd_cov, const_index):
-    """Coverage against window position: constants (excl. R_ON) and f_D-vs-start separately."""
+    """Coverage against window position: constants (excl. R_ON) and f_B-vs-start separately."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -767,9 +794,9 @@ def _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
         ax.plot(x, mean_c, "-o", ms=3, color="tab:blue",
                 label="continuous (constants, excl. $R_{ON}$)")
         ax.plot(x, np.nanmean(fd_cov["cont_" + fd_key], axis=0), "-s", ms=3,
-                color="tab:orange", label="continuous $f_D$ vs start truth")
+                color="tab:orange", label="continuous $f_B$ vs start truth")
         ax.axhline(float(np.nanmean(fd_cov["reset_" + fd_key])), color="tab:orange",
-                   lw=1.0, ls=":", label="reset $f_D$ vs start truth")
+                   lw=1.0, ls=":", label="reset $f_B$ vs start truth")
         ax.set_title(name, fontsize=9)
         ax.set_ylim(0.0, 1.05)
         ax.set_xlabel("window position", fontsize=8)
@@ -784,7 +811,7 @@ def _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
 
 def _figure_dynamic_state(true_start, true_mean, true_end, inferred,
                           reset_true_start, reset_inferred):
-    """The state audit: inferred f_D against the window-START truth across positions."""
+    """The state audit: inferred f_B against the window-START truth across positions."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -805,7 +832,7 @@ def _figure_dynamic_state(true_start, true_mean, true_end, inferred,
     axes[0].plot(x, im, "-o", ms=3, color="tab:blue", label="inferred (posterior mean)")
     axes[0].fill_between(x, il, ih, color="tab:blue", alpha=0.2)
     axes[0].set_xlabel("window position", fontsize=8)
-    axes[0].set_ylabel("dimer-complex fraction f_D (%)", fontsize=8)
+    axes[0].set_ylabel("dimer-complex fraction f_B (%)", fontsize=8)
     axes[0].set_title("the estimator reads the window-START state", fontsize=9)
     axes[0].legend(fontsize=6)
     axes[0].tick_params(labelsize=7)
@@ -820,7 +847,7 @@ def _figure_dynamic_state(true_start, true_mean, true_end, inferred,
     axes[1].fill_between(x, el, eh, color="tab:blue", alpha=0.2)
     axes[1].set_xlabel("window position", fontsize=8)
     axes[1].set_ylabel("paired absolute-error contrast (pp)", fontsize=8)
-    axes[1].set_title("f_D degradation vs position (primary statistic)", fontsize=9)
+    axes[1].set_title("f_B degradation vs position (primary statistic)", fontsize=9)
     axes[1].legend(fontsize=7)
     axes[1].tick_params(labelsize=7)
     fig.suptitle("Dynamic state: the composition audited against the ACTUAL window-start "
@@ -867,7 +894,7 @@ def _phase_analyze(spec, args):
     rng = np.random.default_rng(args.seed)
     margins = dict(_DEFAULT_MARGINS)
     if args.margin_fd is not None:
-        margins["f_D"] = args.margin_fd
+        margins["f_B"] = args.margin_fd
     if args.margin_da is not None:
         margins["diffusivity_alp"] = args.margin_da
     if args.margin_koff is not None:
@@ -890,7 +917,7 @@ def _phase_analyze(spec, args):
     reporter.stat("windows_per_trajectory", n_windows)
     reporter.stat("resets_per_trajectory", n_resets)
 
-    # ---- signed and absolute errors vs the drawn theta (all 10 parameters) ----
+    # ---- signed and absolute errors vs the drawn theta (all learnable parameters) ----
     def _per_traj(fn):
         return np.stack([fn(t) for t in range(n_traj)])
     cont_err = _per_traj(lambda t: ha.quantile_errors(data["cont_q"][t], data["theta"][t])[0])
@@ -906,10 +933,10 @@ def _phase_analyze(spec, args):
     delta_abs = ha.paired_absolute_effect(cont_err, reset_err)      # (T, W, D)
     delta_signed = ha.paired_position_effect(cont_err, reset_err)   # secondary (bias)
 
-    # ---- the state read: f_D from draws, judged against the window-START truth ----
-    fd_cont_mean, fd_cont_q = zip(*(_fd_draw_stats(data["cont_draws"][t], count_index)
+    # ---- the state read: f_B from draws, judged against the window-START truth ----
+    fd_cont_mean, fd_cont_q = zip(*(_fd_draw_stats(data["cont_draws"][t], count_index, table)
                                     for t in range(n_traj)))
-    fd_reset_mean, fd_reset_q = zip(*(_fd_draw_stats(data["reset_draws"][t], count_index)
+    fd_reset_mean, fd_reset_q = zip(*(_fd_draw_stats(data["reset_draws"][t], count_index, table)
                                       for t in range(n_traj)))
     fd_cont = np.stack(fd_cont_mean)                                # (T, W)
     fd_reset = np.stack(fd_reset_mean)                              # (T, R)
@@ -920,7 +947,7 @@ def _phase_analyze(spec, args):
     te_cont = _fd_of_counts(data["cont_true_end"])
     ts_reset = _fd_of_counts(data["reset_true_start"])              # (T, R)
     tm_reset = _fd_of_counts(data["reset_true_mean"])
-    label_fd = _fd_of_counts(10.0 ** data["theta"][:, list(count_index)])   # unrounded label
+    label_fd = _fd_of_parameters(data["theta"], count_index, table)       # unrounded label
     fd_cov = {
         "cont_c50": ((ts_cont >= fd_cont_q[:, 1]) & (ts_cont <= fd_cont_q[:, 2])).astype(float),
         "cont_c90": ((ts_cont >= fd_cont_q[:, 0]) & (ts_cont <= fd_cont_q[:, 3])).astype(float),
@@ -934,7 +961,7 @@ def _phase_analyze(spec, args):
 
     # ---- PRIMARY TABLE: predeclared estimands, three-outcome verdicts ----
     primaries = [
-        ("f_D (state, vs window-start truth)", "f_D", "pp",
+        ("f_B (state, vs window-start truth)", "f_B", "pp",
          np.abs(fd_err_cont), np.abs(fd_err_reset), fd_delta_abs),
     ]
     for key in ("diffusivity_alp", "rate_dissociation"):
@@ -983,7 +1010,7 @@ def _phase_analyze(spec, args):
     agg_headers = ["primary estimand", "reset recording error", "continuous recording error",
                    "paired delta", "95% CI", "margin", "verdict"]
     agg_rows = []
-    aggregates = [("f_D (state, vs window-start truth)", "f_D", "pp",
+    aggregates = [("f_B (state, vs window-start truth)", "f_B", "pp",
                    np.nanmean(fd_err_cont, axis=1), np.nanmean(fd_err_reset, axis=1))]
     for key in ("diffusivity_alp", "rate_dissociation"):
         i = keys.index(key)
@@ -1056,6 +1083,11 @@ def _phase_analyze(spec, args):
         strat_rows = []
         for key in ("diffusivity_alp", "rate_dissociation"):
             i = keys.index(key)
+            # Both predeclared constants are log rows, so their contrasts and shifts are in dex
+            # and the '% shift' column (10 ** dex - 1) is well defined; assert rather than assume.
+            if not is_log_row(table[i]):
+                raise SystemExit(f"stratified table: {key} is not a log row; its dex margins and "
+                                 f"percent shift are undefined.")
             lo_b, hi_b = float(spec["lower"][i]), float(spec["upper"][i])
             coh_lab, edges = ha.stratify_by_true_value(data["theta"][:, i], lo_b, hi_b)
             rec_lab, _ = ha.stratify_by_true_value(rec_true[:, i], lo_b, hi_b)
@@ -1069,21 +1101,22 @@ def _phase_analyze(spec, args):
                          - float(np.nanmean(np.nanmean(reset_err[sel, :, i], axis=1)))
                          ) if sel.any() else np.nan
                 strat_rows.append([
-                    f"{key} {10 ** edges[s]:.3g}-{10 ** edges[s + 1]:.3g}",
+                    f"{key} {float(entry_to_physical(table[i], edges[s])):.3g}-"
+                    f"{float(entry_to_physical(table[i], edges[s + 1])):.3g}",
                     row["n_cohort"], row["n_recovery"], f"{row['margin']:.3f} dex",
                     f"{row['mean']:+.3f}", f"[{row['ci_lo']:+.3f}, {row['ci_hi']:+.3f}]",
                     f"{row['ratio']:.1f}x", f"{100 * (10 ** shift - 1):+.0f}%", row["verdict"]])
-        # f_D: strata in composition space (prespecified bins), margin point-composed from the
-        # recovery medians -- the audit's own f_D margin is formed INSIDE each draw, so the two
+        # f_B: strata in composition space (prespecified bins), margin point-composed from the
+        # recovery medians -- the audit's own f_B margin is formed INSIDE each draw, so the two
         # differ slightly; the prior-averaged point-composed value is reported for comparison.
-        rec_fd_true = _fd_of_counts(10.0 ** rec_true[:, list(count_index)])
-        rec_fd_med = _fd_of_counts(10.0 ** rec_med[:, list(count_index)])
+        rec_fd_true = _fd_of_parameters(rec_true, count_index, table)
+        rec_fd_med = _fd_of_parameters(rec_med, count_index, table)
         fd_edges = np.array([0.0, 0.2, 0.8, 1.0])
         fd_coh_lab = np.clip(np.digitize(ts_cont[:, -1], fd_edges[1:-1]), 0, 2)
         fd_rec_lab = np.clip(np.digitize(rec_fd_true, fd_edges[1:-1]), 0, 2)
         # fd_delta_abs is ALREADY in percentage points (fd_err_cont is 100 * fraction error);
         # the recovery fractions are not, hence the asymmetric scaling below. Cross-check: the
-        # cohort-wide value of this statistic is the f_D row of the PRIMARY table.
+        # cohort-wide value of this statistic is the f_B row of the PRIMARY table.
         fd_rows = ha.stratified_margin_table(
             fd_delta_abs[:, -1], fd_coh_lab,
             100 * np.abs(rec_fd_med - rec_fd_true), fd_rec_lab, rng=rng)
@@ -1092,7 +1125,7 @@ def _phase_analyze(spec, args):
             shift = 100 * float(np.nanmean((fd_cont[:, -1] - ts_cont[:, -1])[sel])) \
                 if sel.any() else np.nan
             strat_rows.append([
-                f"f_D start {fd_edges[s]:g}-{fd_edges[s + 1]:g}",
+                f"f_B start {fd_edges[s]:g}-{fd_edges[s + 1]:g}",
                 row["n_cohort"], row["n_recovery"], f"{row['margin']:.2f} pp",
                 f"{row['mean']:+.2f}", f"[{row['ci_lo']:+.2f}, {row['ci_hi']:+.2f}]",
                 f"{row['ratio']:.1f}x", f"{shift:+.1f} pp", row["verdict"]])
@@ -1101,16 +1134,16 @@ def _phase_analyze(spec, args):
             strat_headers, strat_rows,
             note="strata are FIXED thirds of the prior range (prespecified geometry, not "
                  "data-dependent quantiles; the prior is uniform in log10 so thirds carry equal "
-                 "expected mass), f_D in prespecified composition bins. The margin is the "
+                 "expected mass), f_B in prespecified composition bins. The margin is the "
                  "estimator's own held-out error for true values IN THAT STRATUM, so each "
                  "verdict compares like with like. 'signed shift' is continuous minus the reset "
                  "baseline at the same theta -- the horizon-specific bias, with each arm's "
                  "generic prior shrinkage differenced out. A stratum thinly populated in the "
-                 "cohort is reported with its n, never dropped. The f_D margins here are "
+                 "cohort is reported with its n, never dropped. The f_B margins here are "
                  f"point-composed from recovery medians (prior-averaged "
                  f"{100 * float(np.nanmean(np.abs(rec_fd_med - rec_fd_true))):.2f} pp) while the "
-                 f"audit's f_D is composed INSIDE each draw (declared margin "
-                 f"{margins['f_D']:g} pp); the small offset is stated, not silently mixed.")
+                 f"audit's f_B is composed INSIDE each draw (declared margin "
+                 f"{margins['f_B']:g} pp); the small offset is stated, not silently mixed.")
 
     # ---- exploratory constants (no verdicts; multiplicity) ----
     exp_headers = ["parameter", "reset MAE", f"cont MAE (w{n_windows - 1})",
@@ -1119,7 +1152,7 @@ def _phase_analyze(spec, args):
     for i, key in enumerate(keys):
         if key in ("diffusivity_alp", "rate_dissociation"):
             continue
-        tag = (" (count: vs t=0 label -- reads state drift)" if i in count_index
+        tag = (" (stoichiometry: vs t=0 label -- reads state drift)" if i in count_index
                else (" (unidentified)" if key == "relative_rate_dimerization" else ""))
         d_mean, _, _ = ha.bootstrap_mean_ci(delta_abs[:, -1:, i], rng=rng)
         s_mean, _, _ = ha.bootstrap_mean_ci(delta_signed[:, -1:, i], rng=rng)
@@ -1133,8 +1166,8 @@ def _phase_analyze(spec, args):
     reporter.table(
         "Exploratory parameters (no verdicts: not predeclared, no multiplicity control)",
         exp_headers, exp_rows,
-        note="count rows compare against the stale t=0 label and therefore read STATE DRIFT, "
-             "not estimator error -- the state audit is the f_D primary above. R_ON is already "
+        note="stoichiometry rows compare against the stale t=0 label and therefore read STATE DRIFT, "
+             "not estimator error -- the state audit is the f_B primary above. R_ON is already "
              "known unidentified and never contributes to any verdict.")
 
     # ---- coverage, disaggregated ----
@@ -1147,13 +1180,13 @@ def _phase_analyze(spec, args):
                  f"{np.nanmean(cont_c90[:, 0, const_index]):.2f}",
                  f"{np.nanmean(cont_c50[:, -1, const_index]):.2f} / "
                  f"{np.nanmean(cont_c90[:, -1, const_index]):.2f}"],
-                ["f_D (window-START truth, from draws)",
+                ["f_B (window-START truth, from draws)",
                  f"{np.nanmean(fd_cov['reset_c50']):.2f} / {np.nanmean(fd_cov['reset_c90']):.2f}",
                  f"{np.nanmean(fd_cov['cont_c50'][:, 0]):.2f} / "
                  f"{np.nanmean(fd_cov['cont_c90'][:, 0]):.2f}",
                  f"{np.nanmean(fd_cov['cont_c50'][:, -1]):.2f} / "
                  f"{np.nanmean(fd_cov['cont_c90'][:, -1]):.2f}"],
-                ["counts (STALE t=0 truth -- state drift, expected to fail late)",
+                ["stoichiometry N_R, x_B (STALE t=0 truth -- state drift, expected to fail late)",
                  f"{np.nanmean(reset_c50[:, :, list(count_index)]):.2f} / "
                  f"{np.nanmean(reset_c90[:, :, list(count_index)]):.2f}",
                  f"{np.nanmean(cont_c50[:, 0, list(count_index)]):.2f} / "
@@ -1162,11 +1195,12 @@ def _phase_analyze(spec, args):
                  f"{np.nanmean(cont_c90[:, -1, list(count_index)]):.2f}"]]
     reporter.table("Interval coverage, disaggregated by estimand kind (never pooled)",
                    cov_headers, cov_rows,
-                   note="nominal 0.50 / 0.90. The counts row is diagnostic context only: its "
-                        "late-window failure against the stale t=0 truth measures how far the "
-                        "state drifted, not calibration.")
+                   note="nominal 0.50 / 0.90. The stoichiometry row is diagnostic context only: "
+                        "its late-window failure against the stale t=0 truth measures how far the "
+                        "state drifted, not calibration (the receptor total is conserved, so the "
+                        "drift sits in the dimer fraction).")
 
-    # ---- f_D truth-reference sensitivity ----
+    # ---- f_B truth-reference sensitivity ----
     sens_rows = [
         ["window START (PRIMARY)", f"{np.nanmean(np.abs(fd_err_reset)):.2f}",
          f"{np.nanmean(np.abs(fd_err_cont)):.2f}"],
@@ -1177,22 +1211,33 @@ def _phase_analyze(spec, args):
          f"{np.nanmean(np.abs(100 * (fd_cont - te_cont))):.2f}"],
         ["unrounded theta label (sensitivity, resets only)",
          f"{np.nanmean(np.abs(100 * (fd_reset - label_fd[:, None]))):.2f}", "-"]]
-    reporter.table("f_D error (pp MAE) under each truth reference",
+    reporter.table("f_B error (pp MAE) under each truth reference",
                    ["truth reference", "reset", "continuous (all windows)"], sens_rows,
                    note="the estimator's training labels are window-start populations, so START "
                         "is the primary reference; the spread across references measures how "
                         "much the truth choice alone moves the number (the estimand-mismatch "
-                        "hazard). The unrounded-label row isolates the count-rounding effect.")
+                        "hazard). The unrounded-label row isolates the integer-realization "
+                        "(rounding) effect of the initial composition.")
 
     # ---- state-support drift + flow mass outside the training box ----
-    lo_c = 10.0 ** spec["lower"][list(count_index)]
-    hi_c = 10.0 ** spec["upper"][list(count_index)]
-    outside = ((data["cont_true_start"] < lo_c) | (data["cont_true_start"] > hi_c))
-    reporter.stat("true start-counts outside the training count box (%)",
+    # The trained box is over the stoichiometry coordinates (N_R, x_B), so the TRUE start
+    # populations (species counts) are read back as (total receptors, receptors in dimers) through
+    # the kernel and compared with the box mapped to physical units. N_R is conserved by
+    # construction and x_B is bounded on [0, 1], so only the integer realization of a draw near the
+    # N_R edges can leave the box; the statistic is kept as the honest sanity check of that.
+    count_rows = [table[i] for i in count_index]
+    lo_c = to_physical(spec["lower"][list(count_index)], count_rows)
+    hi_c = to_physical(spec["upper"][list(count_index)], count_rows)
+    start_comp = pc.composition_from_counts(data["cont_true_start"])           # (T, W, 5)
+    start_pairs = start_comp[..., [pc.RECEPTORS_INDEX, pc.RECEPTORS_IN_DIMERS_INDEX]]
+    outside = (start_pairs < lo_c) | (start_pairs > hi_c)
+    reporter.stat("true start-state outside the training stoichiometry box (%)",
                   f"{100 * float(outside.any(axis=2).mean()):.2f}",
-                  note="fraction of continuous windows whose TRUE start population leaves "
-                       "[10^0, 10^2.5] in any species -- state-support drift, distinct from "
-                       "any estimator behavior.")
+                  note=f"fraction of continuous windows whose TRUE start population, read as "
+                       f"(N_R, x_B), leaves the trained box N_R in [{lo_c[0]:.3g}, {hi_c[0]:.3g}], "
+                       f"x_B in [{lo_c[1]:g}, {hi_c[1]:g}] -- state-support drift, distinct from "
+                       f"any estimator behavior. N_R is conserved within a recording, so this reads "
+                       f"integer-realization edge effects only.")
     # Extrapolation control: is the degradation merely the estimator being asked about states
     # outside its training support, or does it persist where the state never leaves the box?
     # Restricting to trajectories that stay inside for EVERY window separates the two.
@@ -1203,16 +1248,16 @@ def _phase_analyze(spec, args):
         in_last = float(np.nanmean(np.abs(fd_err_cont[inside_all, -1])))
         d_in, dlo_in, dhi_in = ha.bootstrap_mean_ci(fd_delta_abs[inside_all, -1:], rng=rng)
         reporter.stat(
-            "f_D degradation on trajectories that NEVER leave the count box",
+            "f_B degradation on trajectories that NEVER leave the stoichiometry box",
             f"{in_first:.2f} -> {in_last:.2f} pp (w0 -> w{n_windows - 1}); "
             f"paired delta {float(d_in[0]):+.2f} [{float(dlo_in[0]):+.2f}, "
             f"{float(dhi_in[0]):+.2f}] pp, n = {n_inside}",
             note="the extrapolation control: these trajectories' TRUE state stays inside the "
-                 "trained count support at every window, so their degradation cannot be "
+                 "trained stoichiometry support at every window, so their degradation cannot be "
                  "explained by the estimator being queried off its training support. A "
                  "degradation that survives here is a property of the inherited state itself.")
     else:
-        reporter.stat("f_D degradation on trajectories that NEVER leave the count box",
+        reporter.stat("f_B degradation on trajectories that NEVER leave the stoichiometry box",
                       f"not evaluable (n = {n_inside})",
                       note="fewer than two trajectories stayed inside the box at every window.")
     reporter.stat("flow mass outside the training box, reset (%)",
@@ -1225,9 +1270,9 @@ def _phase_analyze(spec, args):
 
     # ---- exploratory stratification by the initial state ----
     if n_traj >= 6:
-        strata = [("initial f_D < 0.4", label_fd < 0.4),
-                  ("0.4 <= initial f_D <= 0.7", (label_fd >= 0.4) & (label_fd <= 0.7)),
-                  ("initial f_D > 0.7", label_fd > 0.7)]
+        strata = [("initial f_B < 0.4", label_fd < 0.4),
+                  ("0.4 <= initial f_B <= 0.7", (label_fd >= 0.4) & (label_fd <= 0.7)),
+                  ("initial f_B > 0.7", label_fd > 0.7)]
         srows = []
         for name, mask in strata:
             if mask.sum() == 0:
@@ -1235,7 +1280,7 @@ def _phase_analyze(spec, args):
                 continue
             srows.append([name, str(int(mask.sum())),
                           f"{float(np.nanmean(fd_delta_abs[mask, -1])):+.2f}"])
-        reporter.table("Exploratory: last-window f_D degradation by initial composition",
+        reporter.table("Exploratory: last-window f_B degradation by initial composition",
                        ["stratum", "n trajectories", "mean paired |err| delta (pp)"], srows,
                        note="a prior-wide mean can hide failure in the dimer-rich region the "
                             "activated experimental condition occupies; exploratory (no CI "
@@ -1246,19 +1291,20 @@ def _phase_analyze(spec, args):
         "error_vs_position",
         _figure_error_vs_position(table, keys, np.abs(cont_err), np.abs(reset_err),
                                   count_index),
-        caption="Absolute posterior-median error (log10, truth = drawn theta) against window "
-                "position: continuous (line, trajectory-bootstrap CI) against the reset mean "
-                "(gray band). Count panels read state drift against the stale t=0 label.")
+        caption="Absolute posterior-median error (estimator space, truth = drawn theta) against "
+                "window position: continuous (line, trajectory-bootstrap CI) against the reset "
+                "mean (gray band). Stoichiometry panels read state drift against the stale t=0 "
+                "label.")
     reporter.save_figure(
         "coverage_vs_position",
         _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
                                      fd_cov, const_index),
         caption="Coverage against window position, disaggregated: constants (excluding the "
-                "unidentified R_ON) against theta, and f_D against the window-start truth.")
+                "unidentified R_ON) against theta, and f_B against the window-start truth.")
     reporter.save_figure(
-        "dynamic_state_f_D",
+        "dynamic_state_f_B",
         _figure_dynamic_state(ts_cont, tm_cont, te_cont, fd_cont, ts_reset, fd_reset),
-        caption="The state audit: inferred f_D against the actual window-START population "
+        caption="The state audit: inferred f_B against the actual window-START population "
                 "(primary), with the window-mean and window-end truths as sensitivity "
                 "references, and the paired absolute-error contrast per position.")
     reporter.save_figure(
@@ -1279,7 +1325,7 @@ def _phase_analyze(spec, args):
         fd_cont=fd_cont, fd_reset=fd_reset,
         fd_true_start_cont=ts_cont, fd_true_mean_cont=tm_cont, fd_true_end_cont=te_cont,
         fd_true_start_reset=ts_reset, fd_delta_abs=fd_delta_abs,
-        # f_D interval coverage against the window-START truth. Persisted because it is the
+        # f_B interval coverage against the window-START truth. Persisted because it is the
         # calibration read the write-up quotes (nominal 0.90 falling to 0.39 by the last window)
         # and a figure must be reproducible from this file alone, not from a re-derivation.
         fd_cov50_cont=fd_cov["cont_c50"], fd_cov90_cont=fd_cov["cont_c90"],
@@ -1302,13 +1348,32 @@ def _phase_selftest(spec, args):
 
     # 1. Truth references: start/mean/end must be exact, and distinct when the state moves.
     counts = np.stack([np.arange(10, dtype=float) * 10,
-                       np.full(10, 5.0), np.zeros(10)], axis=1)     # A ramps, B flat, C zero
+                       np.full(10, 5.0)], axis=1)                   # (10, 2): A ramps, B flat
     tr = ha.window_true_counts(counts, np.array([0, 5]), 5)
     assert np.allclose(tr["start"][:, 0], [0, 50]), tr["start"]
     assert np.allclose(tr["mean"][:, 0], [20, 70]), tr["mean"]
     assert np.allclose(tr["end"][:, 0], [40, 90]), tr["end"]
     assert not np.allclose(tr["start"], tr["mean"])                 # the blocker-1 distinction
     print("  [PASS] truth references: start / mean / end exact and distinct")
+
+    # 1b. Species aggregation over modes + the two composition paths agree. Six type ranks
+    #     (A_f, A_s, A_i, B_f, B_s, B_i in an arbitrary rank order) sum to [A, B]; the fraction
+    #     from species counts equals the fraction from the (N_R, x_B) pair that realizes them.
+    rank_map = {0: "A", 1: "B", 2: "A", 3: "B", 4: "A", 5: "B"}
+    type_counts = np.array([[1, 10, 2, 20, 3, 30], [0, 0, 0, 7, 0, 0]])
+    species = ha.species_counts_from_type_counts(type_counts, rank_map, ("A", "B"))
+    assert species.tolist() == [[6, 60], [0, 7]], species
+    n_r, x_b = 6 + 2 * 60, 2 * 60 / (6 + 2 * 60)
+    assert np.isclose(pc.composition_from_counts(species[0])[pc.DIMER_INDEX],
+                      pc.composition(np.array([n_r, x_b]))[pc.DIMER_INDEX])
+    assert np.isclose(pc.composition(np.array([n_r, x_b]))[pc.RECEPTORS_IN_DIMERS_INDEX], x_b)
+    assert np.isclose(pc.closure_residual(pc.composition_from_counts(species)), 0.0)
+    try:
+        ha.species_counts_from_type_counts(type_counts, {0: "A", 1: "B"}, ("A", "B"))
+        raise AssertionError("rank/column mismatch was accepted")
+    except ValueError:
+        pass
+    print("  [PASS] species aggregation: modes summed per species; both composition paths agree")
 
     # 2. Seed uniqueness + determinism across theta, arms, replicates.
     all_seeds = []
@@ -1435,7 +1500,7 @@ def _phase_selftest(spec, args):
         assert parent["lineage"] == []                    # the parent never gains a lineage
     print("  [PASS] cohort lineage: ancestor artifacts kept, theta mismatch and foreigners "
           "refused")
-    print("SELFTEST OK: 8/8 check families passed.")
+    print("SELFTEST OK: 9/9 check families passed.")
 
 
 # =============================================================================
@@ -1527,9 +1592,9 @@ def build_parser(description):
                         "standard sibling location in this data bank). Without it the stratified "
                         "table is skipped and the prior-averaged verdicts stand alone.")
     p.add_argument("--margin-fd", type=float, default=None,
-                   help=f"analyze: equivalence margin for the f_D primary, percentage points "
-                        f"(default {_DEFAULT_MARGINS['f_D']} = the in-model f_D error on the "
-                        f"held-out recovery).")
+                   help=f"analyze: equivalence margin for the f_B primary (dimer-complex fraction), "
+                        f"percentage points (default {_DEFAULT_MARGINS['f_B']} = the in-model f_B "
+                        f"error on the held-out recovery).")
     p.add_argument("--margin-da", type=float, default=None,
                    help=f"analyze: equivalence margin for D_A, dex "
                         f"(default {_DEFAULT_MARGINS['diffusivity_alp']}).")

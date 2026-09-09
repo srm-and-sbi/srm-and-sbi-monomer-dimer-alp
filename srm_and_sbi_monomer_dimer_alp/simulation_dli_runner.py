@@ -24,8 +24,8 @@ between the workflows, so the fork is larger and localized in labeled branches o
   - **biology** (``imaging_source="artifact"``): the six photophysics are a
     marginalized nuisance drawn per task from the persisted ``Nuisance_DLI``
     artifact (a required, schema-guarded input) and recorded as
-    ``Nuisance_DLI_Theta_Set``; the learnable 10-RDS ``Theta_Set`` is READ for the
-    sim-0 diagnostics only.
+    ``Nuisance_DLI_Theta_Set``; the learnable RDS ``Theta_Set`` (the twelve
+    reaction-diffusion labels) is READ for the sim-0 diagnostics only.
   - **detector** (``imaging_source="prior_box"``): the six imaging parameters are
     the inference target, drawn from the imaging prior box and WRITTEN as the
     primary ``Theta_Set`` (the training label); no ``Nuisance_DLI`` artifact.
@@ -33,7 +33,7 @@ between the workflows, so the fork is larger and localized in labeled branches o
 Everything else -- the renderer (already shared as ``render_dli_video``), the
 SCOPE draw + ``Nuisance_SCOPE_Theta_Set`` write, the video store, and the sim-0
 core diagnostics -- is shared. The sim-0 "Parameters of this video" table uses
-each workflow's TARGET spec + its per-sim label vector (biology: the 10-RDS
+each workflow's TARGET spec + its per-sim label vector (biology: the 12-RDS
 table + the read RDS theta; detector: the six-imaging table + the imaging draw);
 this also fixes a latent ``NameError`` in the detector's ``--debug`` path, where
 the copied-from-biology table referenced an undefined ``theta`` / the wrong table.
@@ -83,7 +83,8 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
-    collapse_species_axis, extract_subunit_lineage, extract_trajectory_poses,
+    collapse_species_axis, extract_subunit_lineage, extract_trajectory_poses, monomer_ranks,
+    rank_to_species,
 )
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
@@ -132,7 +133,7 @@ def _labeling_set_path(paths, task_alias, data_bank_root, timing_label, compress
 class _DliSpec:
     """Per-workflow DLI specializations resolved from a ``WorkflowConfig``."""
     imaging_source: str      # "artifact" (biology) | "prior_box" (detector)
-    diag_spec: list          # sim-0 "Parameters of this video" table: PARAMETERIZATION (10-RDS) | DETECTOR_PARAMETERIZATION (6 imaging)
+    diag_spec: list          # sim-0 "Parameters of this video" table: PARAMETERIZATION (12-RDS) | DETECTOR_PARAMETERIZATION (6 imaging)
 
 
 def _dli_spec(cfg: WorkflowConfig) -> _DliSpec:
@@ -175,7 +176,6 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     condition = args.condition
     law_name, law = resolve_labeling_law(condition, args.labeling_law)
     occupancy = parse_occupancy(args.occupancy)
-    rds_species = PARAMETERS.simulation.rds
 
     # ---- Imaging block setup (the six photophysics/imaging + five SCOPE camera).
     # Both share the SCOPE box (drawn from det.scope_*_bound) and the six imaging keys
@@ -249,9 +249,10 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  box_size_nm          : {geom.box_size}")
     print(f"  particle_diameter_nm : {geom.particle_diameter_nm}")
 
-    print("\nParticle species:")
-    print(f"  {rds_cfg.particle_species_names}   "
-          f"A=Monomer, B=Mobile Dimer, C=Immobile Dimer")
+    print("\nParticle types (molecular species x mobility mode):")
+    print(f"  {rds_cfg.particle_type_names}   "
+          f"species {rds_cfg.molecular_species_names} = (monomer, dimer); labeling and "
+          f"occupancy act by molecular species, never by mode")
 
     print("\nLabeling (static degree of labeling; the condition axis of the DLI stage):")
     print(f"  condition               : {condition}   ({CONDITION_DISPLAY[condition]})")
@@ -273,7 +274,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"(calibrated-imaging photophysics artifact; durable tier)")
         print(f"  reads theta sets     : <data_bank>/{paths.theta_subdir}/"
               f"{paths.theta_set_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
-              f"(10-RDS labels; the shared tier, bare alias; diagnostics only, not re-written)")
+              f"(12-RDS labels; the shared tier, bare alias; diagnostics only, not re-written)")
         print(f"  reads trajectories   : <data_bank>/{paths.video_subdir}/"
               f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
               f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the shared tier: bare alias)")
@@ -411,7 +412,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 scope_set_path = _nuisance_scope_path(
                     paths, task, data_bank_root, timing_label, compress, split)
                 print(f"  reads theta set      (task {task}): {theta_set_path}  "
-                      f"[{'OK' if theta_ok else 'MISSING'}]   (10-RDS labels; diagnostics only, not re-written)")
+                      f"[{'OK' if theta_ok else 'MISSING'}]   (12 RDS labels; diagnostics only, not re-written)")
                 print(f"  reads trajectories   (task {task}): "
                       f"{traj_present}/{args.task_simulations} present")
                 print(f"  writes Nuisance_DLI   (task {task}): {dli_set_path}")
@@ -489,11 +490,11 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         # provenance is the biology/detector fork; the five-block SCOPE record is shared.
         if artifact:
             # biology: the six photophysics from the Nuisance_DLI artifact (recorded as
-            # Nuisance_DLI_Theta_Set); READ the learnable 10-RDS Theta_Set for the sim-0
+            # Nuisance_DLI_Theta_Set); READ the learnable 12-RDS Theta_Set for the sim-0
             # diagnostics table (this stage does not re-write it; the RDS stage owns it).
             rds_theta_set_path = paths.theta_set_path(
                 task_alias, data_bank_root, timing_label, compress, split)
-            print(f"  Reading theta set (10-RDS labels):  {rds_theta_set_path}")
+            print(f"  Reading theta set (RDS labels; diagnostics only):  {rds_theta_set_path}")
             rds_theta_set = load_data(rds_theta_set_path)
             imaging_draw = np.power(10, nuisance_dli.sample(args.task_simulations))  # (sims, 6) physical
             imaging_set_path = _nuisance_dli_path(
@@ -598,19 +599,17 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             # lineage carries each subunit -- and so its dyes -- through the reactions; only
             # dyes render. Seeded per (seed, task, sim) when --seed is given so a task index
             # draws the same labeling under --task-id fan-out; None stays non-deterministic.
-            rank_to_species = {int(rank): name for name, rank in tray.particle_types.items()}
-            initial_species = [rank_to_species[int(rank)] for rank in lineage.host_rank[0]]
+            # Ranks are PARTICLE TYPES (species x mode); occupancy and the monomer/dimer
+            # bookkeeping act on the MOLECULAR SPECIES, so map through rank_to_species.
+            species_of_rank = rank_to_species(tray)
+            initial_species = [species_of_rank[int(rank)] for rank in lineage.host_rank[0]]
             labeling_rng = np.random.default_rng(
                 None if args.seed is None else [args.seed, task_alias, sim])
             dye_counts = draw_dye_counts(
                 law, lineage.n_subunits, labeling_rng,
                 occupancy=occupancy_per_subunit(occupancy, initial_species))
-            monomer_ranks = [int(tray.particle_types[name]) for name, n_sub
-                             in zip(rds_species.particle_species_names,
-                                    rds_species.subunit_counts_per_species)
-                             if n_sub == 1 and name in tray.particle_types]
             labeling_rows[sim] = labeling_summary(
-                dye_counts, lineage.host_index[0], lineage.host_rank[0], monomer_ranks)
+                dye_counts, lineage.host_index[0], lineage.host_rank[0], monomer_ranks(tray))
 
             # Assemble the full eleven-key imaging vector (det.DETECTOR_IMAGING order): the six
             # photophysics/imaging followed by the five SCOPE camera-nuisance draws.
@@ -691,7 +690,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 # Prior bounds + sampled values that generated THIS video, so the
                 # parameters sit next to the rendered frame for direct checking. The
-                # spec + label vector are the workflow's TARGET: biology the 10-RDS
+                # spec + label vector are the workflow's TARGET: biology the 12-RDS
                 # labels read from the Theta_Set; detector the six imaging labels drawn
                 # here (det.DETECTOR_PARAMETERIZATION) -- which also fixes the detector's
                 # latent NameError (it previously referenced an undefined `theta`).
@@ -700,9 +699,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.table(
                     "Parameters of this video (sim 0)", headers, prior_rows,
                     note="The prior bounds and sampled values behind this video. "
-                         "count_alp/bet/chi are the TRUE initial A/B/C particle counts; only "
-                         "labeled subunits render (see the labeling record), so the sample "
-                         "frame shows fewer spots.",
+                         "count_total and fraction_dimer_initial fix the TRUE initial "
+                         "monomer/dimer particle counts; only labeled subunits render (see "
+                         "the labeling record), so the sample frame shows fewer spots.",
                 )
                 fixed_headers, fixed_rows = fixed_parameters_table(PARAMETERIZATION_RAW)
                 reporter.table(
@@ -816,8 +815,9 @@ def build_dli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--occupancy", type=str, default="1.0",
         help="Static probe-occupancy probability composing with the labeling law: one value, or "
-             "per initial species 'A=1.0,B=0.8,C=0.8'. A subunit not occupied by a probe carries "
-             "no dye. Default 1.0 (saturating; no effect).",
+             "per initial MOLECULAR species 'A=1.0,B=0.8' (monomer A, dimer B; mobility modes "
+             "are not a selection axis). A subunit not occupied by a probe carries no dye. "
+             "Default 1.0 (saturating; no effect).",
     )
     parser.add_argument(
         "--video-dtype-bits", type=int, default=8, choices=[8, 16],

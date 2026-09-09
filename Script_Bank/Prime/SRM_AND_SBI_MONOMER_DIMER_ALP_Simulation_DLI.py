@@ -13,9 +13,10 @@ sec. 9.3, Phase D): the six photophysics (``mu_r``, ``sigma_r``, ``mu_pc``, ``si
 ``Nuisance_DLI`` artifact (the calibrated-imaging pool minted by the detector workflow), and
 the five SCOPE camera parameters (``gamma``, ``kappa_o``, ``kappa_b``, ``kappa_s``,
 ``kappa_q``) are drawn per simulation from their a-priori box. Both are recorded, per task,
-as self-labeling ``Theta_Set`` variants beside the learnable 10-RDS ``Theta_Set``, then
+as self-labeling ``Theta_Set`` variants beside the learnable twelve-parameter RDS ``Theta_Set``, then
 concatenated into the eleven-key imaging vector the renderer consumes. The learnable
-``Theta_Set`` (the 10 reaction-diffusion labels the estimator inverts) is READ here only for
+``Theta_Set`` (the twelve reaction-diffusion labels the estimator inverts, stored as physical
+values) is READ here only for
 the sim-0 diagnostics table and is never re-written by this stage. The ``Nuisance_DLI``
 artifact is a REQUIRED input built by a user-driven analysis step; if absent, the stage fails
 loud naming the analysis to run.
@@ -36,9 +37,10 @@ Outputs (the ``{timing_label}`` token, e.g. ``2S_50FPS``, is rendered from
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Nuisance_SCOPE_Theta_Set_TASK_{n}_{split}.zarr
         -- the five SCOPE camera parameters drawn from their a-priori box (physical)
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Labeling_Set_TASK_{n}_{split}.zarr
-        -- the per-simulation labeling record (true and visible initial composition)
+        -- the per-simulation labeling record (requested and realized initial dimer fraction,
+           true and visible initial composition by molecular species)
     (``<project_alias>`` here carries the condition: ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_...``;
-    the trajectories and the ten-parameter ``Theta_Set`` it reads carry the bare alias)
+    the trajectories and the twelve-parameter ``Theta_Set`` it reads carry the bare alias)
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py \\

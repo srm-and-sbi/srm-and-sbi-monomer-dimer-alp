@@ -1,21 +1,24 @@
 """Analysis entry point (biology workflow): the inferred population composition, versus its own
 validation on synthetic data.
 
-ROLE. The Experiment stage infers three absolute species counts -- A (monomer), B (mobile dimer),
-C (immobile dimer) -- in every window of every experimental MET recording. Absolute counts are the
-worst-identified coordinates the model has, for an information-theoretic reason rather than a
-defect: counting few emitters in a diffraction-limited scene is a square-root-of-n problem, and the
-three counts trade off against one another because the reactions interconvert them. This analysis
-asks the question those same posteriors answer well -- in what PROPORTION are the receptors
-distributed across the three states -- and reports it beside the measured error of that readout on
-held-out synthetic videos, so the experimental value and the accuracy of the instrument that produced
-it appear in one document.
+ROLE. The Experiment stage infers the stoichiometry of the monomer-dimer model -- the conserved
+receptor-subunit total N_R = n_A + 2 n_B and the initial fraction of receptors in dimers x_B -- in
+every window of every experimental MET recording (the two molecular species, A monomer and B dimer,
+each occupy fast / slow / immobile mobility modes, which are particle types rather than species and
+do not enter the composition). The absolute total is the worst-identified coordinate the model has,
+for an information-theoretic reason rather than a defect: counting few emitters in a
+diffraction-limited scene is a square-root-of-n problem, and the total trades off against the
+fraction because the same visible-spot count can be few dimers or many monomers. This analysis asks
+the question those same posteriors answer well -- in what PROPORTION are the receptors distributed
+across the two species (monomer fraction f_A, dimer-complex fraction f_B, receptors in dimers f_R)
+-- and reports it beside the measured error of that readout on held-out synthetic videos, so the
+experimental value and the accuracy of the instrument that produced it appear in one document.
 
 WHY THE DRAWS AND NOT THE MAP ESTIMATES. A ratio of correlated coordinates is not a function of
 their marginals. Every fraction is formed WITHIN each posterior draw and only then averaged, which
-carries the count-to-count correlations through and is what makes the composition identifiable from
-counts that individually are not. Building a fraction from marginal medians instead would assert a
-combination the posterior never drew. The stage must therefore have been run with
+carries the total-to-fraction correlation through and is what makes the composition identifiable
+from a total that individually is not. Building a fraction from marginal medians instead would
+assert a combination the posterior never drew. The stage must therefore have been run with
 ``--dump-posterior-samples``; the stored quantiles cannot substitute.
 
 WHAT IS REPORTED. Per condition: the span-averaged composition with the standard error across
@@ -23,14 +26,14 @@ RECORDINGS (the replicate unit -- ten windows of one cell are not ten independen
 first-window composition, the within-recording time course, the per-recording spread, the sensitivity
 of the headline to prior-support restriction and to the choice of compositional center, and the
 recording-level condition contrast. From the held-out synthetic set: the same quantities' point-
-estimate error, the counts-versus-total comparison that explains why the composition is better
-identified than its parts, and the accuracy restricted to the dimer-rich region the activated
+estimate error, the species-counts-versus-total comparison that explains why the composition is
+better identified than its parts, and the accuracy restricted to the dimer-rich region the activated
 condition occupies.
 
 WHAT IT DOES NOT DO. It does NOT re-run inference; it derives quantities from estimates already on
 disk. It does NOT report interval coverage of a fraction -- that needs joint posterior draws on the
 held-out set, which a recovery artifact storing marginal quantiles does not carry. And it does not
-turn a model-conditional census into a molecular one: the composition describes the three-species
+turn a model-conditional census into a molecular one: the composition describes the monomer-dimer
 model as fitted to these recordings.
 
 BIOLOGY ONLY. There is no detector counterpart, and the asymmetry is scientific: the detector

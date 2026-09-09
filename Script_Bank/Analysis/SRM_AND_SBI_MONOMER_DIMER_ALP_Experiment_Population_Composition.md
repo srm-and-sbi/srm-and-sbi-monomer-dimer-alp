@@ -1,9 +1,11 @@
 # Experiment Population Composition
 
-Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.py`. It reports the relative
-abundance of the three modeled species across the experimental MET recordings — what fraction of the
-population is monomer, mobile dimer, and immobile dimer — and reports beside it the error of that
-same readout measured on held-out synthetic videos whose parameters are known.
+> **Note (2026-09-09).** The results quoted in this note were produced under the ten-parameter three-species model of 0.1.1 (A monomer, B mobile dimer, C immobile dimer; per-species initial counts). Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes, twelve learnable parameters), and the readout definitions changed with it: the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B`, with the complex fraction `f_B = x_B / (2 − x_B)` and the receptor-level dimer fraction `f_R = x_B`; mobility (fast / slow / immobile) is a mode of either species, not a species of its own. The numbers below are kept as the record of that earlier run and are not re-derived here.
+
+Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.py`. It reports the
+monomer–dimer composition across the experimental MET recordings — the share of receptors sitting in
+dimers, the share of complexes that are dimers, and the receptor total — and reports beside it the
+error of that same readout measured on held-out synthetic videos whose parameters are known.
 
 The two halves belong in one document. An experimental estimate is only as readable as the measured
 accuracy of the instrument that produced it, and here the instrument can be measured exactly: the
@@ -64,7 +66,11 @@ With `T = A + B + C`:
 | `T` | `A + B + C` | total complexes in the scene (a count, not a share) |
 
 `f_D` and `f_R` differ because a dimer holds two receptors: a population half dimeric by complex is
-more than half dimeric by receptor. `f_A + f_B + f_C = 1` for every draw by construction, and the
+more than half dimeric by receptor. Under the 0.1.2 model the same two readouts are functions of the
+stoichiometry block's own coordinates: the estimator infers the conserved receptor total `N_R` and the
+initial dimer fraction `x_B` directly, so `f_R = x_B`, the complex fraction is `f_B = x_B / (2 − x_B)`,
+the complex total is `T = N_R (1 − x_B / 2)`, and the immobile share is a mode occupancy (of either
+species), not a species share. `f_A + f_B + f_C = 1` for every draw by construction, and the
 report checks it (residual ~1e-16) as the cheapest possible detection of a coordinate mix-up.
 
 Because `f_D = 1 - f_A`, their recovery errors are equal in magnitude by identity. The two rows

@@ -52,7 +52,7 @@ from matplotlib.ticker import (AutoMinorLocator, FuncFormatter, LogLocator,
 
 from .labeling import LABELING_CONDITIONS
 from . import temporal_dynamics as tdk
-from .parameterization import PARAMETERS, RunTiming
+from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical
 from .workflow import parameter_keys, parameter_table
 
 # Conditions are named scientifically wherever a reader sees them; the tokens below survive only
@@ -100,7 +100,7 @@ _REFERENCE_BIOLOGY = {
                 "ligand-independent, so the reference applies to both conditions. "
                 "Li et al. 2026, Sec. 2.3",
     },
-    "relative_diffusivity_bet": {
+    "relative_diffusivity_dimer": {
         "unit": "ratio",
         "estimates": [(0.066 / 0.109, None, "T-T  (D_dimer/D_mono)"),
                       (0.056 / 0.093, None, "H-T  (D_dimer/D_mono)")],
@@ -165,13 +165,16 @@ _REFERENCE_DETECTOR = {
 }
 
 _DISPLAY_BIOLOGY = {
-    "count_alp": "Initial monomer count", "count_bet": "Initial mobile-dimer count",
-    "count_chi": "Initial immobile-dimer count", "diffusivity_alp": "Monomer diffusivity",
-    "relative_diffusivity_bet": "Rel. mobile-dimer diffusivity",
-    "relative_diffusivity_chi": "Rel. immobile-dimer diffusivity",
-    "relative_rate_dimerization": "Rel. dimerization rate",
-    "rate_dissociation": "Dissociation rate", "rate_immobility": "Immobilization rate",
-    "rate_mobility": "Mobilization rate",
+    # stoichiometry block
+    "count_total": "Receptor total", "fraction_dimer_initial": "Initial dimer fraction",
+    "relative_rate_dimerization": "Association ratio", "rate_dissociation": "Dissociation rate",
+    # mobility block
+    "diffusivity_alp": "Monomer diffusivity", "relative_diffusivity_dimer": "Rel. dimer diffusivity",
+    "relative_diffusivity_slow": "Rel. slow-mode diffusivity",
+    "relative_diffusivity_immobile": "Rel. immobile-mode diffusivity",
+    "rate_fast_slow": "Switching rate fast->slow", "rate_slow_fast": "Switching rate slow->fast",
+    "rate_slow_immobile": "Switching rate slow->immobile",
+    "rate_immobile_slow": "Switching rate immobile->slow",
 }
 _DISPLAY_DETECTOR = {
     "mu_r": "Median PSF width", "sigma_r": "PSF-width log-spread",
@@ -197,8 +200,10 @@ class _TemporalSpec:
     """Everything about this analysis that differs between the two workflows."""
     keys: list
     table: list
-    prior_low: np.ndarray
-    prior_high: np.ndarray
+    prior_low: np.ndarray                 # estimator space
+    prior_high: np.ndarray                # estimator space
+    to_physical: object                   # (..., D) estimator space -> physical, bound to ``table``
+    log_rows: np.ndarray                  # (D,) bool: which rows the dex statistics apply to
     display: dict
     references: dict
     paths: object
@@ -226,6 +231,11 @@ def _temporal_dynamics_spec(cfg, args) -> _TemporalSpec:
         keys=parameter_keys(cfg), table=table,
         prior_low=np.array(cfg.param_module.theta_lower_bound(), dtype=float),
         prior_high=np.array(cfg.param_module.theta_upper_bound(), dtype=float),
+        # The ONE conversion rule, bound to this workflow's table (all-log for the detector; the
+        # biology table carries the linear initial dimer fraction). Every kernel call goes through
+        # it, so nothing here exponentiates a theta by hand.
+        to_physical=lambda u: to_physical(u, table),
+        log_rows=np.array([is_log_row(e) for e in table], dtype=bool),
         display=(_DISPLAY_DETECTOR if detector else _DISPLAY_BIOLOGY),
         references=(_REFERENCE_DETECTOR if detector else _REFERENCE_BIOLOGY),
         paths=paths, alias=paths.project_alias, timing_label=timing.label,
@@ -327,22 +337,26 @@ def _figure_trajectory(spec, p_index, key, abs_grid, series, line, family, picks
 
     _finish_axes(ax, edges, para, spec, lo, hi)
     title = f"{name} ({para['LABEL']}) over the recording"
-    if recovery:
+    if recovery and spec.log_rows[p_index]:
         # Both nested tolerances, stated as the multiplicative ranges they mean rather than in dex.
         title += "\nheld-out recovery:  " + "  ·  ".join(
             f"{100 * frac[p_index]:.0f}% within {tdk.band_label(b)}" for b, frac in recovery)
+    elif recovery:
+        # A linear row: the dex tolerances do not apply, and saying so beats a silent blank.
+        title += "\nheld-out recovery: dex tolerance bands do not apply to a linear row"
     ax.set_title(title, fontsize=10.5)
     ax.legend(fontsize=7.5, framealpha=0.9, loc="best")
     fig.tight_layout()
     return fig
 
 
-def _figure_posterior(spec, p_index, key, within, series, family, edges, kinds):
+def _figure_posterior(spec, p_index, key, within_abs, series, family, edges, kinds):
     """Within-window posterior interval over the recording -- one panel, one quantity, as steps.
 
     At each chunk, the median across cells of that window's stored posterior interval: how uncertain
-    a TYPICAL SINGLE window's estimate is. Drawn as bands held across each window, matching the
-    trajectory figure, with the ``<family>-window`` series on top as the anchor.
+    a TYPICAL SINGLE window's estimate is. ``within_abs`` is that ``(K, T, D, Q)`` record already in
+    physical units. Drawn as bands held across each window, matching the trajectory figure, with
+    the ``<family>-window`` series on top as the anchor.
 
     This is an interval WIDTH built from the stored five-quantile record -- not a posterior density,
     and it does not approximate one. The pooled density is a separate figure, drawn from the raw
@@ -356,7 +370,7 @@ def _figure_posterior(spec, p_index, key, within, series, family, edges, kinds):
     for e, kind in enumerate(kinds):
         color = CONDITION_COLOR.get(kind, f"C{e}")
         disp = CONDITION_DISPLAY.get(kind, kind)
-        q = 10.0 ** within[e, :, p_index, :]
+        q = within_abs[e, :, p_index, :]
         ax.fill_between(edges, _step(q[:, 0]), _step(q[:, 4]), step="post", color=color,
                         alpha=0.15, linewidth=0, label=f"{disp} posterior 5–95% (typical window)")
         ax.fill_between(edges, _step(q[:, 1]), _step(q[:, 3]), step="post", color=color,
@@ -387,7 +401,10 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
 
     The x axis is in the parameter's own ABSOLUTE units either way -- ticks are plain values, never
     powers of ten and never dex. ``scale`` chooses how that axis is spaced, and the binning, the
-    density's unit, and the prior's shape all follow from it consistently:
+    density's unit, and the prior's shape all follow from it consistently. A LINEAR row (the
+    initial dimer fraction, uniform on [0, 1]) has no decades to space and its prior is flat per
+    unit, so it is always drawn with ``"linear"`` spacing and a flat prior line, whatever ``scale``
+    asked for -- a decade axis starting at zero does not exist:
 
     ``"log"``     bins uniform in decades, which is where a log-uniform prior is flat. Height is a
                   density PER DECADE and the prior is the horizontal line ``1 / (hi - lo)``. This
@@ -414,13 +431,15 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
     para = spec.table[p_index]
     name = spec.display.get(key, key)
     ref = spec.references.get(key)
-    lo, hi = float(spec.prior_low[p_index]), float(spec.prior_high[p_index])
-    log_bins = scale == "log"
+    lo, hi = float(spec.prior_low[p_index]), float(spec.prior_high[p_index])   # estimator space
+    is_log = bool(spec.log_rows[p_index])
+    phys = lambda v: entry_to_physical(para, v)        # noqa: E731  this row's conversion rule
+    log_bins = scale == "log" and is_log
     if log_bins:
         edges_log = np.linspace(lo, hi, POOLED_BINS + 1)
-        edges = 10.0 ** edges_log                       # absolute edges, log-spaced
+        edges = phys(edges_log)                         # absolute edges, log-spaced
     else:
-        edges = np.linspace(10.0 ** lo, 10.0 ** hi, POOLED_BINS + 1)
+        edges = np.linspace(float(phys(lo)), float(phys(hi)), POOLED_BINS + 1)
 
     fig, ax = plt.subplots(figsize=(7.4, 4.9))
     peak = 0.0
@@ -434,7 +453,7 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
         # Bin in the space the axis is spaced in, so the plotted height is a density with respect to
         # the axis actually shown: per decade of log10 value, or per absolute unit.
         dens, _ = (np.histogram(draws, bins=edges_log, density=True) if log_bins
-                   else np.histogram(10.0 ** draws, bins=edges, density=True))
+                   else np.histogram(phys(draws), bins=edges, density=True))
         ax.stairs(dens, edges, color=color, linewidth=2.0, fill=False,
                   label=f"{disp} pooled ({draws.size:,} draws)")
         ax.stairs(dens, edges, color=color, alpha=0.16, fill=True, linewidth=0)
@@ -443,14 +462,18 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
             ax.axvline(float(mark[e, p_index]), color=color, linestyle=(0, (5, 2)), linewidth=1.8,
                        alpha=0.9, label=f"{disp} {mark_name} = {mark[e, p_index]:.3g}")
 
-    # The prior it started from. Flat per decade; a 1/x curve per absolute unit, because that is what
-    # a log-uniform density becomes under x = 10**y -- drawing it flat here would be wrong.
-    prior_label = f"prior (log-uniform over {10 ** lo:.3g}–{10 ** hi:.3g})"
-    if log_bins:
+    # The prior it started from. A log row: flat per decade, a 1/x curve per absolute unit (what a
+    # log-uniform density becomes under x = 10**y -- drawing it flat there would be wrong). A linear
+    # row: uniform on the value itself, so flat per unit.
+    if is_log:
+        prior_label = f"prior (log-uniform over {float(phys(lo)):.3g}–{float(phys(hi)):.3g})"
+    else:
+        prior_label = f"prior (uniform over {lo:g}–{hi:g})"
+    if log_bins or not is_log:
         ax.axhline(1.0 / (hi - lo), color="0.35", linestyle=(0, (4, 3)), linewidth=1.5,
                    label=prior_label)
     else:
-        grid = np.linspace(10.0 ** lo, 10.0 ** hi, 512)
+        grid = np.linspace(float(phys(lo)), float(phys(hi)), 512)
         ax.plot(grid, 1.0 / ((hi - lo) * grid * np.log(10.0)), color="0.35",
                 linestyle=(0, (4, 3)), linewidth=1.5, label=prior_label)
     if ref is not None:
@@ -478,7 +501,7 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
     ax.set_xlabel(f"inferred [{unit}]")
     ax.set_ylabel(f"posterior density [per decade]" if log_bins
                   else f"posterior density [per {unit}]")
-    if not log_bins and peak > 0.0:
+    if not log_bins and is_log and peak > 0.0:
         # Scale to the DATA, not to the prior. Per absolute unit the log-uniform prior diverges as
         # 1/x toward the lower limit, and letting that spike set the limit flattens the posterior
         # into the axis. The prior curve simply leaves the top of the frame where it exceeds the
@@ -491,6 +514,11 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
     ax.grid(True, which="both", alpha=0.18)
     fig.tight_layout()
     return fig
+
+
+def _dex(value, fmt):
+    """Format a dex statistic, or ``n/a`` where it is undefined (a linear row's NaN)."""
+    return fmt.format(value) if np.isfinite(value) else "n/a"
 
 
 def _cells_label(cells):
@@ -600,8 +628,10 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
              f"summary line. The pairing is enforced, so the curve and the line are always the same "
              f"estimator.")
     L.append("")
-    L.append("**Distance metric** (both `sgm-*` estimates): absolute values `10**theta`, each "
-             "parameter divided by its absolute prior width `10**high - 10**low` so no parameter "
+    L.append("**Distance metric** (both `sgm-*` estimates): physical values (the parameter "
+             "table's per-row conversion, `to_physical`: `10**theta` for a log row, the value itself "
+             "for the linear initial dimer fraction), each parameter divided by its physical prior "
+             "width so no parameter "
              "dominates, Euclidean, **exact medoid** — the member minimizing the summed distance to "
              "every other member of the set. Selection is on **all parameters jointly**, so a "
              "selected vector is internally coherent; consequently the value it reports for one "
@@ -629,13 +659,14 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
     L.append("## Drift — measured per cell, independent of the display")
     L.append("")
     L.append("For every (condition, cell, parameter) an ordinary least-squares line is fit to the "
-             "stored **log10** MAP estimate against time (log10 because drift is multiplicative), "
+             "stored **estimator-space** MAP estimate against time (log10 for a log row, because "
+             "its drift is multiplicative; the value itself for the linear initial dimer fraction), "
              "giving a slope and hence fitted endpoints:")
     L.append("")
     L.append("```")
-    L.append("change_dex = slope * (t_last - t_first)")
-    L.append("start      = 10 ** (fitted value at t_first)")
-    L.append("end        = 10 ** (fitted value at t_last)")
+    L.append("change = slope * (t_last - t_first)      (dex for a log row; absolute for a linear row)")
+    L.append("start  = to_physical(fitted value at t_first)")
+    L.append("end    = to_physical(fitted value at t_last)")
     L.append("```")
     L.append("")
     L.append("Because the fit is per cell, **none of these statistics depends on the central "
@@ -649,9 +680,11 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
     L.append("| `drift-sign-consistency` | Fraction of cells whose change shares the sign of the "
              "median change. **Annotated on the figure.** |")
     L.append("| `drift-fold` | Median across cells of `end / start`, a multiplicative factor. |")
-    L.append("| `drift-dex` | Median across cells of `change_dex`, in log10 units. |")
-    L.append(f"| `drift-material-fraction` | Fraction of cells whose `|change_dex|` exceeds "
-             f"{drift['threshold']:g} dex (a factor of two). |")
+    L.append("| `drift-dex` | Median across cells of `change`, in log10 units. Log rows only: "
+             "for a linear row it reads `n/a`, since its change is already `drift-absolute`. |")
+    L.append(f"| `drift-material-fraction` | Fraction of cells whose `|change|` exceeds "
+             f"{drift['threshold']:g} dex (a factor of two). Log rows only (`n/a` for a linear "
+             f"row: a dex threshold does not apply). |")
     L.append("| `drift-wilcoxon-p` | Two-sided signed-rank test that the per-cell changes are "
              "centered at zero. A **detectability** statement, not a magnitude. |")
     L.append("| `reference-ratio` | The `*-trajectory` value divided by the reference mean, where a "
@@ -669,8 +702,9 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
         traj = " | ".join(f"{line[e, i]:.4g}" for e in range(len(kinds)))
         stats = " | ".join(
             f"{drift['drift_absolute'][e, i]:+.3g} / {drift['drift_fold'][e, i]:.2f}x / "
-            f"{drift['drift_dex'][e, i]:+.3f} / {100 * drift['drift_sign_consistency'][e, i]:.0f}% / "
-            f"{100 * drift['drift_material_fraction'][e, i]:.0f}% / "
+            f"{_dex(drift['drift_dex'][e, i], '{:+.3f}')} / "
+            f"{100 * drift['drift_sign_consistency'][e, i]:.0f}% / "
+            f"{_dex(100 * drift['drift_material_fraction'][e, i], '{:.0f}%')} / "
             f"{drift['drift_wilcoxon_p'][e, i]:.1e}" for e in range(len(kinds)))
         ref = spec.references.get(r["key"])
         if ref is None:
@@ -752,7 +786,7 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
             row = [f"`{r['key']}`", r["label"]]
             for e in range(len(kinds)):
                 qs = tdk.cloud_interval(pooled[e])[:, i]
-                row += [f"{10.0 ** v:.3g}" for v in qs]
+                row += [f"{float(entry_to_physical(spec.table[i], v)):.3g}" for v in qs]
             rows.append(row)
         L.append("| " + " | ".join(headers) + " |")
         L.append("|" + "---|" * len(headers))
@@ -772,23 +806,24 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                  "between them can be checked parameter by parameter.")
         L.append("")
         L.append("- `median-pooled` — marginal median of the pooled draws. **Equivariant**: the "
-                 "median in absolute units and `10 ** median(log10)` are the same number, so this "
-                 "value does not depend on the space it was computed in.")
+                 "median in absolute units and `to_physical(median(estimator))` are the same "
+                 "number, so this value does not depend on the space it was computed in.")
         L.append("- `mean-pooled` — arithmetic mean in absolute units. **Not equivariant**: it "
                  "differs from `geomean-pooled` by a factor that grows with the spread, so for a "
                  "log-uniform prior it partly reports the choice of basis rather than the "
                  "posterior. Reported because it is what \"the mean of the posterior\" usually "
                  "names, not because it is the better summary.")
-        L.append("- `geomean-pooled` — `10 ** mean(log10)`, the mean taken in the space the prior "
-                 "is uniform in.")
+        L.append("- `geomean-pooled` — `to_physical(mean(estimator))`, the mean taken in the space "
+                 "the prior is uniform in (the geometric mean for a log row; for the linear initial "
+                 "dimer fraction it coincides with `mean-pooled`).")
         L.append(f"- `{family}-trajectory` — the medoid: one jointly realized vector. Its "
                  "coordinates are a real recording's values and need **not** be marginally "
                  "central; a large `ratio` below means the mixture is skewed for that parameter, "
                  "not that the medoid is wrong.")
         L.append("")
-        med = tdk.pooled_summary(pooled, "median")
-        mea = tdk.pooled_summary(pooled, "mean")
-        geo = tdk.pooled_summary(pooled, "geometric-mean")
+        med = tdk.pooled_summary(pooled, spec.to_physical, "median")
+        mea = tdk.pooled_summary(pooled, spec.to_physical, "mean")
+        geo = tdk.pooled_summary(pooled, spec.to_physical, "geometric-mean")
         heads = ["parameter", "condition", "median-pooled", "mean-pooled", "geomean-pooled",
                  f"{family}-trajectory", "ratio traj/median"]
         L.append("| " + " | ".join(heads) + " |")
@@ -836,7 +871,10 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                  " and ".join(f"±{b:g} dex" for b in tdk.RECOVERY_BANDS_DEX) +
                  " that the Evaluation stage reports — a factor of two and a factor of the square "
                  "root of two — restated as the value range they permit, since that is what a "
-                 "reader needs in order to judge whether the parameter is usable.")
+                 "reader needs in order to judge whether the parameter is usable. A dex band is a "
+                 "multiplicative tolerance and applies to log rows only; the linear initial dimer "
+                 "fraction is flagged as not covered rather than judged against a band that does "
+                 "not fit it.")
         L.append("")
     L.append("Trust a parameter on experimental data when it recovers well on held-out synthetic "
              "data, **and** is stationary where the model says it should be, **and** its posterior "
@@ -900,7 +938,7 @@ def run_temporal_dynamics(cfg, args):
 
     grid, n_cells, n_chunks = tdk.reshape_to_grid(
         inferred_log10, kind_index, cell, chunk, len(kinds))
-    abs_grid = 10.0 ** grid
+    abs_grid = spec.to_physical(grid)
     # A chunk is a WINDOW, not an instant. Edges span the recording's true extent (n_chunks*step,
     # e.g. 0..20 s for ten 2 s windows) and drive the step plots; the drift fit uses window CENTRES,
     # which is where each estimate's information actually sits. The fitted slope, and hence every
@@ -912,17 +950,21 @@ def run_temporal_dynamics(cfg, args):
     # mean with a medoid. Every kernel function below already returns ABSOLUTE units.
     family = args.central
     if family == "sgm":
-        series, picks_window = tdk.sgm_window(grid, spec.prior_low, spec.prior_high)
-        line, picks_traj = tdk.sgm_trajectory(grid, spec.prior_low, spec.prior_high)
+        series, picks_window = tdk.sgm_window(grid, spec.prior_low, spec.prior_high,
+                                              spec.to_physical)
+        line, picks_traj = tdk.sgm_trajectory(grid, spec.prior_low, spec.prior_high,
+                                              spec.to_physical)
     else:
-        series, picks_window = tdk.mean_window(grid), None
-        line, picks_traj = tdk.mean_trajectory(grid), None
-    drift = tdk.drift_statistics(grid, centers)
+        series, picks_window = tdk.mean_window(grid, spec.to_physical), None
+        line, picks_traj = tdk.mean_trajectory(grid, spec.to_physical), None
+    drift = tdk.drift_statistics(grid, centers, spec.to_physical, spec.log_rows)
 
     within = None
     if quant is not None and quant.size:
         qgrid, _, _ = tdk.reshape_to_grid(quant, kind_index, cell, chunk, len(kinds))
-        within = tdk.within_window_interval(qgrid)
+        within = tdk.within_window_interval(qgrid)                # (K, T, D, Q) estimator space
+        # Convert with the parameter axis last, as the table-bound conversion expects.
+        within = np.moveaxis(spec.to_physical(np.moveaxis(within, 2, -1)), -1, 2)
 
     pooled = None
     pooled_mark, pooled_mark_name = None, ""
@@ -931,7 +973,7 @@ def run_temporal_dynamics(cfg, args):
         if args.pooled_mark == "trajectory":
             pooled_mark, pooled_mark_name = line, f"{family}-trajectory"
         else:
-            pooled_mark = tdk.pooled_summary(pooled, args.pooled_mark)
+            pooled_mark = tdk.pooled_summary(pooled, spec.to_physical, args.pooled_mark)
             pooled_mark_name = ("geomean-pooled" if args.pooled_mark == "geometric-mean"
                                 else f"{args.pooled_mark}-pooled")
 
@@ -939,7 +981,8 @@ def run_temporal_dynamics(cfg, args):
     if spec.recovery_npz.exists():
         with np.load(str(spec.recovery_npz), allow_pickle=False) as d:
             if "true_log10" in d.files and "inferred_log10" in d.files:
-                recovery = tdk.recovery_fractions(d["true_log10"], d["inferred_log10"])
+                recovery = tdk.recovery_fractions(d["true_log10"], d["inferred_log10"],
+                                                  spec.log_rows)
 
     print(f"\nLoaded {inferred_log10.shape[0]} estimates: {len(kinds)} conditions x "
           f"{n_cells} recordings x {n_chunks} windows.")
@@ -1044,9 +1087,10 @@ def build_parser(description):
                         "decades, which resolves a wide prior evenly and makes the log-uniform "
                         "prior a flat reference line (density per decade); it writes "
                         "<key>_temporal_posterior_pooled_log.png. 'both' writes both files. For a "
-                        "parameter spanning orders of magnitude (the counts span 1-316) the linear "
-                        "axis compresses the low end, so 'log' or 'both' is the better choice when "
-                        "the low end is the question.")
+                        "parameter spanning orders of magnitude (the receptor total spans decades) "
+                        "the linear axis compresses the low end, so 'log' or 'both' is the better "
+                        "choice when the low end is the question. A linear row (the initial dimer "
+                        "fraction) is always drawn linear with a flat prior.")
     p.add_argument("--pooled-mark",
                    choices=("median", "mean", "geometric-mean", "trajectory"), default="median",
                    help="Which SINGLE statistic the pooled histogram marks per condition; the "

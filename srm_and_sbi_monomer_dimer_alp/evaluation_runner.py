@@ -45,7 +45,7 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
 from srm_and_sbi_monomer_dimer_alp.experiment_support import shard_by_rank
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow, to_physical
 from srm_and_sbi_monomer_dimer_alp.utils import console_log_context  # noqa: F401  (entry points import via this module's siblings)
 from srm_and_sbi_monomer_dimer_alp.visualization_inference import figure_recovery_combined
 from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
@@ -486,7 +486,7 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     lr, tolerance, pool_mode=pool_mode, show=show, verbose=verbose_deep,
                     log_fn=step_log,
                 )
-                true_log = np.log10(np.asarray(theta_set[sim], dtype=float))
+                true_log = to_flow(np.asarray(theta_set[sim], dtype=float), spec.draw_spec)
                 scores.append(score)
                 inferred_log10.append(theta_log)
                 true_log10.append(true_log)
@@ -500,7 +500,7 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     print(f"          original theta [LOG] {_theta_repr(true_log)}",
                           flush=True)
                     print(f"          original theta [ABS] "
-                          f"{_theta_repr(np.power(10.0, true_log))}", flush=True)
+                          f"{_theta_repr(to_physical(true_log, spec.draw_spec))}", flush=True)
                 done += 1
                 elapsed = time.time() - loop_start
                 avg = elapsed / done

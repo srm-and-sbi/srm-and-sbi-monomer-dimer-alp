@@ -64,7 +64,8 @@ the artifact's own prior — the expected NLL under the uniform prior itself.
 For a uniform prior over the learnable box, the density is the constant `1 / V`, where `V` is
 the prior-box volume, so the NLL of the prior is the constant `NLL_prior = ln V = sum_j
 ln(range_j)` (natural log; each `range_j` is the width of parameter `j`'s prior interval, in
-the log10 space the density is scored in). This is the no-information baseline: an estimator
+the estimator space the density is scored in — `log10` for a log row, the value itself for a
+linear row). This is the no-information baseline: an estimator
 that learned nothing — returning the prior for every video — scores exactly `NLL_prior` on
 every example. The analysis reports it three ways:
 
@@ -204,6 +205,6 @@ calibration by simulation-based calibration is Talts et al. ("Validating Bayesia
 Algorithms with Simulation-Based Calibration," 2018).
 
 The artifact, the fixed held-out TEST set, and the imaging parameter table (roles, prior
-ranges, log10 space) are described in `PROJECT_CONTEXT.md` and the Detector calibration
+ranges, per-row scale) are described in `PROJECT_CONTEXT.md` and the Detector calibration
 workflow in `DETECTOR_WORKFLOW.md`; the recovery quantification this analysis defers to is the
 Detector Evaluation stage.

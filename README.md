@@ -1,21 +1,23 @@
 # srm-and-sbi-monomer-dimer-alp
 
-Simulation-based inference of receptor reaction-diffusion parameters from single-particle-tracking microscopy videos: the **MONOMER_DIMER** model family (A monomer, B mobile dimer, C immobile dimer) with an explicit observation layer — measured degree of labeling (DOL), per-subunit label draws, and probe occupancy — where MET-FAB and MET-INLB are two frozen configurations of one codebase.
+Simulation-based inference of receptor reaction-diffusion parameters from single-particle-tracking microscopy videos: the **MONOMER_DIMER** model family — the separated stoichiometry–mobility model, two molecular species (A monomer, B dimer) × three mobility modes (fast, slow, immobile) — with an explicit observation layer — measured degree of labeling (DOL), per-subunit label draws, and probe occupancy — where MET-FAB and MET-INLB are two frozen configurations of one codebase.
 
 This repository is a self-contained pipeline within the `srm-and-sbi` project: it simulates the reaction-diffusion system, renders the trajectories as diffraction-limited microscopy videos, and trains a neural posterior to recover the underlying parameters from a video. It pairs that inference with a leak-proof train/test/eval data split, held-out MAP-recovery validation on synthetic data with known ground truth, and application of the trained posterior to experimental microscopy recordings (no ground truth). See **[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md)** for the full scientific treatment.
 
 ## Repository status
 
-**In development (0.1.1).** The codebase began as a copy of the tracked tree of
+**In development (0.1.2).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
-of the three-species DIMER model with the stationary OU brightness photo-physics — and implements
+of the earlier three-species DIMER model with the stationary OU brightness photo-physics — and implements
 the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the
 measured degree of labeling as a static per-subunit dye draw carried through the reactions; emitters
 are dyes), the condition axis (MET-FAB and MET-INLB as two frozen configurations of one codebase,
-entering at the DLI stage and carried by a condition slot in every downstream name), and a detector
-calibration that marginalizes the full reactive biology prior. Pending: the reparameterized counts
-(true receptor abundance and composition) and the per-condition `Nuisance_DLI` recalibration under
-the DOL-explicit model.
+entering at the DLI stage and carried by a condition slot in every downstream name), a detector
+calibration that marginalizes the full reactive biology prior, and the separated
+stoichiometry–mobility model (two molecular species × three mobility modes, seventeen generated
+reaction channels, twelve learnable parameters led by the conserved receptor total `N_R` and the
+initial dimer fraction `x_B`; all parameter ranges are development settings, not approved training
+priors). Pending: the per-condition `Nuisance_DLI` recalibration under the DOL-explicit model.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the Fab-labeled
 monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,

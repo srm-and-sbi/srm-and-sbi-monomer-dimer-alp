@@ -1,7 +1,12 @@
 """Entry-point script: generate the shared ReaDDy reaction-diffusion trajectory tier.
 
-Samples the DIMER model's ten reaction-diffusion parameters from the log-uniform
-prior, runs ReaDDy simulations for each (task, simulation) pair, and saves the
+Samples the twelve reaction-diffusion parameters of the separated stoichiometry-mobility
+model (two molecular species A monomer / B dimer x three mobility modes f / s / i = six
+particle types; seventeen reaction channels generated from the model blocks) from the
+box-uniform prior in the estimator space (log10 for log rows, the value itself for the
+linear initial dimer fraction), maps them to physical values with
+``parameterization.to_physical``, runs ReaDDy simulations for each (task, simulation)
+pair, and saves the
 resulting particle trajectories (with their reaction records) as .h5 files and the
 parameter samples as a .zarr (compressed) or .npy (uncompressed) theta set.
 
