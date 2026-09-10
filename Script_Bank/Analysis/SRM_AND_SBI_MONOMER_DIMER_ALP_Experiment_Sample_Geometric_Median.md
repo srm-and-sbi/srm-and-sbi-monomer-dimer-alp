@@ -1,6 +1,8 @@
 # Experiment Sample Geometric Median
 
-> **Note (2026-09-09).** The results quoted in this note were produced under the ten-parameter three-species model of 0.1.1 (A monomer, B mobile dimer, C immobile dimer; per-species initial counts). Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes, twelve learnable parameters), and the readout definitions changed with it: the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B`, with the complex fraction `f_B = x_B / (2 − x_B)` and the receptor-level dimer fraction `f_R = x_B`; mobility (fast / slow / immobile) is a mode of either species, not a species of its own. The numbers below are kept as the record of that earlier run and are not re-derived here.
+> **Note (2026-09-09).** The results quoted in this note were produced under the ten-parameter three-species model of 0.1.1 (A monomer, B mobile dimer, C immobile dimer; per-species initial counts). Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes), and the readout definitions changed with it: the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B`, with the complex fraction `f_B = x_B / (2 − x_B)` and the receptor-level dimer fraction `f_R = x_B`; mobility (fast / slow / immobile) is a mode of either species, not a species of its own. The numbers below are kept as the record of that earlier run and are not re-derived here.
+
+> **Note (2026-09-10).** Release 0.1.3 removed the association ratio from the learnable parameters: it is a declared per-condition constant (MET-FAB 0, no association channel; MET-INLB 1, the reference convention), so the summary vector has eleven reaction-diffusion coordinates and the association-rate coordinate of the earlier run has no counterpart. The `sgm_plane` figure shows the initial dimer fraction `x_B` against the dissociation rate `κ_OFF` — the coupled pair at the center of the biological question — in place of an abundance against an association rate. The earlier numbers stand as recorded.
 
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Sample_Geometric_Median.py`. It reduces the
 Experiment stage's cloud of MAP estimates on real MET single-particle-tracking recordings to a
@@ -11,10 +13,10 @@ per-dimension summary.
 
 Given many estimated parameter vectors, the obvious summary is to take the median of each
 dimension separately. That composite is not a member of the collection, and nothing guarantees it
-is even a configuration the system can occupy. The twelve reaction-diffusion parameters are
+is even a configuration the system can occupy. The eleven reaction-diffusion parameters are
 correlated — the receptor total and the initial dimer fraction constrain one another through the
-reactions that interconvert monomers and dimers, and abundance trades off against the rates
-producing it — so a coordinate taken from one
+visible-spot count, and the dimer fraction trades off against the dissociation rate that depletes
+it (association is a per-condition constant, not inferred) — so a coordinate taken from one
 recording and another taken from a different recording need never have co-occurred. For a
 multimodal cloud the composite is actively misleading: it lands in the low-density valley
 *between* the modes, the one configuration the data most clearly rules out.
@@ -58,7 +60,8 @@ prior range**. Two deliberate choices:
   defect: the estimates are unconstrained by the box, so mass outside it means the recordings pull
   that parameter beyond the range the prior anticipated.
 
-Figures: `sgm_plane` (dimer abundance versus dimerization rate, with both summary points),
+Figures: `sgm_plane` (initial dimer fraction versus dissociation rate, with both summary points;
+the fraction on a linear axis, the rate on a log axis),
 `sgm_corner` (all pairwise structure), `out_of_prior_mass`.
 
 ## How to run

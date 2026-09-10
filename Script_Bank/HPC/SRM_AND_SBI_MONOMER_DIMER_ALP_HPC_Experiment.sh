@@ -35,13 +35,13 @@
 # or pre-export it in the submitting shell and let --export=ALL carry it:
 # Example (default KINDS):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Experiment --export=ALL,REPO=$PWD,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 # Example (multi-value KINDS via the environment, NOT inside --export):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
 #   export KINDS=FAB,INLB   # a deliberate cross-condition application, not the default
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Experiment --export=ALL,REPO=$PWD,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 # Example (two nodes, (kind, cell) work sharded across both -- add --nodes=N; --gres is per node):
-#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Experiment --export=ALL,REPO=$PWD,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
+#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=gpu

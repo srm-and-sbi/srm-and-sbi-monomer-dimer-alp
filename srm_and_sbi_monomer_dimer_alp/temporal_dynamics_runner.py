@@ -167,7 +167,7 @@ _REFERENCE_DETECTOR = {
 _DISPLAY_BIOLOGY = {
     # stoichiometry block
     "count_total": "Receptor total", "fraction_dimer_initial": "Initial dimer fraction",
-    "relative_rate_dimerization": "Association ratio", "rate_dissociation": "Dissociation rate",
+    "rate_dissociation": "Dissociation rate",
     # mobility block
     "diffusivity_alp": "Monomer diffusivity", "relative_diffusivity_dimer": "Rel. dimer diffusivity",
     "relative_diffusivity_slow": "Rel. slow-mode diffusivity",

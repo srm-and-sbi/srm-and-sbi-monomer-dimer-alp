@@ -31,12 +31,12 @@
 # 5S_50FPS) whenever you pass TOTAL_TIME=5.0.
 # Example (defaults; unrestricted pool):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI --export=ALL,REPO=$PWD Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Nuisance_DLI.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Nuisance_DLI --export=ALL,REPO=$PWD,CONDITION=FAB Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Nuisance_DLI.sh
 # Example (5 s window, bounded pool):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_5S_50FPS_Nuisance_DLI --export=ALL,REPO=$PWD,POOL_MODE=bounded,TOTAL_TIME=5.0 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Nuisance_DLI.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_5S_50FPS_Nuisance_DLI --export=ALL,REPO=$PWD,CONDITION=FAB,POOL_MODE=bounded,TOTAL_TIME=5.0 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Nuisance_DLI.sh
 # Example (two nodes, pool build sharded across both -- add --nodes=N; --gres is per node):
-#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Nuisance_DLI --export=ALL,REPO=$PWD Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Nuisance_DLI.sh
+#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Nuisance_DLI --export=ALL,REPO=$PWD,CONDITION=FAB Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Nuisance_DLI.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=gpu

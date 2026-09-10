@@ -1,24 +1,29 @@
 """Entry-point: generate the TRAIN / TEST / EVAL datasets in one command.
 
 Runs the generation flow three times -- once per split -- with the task counts derived
-from the dataset-sizing rule: the shared RDS trajectory tier once, then one DLI pass per
-requested workflow and condition over that tier. The three splits are independent draws
-that never mix: by default no seed is passed, so each split draws fresh entropy
+from the dataset-sizing rule: one RDS trajectory tier per requested condition, then one DLI
+pass per requested workflow over each condition's tier. The three splits are independent
+draws that never mix: by default no seed is passed, so each split draws fresh entropy
 (non-deterministic).
 
-The RDS tier is shared. Its trajectories and twelve-parameter ``Theta_Set`` carry the bare
-sibling alias and serve both workflows (the biology's learnable labels are the detector's
-marginalized reaction-diffusion nuisance) and both conditions, so RDS runs at most once per
-split here, and the DLI passes -- condition-specific (the static labeling law of MET-FAB or
-MET-INLB re-images the same trajectories) and workflow-specific (the detector draws the six
-imaging labels from its prior box; the biology draws them from the condition's calibrated
-``Nuisance_DLI`` artifact) -- fan out over ``--workflows`` x ``--conditions``.
+One RDS tier per condition, shared by both workflows. The association ratio of the
+reaction-diffusion model is a declared per-condition constant (MET-FAB 0: no association
+channel; MET-INLB 1: the reference convention), so the two conditions' trajectories differ
+and the RDS stage runs once per condition per split. Within a condition the trajectories
+and the eleven-parameter ``Theta_Set`` carry the sibling alias plus the condition token and
+serve both workflows (the biology's learnable labels are the detector's marginalized
+reaction-diffusion nuisance); the DLI passes -- condition-specific (the static labeling law
+of MET-FAB or MET-INLB re-images that condition's trajectories) and workflow-specific (the
+detector draws the six imaging labels from its prior box; the biology draws them from the
+condition's calibrated ``Nuisance_DLI`` artifact) -- fan out over ``--workflows`` for each
+condition.
 
-Two guards protect the tier. Without ``--reuse-rds`` the RDS stage generates it and REFUSES
-to run over an existing tier: the RDS stage would replace the trajectories and the
-``Theta_Set`` with a fresh draw, silently mislabeling every video already rendered from the
-old tier; ``--overwrite-rds`` lifts that refusal deliberately. With ``--reuse-rds`` the RDS
-stage is skipped and the tier must be present for every planned task. The biology DLI needs
+Two guards protect each condition's tier. Without ``--reuse-rds`` the RDS stage generates
+it and REFUSES to run over an existing tier: the RDS stage would replace the trajectories
+and the ``Theta_Set`` with a fresh draw, silently mislabeling every video already rendered
+from the old tier; ``--overwrite-rds`` lifts that refusal deliberately. With ``--reuse-rds``
+the RDS stage is skipped and every requested condition's tier must be present for every
+planned task. The biology DLI needs
 the condition's ``Nuisance_DLI`` artifact (minted by the detector chain), so a biology pass
 is refused up front, before anything runs, when a requested condition has none.
 
@@ -36,7 +41,7 @@ a deterministic distinct-seed-per-split run: train = seed, test = seed + 1,
 eval = seed + 2 (forwarded to the RDS and every DLI pass of that split).
 
 Usage:
-    # first campaign: the shared tier + the detector videos of both conditions
+    # first campaign: both conditions' tiers + the detector videos of both conditions
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py \\
         --workflows detector --conditions FAB,INLB --core-tasks 10 --task-simulations 10 \\
         --total-time-seconds 2.0 --seed None
@@ -61,7 +66,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
 
 _PRIME = Path(__file__).resolve().parent
 _RDS = _PRIME / "SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py"
-# One DLI entry point per workflow, both over the same trajectory tier.
+# One DLI entry point per workflow, both over the condition's trajectory tier.
 _DLI = {
     "detector": _PRIME / "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py",
     "biology": _PRIME / "SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py",
@@ -105,7 +110,8 @@ def _run(script: Path, label: str, split: str, tasks: int, seed: Optional[int],
     # the DLI entry points have no such flag). Omit when None -> the code default.
     if script == _RDS and args.skin_factor is not None:
         cmd += ["--skin-factor", str(args.skin_factor)]
-    # --condition is a DLI-only axis: the labeling law re-images the condition-free tier.
+    # --condition selects the tier (RDS: the association setting is per condition) and the
+    # labeling law (DLI); every stage pass takes it.
     if condition is not None:
         cmd += ["--condition", condition]
 
@@ -171,18 +177,20 @@ def _plan(args: argparse.Namespace) -> dict:
     }
 
 
-def _tier_status(plan: dict, args: argparse.Namespace) -> Dict[str, tuple]:
-    """Per split: how many of the planned tasks already have the shared tier's ``Theta_Set``
-    (the tier's per-task marker; the trajectories sit beside it)."""
+def _tier_status(plan: dict, args: argparse.Namespace) -> Dict[tuple, tuple]:
+    """Per (split, condition): how many of the planned tasks already have that condition's
+    tier ``Theta_Set`` (the tier's per-task marker; the trajectories sit beside it)."""
     timing_label = _timing_label(args)
     compress = not args.no_compress
     status = {}
     for split, tasks, _seed in plan["splits"]:
         root = PARAMETERS.machine.root_for(split.upper())
-        present = sum(
-            PARAMETERS.paths.theta_set_path(task, root, timing_label, compress, split.upper()).exists()
-            for task in range(tasks))
-        status[split] = (present, tasks)
+        for condition in args.conditions:
+            paths = PARAMETERS.paths.with_condition(condition)
+            present = sum(
+                paths.theta_set_path(task, root, timing_label, compress, split.upper()).exists()
+                for task in range(tasks))
+            status[(split, condition)] = (present, tasks)
     return status
 
 
@@ -218,31 +226,34 @@ def main(args: argparse.Namespace) -> None:
     print(f"  rule             : test_fraction={plan['test_fraction']}, "
           f"eval_fraction={plan['eval_fraction']}, eval_floor={plan['eval_floor']}")
     print(f"  total-time-secs  : {args.total_time_seconds}   (timing label {_timing_label(args)})")
-    print(f"  RDS tier         : {'REUSE the existing shared tier (RDS skipped)' if args.reuse_rds else 'generate the shared tier' + (' (overwriting an existing one)' if args.overwrite_rds else '')}")
-    print(f"  workflows        : {', '.join(args.workflows)}   (one DLI pass each, over the same tier)")
-    print(f"  conditions       : {', '.join(args.conditions)}   (DLI labeling law; the tier is condition-free)")
+    print(f"  RDS tiers        : one per condition; "
+          f"{'REUSE the existing tiers (RDS skipped)' if args.reuse_rds else 'generate them' + (' (overwriting existing ones)' if args.overwrite_rds else '')}")
+    print(f"  workflows        : {', '.join(args.workflows)}   (one DLI pass each, over each condition's tier)")
+    print(f"  conditions       : {', '.join(args.conditions)}   (one RDS tier each -- the association setting is per condition -- and its DLI labeling law)")
     print()
-    print(f"  {'split':<7}{'tasks':>7}{'samples':>9}{'seed':>7}{'tier present':>14}")
+    print(f"  {'split':<7}{'cond':<6}{'tasks':>7}{'samples':>9}{'seed':>7}{'tier present':>14}")
     tier = _tier_status(plan, args)
     for split, tasks, seed in plan["splits"]:
-        present, planned = tier[split]
-        print(f"  {split.upper():<7}{tasks:>7}{tasks * sims:>9}{str(seed):>7}{f'{present}/{planned}':>14}")
+        for condition in args.conditions:
+            present, planned = tier[(split, condition)]
+            print(f"  {split.upper():<7}{condition:<6}{tasks:>7}{tasks * sims:>9}{str(seed):>7}{f'{present}/{planned}':>14}")
     print(div)
 
     # ---- Prerequisite checks (refuse before anything runs) --------------
     problems = []
     for split, tasks, _seed in plan["splits"]:
-        present, planned = tier[split]
-        if args.reuse_rds and present < planned:
-            problems.append(
-                f"--reuse-rds: split {split.upper()} has the shared tier for {present}/{planned} "
-                f"planned tasks; generate it first (drop --reuse-rds) or shrink the plan.")
-        if not args.reuse_rds and not args.overwrite_rds and present > 0:
-            problems.append(
-                f"split {split.upper()} already holds the shared tier for {present}/{planned} planned "
-                f"tasks; the RDS stage would replace those trajectories and Theta_Set with a fresh "
-                f"draw and silently mislabel every video already rendered from them. Pass "
-                f"--reuse-rds to re-image the existing tier, or --overwrite-rds to regenerate it.")
+        for condition in args.conditions:
+            present, planned = tier[(split, condition)]
+            if args.reuse_rds and present < planned:
+                problems.append(
+                    f"--reuse-rds: split {split.upper()} has the {condition} tier for {present}/{planned} "
+                    f"planned tasks; generate it first (drop --reuse-rds) or shrink the plan.")
+            if not args.reuse_rds and not args.overwrite_rds and present > 0:
+                problems.append(
+                    f"split {split.upper()} already holds the {condition} tier for {present}/{planned} planned "
+                    f"tasks; the RDS stage would replace those trajectories and Theta_Set with a fresh "
+                    f"draw and silently mislabel every video already rendered from them. Pass "
+                    f"--reuse-rds to re-image the existing tier, or --overwrite-rds to regenerate it.")
     if "biology" in args.workflows:
         for condition, artifact in _biology_artifacts(args).items():
             ok = artifact.exists()
@@ -264,10 +275,10 @@ def main(args: argparse.Namespace) -> None:
     run_start = time.time()
     for split, tasks, seed in plan["splits"]:
         print(f"\n[{split.upper()}]")
-        if not args.reuse_rds:
-            _run(_RDS, "RDS shared tier", split, tasks, seed, args)
-        for workflow in args.workflows:
-            for condition in args.conditions:
+        for condition in args.conditions:
+            if not args.reuse_rds:
+                _run(_RDS, f"RDS tier {condition}", split, tasks, seed, args, condition=condition)
+            for workflow in args.workflows:
                 _run(_DLI[workflow], f"DLI {workflow} {condition}", split, tasks, seed, args,
                      condition=condition)
 
@@ -280,26 +291,27 @@ def main(args: argparse.Namespace) -> None:
 def parse_args(argv=None) -> argparse.Namespace:
     """Construct the CLI parser and parse argv."""
     parser = argparse.ArgumentParser(
-        description="Generate TRAIN/TEST/EVAL datasets per the dataset-sizing rule: the shared "
-                    "RDS tier once per split, then one DLI pass per workflow and condition.",
+        description="Generate TRAIN/TEST/EVAL datasets per the dataset-sizing rule: one RDS tier "
+                    "per condition per split, then one DLI pass per workflow over each tier.",
     )
     parser.add_argument(
         "--workflows", default="detector,biology",
-        help="Comma-separated DLI passes to render over the shared tier, in run order: "
+        help="Comma-separated DLI passes to render over each condition's tier, in run order: "
              "detector (imaging drawn from the detector prior; needs no artifact) and/or biology "
              "(imaging drawn from the condition's Nuisance_DLI artifact, which the detector chain "
              "must have minted). Default: detector,biology.",
     )
     parser.add_argument(
         "--conditions", default=",".join(LABELING_CONDITIONS),
-        help="Comma-separated experimental conditions whose labeling laws re-image the tier "
+        help="Comma-separated experimental conditions; each gets its own RDS tier (the association "
+             "setting is a per-condition constant) and its labeling law re-images it "
              f"(from {list(LABELING_CONDITIONS)}; FAB = MET-FAB, INLB = MET-INLB). Forwarded to "
-             "the DLI passes only. Default: all.",
+             "the RDS and the DLI passes. Default: all.",
     )
     parser.add_argument(
         "--reuse-rds", action="store_true",
-        help="Skip the RDS stage and re-image the shared tier already on disk (it must be present "
-             "for every planned task of every split).",
+        help="Skip the RDS stage and re-image the condition tiers already on disk (every requested "
+             "condition's tier must be present for every planned task of every split).",
     )
     parser.add_argument(
         "--overwrite-rds", action="store_true",

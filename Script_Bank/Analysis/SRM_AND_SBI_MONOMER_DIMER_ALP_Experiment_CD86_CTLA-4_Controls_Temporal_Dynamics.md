@@ -1,6 +1,8 @@
 # Control-receptor temporal-dynamics analysis — interpretation
 
-> **Note (2026-09-09).** The readout definitions in this note (`D_mix_mobile` from the mobile counts `C_A`, `C_B`, the mobile-dimer diffusivity `D_B = R_B · D_A`, the mobile split `f_B`, and the excluded immobile class C) were written against the ten-parameter three-species model of 0.1.1. Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes, twelve learnable parameters): the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B` (`f_B = x_B / (2 − x_B)`, `f_R = x_B`), immobility is a mode of either species (`R_i`) rather than a species, and the dimer factor `R_B` applies within a mode. Results quoted from earlier runs are kept as their record and are not re-derived here.
+> **Note (2026-09-09).** The readout definitions in this note (`D_mix_mobile` from the mobile counts `C_A`, `C_B`, the mobile-dimer diffusivity `D_B = R_B · D_A`, the mobile split `f_B`, and the excluded immobile class C) were written against the ten-parameter three-species model of 0.1.1. Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes): the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B` (`f_B = x_B / (2 − x_B)`, `f_R = x_B`), immobility is a mode of either species (`R_i`) rather than a species, and the dimer factor `R_B` applies within a mode. Results quoted from earlier runs are kept as their record and are not re-derived here.
+
+> **Note (2026-09-10).** Release 0.1.3 removed the association ratio from the learnable parameters: it is a declared per-condition constant (MET-FAB 0, MET-INLB 1), so the eleven-parameter posterior emits no association-ratio figure and the association-ratio panels of earlier runs have no counterpart. The kinetic caveats below apply to the dissociation and switching rates.
 
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls_Temporal_Dynamics.py`.
 The script applies the DIMER-ALP posterior — trained on the MET single-particle-tracking
@@ -114,16 +116,16 @@ Recovery quality is a property of the posterior, independent of which real data 
 applied to, so it carries over to this reuse. Each figure is annotated (when the
 Evaluation MAP-recovery arrays are present) with the fraction of held-out EVAL videos
 recovered within ±0.3 log10. The monomer diffusivity D_A recovers well and is the
-backbone of the headline readout; the relative dimerization rate R_ON is not
-identifiable from these videos and its trajectory must not be over-read. Trust a
+backbone of the headline readout; a parameter that recovers poorly carries no signal,
+and its trajectory must not be over-read. Trust a
 parameter when it both recovers well on ground truth and is stationary where it should
 be.
 
 ## Caveats
 
 - **Label / model mismatch.** Exchangeable, blinking SiR-S5 vs the always-visible
-  permanent-label training regime. Diffusion transfers; counts and rates (C_*, κ_*,
-  R_ON) do not and are not read quantitatively.
+  permanent-label training regime. Diffusion transfers; counts and rates (C_*, κ_*, the
+  switching rates) do not and are not read quantitatively.
 - **Not the trained mechanism.** CD86 and CTLA-4 are constitutive monomer / dimer
   controls, not the dynamic A + A ⇌ B mechanism with mobility switching the posterior encodes. They bracket
   the diffusion scale and stress-test transferability; they do not exercise the kinetics.
@@ -140,7 +142,8 @@ be.
 - **First-pass posteriors.** The current 2 s / 5 s posteriors come from interrupted
   training; the absolute values will sharpen with the full production posteriors. Re-run
   this analysis on those for the definitive numbers.
-- **Relative parameters** (R_B, R_s, R_i, R_ON) are plotted as dimensionless ratios.
+- **Relative parameters** (R_B, R_s, R_i) are plotted as dimensionless ratios; the initial
+  dimer fraction x_B is a linear coordinate on [0, 1].
 
 ## Not yet implemented: aggregated posterior distributions
 

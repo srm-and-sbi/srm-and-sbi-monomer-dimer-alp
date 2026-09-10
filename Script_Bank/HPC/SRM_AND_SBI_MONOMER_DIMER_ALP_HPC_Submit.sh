@@ -23,11 +23,12 @@
 #   KEY=VALUE pairs are the stage's --export knobs (see each stage script header);
 #   anything not passed falls back to that stage script's own default:
 #     simulation  : SPLIT SIM_STAGE CONDITION TASK_OFFSET TASK_COUNT TASK_SIMS TOTAL_TIME SKIN_FACTOR
-#                   (SIM_STAGE = both|rds|dli; rds generates the SHARED trajectory tier that
-#                   both workflows and both conditions re-image -- no CONDITION, no qualifier;
-#                   dli re-images an existing tier for one CONDITION)
-#                   (CONDITION = FAB|INLB, the DLI stage's static labeling law;
-#                   required unless SIM_STAGE=rds)
+#                   (SIM_STAGE = both|rds|dli; rds generates CONDITION's trajectory tier alone --
+#                   one tier per condition, since the association setting is per condition; it
+#                   carries the condition token and no workflow qualifier, and both workflows
+#                   re-image it; dli re-images CONDITION's existing tier with the biology DLI)
+#                   (CONDITION = FAB|INLB, the run's experimental condition; required for every
+#                   stage, the RDS stage included, because the tier is per condition)
 #                   (SKIN_FACTOR = ReaDDy neighbor-list skin as a multiple of the
 #                   particle diameter; RDS-only, performance not physics; unset =
 #                   the code default 10x = 100 nm)
@@ -64,8 +65,8 @@
 #   bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
 #   DRYRUN=0 GPU_PART=gpu bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
 #   DRYRUN=0 GPU_PART=gpu_test bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=100 EPOCHS=10 RESURRECT=1  # continue a wall-stopped run
-#   PART=test bash .../Submit.sh simulation SIM_STAGE=rds SPLIT=train TASK_COUNT=8 TASK_SIMS=1000 TOTAL_TIME=2.0   # the shared trajectory tier (no CONDITION)
-#   PART=test bash .../Submit.sh simulation SIM_STAGE=dli CONDITION=FAB SPLIT=train TASK_COUNT=8 TASK_SIMS=1000 TOTAL_TIME=2.0   # biology videos over that tier
+#   PART=test bash .../Submit.sh simulation SIM_STAGE=rds CONDITION=FAB SPLIT=train TASK_COUNT=8 TASK_SIMS=1000 TOTAL_TIME=2.0   # the FAB trajectory tier alone (CONDITION=INLB for the other condition's tier)
+#   PART=test bash .../Submit.sh simulation SIM_STAGE=dli CONDITION=FAB SPLIT=train TASK_COUNT=8 TASK_SIMS=1000 TOTAL_TIME=2.0   # biology videos over the FAB tier
 #   bash .../Submit.sh evaluation CONDITION=FAB TOTAL_TIME=5.0 EVAL_TASKS=20 POOL_MODE=bounded
 #   bash .../Submit.sh experiment CONDITION=INLB TOTAL_TIME=2.0 SUMMARY=both
 # =============================================================================
@@ -121,16 +122,12 @@ declare -a EXPORT_PARTS=( "ALL" "REPO=$REPO" )
 _add(){ local k="$1"; [ -n "${!k:-}" ] && EXPORT_PARTS+=( "$k=${!k}" ); }
 
 # CONDITION (FAB|INLB): the condition slot of the runtime grammar. Every stage's products are
-# condition-specific (the labeling law re-images the trajectories per condition), so the token is
-# required and forwarded -- except an RDS-only simulation (SIM_STAGE=rds), whose trajectory tier
-# is shared by both workflows and both conditions and carries neither qualifier nor condition.
-# It enters the job name right after the alias: <alias>_<CONDITION>_<timing>_<Stage>.
-if [ "$STAGE" = simulation ] && [ "${SIM_STAGE:-both}" = rds ]; then
-    cond_slot=""
-else
-    case "${CONDITION:-}" in FAB|INLB) export CONDITION ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB; required for every stage except an RDS-only simulation)." >&2; exit 1 ;; esac
-    cond_slot="_${CONDITION}"
-fi
+# condition-specific -- the RDS stage generates that condition's trajectory tier (the association
+# setting is per condition; one tier per condition, shared by both workflows) and the labeling law
+# re-images it per condition -- so the token is required for every stage, the RDS stage included,
+# and forwarded. It enters the job name right after the alias: <alias>_<CONDITION>_<timing>_<Stage>.
+case "${CONDITION:-}" in FAB|INLB) export CONDITION ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB; required for every stage, the RDS stage included -- the trajectory tier is per condition)." >&2; exit 1 ;; esac
+cond_slot="_${CONDITION}"
 
 declare -a SB=()          # sbatch flags
 SUBMIT_SCRIPT=""

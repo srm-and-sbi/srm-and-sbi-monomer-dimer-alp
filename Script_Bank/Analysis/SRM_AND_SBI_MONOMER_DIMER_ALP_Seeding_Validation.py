@@ -162,7 +162,8 @@ def main(args):
         from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import build_simulation, build_system
 
         def place(theta, seed):
-            smut = build_simulation(build_system(theta, verbose=False), theta,
+            # placement only: the condition (INLB, association on) does not affect the initial state
+            smut = build_simulation(build_system(theta, "INLB", verbose=False), theta,
                                     seed=seed, verbose=False)
             p = np.array([q.pos for q in smut.current_particles], dtype=float).reshape(-1, 3)
             return p[np.lexsort((p[:, 2], p[:, 1], p[:, 0]))]

@@ -294,7 +294,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     # Theta-width guard: the loaded labels must be exactly the learnable width this
     # workflow infers. A mismatch means the DLI stage wrote the wrong theta labels
-    # (e.g. 12-RDS where 6-imaging was expected, or vice-versa) -- fail loud rather
+    # (e.g. 11-RDS where 6-imaging was expected, or vice-versa) -- fail loud rather
     # than build a MAF at the wrong width.
     if theta_dummy.shape[1] != spec.theta_dim:
         raise ValueError(

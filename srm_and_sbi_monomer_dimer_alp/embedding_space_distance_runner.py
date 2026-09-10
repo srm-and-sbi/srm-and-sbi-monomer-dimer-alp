@@ -693,7 +693,6 @@ _PARAM_MEANING_BIOLOGY = {
     # stoichiometry block
     "count_total": "stoichiometry: conserved receptor-subunit total N_R = n_A + 2 n_B of the simulated patch",
     "fraction_dimer_initial": "stoichiometry: initial fraction of receptors in dimers x_B = 2 n_B / N_R (linear on [0, 1])",
-    "relative_rate_dimerization": "association: ratio R_ON of the association rate to the reference 6 D_A / r^2 (A + A -> B, all monomer-mode pairs)",
     "rate_dissociation": "dissociation: dimer unbinding rate kappa_OFF (B -> A + A, mode conserved), per second",
     # mobility block
     "diffusivity_alp": "mobility: monomer scale diffusion coefficient D_A = D[A, fast] (um^2/s)",

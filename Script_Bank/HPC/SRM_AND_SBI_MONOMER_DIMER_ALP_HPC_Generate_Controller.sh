@@ -25,19 +25,22 @@
 # Override points: PART (CPU partition), ACCT (Slurm account), MON_OUT (batch-log
 # output dir), USER_ME (queue-owner username for polling), SIM (per-task launcher
 # path), CASES (which dataset(s): 5s|2s|both), DRYRUN (1 = print only, 0 = submit),
-# SIM_STAGE (both|rds|dli, default both, forwarded to every submitted array: rds = the SHARED
-# trajectory tier only, which both workflows and both conditions re-image -- no CONDITION, no
-# qualifier in the job name; dli = re-image the existing tier under CONDITION with the biology
-# DLI; both = RDS then the biology DLI), CONDITION (FAB|INLB: the DLI stage's static labeling
-# law, REQUIRED unless SIM_STAGE=rds, forwarded to every submitted array),
+# SIM_STAGE (both|rds|dli, default both, forwarded to every submitted array: rds = CONDITION's
+# trajectory tier only -- one tier per condition, shared by both workflows; it carries the condition
+# token and no workflow qualifier; dli = re-image CONDITION's existing tier with the biology DLI;
+# both = RDS then the biology DLI), CONDITION (FAB|INLB: the run's experimental condition -- the RDS
+# stage generates its tier and the DLI stage applies its labeling law; REQUIRED for every SIM_STAGE,
+# forwarded to every submitted array),
 # SKIN_FACTOR (ReaDDy neighbor-list skin as a MULTIPLE of the particle diameter --
 # an RDS-only performance knob, not physics; forwarded to every submitted array when
 # set; unset = the code default 10x = 100 nm; see SimulationRDS.neighbor_list_skin_factor).
 #     DRY RUN (default -- prints the exact sbatch lines, submits nothing):
 #         CONDITION=FAB bash SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Generate_Controller.sh
-#     THE SHARED TIER ONLY (the first campaign; the detector controller re-images it afterwards):
-#         SIM_STAGE=rds bash SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Generate_Controller.sh
-#     RE-IMAGE THE EXISTING TIER FOR ONE CONDITION (biology DLI; needs that condition's Nuisance_DLI):
+#     ONE CONDITION'S TRAJECTORY TIER ONLY (the first campaign of that condition; the detector
+#     controller re-images it afterwards with the same CONDITION; repeat with CONDITION=INLB for the
+#     other condition's tier):
+#         SIM_STAGE=rds CONDITION=FAB bash SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Generate_Controller.sh
+#     RE-IMAGE A CONDITION'S EXISTING TIER (biology DLI; needs that condition's Nuisance_DLI):
 #         SIM_STAGE=dli CONDITION=INLB bash SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Generate_Controller.sh
 #     LIVE:
 #         DRYRUN=0 CONDITION=FAB bash SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Generate_Controller.sh 2>&1 | tee ~/dimer_gen_controller.log
@@ -52,7 +55,7 @@
 #   node 5 of 5s-train (global task ids 50..59):
 #     cd /path/to/srm-and-sbi-monomer-dimer-alp && \
 #       sbatch --array=0-0 --ntasks-per-node=10 --cpus-per-task=4 --time=24:00:00 \
-#         --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_5S_50FPS_Simulation_TRAIN \
+#         --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_5S_50FPS_Simulation_TRAIN \
 #         --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=50,TASK_COUNT=10,TASK_SIMS=500,TOTAL_TIME=5.0 \
 #         Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
 #   single task (id 137): --ntasks-per-node=1 TASK_OFFSET=137 TASK_COUNT=1 (same SPLIT/SIMS/TIME).
@@ -96,15 +99,16 @@ STAGE_B=(
 # independently.
 CASES="${CASES:-both}"
 case "$CASES" in both|5s|2s) ;; *) echo "bad CASES=$CASES (use 5s|2s|both)" >&2; exit 1;; esac
-# SIM_STAGE (both|rds|dli; default both) is forwarded to every submitted array. rds generates the
-# SHARED trajectory tier only (bare alias; no CONDITION; both workflows and both conditions re-image
-# it); dli re-images an existing tier under CONDITION with the biology DLI; both does RDS then DLI.
+# SIM_STAGE (both|rds|dli; default both) is forwarded to every submitted array. rds generates
+# CONDITION's trajectory tier only (one tier per condition: the association setting is per
+# condition; it carries the condition token and no workflow qualifier, and both workflows re-image
+# it); dli re-images CONDITION's existing tier with the biology DLI; both does RDS then DLI.
 SIM_STAGE="${SIM_STAGE:-both}"
 case "$SIM_STAGE" in both|rds|dli) ;; *) echo "bad SIM_STAGE=$SIM_STAGE (use both|rds|dli)" >&2; exit 1;; esac
+# CONDITION (FAB|INLB) is required for every SIM_STAGE -- the RDS stage generates that condition's
+# tier and the DLI stage applies its labeling law -- and forwarded to every submitted array.
 CONDITION="${CONDITION:-}"
-if [ "$SIM_STAGE" != rds ]; then
-  case "$CONDITION" in FAB|INLB) ;; *) echo "FATAL: CONDITION='$CONDITION' (use FAB|INLB; the DLI stage's labeling law; required unless SIM_STAGE=rds)." >&2; exit 1;; esac
-fi
+case "$CONDITION" in FAB|INLB) ;; *) echo "FATAL: CONDITION='$CONDITION' (use FAB|INLB; required for every SIM_STAGE -- the trajectory tier is per condition)." >&2; exit 1;; esac
 if [ "$CASES" != both ]; then
   _A=(); for e in "${STAGE_A[@]}"; do [[ "${e%%|*}" == "${CASES}-"* ]] && _A+=("$e"); done; STAGE_A=("${_A[@]}")
   _B=(); for e in "${STAGE_B[@]}"; do [[ "${e%%|*}" == "${CASES}-"* ]] && _B+=("$e"); done; STAGE_B=("${_B[@]}")
@@ -119,19 +123,16 @@ submit(){   # $1 = entry; echoes job id on stdout, logs to stderr
   # REPO is forwarded EXPLICITLY: it is a plain shell var on the login node, so
   # --export=ALL alone would NOT carry it to the spooled child (which runs from
   # /var/spool and cannot resolve the repo from its own path).
-  local export="ALL,REPO=$REPO,SIM_STAGE=$SIM_STAGE,SPLIT=$split,TASK_OFFSET=0,TASK_COUNT=$count,TASK_SIMS=$sims,TOTAL_TIME=$ttime"
-  # CONDITION is a DLI knob; an RDS-only campaign (SIM_STAGE=rds) forwards none.
-  [ -n "$CONDITION" ] && export="${export},CONDITION=${CONDITION}"
+  local export="ALL,REPO=$REPO,SIM_STAGE=$SIM_STAGE,CONDITION=$CONDITION,SPLIT=$split,TASK_OFFSET=0,TASK_COUNT=$count,TASK_SIMS=$sims,TOTAL_TIME=$ttime"
   # SKIN_FACTOR is optional (RDS-only performance knob); forward it only when set so
   # an unset value leaves the code default (SimulationRDS.neighbor_list_skin_factor).
   [ -n "${SKIN_FACTOR:-}" ] && export="${export},SKIN_FACTOR=${SKIN_FACTOR}"
   # Job name follows the data-file naming convention:
-  # SRM_AND_SBI_MONOMER_DIMER_ALP[_<CONDITION>]_<timing_label>_Simulation_<SPLIT> -- the condition
-  # slot is absent for an RDS-only campaign (the shared tier carries no condition) -- with
+  # SRM_AND_SBI_MONOMER_DIMER_ALP_<CONDITION>_<timing_label>_Simulation_<SPLIT> -- the condition
+  # slot is always present, for an RDS-only campaign too (the tier is per condition) -- with
   # timing_label rendered exactly as PARAMETERS.simulation.timing.label does ("{duration}S_50FPS",
   # duration via :g so 2.0 -> 2, 5.0 -> 5, 2.5 -> 2.5) and SPLIT upper-cased.
-  local timing_label split_uc jobname cond_slot=""
-  [ -n "$CONDITION" ] && cond_slot="_${CONDITION}"
+  local timing_label split_uc jobname cond_slot="_${CONDITION}"
   timing_label="$(LC_ALL=C printf '%gS_50FPS' "$ttime")"
   split_uc="$(echo "$split" | tr '[:lower:]' '[:upper:]')"
   jobname="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}_Simulation_${split_uc}"

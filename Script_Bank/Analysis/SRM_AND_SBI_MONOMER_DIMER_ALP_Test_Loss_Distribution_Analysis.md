@@ -13,7 +13,7 @@ manifest is self-describing, so the analysis is workflow-agnostic and built once
 shared-engine pattern: a workflow-agnostic kernel (`test_loss_analysis.py`), a shared runner
 (`test_loss_analysis_runner.py`), and two thin namespaced shims. The only per-workflow
 difference is which alias-qualified `Posit/` the canonical artifact is resolved from; the
-entry-point name carries the namespace (biology's 10 reaction-diffusion parameters, or the
+entry-point name carries the namespace (biology's 11 reaction-diffusion parameters, or the
 detector's 6 imaging parameters).
 
 This is a post-hoc, read-only analysis step, not one of the canonical pipeline stages. It

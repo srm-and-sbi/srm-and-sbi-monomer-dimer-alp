@@ -11,25 +11,32 @@ Two molecular species, three mobility modes, six particle types
     A_f, A_s, A_i = monomer, fast / slow / immobile
     B_f, B_s, B_i = dimer,   fast / slow / immobile
 
-Seventeen reaction channels, GENERATED from the two model blocks by ``reaction_channels``:
+Up to seventeen reaction channels, GENERATED from the two model blocks and the run's
+CONDITION by ``reaction_channels(theta, condition)``:
     association    A_m + A_m' -> B_{slower(m, m')}   six fusions, one per unordered pair of
-                                                    monomer modes, all at the same lambda_on
+                                                    monomer modes, all at the same
+                                                    lambda_on = R_ON[condition] * lambda_ref;
+                                                    NONE when the condition's ratio is zero
     dissociation   B_m -> A_m + A_m                 three fissions at kappa_OFF (mode conserved)
     switching      X_f <-> X_s <-> X_i               eight conversions: the four shared rates,
                                                     once per species
+The association ratio is a declared per-condition constant (``parameterization.ConditionSetting``):
+MET-INLB R_ON = 1 -> seventeen channels; MET-FAB R_ON = 0 -> eleven channels (no association;
+pre-existing dimers may dissociate). It is not a learnable row in either condition.
 
 Diffusion: D[X, m] = D_A * (R_B if X is the dimer else 1) * (1, R_s, R_i)[m].
 
 Functions:
-    reaction_channels(theta)
-        The declarative list of the seventeen channels (kind, educts, products, rate)
-        derived from the model blocks; ``build_system`` registers exactly these, and the
-        structure audit checks them without ReaDDy.
+    reaction_channels(theta, condition)
+        The declarative list of the condition's channels (kind, educts, products, rate)
+        derived from the model blocks and the condition's association setting;
+        ``build_system`` registers exactly these, and the structure audit checks them
+        without ReaDDy.
 
-    build_system(theta, ...)
+    build_system(theta, condition, ...)
         Builds the ReaDDy ReactionDiffusionSystem: registers the six particle types with
-        their diffusion constants and adds the seventeen channels. Returns the configured
-        system, ready to be wrapped in a Simulation.
+        their diffusion constants and adds the condition's channels. Returns the
+        configured system, ready to be wrapped in a Simulation.
 
     build_simulation(stem, theta, ...)
         Wraps the system in a Simulation, registers observables (per-frame
@@ -126,13 +133,15 @@ def association_reference_rate(diffusivity_um2_s: float, reaction_distance_nm: f
     return 6.0 * float(diffusivity_um2_s) / (r_um * r_um)
 
 
-def reaction_channels(theta: np.ndarray) -> Tuple[ReactionChannel, ...]:
-    """The seventeen channels of the network for one theta, derived from the two blocks.
+def reaction_channels(theta: np.ndarray, condition: str) -> Tuple[ReactionChannel, ...]:
+    """The channels of the network for one theta under one condition, derived from the blocks.
 
-    Order: the association fusions (unordered pairs of monomer modes, fastest first), the
-    dissociation fissions (one per dimer mode), then the switching conversions (per species,
-    in the block's switching order). Every channel is unique by construction; the structure
-    audit asserts the count, the products, and the inherited modes.
+    Order: the association fusions (unordered pairs of monomer modes, fastest first; NONE when
+    the condition's association ratio is zero), the dissociation fissions (one per dimer mode),
+    then the switching conversions (per species, in the block's switching order). Every channel
+    is unique by construction; the structure audit asserts the count per condition (MET-INLB
+    17, MET-FAB 11), the products, and the inherited modes. The association ratio is the
+    condition's declared constant, never a theta entry.
     """
     rds = PARAMETERS.simulation.rds
     sto, mob = rds.stoichiometry, rds.mobility
@@ -140,16 +149,18 @@ def reaction_channels(theta: np.ndarray) -> Tuple[ReactionChannel, ...]:
     mono, dim = sto.monomer.name, sto.dimer.name
     d_a = values[mob.diffusivity_key]
     reaction_distance_nm = PARAMETERS.simulation.stem.particle_diameter_nm
-    lamb_on = values[sto.association_ratio_key] * association_reference_rate(d_a, reaction_distance_nm)
+    r_on = rds.association_ratio_of(condition)
+    lamb_on = r_on * association_reference_rate(d_a, reaction_distance_nm)
     kappa_off = values[sto.dissociation_rate_key]
 
     channels = []
-    for i, m1 in enumerate(mob.modes):
-        for m2 in mob.modes[i:]:
-            product_mode = mob.inherited_mode(m1, m2)
-            e1, e2, pr = rds.type_name(mono, m1), rds.type_name(mono, m2), rds.type_name(dim, product_mode)
-            channels.append(ReactionChannel(
-                "fusion", f"{e1} + {e2} => {pr}", (e1, e2), (pr,), lamb_on, sto.association_ratio_key))
+    if r_on > 0.0:                      # exactly zero declares NO association channel (structural)
+        for i, m1 in enumerate(mob.modes):
+            for m2 in mob.modes[i:]:
+                product_mode = mob.inherited_mode(m1, m2)
+                e1, e2, pr = rds.type_name(mono, m1), rds.type_name(mono, m2), rds.type_name(dim, product_mode)
+                channels.append(ReactionChannel(
+                    "fusion", f"{e1} + {e2} => {pr}", (e1, e2), (pr,), lamb_on, f"R_ON[{condition}]"))
     for m in mob.modes:
         ed, pr = rds.type_name(dim, m), rds.type_name(mono, m)
         channels.append(ReactionChannel(
@@ -181,6 +192,7 @@ def stationary_mode_law(theta: np.ndarray) -> np.ndarray:
 
 
 def build_system(theta: np.ndarray,
+                 condition: str,
                  verbose: bool = False) -> "readdy.ReactionDiffusionSystem":
     """Build a ReaDDy ReactionDiffusionSystem for the separated stoichiometry-mobility model.
 
@@ -188,12 +200,14 @@ def build_system(theta: np.ndarray,
         theta: Learnable-parameter values in PHYSICAL units (``parameterization.to_physical``
             of an estimator-space sample), 1D of length ``len(PARAMETERIZATION)`` in the
             canonical order.
+        condition: The stored condition token (``FAB`` or ``INLB``); selects the declared
+            association ratio and therefore which channels exist (``reaction_channels``).
         verbose: If True, print the per-type diffusion constants and every channel's rate.
 
     Returns:
         A configured ``readdy.ReactionDiffusionSystem`` ready for ``build_simulation``.
 
-    The particle types, their diffusion constants, and the seventeen channels come from
+    The particle types, their diffusion constants, and the condition's channels come from
     ``PARAMETERS.simulation.rds`` through ``diffusion_coefficients`` and
     ``reaction_channels`` (module docstring). Association fires within the reaction distance
     (one particle diameter, the Smoluchowski contact distance, derived from
@@ -214,7 +228,7 @@ def build_system(theta: np.ndarray,
     reaction_distance_nm = stem_geometry.particle_diameter_nm
     product_distance_nm = stem_geometry.fission_product_distance_nm
     coefficients = diffusion_coefficients(theta)
-    channels = reaction_channels(theta)
+    channels = reaction_channels(theta, condition)
 
     stem = readdy.ReactionDiffusionSystem(
         box_size=stem_geometry.box_size,
@@ -249,10 +263,11 @@ def build_system(theta: np.ndarray,
         d_a = values[rds.mobility.diffusivity_key]
         print("  Diffusion coefficients per particle type (um^2/s): "
               + ", ".join(f"{k}={v:.4g}" for k, v in coefficients.items()))
+        r_on = rds.association_ratio_of(condition)
         print(f"  Association reference lambda_ref = 6 D_A / r^2 = "
               f"{association_reference_rate(d_a, reaction_distance_nm):.6g} 1/s "
-              f"(compatibility normalization, not a bound); R_ON = "
-              f"{values[rds.stoichiometry.association_ratio_key]:.6g}")
+              f"(compatibility normalization, not a bound); condition {condition}: R_ON = {r_on:.6g}"
+              + (" -> no association channel" if r_on == 0.0 else f" -> lambda_on = {r_on * association_reference_rate(d_a, reaction_distance_nm):.6g} 1/s"))
         print(f"  Reaction channels ({len(channels)}):")
         for ch in channels:
             print(f"    {ch.kind:<10} {ch.name:<22} rate={ch.rate:.6g} 1/s   [{ch.rate_key}]")

@@ -9,11 +9,12 @@ store), the per-task ``Labeling_Set`` record, the sim-0 diagnostics, and the end
 report. The two entry-point scripts shrink to: build the workflow ``WorkflowConfig``,
 parse args, call ``run_dli``.
 
-The experimental condition (``FAB`` or ``INLB``) is a DLI-side axis: the same RDS
-trajectories are re-imaged per condition under the condition's static labeling law
-(``labeling``), so the DLI stage requires ``--condition`` in both workflows while the
-trajectory tier -- ONE shared tier under the bare sibling alias, read by both workflows
--- carries neither qualifier nor condition. Every subunit draws its dye count once per
+The experimental condition (``FAB`` or ``INLB``) selects both the trajectory tier this stage
+reads -- one tier per condition, because the association setting of the reaction-diffusion
+model is a per-condition constant; the tier carries the sibling alias plus the condition
+token and no workflow qualifier, and both workflows read it -- and the condition's static
+labeling law (``labeling``) that re-images it, so the DLI stage requires ``--condition`` in
+both workflows. Every subunit draws its dye count once per
 recording; only dyes render; the ``Labeling_Set`` records, per simulation, the true and
 visible initial composition the draw produced.
 
@@ -24,7 +25,7 @@ between the workflows, so the fork is larger and localized in labeled branches o
   - **biology** (``imaging_source="artifact"``): the six photophysics are a
     marginalized nuisance drawn per task from the persisted ``Nuisance_DLI``
     artifact (a required, schema-guarded input) and recorded as
-    ``Nuisance_DLI_Theta_Set``; the learnable RDS ``Theta_Set`` (the twelve
+    ``Nuisance_DLI_Theta_Set``; the learnable RDS ``Theta_Set`` (the eleven
     reaction-diffusion labels) is READ for the sim-0 diagnostics only.
   - **detector** (``imaging_source="prior_box"``): the six imaging parameters are
     the inference target, drawn from the imaging prior box and WRITTEN as the
@@ -33,7 +34,7 @@ between the workflows, so the fork is larger and localized in labeled branches o
 Everything else -- the renderer (already shared as ``render_dli_video``), the
 SCOPE draw + ``Nuisance_SCOPE_Theta_Set`` write, the video store, and the sim-0
 core diagnostics -- is shared. The sim-0 "Parameters of this video" table uses
-each workflow's TARGET spec + its per-sim label vector (biology: the 12-RDS
+each workflow's TARGET spec + its per-sim label vector (biology: the 11-RDS
 table + the read RDS theta; detector: the six-imaging table + the imaging draw);
 this also fixes a latent ``NameError`` in the detector's ``--debug`` path, where
 the copied-from-biology table referenced an undefined ``theta`` / the wrong table.
@@ -133,7 +134,7 @@ def _labeling_set_path(paths, task_alias, data_bank_root, timing_label, compress
 class _DliSpec:
     """Per-workflow DLI specializations resolved from a ``WorkflowConfig``."""
     imaging_source: str      # "artifact" (biology) | "prior_box" (detector)
-    diag_spec: list          # sim-0 "Parameters of this video" table: PARAMETERIZATION (12-RDS) | DETECTOR_PARAMETERIZATION (6 imaging)
+    diag_spec: list          # sim-0 "Parameters of this video" table: PARAMETERIZATION (11-RDS) | DETECTOR_PARAMETERIZATION (6 imaging)
 
 
 def _dli_spec(cfg: WorkflowConfig) -> _DliSpec:
@@ -164,9 +165,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     geom = PARAMETERS.simulation.stem
     rds_cfg = PARAMETERS.simulation.rds
     dli_cfg = PARAMETERS.simulation.dli
-    # Every DLI product is condition-specific: the labeling law re-images the condition-free
-    # trajectories, so the run's Paths carry the condition token from here on (the
-    # trajectory and biology theta-set builders strip it again by themselves).
+    # Every DLI product is condition-specific, and so is the trajectory tier it reads: the
+    # run's Paths carry the condition token from here on (the trajectory and biology
+    # theta-set builders resolve the condition's tier alias by themselves).
     paths = cfg.paths.with_condition(args.condition)
     div = "=" * 72
     timing_label = timing.label
@@ -274,10 +275,10 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"(calibrated-imaging photophysics artifact; durable tier)")
         print(f"  reads theta sets     : <data_bank>/{paths.theta_subdir}/"
               f"{paths.theta_set_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
-              f"(12-RDS labels; the shared tier, bare alias; diagnostics only, not re-written)")
+              f"(11-RDS labels; the condition's tier; diagnostics only, not re-written)")
         print(f"  reads trajectories   : <data_bank>/{paths.video_subdir}/"
               f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
-              f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the shared tier: bare alias)")
+              f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the condition's tier, both workflows)")
         print(f"  writes Nuisance_DLI   : <data_bank>/{paths.theta_subdir}/"
               f"{paths.project_alias}_{timing_label}_Nuisance_DLI_Theta_Set_TASK_{{n}}.{output_fmt}   "
               f"(photophysics drawn from the artifact)")
@@ -296,7 +297,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"(marginalized camera nuisance)")
         print(f"  reads trajectories  : <data_bank>/{paths.video_subdir}/"
               f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
-              f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the shared tier: bare alias)")
+              f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the condition's tier, both workflows)")
         print(f"  writes video sets   : <data_bank>/{paths.video_subdir}/"
               f"{paths.project_alias}_{timing_label}_Video_Set_TASK_{{n}}.{output_fmt}   "
               f"(dtype: {target_dtype_name})")
@@ -412,7 +413,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 scope_set_path = _nuisance_scope_path(
                     paths, task, data_bank_root, timing_label, compress, split)
                 print(f"  reads theta set      (task {task}): {theta_set_path}  "
-                      f"[{'OK' if theta_ok else 'MISSING'}]   (12 RDS labels; diagnostics only, not re-written)")
+                      f"[{'OK' if theta_ok else 'MISSING'}]   (11 RDS labels; diagnostics only, not re-written)")
                 print(f"  reads trajectories   (task {task}): "
                       f"{traj_present}/{args.task_simulations} present")
                 print(f"  writes Nuisance_DLI   (task {task}): {dli_set_path}")
@@ -490,7 +491,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         # provenance is the biology/detector fork; the five-block SCOPE record is shared.
         if artifact:
             # biology: the six photophysics from the Nuisance_DLI artifact (recorded as
-            # Nuisance_DLI_Theta_Set); READ the learnable 12-RDS Theta_Set for the sim-0
+            # Nuisance_DLI_Theta_Set); READ the learnable 11-RDS Theta_Set for the sim-0
             # diagnostics table (this stage does not re-write it; the RDS stage owns it).
             rds_theta_set_path = paths.theta_set_path(
                 task_alias, data_bank_root, timing_label, compress, split)
@@ -690,7 +691,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 # Prior bounds + sampled values that generated THIS video, so the
                 # parameters sit next to the rendered frame for direct checking. The
-                # spec + label vector are the workflow's TARGET: biology the 12-RDS
+                # spec + label vector are the workflow's TARGET: biology the 11-RDS
                 # labels read from the Theta_Set; detector the six imaging labels drawn
                 # here (det.DETECTOR_PARAMETERIZATION) -- which also fixes the detector's
                 # latent NameError (it previously referenced an undefined `theta`).
@@ -803,8 +804,9 @@ def build_dli_parser() -> argparse.ArgumentParser:
         "--condition", required=True, choices=LABELING_CONDITIONS,
         help="Experimental condition whose labeling law re-images the trajectories: FAB "
              "(MET-FAB; Poisson dye counts at the measured mean DOL 1.64) or INLB (MET-INLB; "
-             "Bernoulli dye counts at the measured labeling probability 0.5). Required: the RDS "
-             "trajectory tier is condition-free and every DLI product is condition-specific.",
+             "Bernoulli dye counts at the measured labeling probability 0.5). Required: it selects "
+             "the condition's trajectory tier (one per condition: the association setting is a "
+             "per-condition constant) and its labeling law, and every DLI product is condition-specific.",
     )
     parser.add_argument(
         "--labeling-law", type=str, default=None,

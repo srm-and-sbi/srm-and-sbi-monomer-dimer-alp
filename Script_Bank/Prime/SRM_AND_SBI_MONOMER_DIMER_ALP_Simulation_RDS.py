@@ -1,36 +1,38 @@
-"""Entry-point script: generate the shared ReaDDy reaction-diffusion trajectory tier.
+"""Entry-point script: generate one condition's ReaDDy reaction-diffusion trajectory tier.
 
-Samples the twelve reaction-diffusion parameters of the separated stoichiometry-mobility
+Samples the eleven reaction-diffusion parameters of the separated stoichiometry-mobility
 model (two molecular species A monomer / B dimer x three mobility modes f / s / i = six
-particle types; seventeen reaction channels generated from the model blocks) from the
-box-uniform prior in the estimator space (log10 for log rows, the value itself for the
-linear initial dimer fraction), maps them to physical values with
+particle types; the reaction channels generated from the model blocks and the run's
+condition) from the box-uniform prior in the estimator space (log10 for log rows, the
+value itself for the linear initial dimer fraction), maps them to physical values with
 ``parameterization.to_physical``, runs ReaDDy simulations for each (task, simulation)
-pair, and saves the
-resulting particle trajectories (with their reaction records) as .h5 files and the
-parameter samples as a .zarr (compressed) or .npy (uncompressed) theta set.
+pair, and saves the resulting particle trajectories (with their reaction records) as .h5
+files and the parameter samples as a .zarr (compressed) or .npy (uncompressed) theta set.
 
-This is the ONE RDS entry point of the pipeline. The trajectory tier is shared: both
-workflows re-image it at their DLI stages (the biology under the calibrated imaging
-nuisance, the detector with the imaging drawn as its inference target) and both
-conditions re-image it under their labeling law, so it carries the bare sibling alias --
-no workflow qualifier, no condition token. To the biology workflow the ``Theta_Set`` is
-the learnable label; to the detector workflow the same file is the record of the
-reaction-diffusion nuisance it marginalizes. The engine is
-``srm_and_sbi_monomer_dimer_alp.simulation_rds_runner.run_rds``; this shim builds the
-biology ``WorkflowConfig`` (whose paths carry the bare alias) and hands it over.
+This is the ONE RDS entry point of the pipeline, run once PER CONDITION (``--condition``):
+the association ratio is a declared per-condition constant (MET-FAB 0: no association
+channel, eleven channels; MET-INLB 1: the reference convention, seventeen channels), so the
+two conditions' trajectories differ. Within a condition the tier is shared by both
+workflows, which re-image it at their DLI stages (the biology under the calibrated imaging
+nuisance, the detector with the imaging drawn as its inference target) under the
+condition's labeling law, so it carries the sibling alias plus the condition token and no
+workflow qualifier. To the biology workflow the ``Theta_Set`` is the learnable label; to
+the detector workflow the same file is the record of the reaction-diffusion nuisance it
+marginalizes. The engine is ``srm_and_sbi_monomer_dimer_alp.simulation_rds_runner.run_rds``;
+this shim builds the biology ``WorkflowConfig`` (unqualified alias) and hands it over.
 
 Outputs (the ``{timing_label}`` token, e.g. ``2S_50FPS``, is rendered from
 ``PARAMETERS.simulation.timing.label`` to namespace files by duration + fps):
 
-    <data_bank>/<video_subdir>/<trajectory_repo>/<sibling_alias>_{timing_label}_TASK_{n}_{split}/
-        <sibling_alias>_{timing_label}_TASK_{n}_SIM_{m}_{split}.h5     -- per-simulation trajectory
+    <data_bank>/<video_subdir>/<trajectory_repo>/<sibling_alias>_<CONDITION>_{timing_label}_TASK_{n}_{split}/
+        <sibling_alias>_<CONDITION>_{timing_label}_TASK_{n}_SIM_{m}_{split}.h5     -- per-simulation trajectory
     <data_bank>/<theta_subdir>/
-        <sibling_alias>_{timing_label}_Theta_Set_TASK_{n}_{split}.zarr -- per-task theta sample set
+        <sibling_alias>_<CONDITION>_{timing_label}_Theta_Set_TASK_{n}_{split}.zarr -- per-task theta sample set
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py \\
-        --total-time-seconds 2.0 --tasks 2 --task-simulations 5 --seed None
+        --condition FAB --total-time-seconds 2.0 --tasks 2 --task-simulations 5 --seed None
+    (repeat with --condition INLB for the other condition's tier)
     (then render per workflow and condition with SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py
     and SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py, or drive everything with
     SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py)

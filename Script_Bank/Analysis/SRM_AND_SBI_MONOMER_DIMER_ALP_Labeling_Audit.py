@@ -120,7 +120,9 @@ def laws() -> dict:
 def reactive_lineage(workdir: str) -> dict:
     theta = np.array([p["VALUE"] for p in PARAMETERIZATION], dtype=float)   # prior center (VALUE is physical)
     timing = RunTiming(total_time_seconds=2.0, frames=PARAMETERS.simulation.timing)
-    stem = build_system(theta)
+    # MET-INLB: the condition with association switched on, so the lineage exercises every
+    # channel (fusion concatenates, fission distributes, conversion preserves).
+    stem = build_system(theta, "INLB")
     smut = build_simulation(stem, theta, seed=SEED)
     traj = os.path.join(workdir, "labeling_audit_center.h5")
     smut.output_file = traj

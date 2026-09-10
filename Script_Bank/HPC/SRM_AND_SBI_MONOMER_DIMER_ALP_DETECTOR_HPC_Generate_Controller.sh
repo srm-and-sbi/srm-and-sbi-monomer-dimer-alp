@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DIMER DETECTOR production generation -- rolling submit-and-gate controller.
-# The Detector variant of the canonical generation controller: identical staging,
+# The Detector variant of the biology generation controller: identical staging,
 # QOS caps, and eval gating, differing only in what it launches -- the Detector
-# Simulation, a DLI-only pass over the SHARED trajectory tier (imaging parameters
+# Simulation, a DLI-only pass over CONDITION's trajectory tier (imaging parameters
 # drawn from the detector prior as the inference target; the reaction-diffusion
 # biology marginalized by re-imaging the tier) -- and in emitting _DETECTOR job-names.
-# It submits NO RDS: the tier must already exist for every task of every split, at
-# the same sims/task and durations (generate it with the biology controller under
-# SIM_STAGE=rds; the same tier then serves the biology DLI of both conditions).
+# It submits NO RDS: the condition's tier must already exist for every task of every
+# split, at the same sims/task and durations (generate it with the biology controller
+# under SIM_STAGE=rds with the SAME CONDITION -- one tier per condition, shared by both
+# workflows; the same tier then serves the biology DLI of that condition).
 # Submits the six (case x split) generation arrays for the 2 s and 5 s datasets,
 # keeping within the QOS caps (<=40 running, <=50 in-system), then HARD-GATES the
 # eval splits until every train+test job has COMPLETED.
@@ -48,7 +49,7 @@
 #   node 5 of 5s-train (global task ids 50..59):
 #     cd /path/to/srm-and-sbi-monomer-dimer-alp && \
 #       sbatch --array=0-0 --ntasks-per-node=10 --cpus-per-task=4 --time=24:00:00 \
-#         --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_5S_50FPS_Simulation_TRAIN \
+#         --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_5S_50FPS_Simulation_TRAIN \
 #         --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=50,TASK_COUNT=10,TASK_SIMS=500,TOTAL_TIME=5.0 \
 #         Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Simulation.sh
 #   single task (id 137): --ntasks-per-node=1 TASK_OFFSET=137 TASK_COUNT=1 (same SPLIT/SIMS/TIME).

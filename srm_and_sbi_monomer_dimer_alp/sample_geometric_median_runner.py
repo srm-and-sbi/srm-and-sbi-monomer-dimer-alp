@@ -405,15 +405,16 @@ def _sgm_spec(cfg, args):
             "composite built from each dimension independently can sit off the ridge the real "
             "configurations occupy.")
     else:
-        xi, yi = keys.index("fraction_dimer_initial"), keys.index("relative_rate_dimerization")
+        xi, yi = keys.index("fraction_dimer_initial"), keys.index("rate_dissociation")
         plane_caption = (
-            "Initial dimer fraction versus association ratio. The collection members (grey) with "
+            "Initial dimer fraction versus dissociation rate. The collection members (grey) with "
             "the SGM (gold star, a real sample) and the per-dimension vector of medians (magenta "
             "X). These two are the coupled pair at the center of the biological question -- how "
-            "much of the receptor population is dimeric and how fast dimers form -- and they trade "
-            "off against each other, so a composite built per dimension can assert a "
+            "much of the receptor population is dimeric at the window start and how fast those "
+            "dimers dissociate (association is a per-condition constant, not inferred) -- and they "
+            "trade off against each other, so a composite built per dimension can assert a "
             "fraction/rate combination no recording supported. The fraction is a linear coordinate "
-            "on [0, 1] and is drawn on a linear axis; the ratio is a log row on a log axis.")
+            "on [0, 1] and is drawn on a linear axis; the rate is a log row on a log axis.")
     plane = (xi, yi, plane_caption)
     return SGMSpec(
         parameter_keys=keys,

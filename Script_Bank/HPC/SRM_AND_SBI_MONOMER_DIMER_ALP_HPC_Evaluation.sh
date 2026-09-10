@@ -29,9 +29,9 @@
 # trained posterior); use POOL_MODE=unrestricted for an undertrained/smoke posterior.
 # Example (single node):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,EVAL_TASKS=1,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=1,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh
 # Example (two nodes, EVAL set sharded across both -- add --nodes=N; --gres is per node):
-#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,EVAL_TASKS=25,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh
+#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=25,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=gpu

@@ -11,8 +11,10 @@
 #
 #     tid = TASK_OFFSET + SLURM_ARRAY_TASK_ID * SLURM_NTASKS_PER_NODE + k
 #
-# Knobs (--export / CLI): SPLIT, CONDITION (FAB|INLB; the DLI stage's labeling law --
-# required unless SIM_STAGE=rds), TASK_SIMS, TOTAL_TIME, TASK_OFFSET, TASK_COUNT
+# Knobs (--export / CLI): SPLIT, CONDITION (FAB|INLB; the run's experimental condition: the RDS
+# stage generates that condition's trajectory tier -- the association setting is per condition --
+# and the DLI stage applies its labeling law; REQUIRED for every SIM_STAGE), TASK_SIMS, TOTAL_TIME,
+# TASK_OFFSET, TASK_COUNT
 # (tasks this submission generates; default = --ntasks-per-node), SKIN_FACTOR
 # (ReaDDy neighbor-list skin as a MULTIPLE of the particle diameter -- an RDS-only
 # PERFORMANCE knob, not physics; unset = the code default 10x = 100 nm; see
@@ -30,24 +32,26 @@
 # Submit from the repo root and forward REPO: Slurm spools this script to
 # /var/spool, so the child must be told where the repo is (--export=ALL,REPO=$PWD).
 # --job-name follows the data-file naming convention
-# SRM_AND_SBI_MONOMER_DIMER_ALP[_<CONDITION>]_<timing_label>_Simulation_<SPLIT> -- the condition
-# slot is present whenever the DLI stage runs and absent for an RDS-only job (SIM_STAGE=rds), whose
-# shared trajectory tier carries neither qualifier nor condition; with no TOTAL_TIME set the
+# SRM_AND_SBI_MONOMER_DIMER_ALP_<CONDITION>_<timing_label>_Simulation_<SPLIT> -- the condition slot
+# is always present, for an RDS-only job (SIM_STAGE=rds) too, because the trajectory tier is per
+# condition (it carries the condition token and no workflow qualifier); with no TOTAL_TIME set the
 # launcher default (2.0 s) gives timing_label 2S_50FPS, so use a different job-name token
 # (e.g. 5S_50FPS) whenever you pass TOTAL_TIME=5.0.
-# The SHARED trajectory tier only (both workflows and both conditions re-image it; the detector
-# has no RDS stage of its own), CORE=100 (TRAIN 8 / TEST 2 / EVAL 1; 1000 sims/task), one node each:
+# The FAB trajectory tier only (SIM_STAGE=rds; one tier per condition, shared by both workflows --
+# the detector has no RDS stage of its own), CORE=100 (TRAIN 8 / TEST 2 / EVAL 1; 1000 sims/task),
+# one node each:
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SIM_STAGE=rds,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
-#   sbatch --array=0-0 --ntasks-per-node=2 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Simulation_TEST  --export=ALL,REPO=$PWD,SIM_STAGE=rds,SPLIT=test,TASK_OFFSET=0,TASK_COUNT=2  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
-#   sbatch --array=0-0 --ntasks-per-node=1 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Simulation_EVAL  --export=ALL,REPO=$PWD,SIM_STAGE=rds,SPLIT=eval,TASK_OFFSET=0,TASK_COUNT=1  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
-# The biology videos of one condition over that tier (DLI-only; needs the condition's Nuisance_DLI):
+#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SIM_STAGE=rds,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
+#   sbatch --array=0-0 --ntasks-per-node=2 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TEST  --export=ALL,REPO=$PWD,SIM_STAGE=rds,CONDITION=FAB,SPLIT=test,TASK_OFFSET=0,TASK_COUNT=2  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
+#   sbatch --array=0-0 --ntasks-per-node=1 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_EVAL  --export=ALL,REPO=$PWD,SIM_STAGE=rds,CONDITION=FAB,SPLIT=eval,TASK_OFFSET=0,TASK_COUNT=1  Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
+# The INLB tier is a second submission per split with CONDITION=INLB (job-name token _INLB_).
+# The biology videos of one condition over its tier (DLI-only; needs the condition's Nuisance_DLI):
 #   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SIM_STAGE=dli,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
 # RDS then the biology DLI in one job (SIM_STAGE=both, the default), two nodes, 20 tasks
 # (element 0 -> Task_0..9, element 1 -> Task_10..19):
 #   sbatch --array=0-1 --ntasks-per-node=10 --cpus-per-task=4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,CONDITION=FAB,SPLIT=train,TASK_OFFSET=0,TASK_COUNT=20 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
-# Grow the tier later (appends tasks 8..15, no regeneration):
-#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SIM_STAGE=rds,SPLIT=train,TASK_OFFSET=8,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
+# Grow the FAB tier later (appends tasks 8..15, no regeneration):
+#   sbatch --array=0-0 --ntasks-per-node=8 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN --export=ALL,REPO=$PWD,SIM_STAGE=rds,CONDITION=FAB,SPLIT=train,TASK_OFFSET=8,TASK_COUNT=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Simulation.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=YOUR_PARTITION   # set to your cluster's CPU partition (or override on the sbatch command line)
@@ -123,23 +127,23 @@ RDS_ONLY_FLAGS=""
 [ -n "${SKIN_FACTOR:-}" ]  && RDS_ONLY_FLAGS="$RDS_ONLY_FLAGS --skin-factor ${SKIN_FACTOR}"
 
 # SIM_STAGE selects which stage(s) run per task: both (default) | rds | dli. SIM_STAGE=rds
-# generates the SHARED trajectory tier only (bare alias; both workflows and both conditions
-# re-image it; the detector has no RDS stage of its own). SIM_STAGE=dli is a DLI-only pass
-# over the existing tier (the other condition, or a re-render after a DLI-side fix, without
-# repeating the expensive RDS).
+# generates CONDITION's trajectory tier only (one tier per condition: the association setting is
+# per condition; it carries the condition token and no workflow qualifier, and both workflows
+# re-image it -- the detector has no RDS stage of its own). SIM_STAGE=dli is a DLI-only pass over
+# CONDITION's existing tier (the biology videos over a tier an RDS-only job generated, or a
+# re-render after a DLI-side fix, without repeating the expensive RDS).
 SIM_STAGE="${SIM_STAGE:-both}"
 case "$SIM_STAGE" in both|rds|dli) ;; *) echo "bad SIM_STAGE=$SIM_STAGE (use both|rds|dli)" >&2; exit 1;; esac
 
-# CONDITION selects the DLI stage's static labeling law (FAB = MET-FAB, INLB = MET-INLB). The
-# RDS trajectory tier is condition-free, so it is required only when the DLI stage runs.
+# CONDITION is the run's experimental condition (FAB = MET-FAB, INLB = MET-INLB): the RDS stage
+# generates that condition's trajectory tier (the association setting is per condition) and the
+# DLI stage applies its static labeling law, so it is required for every SIM_STAGE.
 CONDITION="${CONDITION:-}"
-if [ "$SIM_STAGE" != rds ]; then
-  case "$CONDITION" in FAB|INLB) ;; *) echo "FATAL: CONDITION='$CONDITION' (use FAB|INLB; required for the DLI stage)." >&2; exit 1;; esac
-fi
+case "$CONDITION" in FAB|INLB) ;; *) echo "FATAL: CONDITION='$CONDITION' (use FAB|INLB; required for every SIM_STAGE -- the trajectory tier is per condition)." >&2; exit 1;; esac
 
 start=$(( TASK_OFFSET + ARRAY_ID * PER_NODE ))
 end=$(( TASK_OFFSET + TASK_COUNT ))
-echo "=== Simulation | $(hostname) | split=${SPLIT} condition=${CONDITION:-<rds only>} sims=${TASK_SIMS} time=${TOTAL_TIME}s | seed=None | tasks [${start}..$(( end - 1 ))] ==="
+echo "=== Simulation | $(hostname) | split=${SPLIT} condition=${CONDITION} sims=${TASK_SIMS} time=${TOTAL_TIME}s | seed=None | tasks [${start}..$(( end - 1 ))] ==="
 
 declare -a PIDS=()
 for (( tid=start; tid < start + PER_NODE && tid < end; tid++ )); do
@@ -148,7 +152,7 @@ for (( tid=start; tid < start + PER_NODE && tid < end; tid++ )); do
       if [ "$SIM_STAGE" != dli ]; then
         python -u "$PRIME/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py" \
             --task-id "$tid" --task-simulations "$TASK_SIMS" \
-            --total-time-seconds "$TOTAL_TIME" --split "$SPLIT" $SIM_FLAGS $RDS_ONLY_FLAGS || rc=1
+            --total-time-seconds "$TOTAL_TIME" --split "$SPLIT" --condition "$CONDITION" $SIM_FLAGS $RDS_ONLY_FLAGS || rc=1
       fi
       if [ "$rc" = 0 ] && [ "$SIM_STAGE" != rds ]; then
         python -u "$PRIME/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py" \

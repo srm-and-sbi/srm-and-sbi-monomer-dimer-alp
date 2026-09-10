@@ -11,8 +11,8 @@ The two workflows invert which half of the model the MAP supplies and which half
 * **detector** -- the MAP supplies the six IMAGING parameters; the reaction-diffusion block is a
   marginalized nuisance, drawn from the biology prior (or pinned) per render, and the system is
   built with its full reaction network -- the same simulator the detector was calibrated against.
-* **biology** -- the MAP supplies the twelve REACTION-DIFFUSION parameters and the system is built
-  with its full reaction network; the imaging block is held fixed at the calibrated vector the
+* **biology** -- the MAP supplies the eleven REACTION-DIFFUSION parameters and the system is built
+  with the recording's condition's reaction network (association is a per-condition constant); the imaging block is held fixed at the calibrated vector the
   training videos were generated with, read from the ``Nuisance_DLI`` artifact at run time.
 
 In both cases the five SCOPE camera parameters are pinned to their MET values rather than drawn:
@@ -173,17 +173,17 @@ def _fixed_imaging_theta(overrides=None):
     return theta
 
 
-# The detector's RDS nuisance is the biology's twelve-parameter prior -- the detector re-images the
-# shared trajectory tier -- so its keys, order, and ranges are the biology table's.
+# The detector's RDS nuisance is the biology's eleven-parameter prior -- the detector re-images the
+# condition's trajectory tier -- so its keys, order, and ranges are the biology table's.
 _NUISANCE_KEYS = [e["KEY"] for e in bio.PARAMETERIZATION]
 
 
 def _draw_nuisance_physical(rng=None):
-    """One fresh RDS-nuisance draw for a posterior-predictive render: the twelve reaction-diffusion
+    """One fresh RDS-nuisance draw for a posterior-predictive render: the eleven reaction-diffusion
     parameters from the biology prior (uniform in estimator space), mapped to physical values by
     the ONE conversion rule (``parameterization.to_physical``: log rows exponentiated, the linear
     initial dimer fraction passed through), in the canonical ``PARAMETERIZATION`` order -- exactly
-    what the shared RDS tier draws per simulation."""
+    what a condition's RDS tier draws per simulation."""
     rng = np.random.default_rng() if rng is None else rng
     low = np.asarray(bio.theta_lower_bound(), dtype=float)
     high = np.asarray(bio.theta_upper_bound(), dtype=float)
@@ -348,8 +348,8 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     nuis = np.asarray(nuisance, dtype=float).ravel()
     npart = []
     # The label table must match the block being shown, or zip() silently truncates. Both
-    # workflows' reaction-diffusion vectors are the biology's twelve parameters in canonical order
-    # (the detector's RDS nuisance is that prior, re-imaged from the shared tier), so the biology
+    # workflows' reaction-diffusion vectors are the biology's eleven parameters in canonical order
+    # (the detector's RDS nuisance is that prior, re-imaged from the condition's tier), so the biology
     # table labels either; the explicit check keeps a future schema change from truncating.
     table = bio.PARAMETERIZATION if rds_table is None else rds_table
     if len(table) != nuis.size:
@@ -694,14 +694,15 @@ def _ppv_spec(cfg, args):
             else:
                 nuisance = _draw_nuisance_physical()
                 desc = "drawn RDS nuisance"
-            # The nuisance vector IS a canonical theta (biology order), so the ordinary reactive
-            # builders apply -- the same system the shared RDS tier simulates.
-            stem = build_system(nuisance, verbose=a.verbose)
+            # The nuisance vector IS a canonical theta (biology order), so the ordinary builders
+            # apply under the recording's condition -- the same system that condition's RDS tier
+            # simulates (association on under INLB, off under FAB).
+            stem = build_system(nuisance, kind_token, verbose=a.verbose)
             smut = build_simulation(stem, nuisance, seed=a.seed, verbose=a.verbose)
             return smut, nuisance, desc + " (full reactive system)"
     else:
         S["map_block"] = "rds"
-        S["map_keys"] = _wf_keys(cfg)                       # the 12 learnable RDS parameters
+        S["map_keys"] = _wf_keys(cfg)                       # the 11 learnable RDS parameters
         S["imaging_desc"] = "calibrated Nuisance_DLI vector + MET SCOPE camera"
         S["rds_desc"] = "full reactive system from the MAP reaction-diffusion parameters"
 
@@ -722,11 +723,12 @@ def _ppv_spec(cfg, args):
             return vec, desc
 
         def build_rds(a, map_theta):
-            # Reactions ARE the inference target here: the full reactive system is built from the MAP.
+            # The reaction-diffusion block IS the inference target here: the system is built from
+            # the MAP under the recording's condition (its declared association setting).
             if a.fixed_nuisance_rds:
                 raise SystemExit("--fixed-nuisance-RDS applies to the detector workflow only: here "
                                  "the reaction-diffusion block is the MAP, not a nuisance.")
-            stem = build_system(map_theta, verbose=a.verbose)
+            stem = build_system(map_theta, kind_token, verbose=a.verbose)
             smut = build_simulation(stem, map_theta, seed=a.seed, verbose=a.verbose)
             return smut, map_theta, "full reactive system from the MAP"
 

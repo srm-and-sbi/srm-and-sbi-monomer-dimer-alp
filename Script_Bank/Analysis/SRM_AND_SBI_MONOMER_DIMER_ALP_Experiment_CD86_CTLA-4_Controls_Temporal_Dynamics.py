@@ -66,7 +66,7 @@ recordings use an exchangeable, blinking SiR-S5 HaloTag probe. The diffusion
 coefficient is a per-track property read from the displacement statistics of a
 molecule while it is visible, so it is robust to how many molecules are lit at once
 and survives the mismatch. The stoichiometry and the rates (N_R, x_B, kappa_OFF, the
-switching rates k_*, R_ON) instead depend on the number of co-visible emitters and on
+switching rates k_*) instead depend on the number of co-visible emitters and on
 track continuity, both corrupted by blinking, so they are NOT read quantitatively here.
 The controls are also constitutive monomer / dimer references, not the dynamic
 A + A <=> B dimerization with fast / slow / immobile mobility switching the posterior
@@ -196,7 +196,6 @@ PARAM_DISPLAY_NAME = {
     # stoichiometry block
     "count_total": "Receptor total",
     "fraction_dimer_initial": "Initial dimer fraction",
-    "relative_rate_dimerization": "Association ratio",
     "rate_dissociation": "Dissociation rate",
     # mobility block
     "diffusivity_alp": "Monomer diffusivity",
@@ -223,8 +222,8 @@ def _abs(map_flow):
 
     The ONE conversion rule (``parameterization.to_physical``): log rows are exponentiated
     (10**theta), the linear initial dimer fraction passes through unchanged. The
-    relative-diffusivity / relative-rate parameters (R_B, R_s, R_i, R_ON) are dimensionless
-    ratios, so their physical value is the ratio itself.
+    relative-diffusivity parameters (R_B, R_s, R_i) are dimensionless ratios, so their
+    physical value is the ratio itself.
     """
     return to_physical(map_flow)
 
@@ -599,7 +598,7 @@ def _write_report(fig_dir, meta, results):
     L.append("- **Reliability = recovery × stationarity.** Trust a parameter when it "
              "both recovers well on ground-truth EVAL data (annotated on each figure, a "
              "property of the posterior) and is stationary where it should be. A "
-             "parameter that recovers poorly (e.g. R_ON) carries no signal.")
+             "parameter that recovers poorly carries no signal.")
     L.append("")
     L.append("## Per-parameter summary (this run)")
     L.append("")
@@ -618,8 +617,8 @@ def _write_report(fig_dir, meta, results):
     L.append("- **Label / model mismatch.** The posterior was trained on always-visible "
              "permanent-label emitters; these controls use an exchangeable, blinking "
              "SiR-S5 HaloTag probe. Diffusion (D) is a per-track property and transfers; "
-             "the stoichiometry and the rates (N_R, x_B, κ_OFF, the switching rates k_*, "
-             "R_ON) depend on co-visible-emitter numbers and track continuity and are "
+             "the stoichiometry and the rates (N_R, x_B, κ_OFF, the switching rates k_*) "
+             "depend on co-visible-emitter numbers and track continuity and are "
              "**not** read quantitatively here.")
     L.append("- **Not the trained mechanism.** CD86 (monomer) and CTLA-4 (dimer) are "
              "constitutive oligomeric-state controls, not the dynamic A + A ⇌ B "
@@ -639,7 +638,7 @@ def _write_report(fig_dir, meta, results):
              "in a confounded parameter, not receptor loss.")
     L.append("- **First-pass posteriors** (interrupted training) — absolute values will "
              "sharpen with the production posteriors; re-run this analysis on those.")
-    L.append("- Relative parameters (R_B, R_s, R_i, R_ON) are shown as dimensionless ratios; "
+    L.append("- Relative parameters (R_B, R_s, R_i) are shown as dimensionless ratios; "
              "the initial dimer fraction x_B is a linear coordinate on [0, 1].")
     L.append("- The pooled **posterior-distribution** panels are a documented, "
              "not-yet-implemented extension (they need the full per-window sample pool, "

@@ -22,15 +22,19 @@ Public interface:
     to_flow(theta_physical)     -- its inverse (physical -> estimator space)
     prior_center(entry)         -- physical value at the center of a ranged row
     realize_initial_composition -- integer (n_A, n_B) from the sampled (N_R, x_B)
+    association_ratio_of(cond)  -- the declared association ratio R_ON of a condition (FAB 0, INLB 1)
 
 Model blocks (the declarative records the reaction-diffusion generator is built from):
-    StoichiometryBlock          -- molecular species A (1 subunit) and B (2), association
-                                   and dissociation channels and their parameter keys
+    StoichiometryBlock          -- molecular species A (1 subunit) and B (2), the dissociation
+                                   channel's parameter key and the composition keys
     MobilityBlock               -- mobility modes, their diffusion-ratio keys, the sequential
                                    switching chain and its rate keys, the inheritance rule
-    PARAMETERS.simulation.rds   -- carries both blocks and derives the PARTICLE TYPES
-                                   (species x mode), their subunit counts and the maps
-                                   type -> species / mode
+    ConditionSetting            -- the per-condition setting of the reaction-diffusion model:
+                                   the association ratio R_ON (0 = no association channels;
+                                   a declared constant, never inferred)
+    PARAMETERS.simulation.rds   -- carries the blocks and the condition settings and derives
+                                   the PARTICLE TYPES (species x mode), their subunit counts
+                                   and the maps type -> species / mode
 
 The estimator space ("flow space"). Every ranged row declares its scale: LOG_FLAG True means
 the prior box and the estimator coordinate are log10 of the physical value; LOG_FLAG False
@@ -227,15 +231,15 @@ class Paths:
     experimental-condition token (``FAB`` or ``INLB``) sit between the iteration
     and the timing label, so ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Video_Set_...``
     is a biology product and ``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_...``
-    a detector product of the MET-FAB condition. The condition enters at the DLI
-    stage (the static labeling law re-images the trajectories per condition), so
-    every DLI-side and inference-side product carries it, while the RDS products --
-    the trajectory tier and its twelve-parameter ``Theta_Set`` -- form ONE shared tier:
-    generated once under the bare sibling alias (``sibling_alias``, exposed as
-    ``rds_alias``), free of both the qualifier and the condition, and re-imaged by
-    both workflows and per condition at the DLI stage. A stage applies its condition
-    with ``with_condition``; the trajectory and theta-set builders below pick the
-    right alias by themselves.
+    a detector product of the MET-FAB condition. The condition enters at the RDS
+    stage: the association intensity of the reaction-diffusion model is a per-condition
+    constant (``SimulationRDS.conditions``), so the trajectory tier and its
+    eleven-parameter ``Theta_Set`` are generated once PER CONDITION under the sibling
+    alias plus the condition token (``rds_alias``, e.g. ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB``),
+    free of the workflow qualifier, and shared by both workflows, which re-image them at
+    the DLI stage under the condition's labeling law. Every product therefore carries
+    the condition. A stage applies its condition with ``with_condition``; the trajectory
+    and theta-set builders below pick the right alias by themselves.
     """
     project_alias: str = "SRM_AND_SBI_MONOMER_DIMER_ALP"
     labor_subdir: str = "Labor"
@@ -260,18 +264,18 @@ class Paths:
     experiment_pattern: str = "Experiment_{kind}_Cell_{cell}_{span}S_RAW.tif"
     compressed_ext: str = "zarr"
     uncompressed_ext: str = "npy"
-    # The bare sibling alias every RDS product carries. The trajectory tier and its
-    # twelve-parameter ``Theta_Set`` are generated once and shared by both workflows and both
-    # conditions, so they never take the workflow qualifier or the condition token that
-    # ``project_alias`` may carry (``rds_alias`` returns this).
+    # The bare sibling alias. The RDS products -- one trajectory tier per condition and its
+    # eleven-parameter ``Theta_Set`` -- carry this alias plus the condition token and never
+    # the workflow qualifier, because both workflows re-image the same tier (``rds_alias``
+    # composes it).
     sibling_alias: str = "SRM_AND_SBI_MONOMER_DIMER_ALP"
-    # The condition token these Paths carry (None = condition-free; see the class
+    # The condition token these Paths carry (None = no condition applied yet; see the class
     # docstring). Set only through ``with_condition``, which also appends the token to
-    # ``project_alias``; ``rds_alias`` strips it again for the RDS products.
+    # ``project_alias``; ``rds_alias`` composes the tier alias from it.
     condition: Optional[str] = None
-    # Whether this workflow's ``Theta_Set`` is an RDS product (biology: the ten
-    # reaction-diffusion labels -- the shared tier's own record, under ``rds_alias``) or a
-    # DLI product (detector: the six imaging labels, drawn when the videos are rendered,
+    # Whether this workflow's ``Theta_Set`` is an RDS product (biology: the eleven
+    # reaction-diffusion labels -- the condition's tier's own record, under ``rds_alias``) or
+    # a DLI product (detector: the six imaging labels, drawn when the videos are rendered,
     # hence qualified and per condition).
     theta_set_is_rds_product: bool = True
 
@@ -284,8 +288,8 @@ class Paths:
         """A copy of these Paths carrying the experimental condition.
 
         ``project_alias`` gains the token (``..._ALP_FAB``, ``..._ALP_DETECTOR_INLB``), so
-        every path pattern namespaces this condition's products; ``rds_alias`` still
-        resolves the shared RDS tier. Applying a condition twice is an error.
+        every path pattern namespaces this condition's products, and ``rds_alias`` resolves
+        this condition's RDS tier. Applying a condition twice is an error.
         """
         if self.condition is not None:
             raise ValueError(
@@ -299,24 +303,31 @@ class Paths:
 
     @property
     def rds_alias(self) -> str:
-        """The alias of the shared RDS tier (trajectories and the twelve-parameter ``Theta_Set``):
-        the bare sibling alias, whatever qualifier or condition these Paths carry."""
+        """The alias of the condition's RDS tier (trajectories and the eleven-parameter
+        ``Theta_Set``): the bare sibling alias plus the condition token, whatever workflow
+        qualifier these Paths carry. Requires a condition (``with_condition``): the tier is
+        per condition because the association setting is."""
         if not self.project_alias.startswith(self.sibling_alias):
             raise ValueError(
                 f"project_alias {self.project_alias!r} does not extend the sibling alias "
-                f"{self.sibling_alias!r}; the shared RDS tier cannot be located from it.")
-        return self.sibling_alias
+                f"{self.sibling_alias!r}; the RDS tier cannot be located from it.")
+        if self.condition is None:
+            raise ValueError(
+                "the RDS trajectory tier is per condition (the association setting differs "
+                "between MET-FAB and MET-INLB); apply Paths.with_condition('FAB' | 'INLB') "
+                "before resolving rds_alias.")
+        return f"{self.sibling_alias}_{self.condition}"
 
     @property
     def theta_set_alias(self) -> str:
-        """Alias of this workflow's ``Theta_Set``: the shared RDS tier's bare alias for an RDS
-        product (biology: the twelve reaction-diffusion labels), the qualified and conditioned
+        """Alias of this workflow's ``Theta_Set``: the condition's RDS-tier alias for an RDS
+        product (biology: the eleven reaction-diffusion labels), the qualified and conditioned
         alias for a DLI product (detector: the six imaging labels)."""
         return self.rds_alias if self.theta_set_is_rds_product else self.project_alias
 
     def trajectory_dir(self, task_alias: int, data_bank_root: Path,
                        timing_label: str, split: str = "TRAIN") -> Path:
-        """Per-task subdirectory for .h5 trajectory files (the shared RDS tier: bare alias).
+        """Per-task subdirectory for .h5 trajectory files (the condition's RDS tier).
 
         ``split`` ∈ {"TRAIN", "TEST", "EVAL"} namespaces the data by role so
         the held-out sets never collide with the training set on disk.
@@ -327,7 +338,7 @@ class Paths:
     def trajectory_path(self, task_alias: int, task_simulation: int,
                         data_bank_root: Path, timing_label: str,
                         split: str = "TRAIN") -> Path:
-        """Full path for a single .h5 trajectory file (the shared RDS tier: bare alias)."""
+        """Full path for a single .h5 trajectory file (the condition's RDS tier)."""
         filename = self.trajectory_pattern.format(
             project_alias=self.rds_alias,
             timing_label=timing_label,
@@ -710,29 +721,33 @@ class ParticleType:
 
 @dataclass(frozen=True)
 class StoichiometryBlock:
-    """Reversible monomer-dimer association, A + A <-> B, and the parameter keys it reads.
+    """Monomer-dimer stoichiometry, A + A -> B (per-condition setting) and B -> A + A, and the
+    parameter keys it reads.
 
     - ``count_total_key``: the conserved receptor-subunit total N_R = n_A + 2 n_B (a count).
     - ``fraction_dimer_key``: the REQUESTED initial fraction of receptors in dimers, x_B in
-      [0, 1]; realized as integers by ``realize_initial_composition``.
-    - ``association_ratio_key``: R_ON, the dimensionless association ratio. The microscopic
-      association rate is lambda_on = R_ON * lambda_ref with the COMPATIBILITY NORMALIZATION
-      lambda_ref = 6 D_A / r^2 (units 1/s; depends on the monomer scale coefficient D_A and the
-      reaction distance r). lambda_ref is NOT a physical upper bound on association -- the
-      diffusion-limited regime is the large-intensity limit of the spatial rule -- it is a
-      declared reference that keeps the parameter dimensionless. The same lambda_on applies to
-      every association channel (one per unordered pair of monomer modes).
+      [0, 1]; realized as integers by ``realize_initial_composition``. Under a condition
+      without association it is read as the fraction of receptors in dimers PRESENT at the
+      start of the recording, not a fraction formed.
     - ``dissociation_rate_key``: kappa_OFF, the dimer unbinding rate (1/s), one for every
-      dimer mode; dissociation is not governed by contact.
-    Association needs an encounter within ``reaction distance`` (one particle diameter, the
-    Smoluchowski contact distance) followed by the reaction; no degradation, internalization,
-    or synthesis occurs within a recording, so N_R is conserved by construction.
+      dimer mode; dissociation is not governed by contact; inferred in every condition.
+    The association intensity is NOT a learnable row. It is a declared per-condition constant
+    (``ConditionSetting.association_ratio``, read through ``SimulationRDS.association_ratio_of``):
+    lambda_on = R_ON * lambda_ref with the COMPATIBILITY NORMALIZATION lambda_ref = 6 D_A / r^2
+    (units 1/s; D_A the monomer scale coefficient, r the reaction distance). lambda_ref is NOT
+    a physical upper bound on association -- the diffusion-limited regime is the
+    large-intensity limit of the spatial rule -- it is a declared reference that keeps the
+    ratio dimensionless. The same lambda_on applies to every association channel (one per
+    unordered pair of monomer modes); a ratio of exactly zero declares that the condition has
+    NO association channel. Association needs an encounter within ``reaction distance`` (one
+    particle diameter, the Smoluchowski contact distance) followed by the reaction; no
+    degradation, internalization, or synthesis occurs within a recording, so N_R is conserved
+    by construction.
     """
     monomer: MolecularSpecies = MolecularSpecies("A", 1)
     dimer: MolecularSpecies = MolecularSpecies("B", 2)
     count_total_key: str = "count_total"
     fraction_dimer_key: str = "fraction_dimer_initial"
-    association_ratio_key: str = "relative_rate_dimerization"
     dissociation_rate_key: str = "rate_dissociation"
 
     def __post_init__(self):
@@ -752,8 +767,7 @@ class StoichiometryBlock:
 
     @property
     def parameter_keys(self) -> tuple:
-        return (self.count_total_key, self.fraction_dimer_key,
-                self.association_ratio_key, self.dissociation_rate_key)
+        return (self.count_total_key, self.fraction_dimer_key, self.dissociation_rate_key)
 
 
 @dataclass(frozen=True)
@@ -834,16 +848,84 @@ class MobilityBlock:
 
 
 @dataclass(frozen=True)
+class ConditionSetting:
+    """The reaction-diffusion setting of one experimental condition: the association ratio.
+
+    ``token`` is the stored condition token (``FAB`` = MET-FAB, ``INLB`` = MET-INLB; the one
+    definition of the naming lives in ``experiment_support.CONDITION_DISPLAY`` and the
+    labeling laws in ``labeling.BASELINE_LAW_OF_CONDITION``; import-time validation keeps
+    the three registries on the same tokens). ``association_ratio`` is R_ON: the microscopic
+    association intensity is lambda_on = R_ON * lambda_ref (lambda_ref = 6 D_A / r^2) for every
+    association channel; EXACTLY zero means the condition has no association channel at all
+    (a structural setting, never a small positive stand-in for a logarithmic scale).
+
+    Decision of 2026-09-09 (model specification, decision log): the association ratio is not
+    inferred in either condition -- it was not recoverable in the earlier workflow and there
+    are no grounds to make its estimation a requirement of the model. MET-FAB: R_ON = 0, a
+    working approximation that omits an unresolved within-recording association process
+    (no activating ligand; basal association is what is omitted) and represents pre-existing
+    dimers through the inferred initial composition; the readout is dimers PRESENT at the
+    recording start. MET-INLB: R_ON = 1, the reference convention -- not a measured
+    association rate and not a verified diffusion-limited regime; composition and unbinding
+    estimates are conditional on it. Because the two settings produce different trajectories,
+    each condition has its own RDS trajectory tier (``Paths.rds_alias``), shared by both
+    workflows. Unbinding stays inferred in both conditions.
+    """
+    token: str
+    association_ratio: float
+
+    def __post_init__(self):
+        token = str(self.token)
+        if not token or not token.isupper() or not token.isalnum():
+            raise ValueError(f"ConditionSetting: token must be an uppercase alphanumeric word "
+                             f"such as FAB or INLB (got {self.token!r}).")
+        ratio = float(self.association_ratio)
+        if not np.isfinite(ratio) or ratio < 0.0:
+            raise ValueError(f"ConditionSetting {token}: association_ratio must be finite and "
+                             f">= 0 (got {self.association_ratio!r}).")
+        if 0.0 < ratio < 1e-3:
+            raise ValueError(f"ConditionSetting {token}: association_ratio {ratio!r} is a disguised "
+                             f"zero; switch association off with exactly 0.0 (no channels are "
+                             f"generated), never with a small positive stand-in.")
+
+
+# The declared per-condition association settings (see ConditionSetting for the decision).
+CONDITION_SETTINGS: tuple = (
+    ConditionSetting("FAB", 0.0),    # MET-FAB: no association channels; pre-existing dimers may dissociate
+    ConditionSetting("INLB", 1.0),   # MET-INLB: lambda_on = lambda_ref, the reference convention
+)
+
+
+@dataclass(frozen=True)
 class SimulationRDS:
-    """RDS-stage runtime defaults + the two model blocks the generator reads.
+    """RDS-stage runtime defaults + the model blocks and condition settings the generator reads.
 
     The particle types are DERIVED here (species x modes, species-major, modes fastest
     first), as are their subunit counts and the maps back to species and mode; nothing
-    downstream lists them by hand.
+    downstream lists them by hand. ``conditions`` declares the per-condition association
+    ratio (``association_ratio_of``); the reaction network of a run is generated from the
+    blocks AND the run's condition.
     """
     prior_seed: Optional[int] = None               # None = OS-determined
     stoichiometry: StoichiometryBlock = field(default_factory=StoichiometryBlock)
     mobility: MobilityBlock = field(default_factory=MobilityBlock)
+    conditions: tuple = CONDITION_SETTINGS
+
+    @property
+    def condition_tokens(self) -> tuple:
+        """The stored condition tokens in declaration order."""
+        return tuple(c.token for c in self.conditions)
+
+    def condition_setting(self, condition: str) -> ConditionSetting:
+        """The declared setting of ``condition``; KeyError names the known tokens."""
+        for setting in self.conditions:
+            if setting.token == condition:
+                return setting
+        raise KeyError(f"unknown condition {condition!r}; the model declares {self.condition_tokens}.")
+
+    def association_ratio_of(self, condition: str) -> float:
+        """R_ON of ``condition``: 0.0 = no association channels; > 0 scales lambda_ref."""
+        return float(self.condition_setting(condition).association_ratio)
 
     @staticmethod
     def type_name(species: str, mode: str) -> str:
@@ -1178,16 +1260,14 @@ _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
     # DEVELOPMENT SETTINGS. Every range below is a broad development placeholder for building
     # and checking the generator; none is a scientifically approved training prior (those are
     # a later, separate decision recorded in the model specification's decision log).
-    'stoichiometry': [  # StoichiometryBlock: conserved total, requested initial dimer fraction, association, dissociation
+    'stoichiometry': [  # StoichiometryBlock: conserved total, requested initial dimer fraction, dissociation (the association ratio is a per-condition CONSTANT, not a row)
         {'KEY': 'count_total', 'VALUE': 10**1.75, 'PRIOR_RANGE': (0.5, 3.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{R}$', 'NOTE': 'Learnable Parameter',
          'DOC': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the SIMULATED patch (the in-field count is a distinct, time-dependent quantity under the open lateral boundary). Realized as an integer by realize_initial_composition. Development range.'},
         {'KEY': 'fraction_dimer_initial', 'VALUE': 0.5, 'PRIOR_RANGE': (0.0, 1.0), 'LOG_FLAG': False, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$x_{B}$', 'NOTE': 'Learnable Parameter',
          'DOC': 'REQUESTED initial fraction of receptors belonging to dimers, x_B = 2 n_B(0) / N_R, LINEAR on [0, 1] inclusive (the estimator coordinate is the value itself). Realized as n_B(0) = min(round(N_R x_B / 2), floor(N_R / 2)); the realized fraction is recorded beside the requested one (Labeling_Set). The complex fraction is f_B = x_B / (2 - x_B).'},
-        {'KEY': 'relative_rate_dimerization', 'VALUE': 10**(-1), 'PRIOR_RANGE': (-2, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count Per Second', 'LABEL': r'$R_{ON}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Association ratio: lambda_on = R_ON * lambda_ref with the compatibility normalization lambda_ref = 6 D_A / r^2 (1/s; D_A the monomer scale coefficient, r the reaction distance). lambda_ref is a declared reference, NOT a physical upper bound on association; R_ON above 1 is admissible in principle. One lambda_on for all association channels. Development range.'},
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{CAP}$', 'NOTE': 'Known Parameter'},
         {'KEY': 'rate_dissociation', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Dimer unbinding rate, B_m -> A_m + A_m for every mode m (dissociation conserves the mode). Development range.'},
+         'DOC': 'Dimer unbinding rate, B_m -> A_m + A_m for every mode m (dissociation conserves the mode); inferred in every condition. Development range; the lower bound needed for dimers that PERSIST over a 20 s recording under the MET-FAB setting (no association) is part of the later range decisions.'},
     ],
     'mobility': [  # MobilityBlock: monomer scale, dimer factor, mode factors, the four shared switching rates
         {'KEY': 'diffusivity_alp', 'VALUE': 10**(-0.75), 'PRIOR_RANGE': (-1.25, -0.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Square Micrometer Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$D_{A}$', 'NOTE': 'Learnable Parameter',
@@ -1467,9 +1547,28 @@ def _validate_model_blocks() -> None:
     lo, hi = phys_range(rds.mobility.dimer_ratio_key)
     if not (0.0 < lo and hi <= 1.0):
         raise ValueError(f"{rds.mobility.dimer_ratio_key}: range must lie in (0, 1] (got [{lo}, {hi}]).")
+    # Condition settings: one per stored condition token, on the tokens the whole codebase names
+    # conditions by (experiment_support is the one definition; a local import keeps the module
+    # graph lean and cycle-free). The ratio's own validity is ConditionSetting.__post_init__.
+    from .experiment_support import CONDITION_DISPLAY
+    tokens = rds.condition_tokens
+    if len(set(tokens)) != len(tokens):
+        raise ValueError(f"SimulationRDS.conditions: a condition token repeats in {tokens}.")
+    if set(tokens) != set(CONDITION_DISPLAY):
+        raise ValueError(f"SimulationRDS.conditions {tokens} must declare exactly the conditions of "
+                         f"experiment_support.CONDITION_DISPLAY {tuple(CONDITION_DISPLAY)}.")
+    if not any(rds.association_ratio_of(t) > 0.0 for t in tokens):
+        raise ValueError("SimulationRDS.conditions: no condition has association switched on; the "
+                         "model family is A + A -> B in at least one condition.")
 
 
 _validate_model_blocks()
+
+
+def association_ratio_of(condition: str) -> float:
+    """The declared association ratio R_ON of ``condition`` (``SimulationRDS.association_ratio_of``):
+    0.0 means the condition has no association channel; a positive value scales lambda_ref."""
+    return PARAMETERS.simulation.rds.association_ratio_of(condition)
 
 
 # =============================================================================

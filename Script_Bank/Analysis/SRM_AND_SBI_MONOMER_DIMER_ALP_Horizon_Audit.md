@@ -87,9 +87,9 @@ separate changed composition from deeper spatial/photophysical memory.
 - **First-window exchangeability gate**: continuous window 0 has no inherited past, so it must be
   statistically exchangeable with the resets before any later-window difference is attributed to
   horizon; a failure there is an arm-construction artifact, not horizon.
-- **Coverage is never pooled across estimand kinds**: constants (the unidentified R_ON excluded
-  from any verdict) are reported separately from f_D-vs-start (computed from the within-draw
-  fraction distribution) and from the stale-truth count rows.
+- **Coverage is never pooled across estimand kinds**: constants are reported separately from
+  f_D-vs-start (computed from the within-draw fraction distribution) and from the stale-truth
+  count rows.
 - **"Flow mass outside the training box"** replaces prior-exceedance language: a bounded-prior
   Bayesian posterior cannot place mass outside its prior; what is measured is the UNRESTRICTED
   neural flow leaking beyond its training support — the deployment gate the experimental analysis
@@ -104,9 +104,11 @@ separate changed composition from deeper spatial/photophysical memory.
   supplied), and every (theta, arm, replicate) gets its own placement, render, and labeling seed via
   `numpy.random.SeedSequence` — resets are independently randomized, never copies of one stream,
   and a rerun of the same cohort reproduces the same placements, labelings, and renders.
-- Every phase takes `--condition` (`FAB` or `INLB`): it selects the condition-specific estimator
-  and output namespace and the static labeling law the renders use (`--labeling-law` overrides
-  it for a sensitivity run), and both are recorded in every generated file. ReaDDy's internal
+- Every phase takes `--condition` (`FAB` or `INLB`): it selects the reaction network the cohort
+  is simulated with (the condition's declared association setting, exactly as its RDS tier is
+  generated), the condition-specific estimator and output namespace, and the static labeling
+  law the renders use (`--labeling-law` overrides it for a sensitivity run); the condition and
+  the law are recorded in every generated file. ReaDDy's internal
   reaction/diffusion RNG has no exposed seed and stays OS-seeded: trajectories are not
   bit-reproducible, and the audit does not claim otherwise.
 - Every cohort carries a **cohort_id** digest (the exact theta matrix plus every
@@ -170,8 +172,8 @@ Trajectory `.h5` files are deleted after their population trace is extracted unl
 - **`first_window_exchangeable`** — the arm-construction gate (non-fatal check).
 - **Exploratory table** — the remaining parameters, no verdicts; count rows labeled as state
   drift.
-- **Coverage table + figure** — disaggregated: constants (excl. R_ON) vs theta; f_D vs start
-  truth; counts vs the stale t=0 truth as context.
+- **Coverage table + figure** — disaggregated: constants vs theta; f_D vs start truth; counts
+  vs the stale t=0 truth as context.
 - **f_D truth-sensitivity table** — the same error under start / mean / end / unrounded-label
   references, so the estimand-mismatch hazard stays visible.
 - **Dynamic-state figure** — inferred f_D against the window-START truth (mean/end as thin

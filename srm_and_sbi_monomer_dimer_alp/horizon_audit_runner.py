@@ -43,8 +43,8 @@ DESIGN DECISIONS.
 * PRIMARY ESTIMANDS ARE PREDECLARED: the dimer-complex fraction f_B = n_B / (n_A + n_B) (state,
   judged against the start truth), D_A and kappa_OFF (constants, judged against theta). Every
   other parameter is exploratory: reported, never verdicted (multiplicity).
-* COVERAGE IS NEVER POOLED ACROSS ESTIMAND KINDS. Constants (R_ON excluded -- already known
-  unidentified) are reported separately from the stoichiometry coordinates, whose "coverage"
+* COVERAGE IS NEVER POOLED ACROSS ESTIMAND KINDS. Constants are reported separately from the
+  stoichiometry coordinates, whose "coverage"
   against the stale t=0 truth measures state drift, not calibration; f_B coverage is computed
   from the within-draw fraction distribution against the start truth.
 * SEEDS ARE SPAWNED, PERSISTED, AND NEVER SHARED. A master seed (drawn and persisted at prepare
@@ -403,9 +403,11 @@ def _phase_extend(spec, args):
 # Phase: generate
 # =============================================================================
 
-def _simulate_and_render(theta_physical, timing, imaging_physical, traj_path,
+def _simulate_and_render(theta_physical, condition, timing, imaging_physical, traj_path,
                          placement_seed, render_seed, labeling_seed, law, verbose):
-    """One simulation at ``theta_physical`` for ``timing``, rendered and converted to uint8.
+    """One simulation at ``theta_physical`` under ``condition`` for ``timing``, rendered and
+    converted to uint8. The condition selects the reaction network (its declared association
+    setting), exactly as the condition's RDS tier is generated.
 
     ``placement_seed`` seeds the initial particle placement, ``render_seed`` the imaging noise
     stream, and ``labeling_seed`` the static per-subunit dye draw under the labeling ``law``
@@ -420,7 +422,7 @@ def _simulate_and_render(theta_physical, timing, imaging_physical, traj_path,
     from .labeling import draw_dye_counts
     from .simulation_dli_support import render_dli_video
 
-    stem = build_system(theta_physical, verbose=verbose)
+    stem = build_system(theta_physical, condition, verbose=verbose)
     smut = build_simulation(stem, theta_physical, seed=placement_seed, verbose=verbose)
     if traj_path.exists():
         traj_path.unlink()
@@ -499,7 +501,7 @@ def _phase_generate(spec, args):
         t0 = time.time()
         traj_path = traj_dir / f"theta_{index:04d}_continuous.h5"
         cont_video, cont_counts = _simulate_and_render(
-            theta_physical, spec["continuous"], imaging_physical, traj_path,
+            theta_physical, args.condition, spec["continuous"], imaging_physical, traj_path,
             seeds["cont"][0], seeds["cont"][1], seeds["cont"][2], law, args.verbose)
         if not args.keep_trajectories:
             traj_path.unlink(missing_ok=True)
@@ -509,7 +511,7 @@ def _phase_generate(spec, args):
         for r in range(n_resets):
             traj_path = traj_dir / f"theta_{index:04d}_reset_{r}.h5"
             video, counts = _simulate_and_render(
-                theta_physical, spec["window"], imaging_physical, traj_path,
+                theta_physical, args.condition, spec["window"], imaging_physical, traj_path,
                 seeds["resets"][r][0], seeds["resets"][r][1], seeds["resets"][r][2], law,
                 args.verbose)
             if not args.keep_trajectories:
@@ -776,7 +778,7 @@ def _figure_error_vs_position(table, keys, cont_abs, reset_abs, count_index):
 
 def _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
                                  fd_cov, const_index):
-    """Coverage against window position: constants (excl. R_ON) and f_B-vs-start separately."""
+    """Coverage against window position: constants and f_B-vs-start separately."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -792,7 +794,7 @@ def _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
         ax.axhline(nominal, color="black", lw=0.8, ls="--", label="nominal")
         ax.axhline(mean_r, color="tab:gray", lw=1.0, label="reset (constants)")
         ax.plot(x, mean_c, "-o", ms=3, color="tab:blue",
-                label="continuous (constants, excl. $R_{ON}$)")
+                label="continuous (constants)")
         ax.plot(x, np.nanmean(fd_cov["cont_" + fd_key], axis=0), "-s", ms=3,
                 color="tab:orange", label="continuous $f_B$ vs start truth")
         ax.axhline(float(np.nanmean(fd_cov["reset_" + fd_key])), color="tab:orange",
@@ -886,8 +888,7 @@ def _phase_analyze(spec, args):
     cohort = _load_cohort(spec)
     data, used = _collect(spec, cohort)
     keys, table, count_index = spec["keys"], spec["table"], spec["count_index"]
-    const_index = [i for i, k in enumerate(keys)
-                   if i not in count_index and k != "relative_rate_dimerization"]
+    const_index = [i for i, k in enumerate(keys) if i not in count_index]
     n_traj = len(used)
     n_windows = data["cont_q"].shape[1]
     n_resets = data["reset_q"].shape[1]
@@ -1152,8 +1153,7 @@ def _phase_analyze(spec, args):
     for i, key in enumerate(keys):
         if key in ("diffusivity_alp", "rate_dissociation"):
             continue
-        tag = (" (stoichiometry: vs t=0 label -- reads state drift)" if i in count_index
-               else (" (unidentified)" if key == "relative_rate_dimerization" else ""))
+        tag = " (stoichiometry: vs t=0 label -- reads state drift)" if i in count_index else ""
         d_mean, _, _ = ha.bootstrap_mean_ci(delta_abs[:, -1:, i], rng=rng)
         s_mean, _, _ = ha.bootstrap_mean_ci(delta_signed[:, -1:, i], rng=rng)
         slopes = ha.trajectory_slopes(cont_err[:, :, i])
@@ -1167,13 +1167,12 @@ def _phase_analyze(spec, args):
         "Exploratory parameters (no verdicts: not predeclared, no multiplicity control)",
         exp_headers, exp_rows,
         note="stoichiometry rows compare against the stale t=0 label and therefore read STATE DRIFT, "
-             "not estimator error -- the state audit is the f_B primary above. R_ON is already "
-             "known unidentified and never contributes to any verdict.")
+             "not estimator error -- the state audit is the f_B primary above.")
 
     # ---- coverage, disaggregated ----
     cov_headers = ["estimand (truth)", "reset c50 / c90",
                    "cont w0 c50 / c90", f"cont w{n_windows - 1} c50 / c90"]
-    cov_rows = [["constants excl. R_ON (theta)",
+    cov_rows = [["constants (theta)",
                  f"{np.nanmean(reset_c50[:, :, const_index]):.2f} / "
                  f"{np.nanmean(reset_c90[:, :, const_index]):.2f}",
                  f"{np.nanmean(cont_c50[:, 0, const_index]):.2f} / "
@@ -1299,8 +1298,8 @@ def _phase_analyze(spec, args):
         "coverage_vs_position",
         _figure_coverage_vs_position(cont_c50, cont_c90, reset_c50, reset_c90,
                                      fd_cov, const_index),
-        caption="Coverage against window position, disaggregated: constants (excluding the "
-                "unidentified R_ON) against theta, and f_B against the window-start truth.")
+        caption="Coverage against window position, disaggregated: constants against theta, and "
+                "f_B against the window-start truth.")
     reporter.save_figure(
         "dynamic_state_f_B",
         _figure_dynamic_state(ts_cont, tm_cont, te_cont, fd_cont, ts_reset, fd_reset),

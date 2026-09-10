@@ -31,8 +31,8 @@
 #
 # Example (single node, all GPUs, biology, full run):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Posterior_Calibration \
-#     --export=ALL,REPO=$PWD,EVAL_TASKS=25,POSTERIOR_SAMPLES=1000 \
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Posterior_Calibration \
+#     --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=25,POSTERIOR_SAMPLES=1000 \
 #     Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Posterior_Calibration.sh
 # Example (two nodes, EVAL sharded across both -- add --nodes=N; --gres is per node):
 #   sbatch --nodes=2 --gres=gpu:4 --export=ALL,REPO=$PWD,EVAL_TASKS=25,POSTERIOR_SAMPLES=1000 \

@@ -1,4 +1,4 @@
-"""Shared RDS-stage engine: the ONE reaction-diffusion trajectory tier both workflows read.
+"""Shared RDS-stage engine: the per-condition reaction-diffusion trajectory tier both workflows read.
 
 ``run_rds(cfg, args)`` holds the entire RDS orchestration -- pre-run banner,
 task-index resolution, dry-run probe, log10 prior sampling + exponentiation, the
@@ -7,13 +7,17 @@ build+run with the kernel-leak mitigation, and the end-of-task report. The singl
 entry-point script (``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py``) shrinks to:
 build the biology ``WorkflowConfig``, parse args, and call ``run_rds``.
 
-The RDS tier is shared. The twelve reaction-diffusion parameters are drawn from the
-biology prior once per simulation and persisted as the ``Theta_Set``; the trajectories
-and that ``Theta_Set`` carry the bare sibling alias (``Paths.rds_alias``) -- no workflow
-qualifier, no condition token -- because both workflows and both conditions re-image
-the same trajectories at the DLI stage. To the biology workflow the ``Theta_Set`` is the
-learnable label; to the detector workflow the same file is the record of the
-reaction-diffusion nuisance it marginalizes (``detector_parameterization.DETECTOR_NUISANCE``,
+One tier per CONDITION, shared by both workflows. The association ratio of the model is a
+declared per-condition constant (``parameterization.ConditionSetting``: MET-FAB 0, no
+association channels; MET-INLB 1, the reference convention), so the trajectories of the two
+conditions differ and ``--condition`` is required here. The eleven reaction-diffusion
+parameters -- the same table for both conditions -- are drawn from the biology prior once
+per simulation and persisted as the ``Theta_Set``; the trajectories and that ``Theta_Set``
+carry the sibling alias plus the condition token (``Paths.rds_alias``) and no workflow
+qualifier, because both workflows re-image the same trajectories at the DLI stage under
+the condition's labeling law. To the biology workflow the ``Theta_Set`` is the learnable
+label; to the detector workflow the same file is the record of the reaction-diffusion
+nuisance it marginalizes (``detector_parameterization.DETECTOR_NUISANCE``,
 nuisance-from-object: supplied by this tier). There is therefore no detector RDS stage
 and no separate RDS-nuisance draw: the detector marginalizes the biology prior by
 construction, not by a checked copy of its ranges.
@@ -36,7 +40,9 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import (
     fixed_parameters_table,
     prior_sampling_table,
 )
+from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_DISPLAY
 from srm_and_sbi_monomer_dimer_alp.io import save_theta_set
+from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
     PARAMETERIZATION,
     PARAMETERIZATION_RAW,
@@ -48,7 +54,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
     to_physical,
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
-    build_simulation, build_system, initial_composition_of,
+    build_simulation, build_system, initial_composition_of, reaction_channels,
 )
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
@@ -67,30 +73,31 @@ _UNIT_DISPLAY = {
 }
 
 
-def _build_sim(theta, seed, skin_factor, verbose):
-    """Build the reactive ReaDDy simulation for one theta: register the four reaction
-    channels (`build_system`) and place the initial particles (`build_simulation`)."""
-    stem = build_system(theta, verbose=verbose)
+def _build_sim(theta, condition, seed, skin_factor, verbose):
+    """Build the ReaDDy simulation for one theta under the run's condition: register the
+    condition's reaction channels (`build_system`) and place the initial particles
+    (`build_simulation`)."""
+    stem = build_system(theta, condition, verbose=verbose)
     # `stem` is reachable only through the returned Simulation; deleting the
     # Simulation (+ gc) in the engine loop releases the ReaDDy kernel and the system.
     return build_simulation(stem, theta, seed=seed, skin_factor=skin_factor, verbose=verbose)
 
 
-def _require_shared_tier_config(cfg: WorkflowConfig) -> None:
-    """The RDS tier is generated once, through the biology config, whose ``Paths`` carry
-    the bare sibling alias and whose parameter table is the twelve-parameter prior the tier
-    samples. A detector config here would only re-generate the same tier under a
+def _require_biology_config(cfg: WorkflowConfig) -> None:
+    """A condition's RDS tier is generated once, through the biology config, whose ``Paths``
+    carry the unqualified sibling alias and whose parameter table is the eleven-parameter prior
+    the tier samples. A detector config here would only re-generate the same tier under a
     qualified name, so it is refused."""
     if cfg.tag != "biology":
         raise ValueError(
-            f"run_rds: the RDS trajectory tier is shared by both workflows and is generated "
-            f"once through the unqualified entry point (biology config); got workflow "
+            f"run_rds: a condition's RDS trajectory tier is shared by both workflows and is "
+            f"generated once through the unqualified entry point (biology config); got workflow "
             f"{cfg.tag!r}. The detector re-images this tier at its DLI stage.")
 
 
 def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run the full RDS generation pipeline for the given workflow + CLI args."""
-    _require_shared_tier_config(cfg)
+    _require_biology_config(cfg)
 
     # Per-run timing from the required --total-time-seconds + the fixed frame cadence.
     timing = RunTiming(
@@ -105,11 +112,15 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     machine = PARAMETERS.machine
     geom = PARAMETERS.simulation.stem
     rds_cfg = PARAMETERS.simulation.rds
-    paths = cfg.paths
+    # The tier is per condition (the association setting differs), so the run's Paths carry
+    # the condition token from here on; rds_alias composes the tier alias from it.
+    condition = args.condition
+    paths = cfg.paths.with_condition(condition)
+    r_on = rds_cfg.association_ratio_of(condition)
     div = "=" * 72
 
     print(div)
-    print(f" {paths.rds_alias} — Simulation_RDS   (the shared RDS tier: both workflows, both conditions)")
+    print(f" {paths.rds_alias} — Simulation_RDS   (the {CONDITION_DISPLAY[condition]} trajectory tier: both workflows)")
     print(f" Started at  : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(div)
 
@@ -122,6 +133,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  num_workers       : {machine.num_workers}")
 
     print("\nRun configuration (CLI args):")
+    print(f"  --condition          : {condition}   ({CONDITION_DISPLAY[condition]}; association ratio R_ON = {r_on:g}"
+          + (" -> no association channel, pre-existing dimers may dissociate)" if r_on == 0.0
+             else " -> lambda_on = R_ON x 6 D_A / r^2 for every association channel)"))
     print(f"  --total-time-seconds : {args.total_time_seconds}")
     if args.task_id is not None:
         print(f"  --task-id            : {args.task_id}        (this run generates exactly one task)")
@@ -161,13 +175,16 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  species {rds_cfg.molecular_species_names} = (monomer, dimer); "
           f"modes {rds_cfg.mobility.modes} = (fast, slow, immobile); "
           f"inheritance: {rds_cfg.mobility.inheritance}")
+    _n_channels = len(reaction_channels(np.array([para['VALUE'] for para in PARAMETERIZATION], dtype=float), condition))
+    print(f"  reaction channels under {condition}: {_n_channels} "
+          f"({'3 fissions + 8 conversions, no association' if r_on == 0.0 else '6 fusions + 3 fissions + 8 conversions'})")
 
     timing_label = timing.label
     print("\nOutput destinations:")
     print(f"  data_bank_root  : {data_bank_root}")
     print(f"  trajectories    : <data_bank>/{paths.video_subdir}/"
           f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
-          f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (shared tier)")
+          f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   ({condition} tier, both workflows)")
     print(f"  theta sets      : <data_bank>/{paths.theta_subdir}/"
           f"{paths.rds_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
           f"(biology labels = detector RDS nuisance)")
@@ -303,7 +320,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             # unseeded, so identical-posterior reproducibility is unreachable
             # regardless; the sampled set is persisted per task and the global
             # task index is the provenance handle.
-            smut = _build_sim(theta, args.seed, args.skin_factor, args.verbose)
+            smut = _build_sim(theta, condition, args.seed, args.skin_factor, args.verbose)
 
             traj_path = paths.trajectory_path(
                 task_alias, sim, data_bank_root, timing_label, split)
@@ -462,6 +479,14 @@ def build_rds_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,
         help="Simulation duration per trajectory in seconds (required; e.g. 2.0, 5.0).",
+    )
+    parser.add_argument(
+        "--condition", required=True, choices=LABELING_CONDITIONS,
+        help="Experimental condition whose trajectory tier this run generates: FAB (MET-FAB; "
+             "association ratio 0 -> no association channel, pre-existing dimers may dissociate) "
+             "or INLB (MET-INLB; association ratio 1, the reference convention). Required: the "
+             "association setting is per condition, so each condition has its own tier, shared "
+             "by both workflows and named <sibling alias>_<CONDITION>_<timing>_....",
     )
     parser.add_argument(
         "--tasks", type=int, default=2,

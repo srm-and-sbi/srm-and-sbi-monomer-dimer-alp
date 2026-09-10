@@ -6,12 +6,15 @@ increment, 2026-09-09). The RUN tier (``--run``) executes tiny, short simulation
 it is compute and runs only when explicitly requested after approval.
 
 Deterministic tier (always):
-    D1 channels        `reaction_channels` yields exactly SEVENTEEN unique channels: six
-                       association fusions (one per unordered pair of monomer modes, product =
-                       dimer in the SLOWER parent's mode, one shared microscopic rate), three
-                       dissociation fissions (dimer -> two monomers in the dimer's mode), eight
-                       switching conversions (the four shared rates, once per species, adjacent
-                       modes only). `build_system` registers exactly these names.
+    D1 channels        `reaction_channels` yields, PER CONDITION, exactly the declared channels:
+                       MET-INLB (association ratio 1) seventeen -- six association fusions (one
+                       per unordered pair of monomer modes, product = dimer in the SLOWER
+                       parent's mode, one shared microscopic rate), three dissociation fissions
+                       (dimer -> two monomers in the dimer's mode), eight switching conversions
+                       (the four shared rates, once per species, adjacent modes only); MET-FAB
+                       (association ratio 0) eleven -- NO fusion channel at all (structural, not
+                       a tiny rate), the same fissions and conversions. `build_system` registers
+                       exactly these names under each condition.
     D2 diffusion       D[X, m] = D_A * species_factor * mode_factor for every type; for every
                        prior draw D_immobile < D_slow <= D_fast within a species and
                        D_dimer <= D_monomer within a mode (the disjoint-range guarantee).
@@ -21,7 +24,8 @@ Deterministic tier (always):
     D4 composition     `realize_initial_composition` at x_B = 0 and 1 for totals 1..40 (odd and
                        even): conservation N_R = n_A + 2 n_B, n_B <= floor(N_R/2), requested vs
                        realized fraction as documented; the association reference equals the
-                       Smoluchowski expression 4 pi (2 D_A) r / ((4/3) pi r^3) = 6 D_A / r^2.
+                       Smoluchowski expression 4 pi (2 D_A) r / ((4/3) pi r^3) = 6 D_A / r^2, and
+                       under MET-INLB every fusion fires at exactly lambda_ref (R_ON = 1).
     D5 stationary law  `stationary_mode_law` sums to one and satisfies detailed balance on
                        every link of the chain.
     D6 occupancy       Occupancy is applied by MOLECULAR species: `rank_to_species` maps every
@@ -36,20 +40,28 @@ Deterministic tier (always):
                        step for immobile daughters). The one-step rebinding probability at the
                        prior center is reported for fast and immobile daughters under the OLD
                        placement, as the documented reason.
+    D8 conditions      The condition registry: the model's tokens equal the labeling and the
+                       experiment registries' tokens; MET-FAB association ratio is exactly 0.0
+                       and MET-INLB exactly 1.0; the retired association-ratio row is absent from
+                       the biology table and the detector's RDS nuisance; `rds_alias` carries the
+                       condition token and refuses to resolve without one.
 
 Run tier (``--run``; tiny; after approval only):
-    R1 conservation    A reactive 1 s run at the prior center: the lineage replays with every
-                       subunit covered once per frame (fail-loud extractor) and its subunit
-                       count equals the realized N_R.
-    R2 stationarity    An isolated-chain run (association off, monomers only, 10 s): the
+    R1 conservation    One 1 s run per condition at the prior center (MET-INLB: the full
+                       reactive network; MET-FAB: dissociation and switching only): the lineage
+                       replays with every subunit covered once per frame (fail-loud extractor)
+                       and its subunit count equals the realized N_R.
+    R2 stationarity    The isolated switching chain under the MET-FAB configuration (no
+                       association channel by construction) with monomers only, 10 s: the
                        time-averaged mode occupancies over the second half agree with
                        `stationary_mode_law` within a prespecified tolerance.
-    R3 visible         Static labeling draws on the reactive lineage at a declared
-                       per-species occupancy reproduce the visible fractions
-                       p_occ (1 - P0) (monomers) and 1 - (1 - p_occ (1 - P0))^2 (dimers).
-    R4 both conditions One short video per condition rendered from the SAME trajectory
-                       through the production renderer; both carry signal.
-    R5 boundary        In the 1 s run, particles may lie outside the imaged box (open
+    R3 visible         Static labeling draws on the MET-INLB lineage (every channel exercised)
+                       at a declared per-species occupancy reproduce the visible fractions
+                       p_occ (1 - P0) (monomers) and 1 - (1 - p_occ (1 - P0))^2 (dimers) under
+                       both labeling laws.
+    R4 both conditions One short video per condition rendered from THAT condition's own
+                       trajectory through the production renderer; both carry signal.
+    R5 boundary        In the MET-INLB run, particles may lie outside the imaged box (open
                        lateral boundary) while the per-frame subunit total stays constant;
                        the fraction outside is reported.
 
@@ -119,14 +131,22 @@ def key_index(key: str) -> int:
 # ----------------------------------------------------------------------------------------------
 
 def d1_channels() -> dict:
+    """Per condition: the generated channels against the declared network (17 under INLB, 11 under FAB)."""
+    out = {c: _d1_condition(c) for c in RDS.condition_tokens}
+    out["ok"] = all(v["ok"] for v in out.values())
+    return out
+
+
+def _d1_condition(condition: str) -> dict:
     theta = prior_center_theta()
-    channels = rds.reaction_channels(theta)
+    channels = rds.reaction_channels(theta, condition)
     sto, mob = RDS.stoichiometry, RDS.mobility
     mono, dim = sto.monomer.name, sto.dimer.name
     names = [c.name for c in channels]
     kinds = {k: sum(c.kind == k for c in channels) for k in ("fusion", "fission", "conversion")}
     n_modes = len(mob.modes)
-    expected_fusions = n_modes * (n_modes + 1) // 2
+    r_on = RDS.association_ratio_of(condition)
+    expected_fusions = n_modes * (n_modes + 1) // 2 if r_on > 0.0 else 0
     expected_conversions = len(mob.switching) * len(sto.species)
     problems = []
     seen_pairs = set()
@@ -156,7 +176,7 @@ def d1_channels() -> dict:
         else:
             problems.append(f"{c.name}: unknown kind {c.kind}")
     # ReaDDy registration carries exactly these names.
-    stem = rds.build_system(theta)
+    stem = rds.build_system(theta, condition)
     registered = None
     try:
         registered = sorted(r.name for r in stem.reactions.registered_reactions) if hasattr(
@@ -164,10 +184,12 @@ def d1_channels() -> dict:
     except Exception:  # pragma: no cover -- API surface differs across ReaDDy builds
         registered = None
     out = dict(
+        condition=condition, association_ratio=r_on,
         n_channels=len(channels), n_unique_names=len(set(names)), kinds=kinds,
         expected=dict(fusion=expected_fusions, fission=n_modes, conversion=expected_conversions,
                       total=expected_fusions + n_modes + expected_conversions),
-        unordered_monomer_pairs_covered=len(seen_pairs), one_shared_association_rate=len(lamb_on) == 1,
+        unordered_monomer_pairs_covered=len(seen_pairs),
+        one_shared_association_rate=(len(lamb_on) == 1 if r_on > 0.0 else len(lamb_on) == 0),
         problems=problems, names=names,
         registered_matches=(registered is None or registered == sorted(names)),
         registered_available=registered is not None,
@@ -285,13 +307,15 @@ def d4_composition() -> dict:
     ref_ok = bool(np.isclose(rds.association_reference_rate(d_a, r_nm), smol, rtol=1e-12)
                   and np.isclose(rds.association_reference_rate(d_a, r_nm), 6 * d_a / r ** 2, rtol=1e-12))
     theta = prior_center_theta()
-    lamb = {c.rate for c in rds.reaction_channels(theta) if c.kind == "fusion"}
-    r_on = theta[key_index(RDS.stoichiometry.association_ratio_key)]
-    lamb_ok = bool(len(lamb) == 1 and np.isclose(
-        lamb.pop(), r_on * rds.association_reference_rate(theta[key_index(RDS.mobility.diffusivity_key)], r_nm)))
+    lamb_ref = rds.association_reference_rate(theta[key_index(RDS.mobility.diffusivity_key)], r_nm)
+    lamb_inlb = {c.rate for c in rds.reaction_channels(theta, "INLB") if c.kind == "fusion"}
+    lamb_ok = bool(len(lamb_inlb) == 1 and np.isclose(lamb_inlb.pop(), RDS.association_ratio_of("INLB") * lamb_ref)
+                   and RDS.association_ratio_of("INLB") == 1.0)
+    fab_fusions = [c for c in rds.reaction_channels(theta, "FAB") if c.kind == "fusion"]
+    fab_ok = len(fab_fusions) == 0          # structural: no channel, not a tiny rate
     return dict(n_cases=len(rows), problems=problems, association_reference_is_smoluchowski=ref_ok,
-                lambda_on_equals_ratio_times_reference=lamb_ok,
-                ok=not problems and ref_ok and lamb_ok)
+                lambda_on_equals_reference_under_INLB=lamb_ok, no_fusion_channel_under_FAB=fab_ok,
+                ok=not problems and ref_ok and lamb_ok and fab_ok)
 
 
 def d5_stationary() -> dict:
@@ -376,15 +400,49 @@ def d7_fission_placement() -> dict:
                 ok=outside and is_twice and passes_field)
 
 
+def d8_conditions() -> dict:
+    """The condition registry and the retirement of the association-ratio row."""
+    from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
+    from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_DISPLAY
+    tokens = RDS.condition_tokens
+    tokens_agree = (set(tokens) == set(lab.LABELING_CONDITIONS) == set(CONDITION_DISPLAY)
+                    and len(set(tokens)) == len(tokens))
+    fab_zero = RDS.association_ratio_of("FAB") == 0.0
+    inlb_one = RDS.association_ratio_of("INLB") == 1.0
+    retired = "relative_rate_dimerization"
+    row_absent = (retired not in par.PARAMETER_KEYS
+                  and retired not in [e["KEY"] for e in det.DETECTOR_NUISANCE]
+                  and not hasattr(RDS.stoichiometry, "association_ratio_key"))
+    epsilon_refused = False
+    try:
+        par.ConditionSetting("X", 1e-6)
+    except ValueError:
+        epsilon_refused = True
+    bare_refused = False
+    try:
+        _ = par.PARAMETERS.paths.rds_alias
+    except ValueError:
+        bare_refused = True
+    aliases = {c: par.PARAMETERS.paths.with_condition(c).rds_alias for c in tokens}
+    alias_ok = all(aliases[c] == f"{par.PARAMETERS.paths.sibling_alias}_{c}" for c in tokens)
+    det_alias_ok = all(det.detector_paths(par.PARAMETERS.paths).with_condition(c).rds_alias == aliases[c]
+                       for c in tokens)
+    return dict(tokens=list(tokens), tokens_agree_across_registries=tokens_agree, fab_ratio_is_zero=fab_zero,
+                inlb_ratio_is_one=inlb_one, association_row_absent=row_absent, disguised_zero_refused=epsilon_refused,
+                bare_rds_alias_refused=bare_refused, tier_aliases=aliases, detector_reads_same_tier=det_alias_ok,
+                ok=tokens_agree and fab_zero and inlb_one and row_absent and epsilon_refused and bare_refused
+                and alias_ok and det_alias_ok)
+
+
 # ----------------------------------------------------------------------------------------------
 # Run tier (tiny simulations; only with --run)
 # ----------------------------------------------------------------------------------------------
 
-def _run(theta: np.ndarray, seconds: float, workdir: str, name: str):
+def _run(theta: np.ndarray, condition: str, seconds: float, workdir: str, name: str):
     import readdy
     from srm_and_sbi_monomer_dimer_alp.parameterization import RunTiming
     timing = RunTiming(total_time_seconds=seconds, frames=PARAMETERS.simulation.timing)
-    stem = rds.build_system(theta)
+    stem = rds.build_system(theta, condition)
     smut = rds.build_simulation(stem, theta, seed=SEED)
     path = os.path.join(workdir, name)
     smut.output_file = path
@@ -395,9 +453,9 @@ def _run(theta: np.ndarray, seconds: float, workdir: str, name: str):
     return readdy.Trajectory(path), timing
 
 
-def r1_r5_reactive(workdir: str) -> tuple:
+def r1_r5_reactive(workdir: str, condition: str) -> tuple:
     theta = prior_center_theta()
-    tray, timing = _run(theta, 1.0, workdir, "structure_audit_center.h5")
+    tray, timing = _run(theta, condition, 1.0, workdir, f"structure_audit_center_{condition}.h5")
     poses = rds.extract_trajectory_poses(tray)
     lineage = rds.extract_subunit_lineage(tray)
     comp = rds.initial_composition_of(theta)
@@ -413,10 +471,10 @@ def r1_r5_reactive(workdir: str) -> tuple:
     xy = rds.collapse_species_axis(poses)[..., :2]
     present = np.isfinite(xy).all(axis=-1)
     outside = ((xy[..., 0] < 0) | (xy[..., 0] > box[0]) | (xy[..., 1] < 0) | (xy[..., 1] > box[1])) & present
-    r1 = dict(n_subunits=lineage.n_subunits, n_total_realized=comp.n_total,
+    r1 = dict(condition=condition, n_subunits=lineage.n_subunits, n_total_realized=comp.n_total,
               subunit_total_constant=bool(np.all(totals == totals[0])), first_total=int(totals[0]),
               ok=lineage.n_subunits == comp.n_total and bool(np.all(totals == comp.n_total)))
-    r5 = dict(frames=int(present.shape[0]), particles_outside_last_frame=int(outside[-1].sum()),
+    r5 = dict(condition=condition, frames=int(present.shape[0]), particles_outside_last_frame=int(outside[-1].sum()),
               fraction_outside_mean=float(outside.sum() / max(present.sum(), 1)),
               subunit_total_constant=r1["subunit_total_constant"],
               note="the open lateral boundary keeps particles simulated outside the imaged field; "
@@ -428,9 +486,10 @@ def r1_r5_reactive(workdir: str) -> tuple:
 def r2_stationarity(workdir: str) -> dict:
     theta = prior_center_theta()
     theta[key_index(RDS.stoichiometry.fraction_dimer_key)] = 0.0       # monomers only
-    theta[key_index(RDS.stoichiometry.association_ratio_key)] = 1e-9    # association off
     theta[key_index(RDS.stoichiometry.count_total_key)] = 600.0
-    tray, timing = _run(theta, 10.0, workdir, "structure_audit_chain.h5")
+    # MET-FAB has no association channel by construction, so with monomers only the run IS the
+    # isolated switching chain (no reaction can create a dimer; fissions have no educt).
+    tray, timing = _run(theta, "FAB", 10.0, workdir, "structure_audit_chain.h5")
     poses = rds.extract_trajectory_poses(tray)
     present = np.isfinite(poses).any(axis=2)                          # (frames, particles, types)
     per_type = present.sum(axis=1)                                     # (frames, types)
@@ -474,20 +533,22 @@ def r3_visible(lineage, tray, species_of_rank) -> dict:
     return out
 
 
-def r4_both_conditions(lineage, tray) -> dict:
+def r4_both_conditions(runs: dict) -> dict:
+    """``runs``: condition -> (lineage, tray) of THAT condition's own trajectory."""
     from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
     from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
     rng = np.random.default_rng(SEED + 4)
     imaging = np.array([10 ** ((e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2) for e in det.DETECTOR_IMAGING])
-    poses = rds.collapse_species_axis(rds.extract_trajectory_poses(tray))[:20]
     out = {}
     for condition in lab.LABELING_CONDITIONS:
+        lineage, tray = runs[condition]
+        poses = rds.collapse_species_axis(rds.extract_trajectory_poses(tray))[:20]
         _, law = lab.resolve_labeling_law(condition)
         dyes = lab.draw_dye_counts(law, lineage.n_subunits, rng)
         frames = render_dli_video(poses, lineage.host_index[:20], dyes, imaging, seed=SEED)
         out[condition] = dict(frames=int(frames.shape[2]), n_dyes=int(dyes.sum()), pixel_max=float(frames.max()),
+                              own_trajectory=True,
                               ok=bool(frames.shape[2] == 20 and frames.max() > 0 and np.isfinite(frames).all()))
-    out["same_trajectory"] = True
     out["ok"] = all(v["ok"] for k, v in out.items() if isinstance(v, dict))
     return out
 
@@ -500,12 +561,16 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
     L = ["# Model-structure audit: separated stoichiometry-mobility generator", "",
          f"Repository `srm-and-sbi-monomer-dimer-alp`; particle types {RDS.particle_type_names}; "
-         f"parameters {par.PARAMETER_KEYS}.", "",
+         f"parameters {par.PARAMETER_KEYS}; condition association ratios "
+         f"{ {c: RDS.association_ratio_of(c) for c in RDS.condition_tokens} }.", "",
          "## Deterministic tier", "", "| check | verdict | detail |", "|---|---|---|"]
     d = det_out
-    L.append(f"| D1 seventeen channels | {passed(d['d1']['ok'])} | {d['d1']['n_channels']} channels, "
-             f"{d['d1']['n_unique_names']} unique names, kinds {d['d1']['kinds']}, one shared association rate: "
-             f"{d['d1']['one_shared_association_rate']}, ReaDDy names match: {d['d1']['registered_matches']} |")
+    for c in RDS.condition_tokens:
+        dc = d["d1"][c]
+        L.append(f"| D1 channels under {c} (R_ON = {dc['association_ratio']:g}) | {passed(dc['ok'])} | {dc['n_channels']} channels "
+                 f"(expected {dc['expected']['total']}), {dc['n_unique_names']} unique names, kinds {dc['kinds']}, "
+                 f"association rate shared/absent as declared: {dc['one_shared_association_rate']}, "
+                 f"ReaDDy names match: {dc['registered_matches']} |")
     L.append(f"| D2 diffusion ordering | {passed(d['d2']['ok'])} | {d['d2']['n_draws']} prior draws incl. box corners; "
              f"immobile < slow <= fast within species: {d['d2']['within_species_ordering']}; dimer <= monomer within "
              f"mode: {d['d2']['dimer_not_faster_than_monomer']}; closed form: {d['d2']['closed_form_matches']} |")
@@ -514,7 +579,9 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
              f"blanket 10**u differs only on the linear row: {d['d3']['blanket_power_differs_only_on_linear_row']} |")
     L.append(f"| D4 initial composition and association reference | {passed(d['d4']['ok'])} | {d['d4']['n_cases']} "
              f"(N, x_B) cases incl. odd totals at x_B = 0 and 1; problems: {d['d4']['problems'] or 'none'}; "
-             f"lambda_ref = 6 D_A / r^2 = Smoluchowski/volume: {d['d4']['association_reference_is_smoluchowski']} |")
+             f"lambda_ref = 6 D_A / r^2 = Smoluchowski/volume: {d['d4']['association_reference_is_smoluchowski']}; "
+             f"INLB fusions at exactly lambda_ref: {d['d4']['lambda_on_equals_reference_under_INLB']}; "
+             f"no fusion channel under FAB: {d['d4']['no_fusion_channel_under_FAB']} |")
     L.append(f"| D5 stationary mode law | {passed(d['d5']['ok'])} | sums to one: {d['d5']['sums_to_one']}; "
              f"detailed balance on every link: {d['d5']['detailed_balance']} |")
     L.append(f"| D6 occupancy by molecular species | {passed(d['d6']['ok'])} | identical within species: "
@@ -525,14 +592,23 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
              f"{d['d7']['outside_fusion_radius']}; build_system passes the field: {d['d7']['build_system_uses_field']}; one-step rebinding "
              f"probability if placed AT the radius (sub-step {d['d7']['sub_step_s']*1e3:.0f} ms, prior center) by daughter mode: "
              f"{ {k: round(v, 3) for k, v in d['d7']['one_step_rebind_probability_if_placed_at_radius'].items()} } |")
-    L += ["", "Channels:", ""] + [f"- `{n}`" for n in d["d1"]["names"]] + [""]
+    L.append(f"| D8 condition registry | {passed(d['d8']['ok'])} | tokens {d['d8']['tokens']} agree across registries: "
+             f"{d['d8']['tokens_agree_across_registries']}; FAB ratio 0.0: {d['d8']['fab_ratio_is_zero']}; INLB ratio 1.0: "
+             f"{d['d8']['inlb_ratio_is_one']}; retired association-ratio row absent: {d['d8']['association_row_absent']}; "
+             f"disguised zero refused: {d['d8']['disguised_zero_refused']}; bare rds_alias refused: "
+             f"{d['d8']['bare_rds_alias_refused']}; tier aliases {d['d8']['tier_aliases']}; detector reads the same tier: "
+             f"{d['d8']['detector_reads_same_tier']} |")
+    for c in RDS.condition_tokens:
+        L += ["", f"Channels under {c}:", ""] + [f"- `{n}`" for n in d["d1"][c]["names"]] + [""]
     if run_out is None:
         L += ["## Run tier", "", "Not executed (`--run` not given). The run tier needs explicit approval.", ""]
     else:
         r = run_out
         L += ["## Run tier (tiny simulations)", "", "| check | verdict | detail |", "|---|---|---|"]
-        L.append(f"| R1 conservation | {passed(r['r1']['ok'])} | lineage {r['r1']['n_subunits']} subunits = realized "
-                 f"N_R {r['r1']['n_total_realized']}; per-frame subunit total constant: {r['r1']['subunit_total_constant']} |")
+        for c in RDS.condition_tokens:
+            rc = r["r1"][c]
+            L.append(f"| R1 conservation {c} | {passed(rc['ok'])} | lineage {rc['n_subunits']} subunits = realized "
+                     f"N_R {rc['n_total_realized']}; per-frame subunit total constant: {rc['subunit_total_constant']} |")
         L.append(f"| R2 stationary occupancies | {passed(r['r2']['ok'])} | law {np.round(r['r2']['stationary_law'], 3).tolist()} "
                  f"vs time average {np.round(r['r2']['time_averaged_second_half'], 3).tolist()}; max |dev| "
                  f"{r['r2']['max_abs_deviation']:.3f} (tol {TOL_STATIONARY}) |")
@@ -540,7 +616,7 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
             v = r["r3"][c]
             L.append(f"| R3 visible fractions {c} | {passed(v['ok'])} | monomer {v['visible_monomer_emp']:.3f} vs "
                      f"{v['visible_monomer']:.3f}; dimer {v['visible_dimer_emp']:.3f} vs {v['visible_dimer']:.3f} |")
-        L.append(f"| R4 both conditions from one trajectory | {passed(r['r4']['ok'])} | "
+        L.append(f"| R4 both conditions, each from its own trajectory | {passed(r['r4']['ok'])} | "
                  + "; ".join(f"{c}: {r['r4'][c]['frames']} frames, {r['r4'][c]['n_dyes']} dyes, max {r['r4'][c]['pixel_max']:.0f}"
                              for c in lab.LABELING_CONDITIONS) + " |")
         L.append(f"| R5 boundary | {passed(r['r5']['ok'])} | particles outside the field at the last frame: "
@@ -560,15 +636,22 @@ def main() -> None:
     args = parser.parse_args()
     det_out = dict(d1=d1_channels(), d2=d2_diffusion(), d3=d3_transforms(),
                    d4=d4_composition(), d5=d5_stationary(), d6=d6_occupancy(),
-                   d7=d7_fission_placement())
+                   d7=d7_fission_placement(), d8=d8_conditions())
     for k, v in det_out.items():
         print(f"  [{passed(v['ok'])}] {k}")
     run_out = None
     if args.run:
         with tempfile.TemporaryDirectory() as workdir:
-            r1, r5, lineage, tray, species_of_rank = r1_r5_reactive(workdir)
-            r3 = r3_visible(lineage, tray, species_of_rank)
-            r4 = r4_both_conditions(lineage, tray)
+            r1, runs = {}, {}
+            for condition in RDS.condition_tokens:      # one 1 s run per condition (its own network)
+                r1_c, r5_c, lineage_c, tray_c, species_c = r1_r5_reactive(workdir, condition)
+                r1[condition] = r1_c
+                runs[condition] = (lineage_c, tray_c)
+                if condition == "INLB":
+                    r5, lineage, tray, species_of_rank = r5_c, lineage_c, tray_c, species_c
+            r1["ok"] = all(v["ok"] for k, v in r1.items() if k != "ok")
+            r3 = r3_visible(lineage, tray, species_of_rank)      # the INLB lineage exercises every channel
+            r4 = r4_both_conditions(runs)
             r2 = r2_stationarity(workdir)
             run_out = dict(r1=r1, r2=r2, r3=r3, r4=r4, r5=r5)
             for k in ("r1", "r2", "r3", "r4", "r5"):

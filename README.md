@@ -6,18 +6,21 @@ This repository is a self-contained pipeline within the `srm-and-sbi` project: i
 
 ## Repository status
 
-**In development (0.1.2).** The codebase began as a copy of the tracked tree of
+**In development (0.1.3).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
 of the earlier three-species DIMER model with the stationary OU brightness photo-physics — and implements
 the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the
 measured degree of labeling as a static per-subunit dye draw carried through the reactions; emitters
 are dyes), the condition axis (MET-FAB and MET-INLB as two frozen configurations of one codebase,
-entering at the DLI stage and carried by a condition slot in every downstream name), a detector
+entering at the RDS stage through the condition's declared association setting and at the DLI
+stage through its labeling law, and carried by a condition slot in every product name), a detector
 calibration that marginalizes the full reactive biology prior, and the separated
-stoichiometry–mobility model (two molecular species × three mobility modes, seventeen generated
-reaction channels, twelve learnable parameters led by the conserved receptor total `N_R` and the
-initial dimer fraction `x_B`; all parameter ranges are development settings, not approved training
-priors). Pending: the per-condition `Nuisance_DLI` recalibration under the DOL-explicit model.
+stoichiometry–mobility model (two molecular species × three mobility modes; the reaction channels
+generated from the model blocks and the condition's association setting, seventeen under MET-INLB
+and eleven under MET-FAB; eleven learnable parameters, identical for both conditions, led by the
+conserved receptor total `N_R` and the initial dimer fraction `x_B`; all parameter ranges are
+development settings, not approved training priors). Pending: the per-condition `Nuisance_DLI`
+recalibration under the DOL-explicit model.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the Fab-labeled
 monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,
@@ -64,13 +67,13 @@ Should print your profile name. If it raises a `ValueError`, the message points 
 
 The pipeline is a five-stage chain. The first two stages form **generation** (**RDS → DLI**), and the remaining three consume its artifacts:
 
-- **RDS** — reaction-diffusion simulation (ReaDDy-based): produces the one shared trajectory tier from sampled parameters; both workflows and both conditions re-image it, so it has a single entry point.
+- **RDS** — reaction-diffusion simulation (ReaDDy-based): produces one trajectory tier per condition from sampled parameters, the condition's declared association setting selecting the reaction network; both workflows re-image a condition's tier, so it has a single entry point, run once per condition.
 - **DLI** — diffraction-limited imaging: renders each trajectory as a microscopy video (PSF + Poisson + EMCCD noise).
 - **Inference** — neural posterior estimation: trains the posterior on TRAIN and selects the network on TEST.
 - **Evaluation** — MAP-recovery validation: estimates parameters on the held-out EVAL set and scores recovery against the known ground truth.
 - **Experiment** — experimental-data application: applies the trained posterior to experimental microscopy videos (no ground truth).
 
-**Conditions.** The experimental condition (`FAB` = MET-FAB, `INLB` = MET-INLB) enters at the DLI stage, where the condition's measured labeling law re-images the condition-free trajectories, so every stage past RDS takes `--condition FAB|INLB` and every product from the videos onward carries the token in its name (`..._ALP_FAB_2S_50FPS_Video_Set_...`, `..._ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz`). MET-FAB and MET-INLB are two frozen configurations of one codebase, generated, trained, and validated separately; the condition-slot section of [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) lists which products carry the token.
+**Conditions.** The experimental condition (`FAB` = MET-FAB, `INLB` = MET-INLB) enters at the RDS stage, where the condition's declared association setting selects the reaction network (MET-FAB: no association channel, `R_ON = 0`, pre-existing dimers may dissociate; MET-INLB: the reference intensity, `R_ON = 1`) and produces the condition's own trajectory tier, and again at the DLI stage, where the condition's measured labeling law re-images that tier. Every stage therefore takes `--condition FAB|INLB`, and every product carries the token in its name (`..._ALP_FAB_2S_50FPS_Theta_Set_...`, `..._ALP_FAB_2S_50FPS_Video_Set_...`, `..._ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz`). MET-FAB and MET-INLB are two frozen configurations of one codebase, generated, trained, and validated separately; the condition-slot section of [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) lists how each product carries the token.
 
 Each stage is an entry-point under `Script_Bank/Prime/`, run with the active `MACHINE_PROFILE` set. The stages communicate through on-disk artifacts, so a run can **target a single stage** rather than the whole chain: invoking a stage script directly (with `--split {train,test,eval}`) re-runs just that stage against the artifacts already on disk — for example, re-rendering videos with `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (the DLI stage only) over trajectories that an RDS run already wrote to disk. Run any stage with `--help` for its full flag list.
 
@@ -78,12 +81,12 @@ For the exact mapping from each scientific concept and pipeline stage to the mod
 
 ### Generate a complete dataset
 
-One command runs the shared RDS tier and the requested DLI passes — one per workflow and condition, all over the same trajectories — for all three splits in the correct proportions. It refuses to regenerate a tier that already exists (a fresh draw would mislabel the videos rendered from the old one) and checks the biology's per-condition `Nuisance_DLI` artifacts before anything runs:
+One command runs the RDS stage once per condition and the requested DLI passes — one per workflow over each condition's tier — for all three splits in the correct proportions. It refuses to regenerate a condition's tier that already exists (a fresh draw would mislabel the videos rendered from the old one) and checks the biology's per-condition `Nuisance_DLI` artifacts before anything runs:
 
 ```bash
-# the shared tier once per split, then the detector videos of both conditions
+# one tier per condition per split, then the detector videos of both conditions
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --workflows detector --conditions FAB,INLB --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
-# the biology videos of both conditions over the same tier, once the detector chain has minted the per-condition Nuisance_DLI artifacts
+# the biology videos of both conditions over the same per-condition tiers, once the detector chain has minted the per-condition Nuisance_DLI artifacts
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --workflows biology --conditions FAB,INLB --reuse-rds --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py --workflows detector,biology --conditions FAB,INLB --core-tasks 100 --task-simulations 10 --total-time-seconds 10.0 --dry-run   # preview sizing + prerequisite checks only
 ```
@@ -180,7 +183,7 @@ then open the printed `http://localhost:8888/...` URL in your browser and run th
 
 - `Script_Bank/Analysis` — post-hoc diagnostics, run on completed outputs (not pipeline stages): paired `.py`/`.md` scripts (each script ships with a companion `.md` explaining its interpretation) serving both the biology and detector workflows, grouped by family — posterior calibration, estimator comparison, test-loss distribution, embedding-space distance, posterior-predictive video, sample-geometric-median, temporal dynamics, population composition, seeding validation, and `Nuisance_DLI` construction
 - `Script_Bank/HPC` — HPC-mode submission and orchestration scripts
-- `Script_Bank/Prime` — stage entry points: the shared-tier simulation (`Simulation_RDS`, one entry point for both workflows), the biology stages (`Simulation_DLI`, training with `Inference`, validation with `Evaluation` on synthetic EVAL data and `Experiment` on experimental microscopy), dataset generation (`Generate_Datasets`, fanning the DLI passes out over workflows and conditions) — plus the `DETECTOR_`-prefixed mirrors of the four stages past RDS for the Detector calibration workflow
+- `Script_Bank/Prime` — stage entry points: the trajectory-tier simulation (`Simulation_RDS`, one entry point for both workflows, run once per condition), the biology stages (`Simulation_DLI`, training with `Inference`, validation with `Evaluation` on synthetic EVAL data and `Experiment` on experimental microscopy), dataset generation (`Generate_Datasets`, fanning the DLI passes out over workflows and conditions) — plus the `DETECTOR_`-prefixed mirrors of the four stages past RDS for the Detector calibration workflow
 - `srm_and_sbi_monomer_dimer_alp/` — main Python package (modules, support functions)
 
 ## Documentation

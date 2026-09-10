@@ -22,8 +22,8 @@
 #
 # Example (biology, the detector's known-good scale):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Embedding_Space_Distance \
-#          --export=ALL,REPO=$PWD,WORKFLOW=biology,EVAL_TASKS=10 \
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Embedding_Space_Distance \
+#          --export=ALL,REPO=$PWD,CONDITION=FAB,WORKFLOW=biology,EVAL_TASKS=10 \
 #          Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Embedding_Space_Distance.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_Embedding_Space_Distance

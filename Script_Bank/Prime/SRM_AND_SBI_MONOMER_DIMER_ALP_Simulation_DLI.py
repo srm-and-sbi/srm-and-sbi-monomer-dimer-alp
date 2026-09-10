@@ -1,7 +1,7 @@
 """Entry-point script (biology workflow): render diffraction-limited videos from RDS trajectories.
 
-Reads each .h5 trajectory of the SHARED RDS tier (generated once by
-``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`` for both workflows), extracts the
+Reads each .h5 trajectory of the CONDITION's RDS tier (generated once per condition by
+``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition``, for both workflows), extracts the
 particle poses and replays the reaction records into the subunit lineage, draws the
 condition's static per-subunit dye counts, renders the synthetic fluorescence video via
 the shared dye-centric DLI renderer (PSF + Poisson + EMCCD noise), and saves the videos
@@ -13,9 +13,9 @@ sec. 9.3, Phase D): the six photophysics (``mu_r``, ``sigma_r``, ``mu_pc``, ``si
 ``Nuisance_DLI`` artifact (the calibrated-imaging pool minted by the detector workflow), and
 the five SCOPE camera parameters (``gamma``, ``kappa_o``, ``kappa_b``, ``kappa_s``,
 ``kappa_q``) are drawn per simulation from their a-priori box. Both are recorded, per task,
-as self-labeling ``Theta_Set`` variants beside the learnable twelve-parameter RDS ``Theta_Set``, then
+as self-labeling ``Theta_Set`` variants beside the learnable eleven-parameter RDS ``Theta_Set``, then
 concatenated into the eleven-key imaging vector the renderer consumes. The learnable
-``Theta_Set`` (the twelve reaction-diffusion labels the estimator inverts, stored as physical
+``Theta_Set`` (the eleven reaction-diffusion labels the estimator inverts, stored as physical
 values) is READ here only for
 the sim-0 diagnostics table and is never re-written by this stage. The ``Nuisance_DLI``
 artifact is a REQUIRED input built by a user-driven analysis step; if absent, the stage fails
@@ -40,7 +40,8 @@ Outputs (the ``{timing_label}`` token, e.g. ``2S_50FPS``, is rendered from
         -- the per-simulation labeling record (requested and realized initial dimer fraction,
            true and visible initial composition by molecular species)
     (``<project_alias>`` here carries the condition: ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_...``;
-    the trajectories and the twelve-parameter ``Theta_Set`` it reads carry the bare alias)
+    the trajectories and the eleven-parameter ``Theta_Set`` it reads carry the sibling alias plus
+    the condition token, ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_...``, no workflow qualifier)
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py \\

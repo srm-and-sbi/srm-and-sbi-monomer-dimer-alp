@@ -41,7 +41,7 @@ serves both, following the codebase's shared-engine pattern:
   detector one adds the `_DETECTOR` alias), matching the data files, so a run and its
   outputs are never ambiguous about which workflow they belong to.
 
-The biology shim scores the 10 reaction-diffusion parameters; the detector shim scores
+The biology shim scores the 11 reaction-diffusion parameters; the detector shim scores
 the 6 imaging parameters. Same engine, same report structure, correct namespace each.
 
 ## The four diagnostics
@@ -154,7 +154,7 @@ no parameter of either workflow and the two never appear in the same report.
 
 ### The digest, and why the profile shape is the point
 
-With `--n-strata=10`, four diagnostics and a six- or twelve-parameter target vector, the
+With `--n-strata=10`, four diagnostics and a six- or eleven-parameter target vector, the
 per-bin results number in the hundreds. Tabulating them one bin per row is the wrong
 presentation twice over: no reader holds hundreds of rows, and the thing the stratification
 exists to reveal — *how* the statistic varies across a parameter's range — is exactly what a
@@ -193,7 +193,7 @@ python SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py \
     --total-time-seconds 2.0 --eval-tasks 10 --dry-run
 ```
 
-**3 — Run.** Biology (10 reaction-diffusion parameters) or detector (6 imaging
+**3 — Run.** Biology (11 reaction-diffusion parameters) or detector (6 imaging
 parameters) — identical options; the entry-point name selects the workflow and namespace:
 
 ```bash

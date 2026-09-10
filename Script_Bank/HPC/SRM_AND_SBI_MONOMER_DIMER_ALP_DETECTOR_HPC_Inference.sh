@@ -41,11 +41,11 @@
 # 5S_50FPS) whenever you pass TOTAL_TIME=5.0.
 # Example (single node):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Inference --export=ALL,REPO=$PWD,TRAIN_TASKS=8,TEST_TASKS=2,EPOCHS=50 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Inference --export=ALL,REPO=$PWD,CONDITION=FAB,TRAIN_TASKS=8,TEST_TASKS=2,EPOCHS=50 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh
 # Example (two nodes, data-parallel across both -- add --nodes=N; --gres is per node):
-#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Inference --export=ALL,REPO=$PWD,TRAIN_TASKS=8,TEST_TASKS=2,EPOCHS=50 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh
+#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Inference --export=ALL,REPO=$PWD,CONDITION=FAB,TRAIN_TASKS=8,TEST_TASKS=2,EPOCHS=50 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh
 # Quick smoke on a shorter-lived test GPU partition (set <gpu-partition> to your cluster's; matches VALIDATION.md section 2.5):
-#   sbatch --partition=<gpu-partition> --gres=gpu:1 --time=01:00:00 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_2S_50FPS_Inference --export=ALL,REPO=$PWD,TRAIN_TASKS=16,TEST_TASKS=4,EPOCHS=5,BATCH=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh
+#   sbatch --partition=<gpu-partition> --gres=gpu:1 --time=01:00:00 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Inference --export=ALL,REPO=$PWD,CONDITION=FAB,TRAIN_TASKS=16,TEST_TASKS=4,EPOCHS=5,BATCH=8 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Inference   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=gpu

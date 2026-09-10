@@ -41,5 +41,6 @@ MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
 Outputs are data and land in the Data_Bank Posit tier, never in the codebase:
 `<data_bank_root>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_Labeling_Audit/` holds the report
 (`SRM_AND_SBI_MONOMER_DIMER_ALP_Labeling_Audit.md`) and `audit_summary.json` with every number
-the report quotes. The audit is condition-free by construction: it exercises both conditions'
-baseline laws on the same lineage.
+the report quotes. The audit is not tied to one condition: the lineage is simulated under the
+MET-INLB reaction network (association switched on, so every channel is exercised), and both
+conditions' baseline laws are drawn on that same lineage.

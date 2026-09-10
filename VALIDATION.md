@@ -138,9 +138,11 @@ workflows in this repository — the biology reaction-diffusion pipeline
 `DETECTOR_WORKFLOW.md`) — which share the stage sequence generate → infer →
 evaluate → (experiment). Every smoke passes `--total-time-seconds` (always
 required), runs seedless (`--seed None`), keeps the task and simulation counts
-small, and passes `--condition FAB` on every stage past RDS (the condition of the
-recordings the estimator is for; the INLB configuration is the same sequence with
-`--condition INLB`). The **Detector calibration smoke (section 2.5) is the reference
+small, and passes `--condition FAB` on every stage, the RDS stage included (the
+condition selects the trajectory tier — the association setting is per condition —
+and the labeling law, and is the condition of the recordings the estimator is for;
+the INLB configuration is the same sequence with `--condition INLB`, generating its
+own tier). The **Detector calibration smoke (section 2.5) is the reference
 configuration** the whole repository follows: one shared duration and the
 three-split sizing `--tasks 25 / 5 / 2 --task-simulations 10` (TRAIN / TEST / EVAL
 → 250 / 50 / 20 videos). The biology sections below replicate that same sizing with
@@ -177,25 +179,30 @@ header examples and replicate them verbatim — change only what the check
 requires (typically the duration and the task counts). Do not recompute node
 counts, core-per-node geometry, or GPU counts; the scripts already pin them.
 
-### 2.1 RDS (reaction-diffusion simulation — the shared trajectory tier)
+### 2.1 RDS (reaction-diffusion simulation — the condition's trajectory tier)
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
+# the MET-FAB tier (no association channel); the INLB arm generates its own tier with --condition INLB
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
 ```
 
 **Expected**: per split, one `.h5` trajectory per simulation under the RDS
 trajectory directory `READY_TRACT/`, namespaced by split — for TRAIN,
-`<data_bank>/Video/READY_TRACT/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_TASK_0_TRAIN/`
+`<data_bank>/Video/READY_TRACT/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_TASK_0_TRAIN/`
 (`..._TASK_0_SIM_0_TRAIN.h5`, …), and one `.zarr` theta set per task at
-`<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`
-(with the `_TEST` / `_EVAL` namespaces for the other two splits). This generates
+`<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`
+(the condition token right after the sibling alias, no workflow qualifier; with the
+`_TEST` / `_EVAL` namespaces for the other two splits). This generates
 250 / 50 / 20 (train / test / eval) trajectories. Add `--verbose` to print the
-sampled diffusion and reaction rates per simulation. This tier is shared: the detector
-smoke (§2.5) re-images these same trajectories, and a second condition is one more
-DLI pass over them — never a second RDS run, which would replace the tier and mislabel
-the videos already rendered from it.
+sampled diffusion and reaction rates per simulation. This is the MET-FAB tier, shared
+by both workflows: the detector smoke (§2.5) re-images these same trajectories under
+the FAB labeling law. The second condition has its own tier, because the association
+setting differs (MET-INLB associates at the reference intensity, MET-FAB has no
+association channel): generate it with the same three commands and `--condition INLB`.
+Never re-run the RDS stage over a condition's existing tier — it would replace the tier
+and mislabel the videos already rendered from it.
 
 ### 2.2 DLI (diffraction-limited imaging)
 
@@ -319,8 +326,8 @@ report for the FAB cells.
 ### 2.5 Detector calibration smoke test
 
 The Detector calibration workflow (imaging-parameter inference with the
-reaction-diffusion biology marginalized by re-imaging the shared trajectory tier; see
-`DETECTOR_WORKFLOW.md`) has its own smoke — the shared tier, then its four stages — run in
+reaction-diffusion biology marginalized by re-imaging the condition's trajectory tier; see
+`DETECTOR_WORKFLOW.md`) has its own smoke — the condition's tier, then its four stages — run in
 order on a single GPU with plain `python`.
 It is seedless and requires approval (both rules above). Use one duration for all
 five stages — 2.0 s here; the pipeline is duration-general, but the DLI stage
@@ -328,11 +335,12 @@ checks its frame count against the RDS trajectories, so a single run must share
 one duration. The inferred imaging vector is 6-dimensional — the five EMCCD camera parameters are marginalized as the SCOPE nuisance (drawn at the DLI stage, recorded separately as `Nuisance_SCOPE`), so the DLI stage writes a `Theta_Set` (6 learnable), a `Nuisance_SCOPE_Theta_Set` (5 camera), and a `Labeling_Set` (the per-simulation labeling record) per task, all under the condition-qualified alias (`..._DETECTOR_FAB_2S_50FPS_...`).
 
 ```bash
-# 1. The shared trajectory tier, per split (seedless; bare alias). The detector has no RDS stage of
-#    its own; if the biology smoke (section 2.1) already generated the tier at these sizes, skip this step.
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
+# 1. The MET-FAB trajectory tier, per split (seedless; the sibling alias plus the condition token). The
+#    detector has no RDS stage of its own; if the biology smoke (section 2.1) already generated this tier
+#    at these sizes, skip this step. The INLB arm generates its own tier with --condition INLB.
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --seed None
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB --total-time-seconds 2.0 --split eval  --tasks 2  --task-simulations 10 --seed None
 # 2. Render the detector videos over that tier, per split (seedless; 8-bit, matching what the estimator trains on)
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py --condition FAB --total-time-seconds 2.0 --split train --tasks 25 --task-simulations 10 --video-dtype-bits 8 --seed None
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Simulation_DLI.py --condition FAB --total-time-seconds 2.0 --split test  --tasks 5  --task-simulations 10 --video-dtype-bits 8 --seed None
@@ -448,9 +456,10 @@ counts (section 2.5). Submit through the dispatchers — `..._HPC_Submit.sh` and
 `..._HPC_Generate_Controller.sh` (biology and Detector alike) — which default to
 dry-run (`DRYRUN=1` prints the resolved `sbatch` line and submits nothing; set
 `DRYRUN=0` only after the printed command is verified); the fleet-sync utility
-follows the same convention. Every submission past an RDS-only simulation also takes
-`CONDITION=FAB|INLB`, which the dispatchers validate, forward, and place in the job
-name (`SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Inference`). The per-stage wrappers themselves are plain
+follows the same convention. Every submission, an RDS-only simulation included, also
+takes `CONDITION=FAB|INLB`, which the dispatchers validate, forward, and place in the
+job name (`SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Inference`;
+`SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN` for the FAB tier). The per-stage wrappers themselves are plain
 `sbatch` scripts with no dry-run mode, which is why submission goes through the
 dispatchers. The end-to-end dependency-chained sequence is in
 the HPC runbook (`Script_Bank/HPC/README.md`).
@@ -468,9 +477,10 @@ larger, so the simulations per task fall (and the task count rises to hold the
 video totals constant), and the recommended training batch size falls to fit GPU
 memory.
 
-The RDS trajectory tier is generated once (`SIM_STAGE=rds`, no condition, no qualifier)
-and shared: the detector re-images it per condition through its DLI-only Simulation
-wrapper, the biology re-images it per condition with a DLI-only submission
+The RDS trajectory tier is generated once per condition (`SIM_STAGE=rds`,
+`CONDITION=FAB|INLB`, no qualifier; the association setting is per condition) and
+shared by both workflows: the detector re-images the condition's tier through its
+DLI-only Simulation wrapper, the biology re-images it with a DLI-only submission
 (`SIM_STAGE=dli`, `CONDITION=...`) once that condition's `Nuisance_DLI` exists, and
 inference, evaluation, and experiment run per workflow and condition.
 
@@ -565,7 +575,7 @@ against any particular reference run. Equivalence rests on three pillars:
    ```bash
    python -c "
    import zarr
-   z = zarr.open('<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr', mode='r')
+   z = zarr.open('<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr', mode='r')
    print(z[:].tolist())
    "
    ```
@@ -620,8 +630,8 @@ DB=<data_bank>            # the data_bank_root from your machine profile
 for i in 1 2 3; do
     rm -rf "$DB/Theta" "$DB/Video"
     python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py \
-        --total-time-seconds 2.0 --tasks 1 --task-simulations 5 --seed 42
-    find "$DB/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr" \
+        --condition FAB --total-time-seconds 2.0 --tasks 1 --task-simulations 5 --seed 42
+    find "$DB/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr" \
         -type f | sort | xargs md5sum
 done
 ```
@@ -694,7 +704,7 @@ legs run on the biology DLI path (section 3.1); the duration arithmetic is also
 confirmed through the RDS leg and the derived-frame-count check below:
 
 ```bash
-python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py \
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition FAB \
     --total-time-seconds 10.0 --tasks 1 --task-simulations 5 --seed None --verbose
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py --condition FAB \
     --total-time-seconds 10.0 --tasks 1 --task-simulations 5 --seed None --verbose

@@ -5,6 +5,87 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.3 - 2026-09-10
+
+The per-condition association setting: the association ratio leaves the learnable table and
+becomes a declared constant of each experimental condition, and the RDS trajectory tier follows
+the condition.
+
+### Added
+
+- **`ConditionSetting` and `CONDITION_SETTINGS`** (`parameterization.py`): the per-condition
+  setting of the reaction-diffusion model, carried on `SimulationRDS.conditions` and read through
+  `SimulationRDS.association_ratio_of` (module-level `association_ratio_of(condition)`). MET-FAB
+  `R_ON = 0` -- no association channel at all, a structural setting (a ratio between 0 and 1e-3 is
+  refused at import as a disguised zero); pre-existing dimers may still dissociate, and the readout
+  is dimers PRESENT at the recording start, not dimers formed. MET-INLB `R_ON = 1` --
+  `lambda_on = lambda_ref = 6 D_A / r^2` for every association channel, a diffusion-scaled
+  reference convention, not a measured association rate or a verified diffusion-limited regime;
+  composition and unbinding estimates are conditional on it. Import-time validation keeps the
+  condition tokens equal to the labeling and experiment registries and requires association to be
+  switched on in at least one condition.
+- **`--condition` on the RDS stage** (`simulation_rds_runner.build_rds_parser`, the Prime
+  `..._Simulation_RDS.py`): required, `FAB` or `INLB`; it selects the reaction network and the
+  tier the run writes.
+- **Structure audit D8 and per-condition checks** (`..._Model_Structure_Audit.py`): D8 checks the
+  condition registry (the tokens, the exact 0.0 / 1.0 ratios, the retired row absent from both
+  tables, the disguised-zero refusal, `Paths.rds_alias` carrying the condition token and refusing
+  to resolve without one); D1 and D4 run per condition (17 channels under MET-INLB, 11 under
+  MET-FAB; every MET-INLB fusion at exactly `lambda_ref`, no fusion under MET-FAB); the run tier
+  simulates each condition from its own network and renders each condition from its own
+  trajectory. Deterministic tier PASSED 8/8 on 2026-09-10 (profile `mars_pc`); the run tier awaits
+  approval.
+
+### Changed
+
+- **Eleven learnable parameters, identical for both conditions**: `count_total`,
+  `fraction_dimer_initial`, `rate_dissociation`, `diffusivity_alp`, `relative_diffusivity_dimer`,
+  `relative_diffusivity_slow`, `relative_diffusivity_immobile`, `rate_fast_slow`,
+  `rate_slow_fast`, `rate_slow_immobile`, `rate_immobile_slow` -- one table, one estimator layout
+  (`event_shape == (11,)`). Unbinding stays inferred in both conditions. ALL ranges remain
+  DEVELOPMENT SETTINGS; the training priors -- including the MET-FAB unbinding lower bound needed
+  for dimers that persist over a 20 s recording -- are a later, dedicated decision.
+- **The reaction network is generated per condition**: `reaction_channels(theta, condition)` and
+  `build_system(theta, condition, ...)` -- 17 channels under MET-INLB (6 fusions, 3 fissions,
+  8 conversions), 11 under MET-FAB (3 fissions, 8 conversions). Fission placement (2 x the reaction
+  distance) and the 2 ms sub-step are unchanged.
+- **One RDS trajectory tier per condition, shared by both workflows.** `Paths.rds_alias` is the
+  sibling alias plus the condition token (`SRM_AND_SBI_MONOMER_DIMER_ALP_FAB`), never the workflow
+  qualifier, and refuses to resolve without a condition; the trajectories and the eleven-parameter
+  `Theta_Set` carry `SRM_AND_SBI_MONOMER_DIMER_ALP_<CONDITION>_<timing>_...`. Every stage takes
+  `--condition`. Held-out recordings are matched across conditions by parameter draw, not by
+  trajectory.
+- **`Generate_Datasets.py` runs the RDS stage once per condition per split**, then the DLI passes
+  per workflow over each condition's tier; the refusal to regenerate an existing tier and the
+  `--reuse-rds` presence check are per condition.
+- **HPC: `CONDITION` is required for RDS-only jobs too** (`SIM_STAGE=rds`), and the job name always
+  carries the condition slot: `SRM_AND_SBI_MONOMER_DIMER_ALP_<CONDITION>_<timing>_Simulation_<SPLIT>`.
+- **The detector's RDS nuisance** (`detector_parameterization.DETECTOR_NUISANCE`) has eleven rows
+  (nuisance-from-object, supplied by the condition's tier); the association ratio is a constant of
+  the generator, not a row.
+- **The sample-geometric-median plane** (`sample_geometric_median_runner`) shows the initial dimer
+  fraction `x_B` against the dissociation rate `kappa_OFF`.
+- **The horizon audit** reports coverage and the exploratory table without the former
+  association-ratio exclusions, and its generate phase simulates the cohort under the run's
+  condition.
+- **The structure audit's stationarity check (R2)** runs the isolated switching chain under the
+  MET-FAB configuration (no association channel by construction) instead of at a tiny ratio.
+- **Documentation**: `PROJECT_CONTEXT.md` sec. 2 states the per-condition association setting and
+  the eleven-row table; sec. 3-5 the per-condition tier and the naming grammar
+  (`..._ALP_FAB_2S_50FPS_TASK_0_SIM_0_TRAIN.h5`, `..._ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`);
+  `DETECTOR_WORKFLOW.md` sec. 4-7 and 9 follow; `CLAUDE.md`, `README.md`, `VALIDATION.md` (every
+  RDS smoke command takes `--condition`), and the analysis companion notes follow, with a dated
+  note in the companions whose earlier results or figures involved the association ratio.
+
+### Removed
+
+- The learnable row `relative_rate_dimerization` (`R_ON`) from the biology table, the
+  corresponding nuisance row from the detector table, and
+  `StoichiometryBlock.association_ratio_key`.
+- Resolution of the 0.1.2 trajectory tiers under the bare sibling alias: `rds_alias` requires a
+  condition, so those tiers are no longer resolvable by name, and a fresh per-condition tier must
+  be generated before any DLI run.
+
 ## 0.1.2 - 2026-09-09
 
 The separated stoichiometry-mobility model, its twelve learnable parameters, and the one

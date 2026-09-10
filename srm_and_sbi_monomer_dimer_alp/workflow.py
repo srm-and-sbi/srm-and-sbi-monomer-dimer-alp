@@ -3,9 +3,10 @@
 The pipeline runs **two mirrored workflows** over the same five stages (RDS, DLI,
 Inference, Evaluation, Experiment):
 
-  - **biology**  -- infers the reaction-diffusion parameters (three species
-    counts + three diffusivities + four reaction rates) and marginalizes the
-    imaging block. This is the unqualified entry point / ``project_alias``.
+  - **biology**  -- infers the eleven reaction-diffusion parameters (receptor
+    total, initial dimer fraction, unbinding rate, monomer diffusivity, three
+    diffusion ratios, four switching rates) and marginalizes the imaging block.
+    This is the unqualified entry point / ``project_alias``.
   - **detector** -- infers the six imaging parameters and marginalizes the
     reaction-diffusion domain and the camera (SCOPE) block. Its data namespaces
     separately under the ``_DETECTOR`` runtime-prefix qualifier.
