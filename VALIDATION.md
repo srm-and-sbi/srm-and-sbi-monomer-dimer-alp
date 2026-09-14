@@ -156,7 +156,9 @@ detector workflow calibrates the imaging model; then **build the `Nuisance_DLI` 
 from; then the **biology smoke (§2.1–2.4b)** — it consumes that artifact at its DLI
 stage. The section numbering is a reading convenience; this is the required execution
 order. (The detector DLI itself needs no artifact: it draws imaging from the prior box,
-because imaging is the detector's inference target.)
+because imaging is the detector's inference target.) Both workflows re-image the same per-condition RDS tier;
+what is drawn once and what each workflow adds is summarized in `PROJECT_CONTEXT.md` §4,
+*One draw of the biology per condition, two imagings per draw*.
 
 Two rules apply to every smoke and to every production run:
 

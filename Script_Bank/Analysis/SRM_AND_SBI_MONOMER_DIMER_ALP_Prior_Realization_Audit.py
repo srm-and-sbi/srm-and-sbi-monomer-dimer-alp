@@ -18,9 +18,10 @@ Checks:
                        (expected 25% each). A flagged row is evidence to investigate (sampler, conversion,
                        or an undersized tier), not a verdict.
     P2 composition     From the stored (N_R, r): every draw realizes at least one dimer; the realized
-                       receptor fraction follows x_B = 2r/(1+2r) up to rounding; the realized complex
-                       fraction f_B is symmetric about 1/2 (its median within tolerance) -- the prior
-                       is even-handed between mostly-monomer and mostly-dimer populations.
+                       receptor fraction follows x_B = 2r/(1+2r) up to rounding; the median of the
+                       requested log10 r lies within three standard errors of the box center (the
+                       tolerance scales as 1/sqrt(n)), so the realized prior is even-handed between
+                       mostly-monomer and mostly-dimer populations; the realized f_B median is reported.
     P3 trajectories    (--trajectories K) K trajectory files, evenly spaced over the tier: the frame-0
                        particle counts per species equal the composition realized from the stored
                        theta; the per-frame subunit total is constant (conservation); the pooled
@@ -85,7 +86,8 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERIZATION, PAR
 RDS = PARAMETERS.simulation.rds
 KEYS = list(par.PARAMETER_KEYS)
 SEED = 20260914
-TOL_MEDIAN_FB = 0.05          # P2: |median f_B - 1/2|
+P2_SIGMAS = 3.0               # P2: |median log10 r - box center| <= P2_SIGMAS standard errors of a uniform's sample median
+P2_MIN_DRAWS = 20             # P2: below this the symmetry verdict is not formed (reported only)
 TOL_VISIBLE_FLOOR = 0.02      # P4: absolute tolerance floor on pooled fractions
 TOL_P6_FLOOR = 0.002          # P6: absolute tolerance floor on Monte Carlo fractions (n = 3e5 subunits)
 TOL_RATIO = 0.05              # P6: |realized FAB/INLB visibility ratio - declared| (products and code path)
@@ -147,10 +149,21 @@ def p2_composition(theta_physical: np.ndarray) -> dict:
     rounding = np.abs(x_real - x_req) * n_tot / 2.0          # in units of dimers: must be <= 0.5 + cap effects
     at_least_one = bool((n_dimers >= 1).all())
     median_fb = float(np.median(f_b))
-    symmetric = abs(median_fb - 0.5) <= TOL_MEDIAN_FB if f_b.size >= 200 else None
+    # Symmetry of the REQUESTED composition prior: the sample median of the box-uniform log10 ratio against
+    # the box center, within P2_SIGMAS standard errors of the sample median of a UNIFORM of width w,
+    # SE = 1 / (2 f(m) sqrt(n)) = w / (2 sqrt(n)) (the normal-median formula 1.2533 sigma/sqrt(n) would be
+    # 28% too tight here). The tolerance scales with n; a fixed tolerance in f_B would fail a correct sampler
+    # at small n, since f_B changes by ~0.58 per dex near an even split.
+    i_r = KEYS.index(RDS.stoichiometry.composition_ratio_key)
+    lo, hi = par.theta_lower_bound()[i_r], par.theta_upper_bound()[i_r]
+    u = np.log10(np.asarray(theta_physical, dtype=float)[:, i_r])
+    median_u, center = float(np.median(u)), 0.5 * (lo + hi)
+    tol_u = float(P2_SIGMAS * (hi - lo) / (2.0 * np.sqrt(max(u.size, 1))))
+    symmetric = abs(median_u - center) <= tol_u if u.size >= P2_MIN_DRAWS else None
     return dict(n_draws=int(f_b.size), every_draw_has_a_dimer=at_least_one, min_dimers=int(n_dimers.min()),
                 complex_fraction=quantiles(f_b), receptor_fraction=quantiles(x_real),
-                median_complex_fraction=median_fb, symmetric_about_half=symmetric,
+                median_complex_fraction=median_fb, median_log10_ratio=median_u, box_center_log10_ratio=center,
+                tolerance_log10_ratio=tol_u, symmetric_about_center=symmetric,
                 max_rounding_deviation_dimers=float(rounding.max()),
                 ok=at_least_one and (symmetric is not False) and float(rounding.max()) <= 0.5 + 1e-9)
 
@@ -311,14 +324,17 @@ def declared_visibility_ratio() -> tuple:
 def a9_spot_ratio() -> dict:
     """Deposited Fab/InlB spot-count ratios (descriptive companion to the visibility ratio)."""
     if not os.path.exists(A9_CSV):
-        return dict(source="A9 fallback (2026-09-14)", first2s_median=143 / 348, whole_recording_mean=0.48)
+        return dict(source="A9 fallback (2026-09-14)", first2s_median=143 / 348, whole_recording_mean=0.48,
+                    per_area_first2s_means=0.43, per_area_first2s_medians=0.38)
     import pandas as pd
     d = pd.read_csv(A9_CSV)
     fab, inlb = d[d["cond"] == "Fab"], d[d["cond"] == "InlB"]
     return dict(source=A9_CSV, first2s_median=float(fab["spots_first2s"].median() / inlb["spots_first2s"].median()),
                 whole_recording_mean=float(fab["spots_mean"].mean() / inlb["spots_mean"].mean()),
-                per_area_first2s=float((fab["spots_first2s"] / fab["area_um2"]).mean()
-                                       / (inlb["spots_first2s"] / inlb["area_um2"]).mean()))
+                per_area_first2s_means=float((fab["spots_first2s"] / fab["area_um2"]).mean()
+                                             / (inlb["spots_first2s"] / inlb["area_um2"]).mean()),
+                per_area_first2s_medians=float((fab["spots_first2s"] / fab["area_um2"]).median()
+                                               / (inlb["spots_first2s"] / inlb["area_um2"]).median()))
 
 
 def visibility_ratio_check(per_condition: dict, key: str) -> dict:
@@ -507,7 +523,9 @@ def write_report(out_dir, header: dict, res: dict) -> str:
     p2 = res.get("p2")
     if p2 is not None:
         L.append(f"| P2 composition | {passed(p2['ok'])} | every draw has a dimer: {p2['every_draw_has_a_dimer']} (min {p2['min_dimers']}); "
-                 f"realized f_B median {p2['median_complex_fraction']:.3f} (symmetric about 1/2: {p2['symmetric_about_half']}); "
+                 f"requested log10 r median {p2['median_log10_ratio']:.3f} vs box center {p2['box_center_log10_ratio']:.1f} "
+                 f"(tol {p2['tolerance_log10_ratio']:.3f} = {P2_SIGMAS:g} SE at n = {p2['n_draws']}; symmetric: {p2['symmetric_about_center']}); "
+                 f"realized f_B median {p2['median_complex_fraction']:.3f}; "
                  f"f_B quartiles {p2['complex_fraction']['q25']:.3f} / {p2['complex_fraction']['q75']:.3f}; "
                  f"max rounding deviation {p2['max_rounding_deviation_dimers']:.2f} dimers |")
     if res.get("p3") is not None:

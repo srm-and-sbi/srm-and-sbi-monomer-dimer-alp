@@ -551,6 +551,63 @@ train/test set sizes, epochs, and test loss. See the HPC operations runbook
 
 ## §4. Data and Computational Flow
 
+### One draw of the biology per condition, two imagings per draw
+
+The pipeline generates data in two stages, and the two workflows differ only in
+the second.
+
+**Stage 1, RDS: the receptors.** One simulation draws the eleven
+reaction-diffusion parameters from the prior table and simulates the receptors:
+monomers and dimers diffusing in three mobility modes, associating,
+dissociating, and switching mode. Its output is a trajectory, and the set of
+trajectories of one condition, split, and duration is that condition's **tier**.
+The tier is generated once per condition because the association intensity is a
+declared per-condition constant of the generator, off under MET-FAB and at the
+reference value under MET-INLB, so the two conditions have different reaction
+networks (eleven and seventeen channels) and different trajectories. Nothing
+else about the tier is condition-specific: both conditions share the one prior
+table, and neither workflow asks for a different draw.
+
+**Stage 2, DLI: the imaging.** Each workflow re-images the same tier in its own
+way.
+
+| | biology workflow | detector workflow |
+|---|---|---|
+| what it learns | the eleven reaction-diffusion parameters | the six imaging parameters |
+| its training label | the tier's `Theta_Set`, read as is | its own imaging draw from the prior box |
+| where its imaging comes from | the condition's `Nuisance_DLI` bridge, built from the detector's calibration | the imaging prior box |
+| what it marginalizes | the imaging, through the bridge | the biology, through the tier's `Theta_Set` |
+| condition-specific inputs | dye-count law, occupancy, calibrated imaging | dye-count law, occupancy |
+
+The detector marginalizes the biology prior by construction: the tier is a
+sample from that prior, already simulated, so re-imaging it needs no second
+reaction-diffusion draw and no second copy of the biology ranges. Within a
+condition, the two workflows' videos therefore sit on the same trajectories and
+the same parameter draws. That is intended: the detector never uses the biology
+parameters as a target, and the biology's imaging comes from the bridge rather
+than from the detector's training videos, so the two estimators learn different
+labels over the same dynamics.
+
+**Naming follows the two stages.** The tier and its `Theta_Set` carry the sibling
+alias and the condition token with no workflow qualifier (`Paths.rds_alias`,
+e.g. `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB`), because both workflows read them.
+Every DLI product carries the alias of the workflow that wrote it. Worked
+example, task 3, simulation 7, MET-FAB, TRAIN, 2 s:
+
+- RDS writes `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_TASK_3_SIM_7_TRAIN.h5`
+  and row 7 of `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_3_TRAIN.zarr`.
+- Detector DLI writes video 7 of
+  `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Video_Set_TASK_3_TRAIN.zarr`
+  and row 7 of its `Theta_Set` (the imaging labels), `Nuisance_SCOPE_Theta_Set`,
+  and `Labeling_Set`.
+- Biology DLI writes video 7 of
+  `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Video_Set_TASK_3_TRAIN.zarr` and
+  row 7 of its `Nuisance_DLI_Theta_Set`, `Nuisance_SCOPE_Theta_Set`, and
+  `Labeling_Set`; its label is row 7 of the RDS `Theta_Set` above.
+
+One trajectory, two videos, and each video's label is in the `Theta_Set` that
+carries the same alias as the video.
+
 ### RDS Simulation (this repository, step 1)
 
 **Script:** `Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`
@@ -574,24 +631,14 @@ train/test set sizes, epochs, and test loss. See the HPC operations runbook
    convention), and the sampled theta set to a compressed `.zarr` array.
 
 **One tier per condition, shared by both workflows.** This is the only RDS entry
-point, run once per condition: the association ratio of the model is a declared
-per-condition constant (§2), so the two conditions' trajectories differ and the
-condition enters here. Within a condition the trajectories and the
-eleven-parameter `Theta_Set` (physical values, with its schema in the store's
-attributes; *The one parameter-conversion rule* above) carry the sibling alias plus the
-condition token (`Paths.rds_alias`, e.g. `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB`) and
-no workflow qualifier, because both workflows re-image them at the DLI stage: the
-biology reads the `Theta_Set` as its learnable label, the detector reads the same
-file as the record of the reaction-diffusion nuisance it marginalizes, and the
-condition's labeling law thins the receptors of the condition's own tier. The
-detector therefore has no RDS stage, no separate nuisance draw, and no copy of the
-biology ranges to keep equal: it marginalizes the biology prior by construction.
-Because a tier serves both workflows, regenerating it silently mislabels every
-video already rendered from it, so the dataset orchestrator refuses to run the
-RDS stage over a condition's existing tier unless told to overwrite, and
-re-images an existing tier with `--reuse-rds`; both checks are per condition.
-Held-out recordings are matched across conditions by parameter draw, not by
-trajectory.
+point, run once per condition; why the tier is per condition and not per
+workflow, and how each workflow reads it, is stated at the top of this section
+(*One draw of the biology per condition, two imagings per draw*). Because a tier
+serves both workflows, regenerating it silently mislabels every video already
+rendered from it, so the dataset orchestrator refuses to run the RDS stage over
+a condition's existing tier unless told to overwrite, and re-images an existing
+tier with `--reuse-rds`; both checks are per condition. Held-out recordings are
+matched across conditions by parameter draw, not by trajectory.
 
 **Example quantities:** Particle count per particle type and per molecular
 species over time, mode occupancies, mean inter-particle distances,

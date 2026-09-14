@@ -64,7 +64,7 @@ Deterministic tier (always):
                        (`ThetaSetSchemaError`), and `theta_set_status` names the reason.
 
 Run tier (``--run``; tiny; after approval only):
-    R1 conservation    One 1 s run per condition at the prior center (MET-INLB: the full
+    R1 conservation    One 2 s run per condition at the prior center (the reference recording length) (MET-INLB: the full
                        reactive network; MET-FAB: dissociation and switching only): the lineage
                        replays with every subunit covered once per frame (fail-loud extractor)
                        and its subunit count equals the realized N_R.
@@ -528,6 +528,9 @@ def d9_ranges() -> dict:
 # Run tier (tiny simulations; only with --run)
 # ----------------------------------------------------------------------------------------------
 
+R1_SECONDS = 2.0       # the reference recording length: the run tier is exercised at the main case
+
+
 def _run(theta: np.ndarray, condition: str, seconds: float, workdir: str, name: str):
     import readdy
     from srm_and_sbi_monomer_dimer_alp.parameterization import RunTiming
@@ -545,7 +548,7 @@ def _run(theta: np.ndarray, condition: str, seconds: float, workdir: str, name: 
 
 def r1_r5_reactive(workdir: str, condition: str) -> tuple:
     theta = prior_center_theta()
-    tray, timing = _run(theta, condition, 1.0, workdir, f"structure_audit_center_{condition}.h5")
+    tray, timing = _run(theta, condition, R1_SECONDS, workdir, f"structure_audit_center_{condition}.h5")
     poses = rds.extract_trajectory_poses(tray)
     lineage = rds.extract_subunit_lineage(tray)
     comp = rds.initial_composition_of(theta)
@@ -827,7 +830,7 @@ def main() -> None:
     if args.run:
         with tempfile.TemporaryDirectory() as workdir:
             r1, runs = {}, {}
-            for condition in RDS.condition_tokens:      # one 1 s run per condition (its own network)
+            for condition in RDS.condition_tokens:      # one 2 s run per condition (its own network)
                 r1_c, r5_c, lineage_c, tray_c, species_c = r1_r5_reactive(workdir, condition)
                 r1[condition] = r1_c
                 runs[condition] = (lineage_c, tray_c)
