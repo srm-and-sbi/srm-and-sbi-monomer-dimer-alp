@@ -8,6 +8,8 @@ distribution, an interpretable reference for what the numbers mean, and which re
 parameter space the estimator finds hard. This note explains how to run it and how to read its
 outputs, so the analysis can be used and understood without reverse-engineering the code.
 
+> **Note (2026-09-14).** Release 0.1.4 gave every learnable row of the biology table its decided prior range and replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r`, so the decided biology table has no linear row (the per-row rule below stays general). Because `NLL_prior = ln V` is recomputed from each artifact's own prior box, baselines and information gains of estimators trained under the earlier ranges are not comparable with those trained under the decided ranges. Earlier results stand as recorded.
+
 **One tool, both workflows.** Both workflows write a Test-Loss-Distribution artifact whose
 manifest is self-describing, so the analysis is workflow-agnostic and built once over the
 shared-engine pattern: a workflow-agnostic kernel (`test_loss_analysis.py`), a shared runner

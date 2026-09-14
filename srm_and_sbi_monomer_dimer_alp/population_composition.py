@@ -7,8 +7,9 @@ to its parameter table. Pure numpy plus a lazy scipy import for the three rank t
 and unit-tests without a machine profile.
 
 WHAT THE ANALYSIS ASKS. The estimator infers the stoichiometry of the model directly: the conserved
-receptor-subunit total N_R = n_A + 2 n_B (a count) and the initial fraction of receptors belonging to
-dimers, x_B = 2 n_B / N_R (linear on [0, 1]), independently in every window of every recording. The
+receptor-subunit total N_R = n_A + 2 n_B (a count) and the initial composition, parameterized as the
+log10 dimer-to-monomer ratio r = n_B / n_A and read here as the receptor fraction in dimers
+x_B = 2r / (1 + 2r), independently in every window of every recording. The
 absolute total is the *worst*-identified coordinate the model has, and the reason is
 information-theoretic rather than a defect: counting few emitters in a diffraction-limited scene is a
 square-root-of-n problem, and the total trades off against the fraction because the same number of
@@ -51,10 +52,11 @@ identically, so the monomer and dimer-complex rows of a recovery table are the s
 twice -- an internal consistency check, not two independent results.
 
 SPACES. The estimator works in its own coordinates ("estimator space": log10 of the receptor total,
-the fraction itself). Every function that receives estimator-space draws takes a ``to_physical``
-callable mapping the ``(..., 2)`` stoichiometry coordinates to physical ``(N_R, x_B)``; the runner
-binds ``parameterization.to_physical`` to the two table rows, so the per-row conversion rule lives in
-one place and this kernel never exponentiates by hand. Species COUNTS extracted from a trajectory
+log10 of the dimer-to-monomer ratio). Every function that receives estimator-space draws takes a
+``to_physical`` callable mapping the ``(..., 2)`` stoichiometry coordinates to physical ``(N_R, x_B)``;
+the runner binds ``parameterization.to_physical`` to the two table rows and composes the ratio row
+with ``ratio_to_receptor_fraction``, so the per-row conversion rule lives in one place and this
+kernel never exponentiates by hand. Species COUNTS extracted from a trajectory
 (``(..., 2)`` = ``[n_A, n_B]``) enter through :func:`composition_from_counts` instead.
 
 WHAT THIS KERNEL DOES NOT CLAIM. The composition is conditional on the monomer-dimer model: it is a
@@ -132,7 +134,8 @@ def composition(stoichiometry_physical):
     """The five derived quantities from the PHYSICAL stoichiometry pair ``(N_R, x_B)``.
 
     ``stoichiometry_physical`` is ``(..., 2)`` holding the receptor total N_R (a count, never its
-    log10) and the initial dimer fraction x_B (on [0, 1]) -- any leading shape is preserved, so the
+    log10) and the initial receptor fraction in dimers x_B on [0, 1] (derived from the ratio row by
+    the caller's binding) -- any leading shape is preserved, so the
     same call serves a single MAP vector, a window's draws, or the whole held-out set. Returns
     ``(..., 5)`` ordered as :data:`COMPOSITION`.
 

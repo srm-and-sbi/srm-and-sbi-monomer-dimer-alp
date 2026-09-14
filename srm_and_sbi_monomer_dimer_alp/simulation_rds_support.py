@@ -42,7 +42,7 @@ Functions:
         Wraps the system in a Simulation, registers observables (per-frame
         particle positions, per-step reaction counts, per-step reaction
         records), and places the initial particles uniformly in the box: the integer
-        composition from (N_R, x_B) and each particle's mode from the stationary law of
+        composition from (N_R, r) and each particle's mode from the stationary law of
         the switching chain. Returns the runnable Simulation.
 
     extract_trajectory_poses(tray, ...)
@@ -290,7 +290,7 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
     Args:
         stem: ReactionDiffusionSystem from ``build_system``.
         theta: The same physical parameter vector passed to ``build_system``; supplies the
-            receptor total N_R, the requested initial dimer fraction x_B, and the switching
+            receptor total N_R, the requested initial dimer-to-monomer ratio r, and the switching
             rates whose stationary law draws each particle's initial mode.
         seed: RNG seed for the initial composition's mode draw and the placement. None ->
             non-deterministic. Note: this seed only controls the NumPy RNG; ReaDDy's own
@@ -306,15 +306,15 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
             - 'reaction_counts' observable at every step (stride=1),
             - 'reactions' observable at every step (stride=1): one record per event with
               its educt and product particle ids, read back by ``extract_subunit_lineage``,
-            - the initial particles: ``realize_initial_composition(N_R, x_B)`` gives the
-              integer monomer and dimer counts (requested vs realized fraction recorded by
+            - the initial particles: ``realize_initial_composition(N_R, r)`` gives the
+              integer monomer and dimer counts (requested ratio and realized fraction recorded by
               the DLI stage's Labeling_Set), each particle's mode is drawn from
               ``stationary_mode_law``, positions are uniform in the box.
     """
     rds = PARAMETERS.simulation.rds
     values = theta_by_key(theta)
     composition = realize_initial_composition(
-        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.fraction_dimer_key])
+        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key])
     mode_law = stationary_mode_law(theta)
 
     smut = stem.simulation(kernel="CPU")
@@ -362,7 +362,7 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
     if verbose:
         print(f"  Initial composition: N_R={composition.n_total} subunits -> "
               f"{composition.n_monomers} monomers + {composition.n_dimers} dimers "
-              f"(x_B requested {composition.fraction_requested:.4f}, realized "
+              f"(r requested {composition.ratio_requested:.4g} -> x_B {composition.fraction_requested:.4f}, realized "
               f"{composition.fraction_realized:.4f})")
         print("  Stationary mode law (f, s, i): " + ", ".join(f"{p:.4f}" for p in mode_law))
         print(f"  Initial particle counts per type: {initial_counts}")
@@ -375,7 +375,7 @@ def initial_composition_of(theta: np.ndarray):
     rds = PARAMETERS.simulation.rds
     values = theta_by_key(theta)
     return realize_initial_composition(
-        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.fraction_dimer_key])
+        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key])
 
 
 # =============================================================================

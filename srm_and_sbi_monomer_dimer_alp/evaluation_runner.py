@@ -44,7 +44,7 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
 )
 from srm_and_sbi_monomer_dimer_alp.experiment_support import shard_by_rank
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
-from srm_and_sbi_monomer_dimer_alp.io import load_data
+from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow, to_physical
 from srm_and_sbi_monomer_dimer_alp.utils import console_log_context  # noqa: F401  (entry points import via this module's siblings)
 from srm_and_sbi_monomer_dimer_alp.visualization_inference import figure_recovery_combined
@@ -356,10 +356,11 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         ]
         missing = 0
         for role, path in inputs:
-            ok = Path(path).exists()
-            if not ok:
+            status = (theta_set_status(path, spec.draw_spec, condition=args.condition) if "theta" in role
+                      else ("OK" if Path(path).exists() else "MISSING"))
+            if status != "OK":
                 missing += 1
-            print(f"  reads {role}: {path}  [{'OK' if ok else 'MISSING'}]")
+            print(f"  reads {role}: {path}  [{status}]")
         if missing:
             print(f"\n[DRY RUN] configuration validated; {missing} input(s) MISSING.")
         else:
@@ -407,8 +408,9 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # costs only a few extra metadata reads.
     per_task_sims = {}
     for task in range(args.eval_tasks):
-        theta_set = load_data(
-            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"))
+        theta_set = load_theta_set(
+            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"),
+            spec.draw_spec, condition=args.condition)
         n_sims = theta_set.shape[0]
         per_task_sims[task] = min(n_sims, args.max_sims) if args.max_sims > 0 else n_sims
     all_videos = [(t, s) for t in range(args.eval_tasks) for s in range(per_task_sims[t])]
@@ -464,8 +466,9 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         for task, task_videos in groupby(my_videos, key=lambda pair: pair[0]):
             video_set = load_data(
                 paths.video_set_path(task, data_bank_root, timing_label, compress, "EVAL"))
-            theta_set = load_data(
-                paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"))
+            theta_set = load_theta_set(
+                paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"),
+                spec.draw_spec, condition=args.condition)
             task_start = time.time()
             task_count = 0
             for _, sim in task_videos:

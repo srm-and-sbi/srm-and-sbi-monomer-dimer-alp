@@ -28,7 +28,8 @@ slow s), excluding the immobile mode i:
     D_mix_mobile = sum_X sum_{m in {f,s}} n_X pi_m D[X, m] / sum_X sum_{m in {f,s}} n_X pi_m   [um^2/s]
 
 with n_A = N_R (1 - x_B), n_B = N_R x_B / 2 the species composition from the inferred
-receptor total N_R and initial dimer fraction x_B, pi_m the stationary occupancy of mode m
+receptor total N_R and initial dimer-to-monomer ratio r (x_B = 2r / (1 + 2r)), pi_m the
+stationary occupancy of mode m
 under the inferred switching rates (the initial-mode law the simulator seeds with), and
 D[X, m] = D_A * (R_B if X = B) * (1, R_s)[m] the per-type diffusion coefficients. Because
 the switching rates are shared by both species the mode weights cancel in the species
@@ -195,7 +196,7 @@ EXPERIMENTAL_REFERENCE = {}
 PARAM_DISPLAY_NAME = {
     # stoichiometry block
     "count_total": "Receptor total",
-    "fraction_dimer_initial": "Initial dimer fraction",
+    "ratio_dimer_monomer_initial": "Initial dimer/monomer ratio",
     "rate_dissociation": "Dissociation rate",
     # mobility block
     "diffusivity_alp": "Monomer diffusivity",
@@ -391,7 +392,8 @@ def _mobile_mixture(abs_grid):
 
     From the physical-unit grid (last axis = PARAMETERIZATION order) reads, per window:
       * the species composition n_A = N_R (1 - x_B), n_B = N_R x_B / 2 from the receptor
-        total (count_total) and the initial dimer fraction (fraction_dimer_initial);
+        total (count_total) and the initial dimer-to-monomer ratio (ratio_dimer_monomer_initial,
+        read as x_B = 2r / (1 + 2r));
       * the per-type diffusion coefficients D[X, m] = D_A * (R_B if X = B) * (1, R_s, R_i)[m]
         (simulation_rds_support.diffusion_coefficients, the generator's own definition);
       * the stationary occupancy pi_m of the isolated switching chain
@@ -416,7 +418,7 @@ def _mobile_mixture(abs_grid):
     mono, dim = rds.stoichiometry.monomer.name, rds.stoichiometry.dimer.name
     mobile_modes = list(rds.mobility.modes[:-1])           # all but the (last, immobile) mode
     n_r_index = _key_index(rds.stoichiometry.count_total_key)
-    x_b_index = _key_index(rds.stoichiometry.fraction_dimer_key)
+    ratio_index = _key_index(rds.stoichiometry.composition_ratio_key)
     shape = grid.shape[:-1]
     d_mix, d_a, d_b, f_b = (np.full(shape, np.nan) for _ in range(4))
     for index in np.ndindex(*shape):
@@ -428,7 +430,8 @@ def _mobile_mixture(abs_grid):
         w = sum(pi[m] for m in mobile_modes)
         da = sum(pi[m] * coeff[rds.type_name(mono, m)] for m in mobile_modes) / w
         db = sum(pi[m] * coeff[rds.type_name(dim, m)] for m in mobile_modes) / w
-        n_r, x_b = theta[n_r_index], theta[x_b_index]
+        n_r, ratio = theta[n_r_index], theta[ratio_index]
+        x_b = 2.0 * ratio / (1.0 + 2.0 * ratio)             # receptor fraction in dimers from the ratio
         n_a, n_b = n_r * (1.0 - x_b), 0.5 * n_r * x_b
         total = n_a + n_b
         d_a[index], d_b[index] = da, db
@@ -535,7 +538,7 @@ def _write_report(fig_dir, meta, results):
              "color) against the experimental mobile-fraction diffusion coefficient "
              "D_mobile (in a separate per-condition color). Here n_A = N_R (1 − x_B) and "
              "n_B = N_R x_B / 2 are the species composition from the inferred receptor total "
-             "and initial dimer fraction, and d_A, d_B = R_B·d_A are the monomer and dimer "
+             "and initial dimer-to-monomer ratio (x_B = 2r / (1 + 2r)), and d_A, d_B = R_B·d_A are the monomer and dimer "
              "diffusivities averaged over the MOBILE modes (fast, slow) with the stationary "
              "occupancies of the inferred switching chain; the immobile mode is excluded. "
              "d_A, d_B — which bracket D_mix in either order — and the dimer-complex split "
@@ -639,7 +642,7 @@ def _write_report(fig_dir, meta, results):
     L.append("- **First-pass posteriors** (interrupted training) — absolute values will "
              "sharpen with the production posteriors; re-run this analysis on those.")
     L.append("- Relative parameters (R_B, R_s, R_i) are shown as dimensionless ratios; "
-             "the initial dimer fraction x_B is a linear coordinate on [0, 1].")
+             "the initial composition is the log10 dimer-to-monomer ratio r, read as x_B = 2r / (1 + 2r).")
     L.append("- The pooled **posterior-distribution** panels are a documented, "
              "not-yet-implemented extension (they need the full per-window sample pool, "
              "not the stored quantiles).")

@@ -119,8 +119,8 @@ def _figure_plane(pool_log, results, keys, xi, yi, rng, to_physical, log_rows):
                edgecolors="k", linewidths=1.2, zorder=6, label="SGM (real sample)")
     ax.scatter(ur["vom_abs"][xi], ur["vom_abs"][yi], marker="X", s=210, c="magenta",
                edgecolors="k", linewidths=1.2, zorder=6, label="vector of medians")
-    # A log axis only for a log row; a linear row (the initial dimer fraction on [0, 1]) is drawn
-    # on a linear axis, since zero has no logarithm and its prior is uniform in the value itself.
+    # A log axis only for a log row; a linear row, if the table declared one, is drawn on a linear
+    # axis, since zero has no logarithm and its prior is uniform in the value itself.
     ax.set_xscale("log" if log_rows[xi] else "linear")
     ax.set_yscale("log" if log_rows[yi] else "linear")
     ax.set_xlabel(keys[xi])
@@ -233,7 +233,7 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
                  "combination nothing in the collection realized. "
                  f"SGM in-box: {res['sgm_in_box']}; vector-of-medians in-box: {res['vom_in_box']}. "
                  f"Estimator space is log10 for log rows and the value itself for a linear row "
-                 f"(the initial dimer fraction).")
+                 f"(none in the decided biology table).")
 
     reporter.table(
         "Typicality of the vector of medians versus the SGM",
@@ -405,16 +405,16 @@ def _sgm_spec(cfg, args):
             "composite built from each dimension independently can sit off the ridge the real "
             "configurations occupy.")
     else:
-        xi, yi = keys.index("fraction_dimer_initial"), keys.index("rate_dissociation")
+        xi, yi = keys.index("ratio_dimer_monomer_initial"), keys.index("rate_dissociation")
         plane_caption = (
-            "Initial dimer fraction versus dissociation rate. The collection members (grey) with "
+            "Initial dimer-to-monomer ratio versus dissociation rate. The collection members (grey) with "
             "the SGM (gold star, a real sample) and the per-dimension vector of medians (magenta "
             "X). These two are the coupled pair at the center of the biological question -- how "
             "much of the receptor population is dimeric at the window start and how fast those "
             "dimers dissociate (association is a per-condition constant, not inferred) -- and they "
             "trade off against each other, so a composite built per dimension can assert a "
-            "fraction/rate combination no recording supported. The fraction is a linear coordinate "
-            "on [0, 1] and is drawn on a linear axis; the rate is a log row on a log axis.")
+            "ratio/rate combination no recording supported. Both are log rows on log axes; the ratio "
+            "r = n_B / n_A reads as the complex fraction f_B = r / (1 + r).")
     plane = (xi, yi, plane_caption)
     return SGMSpec(
         parameter_keys=keys,

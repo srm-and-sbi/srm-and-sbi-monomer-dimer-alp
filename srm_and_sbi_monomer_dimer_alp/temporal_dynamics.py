@@ -61,8 +61,8 @@ MATERIAL_DRIFT_DEX = 0.3
 # stage reports. Kept separate from MATERIAL_DRIFT_DEX even though the wider one coincides
 # numerically: one is a tolerance on recovery against known truth, the other a threshold on drift
 # across a recording, and conflating them would tie two unrelated decisions to one constant.
-# Both are DEX quantities and therefore apply to LOG rows only: for a linear row (the initial dimer
-# fraction) a dex band is meaningless, so every band-based statistic below reports NaN for it and
+# Both are DEX quantities and therefore apply to LOG rows only: for a linear row (none in the decided
+# biology table; the rule stays general) a dex band is meaningless, so every band-based statistic below reports NaN for it and
 # the runner says so instead of silently applying log arithmetic to a linear coordinate.
 RECOVERY_BANDS_DEX = (0.3, 0.15)
 

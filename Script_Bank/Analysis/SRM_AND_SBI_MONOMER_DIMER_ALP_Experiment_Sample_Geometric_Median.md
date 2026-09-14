@@ -4,6 +4,8 @@
 
 > **Note (2026-09-10).** Release 0.1.3 removed the association ratio from the learnable parameters: it is a declared per-condition constant (MET-FAB 0, no association channel; MET-INLB 1, the reference convention), so the summary vector has eleven reaction-diffusion coordinates and the association-rate coordinate of the earlier run has no counterpart. The `sgm_plane` figure shows the initial dimer fraction `x_B` against the dissociation rate `κ_OFF` — the coupled pair at the center of the biological question — in place of an abundance against an association rate. The earlier numbers stand as recorded.
 
+> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A`, a log10 row on [−2, 2] (`x_B = 2r / (1 + 2r)` is derived), and gave every learnable row its decided prior range (`PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*). The `sgm_plane` figure is now the log ratio `r` against the dissociation rate `κ_OFF`, both axes logarithmic; where the text below names the initial dimer fraction, read the derived `x_B`. The earlier numbers and figures stand as recorded.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Sample_Geometric_Median.py`. It reduces the
 Experiment stage's cloud of MAP estimates on real MET single-particle-tracking recordings to a
 single representative parameter vector, and reports how that vector differs from the naive

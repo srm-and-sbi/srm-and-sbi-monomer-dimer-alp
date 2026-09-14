@@ -7,6 +7,8 @@ imaging parameters). Both are thin shims over one shared engine,
 `srm_and_sbi_monomer_dimer_alp.temporal_dynamics_runner`, over the workflow-agnostic kernel
 `srm_and_sbi_monomer_dimer_alp.temporal_dynamics`.
 
+> **Note (2026-09-14).** Release 0.1.4 gave every learnable row of the eleven-parameter biology table its decided prior range and replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r` (`x_B = 2r / (1 + 2r)` is derived), so every biology row is a log row and the prior-reference curves of the pooled figures are log-uniform for all eleven (`PROJECT_CONTEXT.md` §2). Results quoted from earlier runs stand as recorded.
+
 This note documents the **method and its assumptions**. Per-run numbers live in the `report.md`
 each run writes beside its figures, never here, so that this note cannot go stale against a newer
 posterior.
@@ -252,7 +254,7 @@ would draw an interpolation the analysis never computed. The time axis therefore
 recording's true extent — ten 2 s windows reach **20 s**, not 18 — and the same rendering applies to
 the per-recording traces and to the posterior bands.
 
-**Windows are fit at their centres.** The drift regression uses each window's centre time, which is
+**Windows are fit at their centers.** The drift regression uses each window's center time, which is
 where its information sits. The fitted slope is identical to using window starts, so every drift
 statistic is unaffected; only the reported endpoints shift by half a window.
 

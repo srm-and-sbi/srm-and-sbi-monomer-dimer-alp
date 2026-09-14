@@ -4,6 +4,8 @@
 
 > **Note (2026-09-10).** Release 0.1.3 removed the association ratio from the learnable parameters: it is a declared per-condition constant (MET-FAB 0, MET-INLB 1), so the eleven-parameter posterior emits no association-ratio figure and the association-ratio panels of earlier runs have no counterpart. The kinetic caveats below apply to the dissociation and switching rates.
 
+> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A`, a log10 row on [−2, 2] (`x_B = 2r / (1 + 2r)` is derived), so the composition coordinate is plotted on a log axis like every other row and the remark below on a linear coordinate describes the earlier table; every learnable row now carries its decided prior range (`PROJECT_CONTEXT.md` §2). Results quoted from earlier runs stand as recorded.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls_Temporal_Dynamics.py`.
 The script applies the DIMER-ALP posterior — trained on the MET single-particle-tracking
 regime — to two control receptors and tracks each inferred parameter over their

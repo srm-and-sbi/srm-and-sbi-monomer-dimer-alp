@@ -38,11 +38,20 @@ Condition laws for the MET recordings of Harwardt et al. (2017; BioStudies S-BSS
 Derived visible fractions (arithmetic of the laws): INLB monomer 0.50 / dimer 0.75, with two
 thirds of the visible INLB dimers carrying one dye; FAB monomer 0.806 / dimer 0.962.
 
-A static probe-OCCUPANCY multiplier composes with the law: a subunit is occupied by a
-probe with probability ``p_occ`` (default 1, i.e. saturating), optionally per initial
-species, and an unoccupied subunit carries no dyes regardless of its draw. It is a
-sensitivity knob for the effective labeling probability (``q_eff = p_occ * q``) and for the
-species-dependent selection the InlB ligand may exert; at its default it does nothing.
+A static probe-OCCUPANCY probability composes with the law: a subunit is occupied by a
+probe with probability ``p_occ``, optionally per initial molecular species, and an
+unoccupied subunit carries no dyes regardless of its draw. The occupancy is a DECLARED
+PER-CONDITION INPUT of the visibility layer, not a sensitivity knob with an inert default:
+the published protocol is uPAINT (both probes in the imaging medium at 0.25 nM, binding
+during acquisition), which labels a sparse subset of receptors by design, so full occupancy
+is not a defensible baseline. The values live on the condition settings of
+``parameterization.py`` (``ConditionSetting``; MET-INLB 0.5 declared, MET-FAB 0.155 derived
+from a declared Fab/InlB visibility ratio of 0.5 and the InlB anchor; both provisional until
+the collaborators answer the questions of 2026-09-11); the DLI stage reads them through
+``parameterization.occupancy_of`` and ``--occupancy`` overrides them for sensitivity runs.
+The effective visibility per subunit is ``a = p_occ * P(kappa >= 1)`` (INLB 0.25, FAB 0.125),
+and the share of visible dimers with BOTH subunits labeled is ``a / (2 - a)`` when the two subunits
+are occupied independently -- what brightness can report about stoichiometry.
 
 Probe kinetics (an assumption, stated). The dye count is static for the recording, so the
 observation layer removes a dye only by photobleaching and never adds one: ligand binding
@@ -253,6 +262,17 @@ def occupancy_per_subunit(occupancy: Occupancy, initial_species: Sequence[str]) 
     return np.full(initial_species.shape[0], float(occupancy))
 
 
+def occupancy_by_species(occupancy: Occupancy, species_names: Sequence[str]) -> Tuple[float, ...]:
+    """The occupancy probability of each molecular species, in ``species_names`` order
+    (a scalar occupancy repeats; a per-species mapping must cover every name)."""
+    if isinstance(occupancy, dict):
+        missing = [s for s in species_names if s not in occupancy]
+        if missing:
+            raise ValueError(f"occupancy has no entry for species {missing}.")
+        return tuple(float(occupancy[s]) for s in species_names)
+    return tuple(float(occupancy) for _ in species_names)
+
+
 def draw_dye_counts(law: LabelingLaw, n_subunits: int, rng: np.random.Generator,
                     occupancy: Union[float, np.ndarray] = 1.0) -> np.ndarray:
     """Draw the static dye count of every subunit once: ``int64`` array ``(n_subunits,)``.
@@ -284,11 +304,14 @@ LABELING_SET_COLUMNS: Tuple[str, ...] = (
     "dimers_0",              # dimer particles (any mobility mode) at frame 0
     "dimers_visible_0",      # ... with at least one labeled subunit
     "dimers_two_labeled_0",  # ... with both subunits labeled
+    "occupancy_monomer",     # probe-occupancy probability applied to monomer subunits (declared/derived/override)
+    "occupancy_dimer",       # ... to dimer subunits
 )
 
 
 def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank_0: np.ndarray,
-                     monomer_ranks: Sequence[int]) -> np.ndarray:
+                     monomer_ranks: Sequence[int],
+                     occupancy_by_species_values: Tuple[float, float] = (float("nan"), float("nan"))) -> np.ndarray:
     """The ``LABELING_SET_COLUMNS`` row for one simulation (``float64`` array).
 
     Args:
@@ -296,6 +319,8 @@ def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank
         host_index_0, host_rank_0: frame-0 rows of the subunit lineage.
         monomer_ranks: particle-type ranks whose particles are single subunits (all
             monomer modes; see ``simulation_rds_support.monomer_ranks``).
+        occupancy_by_species_values: the (monomer, dimer) occupancy probabilities actually
+            applied (``occupancy_by_species``); NaN when not recorded.
     """
     dye_counts = np.asarray(dye_counts)
     labeled = dye_counts >= 1
@@ -315,4 +340,6 @@ def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank
         int(dimer_hosts.sum()),
         int((labeled_per_host[dimer_hosts] >= 1).sum()),
         int((labeled_per_host[dimer_hosts] >= 2).sum()),
+        float(occupancy_by_species_values[0]),
+        float(occupancy_by_species_values[1]),
     ], dtype=np.float64)

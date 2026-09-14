@@ -4,6 +4,8 @@ Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py` (biology) 
 `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Calibration.py` (detector). This is the
 authoritative reference for both; the detector companion points here.
 
+> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r` (`x_B = 2r / (1 + 2r)` is derived) and gave every learnable row its decided prior range, so the decided biology table has no linear row; the per-row `LOG_FLAG` rule and `to_flow` stay the one conversion. Earlier calibration results stand as recorded.
+
 ## What it does
 
 The Inference stage trains a neural posterior `q(theta | x)` over a workflow's target
@@ -121,8 +123,8 @@ that accept pre-drawn inputs (`check_sbc`, `check_tarp`, `LC2ST`, the samples-ba
 (`#{samples < truth}`), which are definitions, not algorithms.
 
 All theta live in the estimator space (the flow's and the prior's space: `log10` of the
-physical value for a log row, the value itself for a linear row such as the biology's initial
-dimer fraction `x_B`); the ground-truth theta sets are stored as physical values, so calibration
+physical value for a log row, the value itself for a linear row, of which the decided biology
+table has none); the ground-truth theta sets are stored as physical values, so calibration
 is scored on `to_flow(theta_true)` — the workflow table's one sanctioned conversion, never a
 blanket `log10`.
 

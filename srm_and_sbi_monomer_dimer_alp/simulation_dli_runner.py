@@ -64,9 +64,11 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import (
 )
 from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_DISPLAY
 from srm_and_sbi_monomer_dimer_alp.io import (
-    convert_video_dtype, load_data, save_theta_set, save_video_set,
+    convert_video_dtype, load_theta_set, save_theta_set, save_video_set,
+    theta_set_schema, theta_set_status, write_theta_set,
 )
 from srm_and_sbi_monomer_dimer_alp.labeling import (
+    occupancy_by_species,
     LABELING_CONDITIONS,
     LABELING_SET_COLUMNS,
     draw_dye_counts,
@@ -76,6 +78,8 @@ from srm_and_sbi_monomer_dimer_alp.labeling import (
     resolve_labeling_law,
 )
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
+    occupancy_of,
+    occupancy_source_of,
     PARAMETER_RAW_FIND,
     PARAMETERIZATION,
     PARAMETERIZATION_RAW,
@@ -176,7 +180,14 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # simulation as a static per-subunit dye draw (labeling.draw_dye_counts).
     condition = args.condition
     law_name, law = resolve_labeling_law(condition, args.labeling_law)
-    occupancy = parse_occupancy(args.occupancy)
+    # Occupancy: the condition's DECLARED (MET-INLB) or DERIVED (MET-FAB) probability from the
+    # parameterization's condition settings, unless --occupancy overrides it for a sensitivity run.
+    if args.occupancy is None:
+        occupancy = occupancy_of(condition)
+        occupancy_source = occupancy_source_of(condition)
+    else:
+        occupancy = parse_occupancy(args.occupancy)
+        occupancy_source = "override"
 
     # ---- Imaging block setup (the six photophysics/imaging + five SCOPE camera).
     # Both share the SCOPE box (drawn from det.scope_*_bound) and the six imaging keys
@@ -259,9 +270,15 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  condition               : {condition}   ({CONDITION_DISPLAY[condition]})")
     print(f"  labeling law            : {law_name} = {law.describe()}   "
           f"(per-subunit dye count, drawn once per recording; fixed, never inferred)")
-    print(f"  occupancy               : {occupancy}   (probe-occupancy probability; 1 = saturating)")
-    print(f"  visible fractions       : monomer {law.visible_probability:.3f}, dimer "
-          f"{law.visible_fraction(2):.3f}   (derived from the law at occupancy 1)")
+    occ_pair = occupancy_by_species(occupancy, rds_cfg.molecular_species_names)   # (monomer, dimer)
+    a_mono, a_dim = (p * law.visible_probability for p in occ_pair)
+    print(f"  occupancy               : {occupancy}   ({occupancy_source}; probe-occupancy probability per "
+          f"subunit, by molecular species {rds_cfg.molecular_species_names} = "
+          f"{tuple(round(p, 4) for p in occ_pair)})")
+    print(f"  P(dye >= 1 | bound)     : {law.visible_probability:.3f}   (from the law)")
+    print(f"  visible per subunit     : monomer {a_mono:.4f}, dimer subunit {a_dim:.4f}   (occupancy x P(dye >= 1))")
+    print(f"  visible fractions       : monomer {a_mono:.3f}, dimer {1 - (1 - a_dim) ** 2:.3f}; both-subunits-labeled share "
+          f"among visible dimers {a_dim / (2 - a_dim):.3f}")
 
     print("\nDLI runtime defaults:")
     print(f"  optical background      : SCOPE nuisance kappa_o (drawn per sim; pre-PSF photon floor)")
@@ -374,7 +391,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"{args.task_simulations} sim(s) = {planned} video(s), "
               f"split _{split}.")
         print(f"[DRY RUN] labeling: condition {condition} ({CONDITION_DISPLAY[condition]}), "
-              f"law {law_name} = {law.describe()}, occupancy {occupancy}.")
+              f"law {law_name} = {law.describe()}, occupancy {occupancy} ({occupancy_source}).")
         if artifact:
             # The imaging block is marginalized: photophysics from the persisted Nuisance_DLI
             # artifact (a required input, like the estimator), camera from the SCOPE box.
@@ -395,7 +412,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             for task in task_indices:
                 theta_set_path = paths.theta_set_path(
                     task, data_bank_root, timing_label, compress, split)
-                theta_ok = theta_set_path.exists()
+                theta_status = theta_set_status(theta_set_path, PARAMETERIZATION, condition=condition)
+                theta_ok = theta_status == "OK"
                 if not theta_ok:
                     missing += 1
                 traj_present = 0
@@ -413,7 +431,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 scope_set_path = _nuisance_scope_path(
                     paths, task, data_bank_root, timing_label, compress, split)
                 print(f"  reads theta set      (task {task}): {theta_set_path}  "
-                      f"[{'OK' if theta_ok else 'MISSING'}]   (11 RDS labels; diagnostics only, not re-written)")
+                      f"[{theta_status}]   (11 RDS labels; schema-checked; diagnostics only, not re-written)")
                 print(f"  reads trajectories   (task {task}): "
                       f"{traj_present}/{args.task_simulations} present")
                 print(f"  writes Nuisance_DLI   (task {task}): {dli_set_path}")
@@ -496,7 +514,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             rds_theta_set_path = paths.theta_set_path(
                 task_alias, data_bank_root, timing_label, compress, split)
             print(f"  Reading theta set (RDS labels; diagnostics only):  {rds_theta_set_path}")
-            rds_theta_set = load_data(rds_theta_set_path)
+            rds_theta_set = load_theta_set(rds_theta_set_path, PARAMETERIZATION, condition=condition)
             imaging_draw = np.power(10, nuisance_dli.sample(args.task_simulations))  # (sims, 6) physical
             imaging_set_path = _nuisance_dli_path(
                 paths, task_alias, data_bank_root, timing_label, compress, split)
@@ -514,16 +532,16 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             print(f"  Writing imaging theta:  {imaging_set_path}")
             print(f"  Writing SCOPE nuisance: {scope_set_path}")
 
+        # The imaging set carries the six-row imaging schema: the detector's Theta_Set is a
+        # training label and is schema-checked by its readers; the biology Nuisance_DLI record
+        # carries the same schema for provenance only.
+        write_theta_set(imaging_set_path, imaging_draw, theta_set_schema(
+            det.DETECTOR_PARAMETERIZATION, condition=condition, timing_label=timing_label,
+            generator="dli_nuisance" if artifact else "dli_detector"))
         if compress:
             theta_compressor = numcodecs.Blosc(
                 cname="zstd", clevel=9, shuffle=numcodecs.Blosc.BITSHUFFLE,
             )
-            imaging_store = zarr.open(
-                store=str(imaging_set_path), mode="w", shape=imaging_draw.shape,
-                chunks=(1, imaging_draw.shape[1]), dtype=np.float64,
-                compressor=theta_compressor,
-            )
-            imaging_store[:, :] = imaging_draw
             scope_store = zarr.open(
                 store=str(scope_set_path), mode="w", shape=scope_data.shape,
                 chunks=(1, scope_data.shape[1]), dtype=np.float64,
@@ -531,7 +549,6 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             )
             scope_store[:, :] = scope_data
         else:
-            save_theta_set(imaging_set_path, imaging_draw, compress=False)
             save_theta_set(scope_set_path, scope_data, compress=False)
 
         # ---- Create the video-set store/buffer ------------------------
@@ -610,7 +627,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 law, lineage.n_subunits, labeling_rng,
                 occupancy=occupancy_per_subunit(occupancy, initial_species))
             labeling_rows[sim] = labeling_summary(
-                dye_counts, lineage.host_index[0], lineage.host_rank[0], monomer_ranks(tray))
+                dye_counts, lineage.host_index[0], lineage.host_rank[0], monomer_ranks(tray),
+                occupancy_by_species_values=occ_pair)
 
             # Assemble the full eleven-key imaging vector (det.DETECTOR_IMAGING order): the six
             # photophysics/imaging followed by the five SCOPE camera-nuisance draws.
@@ -665,7 +683,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 for column, value in zip(LABELING_SET_COLUMNS, labeling_rows[sim]):
                     reporter.stat(
                         column, int(value),
-                        note=f"labeling record ({law_name}, occupancy {occupancy}); "
+                        note=f"labeling record ({law_name}, occupancy {occupancy}, {occupancy_source}); "
                              "see labeling.LABELING_SET_COLUMNS.",
                     )
                 reporter.stat(
@@ -700,7 +718,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.table(
                     "Parameters of this video (sim 0)", headers, prior_rows,
                     note="The prior bounds and sampled values behind this video. "
-                         "count_total and fraction_dimer_initial fix the TRUE initial "
+                         "count_total and ratio_dimer_monomer_initial fix the TRUE initial "
                          "monomer/dimer particle counts; only labeled subunits render (see "
                          "the labeling record), so the sample frame shows fewer spots.",
                 )
@@ -815,11 +833,12 @@ def build_dli_parser() -> argparse.ArgumentParser:
              "bernoulli:0.4). Default: the condition's baseline (FAB_POISSON / INLB_BERNOULLI).",
     )
     parser.add_argument(
-        "--occupancy", type=str, default="1.0",
-        help="Static probe-occupancy probability composing with the labeling law: one value, or "
-             "per initial MOLECULAR species 'A=1.0,B=0.8' (monomer A, dimer B; mobility modes "
-             "are not a selection axis). A subunit not occupied by a probe carries no dye. "
-             "Default 1.0 (saturating; no effect).",
+        "--occupancy", type=str, default=None,
+        help="OVERRIDE of the condition's declared probe occupancy for a sensitivity run: one value, "
+             "or per initial MOLECULAR species 'A=0.5,B=1.0' (monomer A, dimer B; mobility modes "
+             "are not a selection axis). A subunit not occupied by a probe carries no dye. Default: "
+             "the condition's declared (INLB 0.5) or derived (FAB 0.155) value from "
+             "parameterization.ConditionSetting; the value used is recorded in the Labeling_Set.",
     )
     parser.add_argument(
         "--video-dtype-bits", type=int, default=8, choices=[8, 16],

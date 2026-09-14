@@ -41,6 +41,7 @@ import torch._dynamo
 from sbi.neural_nets.net_builders import build_maf
 from torch.utils.data import DataLoader
 
+from srm_and_sbi_monomer_dimer_alp.io import theta_set_status
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
@@ -198,10 +199,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         print(f"\n[DRY RUN] TRAIN namespace ({args.tasks} task(s) expected, probing TASK_0):")
         for role, set_path in (("TRAIN video set", train_video),
                                ("TRAIN theta set", train_theta)):
-            if Path(set_path).exists():
-                print(f"  reads {role}: {set_path}  [OK]")
-            else:
-                print(f"  reads {role}: {set_path}  [MISSING]")
+            status = (theta_set_status(set_path, spec.draw_spec) if "theta" in role
+                      else ("OK" if Path(set_path).exists() else "MISSING"))
+            print(f"  reads {role}: {set_path}  [{status}]")
+            if status != "OK":
                 missing += 1
         if args.test_tasks > 0:
             test_video = paths.video_set_path(
@@ -211,10 +212,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             print(f"\n[DRY RUN] TEST namespace ({args.test_tasks} task(s) expected, probing TASK_0):")
             for role, set_path in (("TEST video set", test_video),
                                    ("TEST theta set", test_theta)):
-                if Path(set_path).exists():
-                    print(f"  reads {role}: {set_path}  [OK]")
-                else:
-                    print(f"  reads {role}: {set_path}  [MISSING]")
+                status = (theta_set_status(set_path, spec.draw_spec) if "theta" in role
+                          else ("OK" if Path(set_path).exists() else "MISSING"))
+                print(f"  reads {role}: {set_path}  [{status}]")
+                if status != "OK":
                     missing += 1
         else:
             print("\n[DRY RUN] TEST namespace: skipped (--test-tasks 0)")

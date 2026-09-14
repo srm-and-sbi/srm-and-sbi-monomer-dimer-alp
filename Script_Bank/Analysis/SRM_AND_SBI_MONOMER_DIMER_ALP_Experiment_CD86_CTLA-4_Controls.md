@@ -1,5 +1,7 @@
 # Control-receptor experiment (CD86 / CTLA-4) — usage and interpretation
 
+> **Note (2026-09-14).** Release 0.1.4 gave every learnable row of the eleven-parameter table its decided prior range and replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r` (`x_B = 2r / (1 + 2r)` is derived), and made probe occupancy a declared per-condition input of the MET conditions (`PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*). An application of a MET-trained posterior to the control recordings inherits that table's ranges and occupancy conventions. Results quoted from earlier runs stand as recorded.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py`. The script
 MAP-estimates the model parameters from real single-particle-tracking recordings of
 two control receptors — CD86 and CTLA-4 — by reusing the DIMER-ALP posterior trained

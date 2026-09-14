@@ -166,7 +166,7 @@ _REFERENCE_DETECTOR = {
 
 _DISPLAY_BIOLOGY = {
     # stoichiometry block
-    "count_total": "Receptor total", "fraction_dimer_initial": "Initial dimer fraction",
+    "count_total": "Receptor total", "ratio_dimer_monomer_initial": "Initial dimer/monomer ratio",
     "rate_dissociation": "Dissociation rate",
     # mobility block
     "diffusivity_alp": "Monomer diffusivity", "relative_diffusivity_dimer": "Rel. dimer diffusivity",
@@ -401,9 +401,9 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
 
     The x axis is in the parameter's own ABSOLUTE units either way -- ticks are plain values, never
     powers of ten and never dex. ``scale`` chooses how that axis is spaced, and the binning, the
-    density's unit, and the prior's shape all follow from it consistently. A LINEAR row (the
-    initial dimer fraction, uniform on [0, 1]) has no decades to space and its prior is flat per
-    unit, so it is always drawn with ``"linear"`` spacing and a flat prior line, whatever ``scale``
+    density's unit, and the prior's shape all follow from it consistently. A LINEAR row (none in
+    the decided biology table; the rule stays general) has no decades to space and its prior is
+    flat per unit, so it is always drawn with ``"linear"`` spacing and a flat prior line, whatever ``scale``
     asked for -- a decade axis starting at zero does not exist:
 
     ``"log"``     bins uniform in decades, which is where a log-uniform prior is flat. Height is a
@@ -1089,8 +1089,8 @@ def build_parser(description):
                         "<key>_temporal_posterior_pooled_log.png. 'both' writes both files. For a "
                         "parameter spanning orders of magnitude (the receptor total spans decades) "
                         "the linear axis compresses the low end, so 'log' or 'both' is the better "
-                        "choice when the low end is the question. A linear row (the initial dimer "
-                        "fraction) is always drawn linear with a flat prior.")
+                        "choice when the low end is the question. A linear row, if the table declares "
+                        "one, is always drawn linear with a flat prior.")
     p.add_argument("--pooled-mark",
                    choices=("median", "mean", "geometric-mean", "trajectory"), default="median",
                    help="Which SINGLE statistic the pooled histogram marks per condition; the "

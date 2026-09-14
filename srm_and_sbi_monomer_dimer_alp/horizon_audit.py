@@ -1,8 +1,8 @@
 """Horizon-audit kernel: does inherited latent state break the reset assumption?
 
 The estimator is trained on independently initialized model-window simulations: every training
-video begins with freshly placed particles whose stoichiometry (receptor total N_R, initial dimer
-fraction x_B) is the drawn theta. The
+video begins with freshly placed particles whose stoichiometry (receptor total N_R, initial
+dimer-to-monomer ratio r) is the drawn theta. The
 experimental analysis, however, slices each long continuous recording into consecutive
 model-length windows and runs the estimator on every window. Those two ensembles are equal in
 window length but not necessarily in distribution: a later window of a continuous recording
@@ -152,7 +152,7 @@ def quantile_errors(post_q, true_flow):
     serves every window, a per-window truth supplies one row per window.
 
     Returns ``(errors, cover50, cover90)``: the signed ``Q50 - truth`` in estimator space
-    (``(N, D)`` float: dex for log rows, an absolute difference for the linear row), and boolean
+    (``(N, D)`` float: dex for log rows, an absolute difference for a linear row if the table declared one), and boolean
     coverage indicators of the 50% (IQR) and 90% (Q05-Q95) intervals. A
     calibrated posterior covers ~50% / ~90%; systematic positional decay of coverage in the
     continuous ensemble only is the horizon signature.

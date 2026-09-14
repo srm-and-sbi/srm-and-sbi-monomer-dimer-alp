@@ -194,7 +194,10 @@ trajectory directory `READY_TRACT/`, namespaced by split — for TRAIN,
 (`..._TASK_0_SIM_0_TRAIN.h5`, …), and one `.zarr` theta set per task at
 `<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`
 (the condition token right after the sibling alias, no workflow qualifier; with the
-`_TEST` / `_EVAL` namespaces for the other two splits). This generates
+`_TEST` / `_EVAL` namespaces for the other two splits). Each theta set carries its schema in
+the store's attributes — the eleven keys in order, their prior bounds and scales, the condition,
+the timing label, and the package version — and the stage prints a `Theta_Set schema:` line per
+task; every later stage refuses a theta set whose schema differs from its table. This generates
 250 / 50 / 20 (train / test / eval) trajectories. Add `--verbose` to print the
 sampled diffusion and reaction rates per simulation. This is the MET-FAB tier, shared
 by both workflows: the detector smoke (§2.5) re-images these same trajectories under
@@ -222,8 +225,23 @@ biology renderer marginalizes imaging, each task additionally writes the per-tas
 it used, all under `<data_bank>/Theta/` with the condition slot: a `Nuisance_DLI_Theta_Set`
 (the imaging vectors drawn from the artifact), a `Nuisance_SCOPE_Theta_Set` (the EMCCD
 camera vectors drawn from the SCOPE box), and a `Labeling_Set` (the per-simulation labeling
-record: true and visible initial composition under the MET-FAB labeling law). `--video-dtype-bits 8` matches the bit depth the
+record: true and visible initial composition under the MET-FAB labeling law, and the probe
+occupancy applied, in `occupancy_monomer` / `occupancy_dimer`). `--video-dtype-bits 8` matches the bit depth the
 estimator trains on and is also the DLI default.
+
+**Occupancy.** The DLI stage applies the condition's declared probe occupancy by default —
+MET-FAB 0.155 (derived from the declared Fab/InlB visibility ratio 0.5 and the INLB anchor),
+MET-INLB 0.5 (declared) — and prints it with its source (`derived` / `declared`); no flag is
+passed, and there is no full-occupancy default (`PROJECT_CONTEXT.md` §2, *How the prior ranges
+and the declared inputs are set*). `--occupancy` is an explicit OVERRIDE for a sensitivity run
+only, recorded as `override` in the `Labeling_Set`; an override writes into the same product
+names as the default pass, so run it on a throwaway smoke tier and never over a tier that feeds
+training or calibration:
+
+```bash
+# SENSITIVITY RUN, not a training tier: re-image a throwaway INLB smoke tier under the within-dimer alternative (every InlB dimer carries two ligands: monomer subunits 0.5, dimer subunits 1.0; both-subunits-labeled share among visible dimers 1/3 instead of 1/7 (equal to the two-dye share under the one-dye-per-ligand InlB law))
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py --condition INLB --total-time-seconds 2.0 --split eval --tasks 2 --task-simulations 10 --video-dtype-bits 8 --seed None --occupancy A=0.5,B=1.0
+```
 
 **Requires**: two prerequisites. First, the RDS smoke (§2.1) must have run with the
 same duration, splits, and `--task-simulations`; DLI reads the `.h5` trajectories and
@@ -234,6 +252,45 @@ renderer **marginalizes imaging** by drawing the photophysics from that artifact
 camera from the SCOPE box), and fails loud if it is absent. The artifact is a detector-side product, so the detector smoke (§2.5)
 and the `Nuisance_DLI` build (§2.5b) must run first — see **Run order** in the section
 intro.
+
+### 2.2b Prior-realization audit (after any tier or DLI pass)
+
+Run the prior-realization audit (it reads the products and writes only its report) over every
+generated tier and every DLI pass before
+the products are used, and again whenever a range or a declared input changes. It reads the
+condition's `Theta_Set` (P1: every draw inside the prior box, per-row uniformity; P2: the
+composition rule from `(N_R, r)`), optionally a few trajectories (P3: frame-0 counts against
+the realized composition, subunit conservation, the stationary mode law), and the workflow's
+`Labeling_Set` (P4: the recorded occupancy equals the condition's declared or derived value,
+the per-subunit visibility, the visible fractions, the both-labeled share, and the emitters per
+subunit against the declared visibility), compares the simulated visible counts with the
+deposited recordings' spot counts descriptively (P5, Special_Analyses A9), and always
+corroborates the theoretical visibility chain through the DLI stage's own labeling functions
+on a synthetic lineage for both conditions, including the FAB/INLB visibility ratio against
+the declared one (P6). The report ends with theory, code path, and products side by side.
+Nothing is simulated or rendered; it takes seconds. `--workflow detector` reads the
+detector's `Labeling_Set` instead of the biology's.
+
+```bash
+# the FAB TRAIN tier after the RDS + DLI smokes (biology Labeling_Set); <profile> is the machine profile, as everywhere in this file
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --condition FAB --split train --total-time-seconds 2
+# the same with P3 over eight evenly spaced trajectory files
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --condition FAB --split train --total-time-seconds 2 --trajectories 8
+# the checks themselves, on in-memory draws from the prior and the declared occupancies (no tier needed)
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --selftest
+# the visibility chain alone (P6, both conditions): theory vs the DLI code path, no tier needed
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --visibility
+```
+
+**Expected**: a report `.md` and `prior_realization_summary.json` under
+`<data_bank_root>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Prior_Realization_Audit_TRAIN/`,
+every check PASS; the companion
+`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.md` explains each
+verdict. Products generated before the decided ranges cannot be reused: a `Theta_Set` written
+before the schema existed carries none, and one drawn under another table carries different keys
+or bounds, so the audit (P0) and every stage refuse it by name, with the reason. Generate a fresh
+per-condition tier. The audit reads TRAIN/TEST products from the split-aware root (the scratch
+tier on two-tier machines) and writes its report on the permanent tier.
 
 ### 2.3 Inference (posterior training)
 
@@ -332,7 +389,7 @@ order on a single GPU with plain `python`.
 It is seedless and requires approval (both rules above). Use one duration for all
 five stages — 2.0 s here; the pipeline is duration-general, but the DLI stage
 checks its frame count against the RDS trajectories, so a single run must share
-one duration. The inferred imaging vector is 6-dimensional — the five EMCCD camera parameters are marginalized as the SCOPE nuisance (drawn at the DLI stage, recorded separately as `Nuisance_SCOPE`), so the DLI stage writes a `Theta_Set` (6 learnable), a `Nuisance_SCOPE_Theta_Set` (5 camera), and a `Labeling_Set` (the per-simulation labeling record) per task, all under the condition-qualified alias (`..._DETECTOR_FAB_2S_50FPS_...`).
+one duration. The inferred imaging vector is 6-dimensional — the five EMCCD camera parameters are marginalized as the SCOPE nuisance (drawn at the DLI stage, recorded separately as `Nuisance_SCOPE`), so the DLI stage writes a `Theta_Set` (6 learnable), a `Nuisance_SCOPE_Theta_Set` (5 camera), and a `Labeling_Set` (the per-simulation labeling record, the applied probe occupancy included — the detector DLI applies the condition's declared occupancy by default, exactly as the biology DLI does, §2.2) per task, all under the condition-qualified alias (`..._DETECTOR_FAB_2S_50FPS_...`).
 
 ```bash
 # 1. The MET-FAB trajectory tier, per split (seedless; the sibling alias plus the condition token). The
@@ -368,7 +425,8 @@ data directory.
 **Acceptance**: all five stages exit zero; the Inference test loss descends across
 the five epochs on fresh per-video data (a flat curve signals a frozen-seed
 regression); Evaluation reports MAP recovery on the 20 EVAL videos; Experiment
-writes a per-condition report for the FAB and INLB cells.
+writes a per-condition report for the FAB and INLB cells. After step 2, run the
+prior-realization audit over the detector pass (§2.2b, `--workflow detector`).
 
 ### 2.5b Build the Nuisance_DLI (detector → biology bridge)
 
@@ -576,6 +634,7 @@ against any particular reference run. Equivalence rests on three pillars:
    python -c "
    import zarr
    z = zarr.open('<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr', mode='r')
+   print(dict(z.attrs))      # the schema: parameter_keys, prior bounds, condition, timing, package version
    print(z[:].tolist())
    "
    ```

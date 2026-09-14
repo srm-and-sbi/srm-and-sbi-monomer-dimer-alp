@@ -6,6 +6,8 @@ stage dispatcher, and it needs no trained estimator and no recordings: it simula
 reactive trajectory at the biology prior center, draws labelings on it, and renders static
 scenes through the production renderer.
 
+> **Note (2026-09-14).** Release 0.1.4 made probe occupancy a declared per-condition input of the visibility layer (`parameterization.ConditionSetting`: MET-INLB 0.5 declared; MET-FAB 0.155, derived from the declared Fab/InlB visibility ratio 0.5 and the InlB anchor), applied by the DLI stage by default and overridable with `--occupancy` for a sensitivity run only; the full-occupancy default is retired. The level-3 draws of this audit exercise the bare labeling laws (occupancy 1), so the two-thirds one-dye share among visible MET-INLB dimers and the visible fractions quoted below are properties of the laws themselves; under the declared occupancies the visibility per subunit is 0.25 (MET-INLB) and 0.125 (MET-FAB) and the share of visible dimers with both subunits labeled 14 % and 6.7 % (for MET-INLB also the two-dye share), checked by the structure audit (R3) and the prior-realization audit (P4). The rendered-scene checks are unaffected.
+
 ## What it checks, and why each check exists
 
 | level | object | what could be wrong without it |

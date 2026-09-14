@@ -195,8 +195,8 @@ def _fixed_nuisance_physical(overrides=None):
     held at its prior-center nominal (``parameterization.prior_center``: the physical value at the
     midpoint of its estimator-space range), then any ``overrides`` (``{key: physical_value}``)
     applied last. This replaces the fresh ``_draw_nuisance_physical`` draw with a deterministic,
-    controlled nuisance, so the stoichiometry (receptor total ``count_total``, initial dimer
-    fraction ``fraction_dimer_initial``), diffusivities, switching rates, and reaction rates are
+    controlled nuisance, so the stoichiometry (receptor total ``count_total``, initial
+    dimer-to-monomer ratio ``ratio_dimer_monomer_initial``), diffusivities, switching rates, and reaction rates are
     pinned to condition-appropriate values rather than sampled from a flat prior. Returns a
     ``(len(PARAMETERIZATION),)`` array in canonical theta order."""
     centers = {e["KEY"]: bio.prior_center(e) for e in bio.PARAMETERIZATION}

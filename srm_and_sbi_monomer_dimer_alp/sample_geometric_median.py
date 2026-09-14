@@ -23,7 +23,7 @@ geometric median is not invariant under the estimator-to-physical transform, so 
 defined in the space where the vector is actually used -- the simulator consumes physical values.
 Normalizing by the prior range makes the dimensions commensurable, so no parameter dominates the
 distance merely because its units are larger. The kernel does not know the per-row conversion rule
-(log10 for log rows, identity for a linear row such as the initial dimer fraction): callers pass the
+(log10 for log rows, identity for a linear row if a table declares one): callers pass the
 ``to_physical`` / ``to_flow`` callables bound to their parameter table (``parameterization``), so the
 one conversion rule stays in one place and nothing here exponentiates by hand.
 """

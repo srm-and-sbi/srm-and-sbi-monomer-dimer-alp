@@ -30,7 +30,6 @@ import gc
 import time
 from datetime import datetime, timezone
 
-import numcodecs
 import numpy as np
 import readdy
 import zarr
@@ -41,7 +40,7 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import (
     prior_sampling_table,
 )
 from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_DISPLAY
-from srm_and_sbi_monomer_dimer_alp.io import save_theta_set
+from srm_and_sbi_monomer_dimer_alp.io import theta_set_schema, write_theta_set
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
     PARAMETERIZATION,
@@ -192,7 +191,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     if args.verbose:
         print(f"\nLearnable theta prior spec ({len(PARAMETERIZATION)} parameters, "
               f"sampled in estimator space, mapped to physical values by to_physical; "
-              f"DEVELOPMENT ranges):")
+              f"decided prior ranges of 2026-09-14):")
         for para in PARAMETERIZATION:
             lo, hi = para["PRIOR_RANGE"]
             unit = _UNIT_DISPLAY.get(para["UNIT"], para["UNIT"])
@@ -244,7 +243,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         return
 
     # ---- Sample the parameter sets in estimator space, map to physical values ----
-    # (the one shared rule: log rows exponentiated, the linear initial dimer fraction as is)
+    # (the one shared rule per row: log rows exponentiated; every row of the decided table is log)
     low = np.array(theta_lower_bound())
     high = np.array(theta_upper_bound())
     rng = np.random.default_rng(args.seed)
@@ -268,27 +267,18 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         traj_dir = paths.trajectory_dir(task_alias, data_bank_root, timing_label, split)
         traj_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write the sampled set: incremental zarr.open for compressed, save_theta_set for plain.
+        # Write the sampled set WITH its schema (io.write_theta_set: .zarr attrs, or a JSON
+        # sidecar beside a plain .npy). The schema names the eleven keys in order, their prior
+        # bounds and scales, the condition and timing, and the package version, so no reader
+        # can consume this tier under a different table (io.load_theta_set refuses it).
         theta_set_path = paths.theta_set_path(
             task_alias, data_bank_root, timing_label, compress, split)
-        theta_set_path.parent.mkdir(parents=True, exist_ok=True)
         theta_set_data = theta_sets[task]  # shape (task_simulations, n_params)
-
-        if compress:
-            compressor = numcodecs.Blosc(
-                cname="zstd", clevel=9, shuffle=numcodecs.Blosc.BITSHUFFLE,
-            )
-            theta_store = zarr.open(
-                store=str(theta_set_path),
-                mode="w",
-                shape=theta_set_data.shape,
-                chunks=(1, theta_set_data.shape[1]),
-                dtype=np.float64,
-                compressor=compressor,
-            )
-            theta_store[:, :] = theta_set_data
-        else:
-            save_theta_set(theta_set_path, theta_set_data, compress=False)
+        theta_schema = theta_set_schema(PARAMETERIZATION, condition=condition,
+                                        timing_label=timing_label, generator="rds")
+        write_theta_set(theta_set_path, theta_set_data, theta_schema)
+        print(f"  Theta_Set schema: {len(theta_schema['parameter_keys'])} keys, condition "
+              f"{theta_schema['condition']}, package {theta_schema['package_version']}")
 
         # ---- Diagnostics reporter (debug mode) ------------------------
         reporter = DiagnosticReporter(
@@ -356,14 +346,15 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     "theta_in_prior_bounds", in_bounds,
                     "all estimator-space values within the prior box",
                     note="the sampled parameters lie inside the prior box they were "
-                         "drawn from (log10 for log rows, linear for the dimer fraction).",
+                         "drawn from (log10 for every row of the decided table).",
                 )
                 reporter.stat(
                     "initial_composition",
                     f"N_R={composition.n_total}: {composition.n_monomers} monomers + "
                     f"{composition.n_dimers} dimers",
-                    note=f"integer realization of the sampled total and requested dimer "
-                         f"fraction x_B={composition.fraction_requested:.4f} (realized "
+                    note=f"integer realization of the sampled total and requested dimer-to-monomer "
+                         f"ratio r={composition.ratio_requested:.4g} (receptor fraction "
+                         f"x_B={composition.fraction_requested:.4f}, realized "
                          f"{composition.fraction_realized:.4f}); conservation "
                          f"N_R = n_A + 2 n_B holds for the realized integers.",
                 )
@@ -379,7 +370,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.table(
                     "Prior sampling (sim 0)", headers, prior_rows,
                     note="Prior box (estimator space) and the value drawn for this "
-                         "simulation. count_total and fraction_dimer_initial fix the "
+                         "simulation. count_total and ratio_dimer_monomer_initial fix the "
                          "initial monomer/dimer numbers the run was seeded with (see "
                          "initial_composition) -- cross-check against the rendered video.",
                 )

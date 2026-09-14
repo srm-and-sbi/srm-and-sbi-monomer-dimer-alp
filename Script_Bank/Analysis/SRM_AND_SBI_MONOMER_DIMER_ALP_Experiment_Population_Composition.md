@@ -4,6 +4,8 @@
 
 > **Note (2026-09-10).** Release 0.1.3 made the association ratio a declared per-condition constant, not an inferred parameter: MET-FAB has no association channel, so its initial dimer fraction `x_B` reads as the dimers *present at the recording start*, not dimers formed, and the simulated dimer count within a recording is non-increasing; MET-INLB associates at the reference intensity `λ_on = 6 D_A / r²`, on which its composition estimates are conditional. The eleven-parameter posterior carries no association-rate coordinate.
 
+> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A` (log10 on [−2, 2], symmetric about an even split) and gave every learnable row its decided prior range. The composition is now formed from the posterior pair `(N_R, r)` with `x_B = 2r / (1 + 2r)` derived inside each draw; the kernel's formulas below, written in `x_B`, are unchanged (`f_R = x_B`, `f_B = x_B / (2 − x_B) = r / (1 + r)`, `T = N_R (1 − x_B / 2)`). Probe occupancy is a declared per-condition input (MET-INLB 0.5; MET-FAB 0.155, derived), on which the absolute receptor total `N_R` is conditional; the within-visible compositions are not. The earlier numbers stand as recorded.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Population_Composition.py`. It reports the
 monomer–dimer composition across the experimental MET recordings — the share of receptors sitting in
 dimers, the share of complexes that are dimers, and the receptor total — and reports beside it the

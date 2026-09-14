@@ -14,7 +14,8 @@ tools with different run stamps.
 
 ONE WORKFLOW. Unlike the mirrored stage runners, this analysis exists for the **biology** workflow
 only, and the asymmetry is scientific rather than incidental: the composition is a function of the
-two inferred stoichiometry coordinates (the receptor total N_R and the initial dimer fraction x_B),
+two inferred stoichiometry coordinates (the receptor total N_R and the initial dimer-to-monomer
+ratio r, read as the receptor fraction x_B = 2r / (1 + 2r)),
 and the detector workflow infers imaging parameters and no stoichiometry at all -- it treats the
 population implicitly, as part of what it marginalizes. There is therefore no
 detector composition to compute, in the same way the detector's ``Nuisance_DLI`` pool has no biology
@@ -57,8 +58,8 @@ class CompositionSpec:
     """Everything about this analysis that a workflow supplies."""
 
     parameter_keys: list
-    count_index: tuple                    # theta indices of (receptor total N_R, initial dimer fraction x_B)
-    to_physical: object                   # (..., 2) estimator-space stoichiometry -> physical (N_R, x_B)
+    count_index: tuple                    # theta indices of (receptor total N_R, initial dimer-to-monomer ratio r)
+    to_physical: object                   # (..., 2) estimator-space stoichiometry -> physical (N_R, x_B = 2r/(1+2r))
     prior_low: np.ndarray                 # prior lower bounds, estimator space (all parameters)
     prior_high: np.ndarray                # prior upper bounds, estimator space (all parameters)
     experiment_npz: object
@@ -301,7 +302,8 @@ def _write_report(args, spec, data, rng):
              "biological spread; it is not the within-window posterior width, and it is deliberately "
              "not divided by the number of windows, since ten windows of one recording are not ten "
              "independent measurements. The shares f_A + f_B close to 100% exactly; f_B = 1 - f_A "
-             "by definition, and f_R (the share of RECEPTORS in dimers) is the inferred x_B itself.")
+             "by definition, and f_R (the share of RECEPTORS in dimers) is x_B = 2r / (1 + 2r) of the "
+             "inferred ratio r.")
 
     reporter.table(
         f"Population composition, first window only (0-{spec.window_seconds:g} s)",
@@ -447,9 +449,9 @@ def _write_report(args, spec, data, rng):
                        "not species, and do not enter the composition. A dimer holds two "
                        "receptors, which is what separates f_B (a share of complexes) from f_R (a "
                        "share of receptors)")
-    reporter.stat("space", "physical stoichiometry (N_R, x_B) via parameterization.to_physical "
-                           "(log row for the total, linear row for the fraction), fractions formed "
-                           "per draw")
+    reporter.stat("space", "physical stoichiometry (N_R, x_B) via parameterization.to_physical on the "
+                           "two log rows (total, dimer-to-monomer ratio) and x_B = 2r / (1 + 2r), "
+                           "fractions formed per draw")
 
     # -- figures ---------------------------------------------------------------------------------
     rec_rows = None if data["recovery"] is None else data["recovery"]["rows"]
@@ -517,7 +519,7 @@ def run_population_composition(cfg, args):
         print(f"  recovery .npz   : {spec.recovery_npz}  "
               f"[{'OK' if spec.recovery_npz.exists() else 'absent (validation half skipped)'}]")
         print(f"  stoichiometry   : "
-              f"{', '.join(spec.parameter_keys[i] for i in spec.count_index)}  (N_R, x_B)")
+              f"{', '.join(spec.parameter_keys[i] for i in spec.count_index)}  (N_R, r -> x_B)")
         print(f"  quantities      : "
               f"{', '.join(q.symbol + ' = ' + q.formula for q in pc.COMPOSITION)}")
         print(f"  bootstrap       : {args.bootstrap:,} resamples of recordings"
@@ -652,26 +654,30 @@ def _population_composition_spec(cfg, args) -> CompositionSpec:
     workflow treats the population implicitly and has nothing to compose, so a composition computed
     from its six imaging coordinates would be a well-formatted meaningless number.
     """
-    from .parameterization import PARAMETERS, RunTiming, to_physical
+    from .parameterization import PARAMETERS, RunTiming, ratio_to_receptor_fraction, to_physical
     from .workflow import parameter_keys as _wf_keys, parameter_table
 
     keys = _wf_keys(cfg)
     rds = PARAMETERS.simulation.rds.stoichiometry
-    count_keys = (rds.count_total_key, rds.fraction_dimer_key)     # (N_R, x_B)
+    count_keys = (rds.count_total_key, rds.composition_ratio_key)     # (N_R, r)
     missing = [k for k in count_keys if k not in keys]
     if missing:
         raise SystemExit(
             f"the population composition needs the two stoichiometry parameters "
-            f"{count_keys} (receptor total, initial dimer fraction), and the {cfg.tag} workflow "
+            f"{count_keys} (receptor total, initial dimer-to-monomer ratio), and the {cfg.tag} workflow "
             f"does not infer {missing}. This analysis is biology-only by construction: the detector "
             f"workflow infers imaging parameters and treats the population implicitly, so it has no "
             f"composition to report.")
     table = parameter_table(cfg)
     count_index = tuple(keys.index(k) for k in count_keys)
-    # The ONE conversion rule, bound to the two stoichiometry rows: the receptor total is a log row,
-    # the fraction a linear one, and only the table knows that -- the kernel never exponentiates.
+    # The ONE conversion rule, bound to the two stoichiometry rows (both log), then the ratio row
+    # mapped to the receptor fraction the kernel is written in: (N_R, r) -> (N_R, x_B = 2r / (1 + 2r)).
     count_rows = [table[i] for i in count_index]
-    stoichiometry_to_physical = lambda u: to_physical(u, count_rows)   # noqa: E731
+
+    def stoichiometry_to_physical(u):
+        pair = np.array(to_physical(u, count_rows), dtype=float)
+        pair[..., 1] = ratio_to_receptor_fraction(pair[..., 1])
+        return pair
 
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)

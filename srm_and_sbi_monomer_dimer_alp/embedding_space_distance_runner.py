@@ -173,14 +173,14 @@ def _load_eval_theta(R, n_tasks):
     which case the PC1 parameter tracking is skipped (it is an optional add-on to the distance
     measure, needing the theta that generated the exact videos embedded).
     """
-    from srm_and_sbi_monomer_dimer_alp.io import load_data
+    from srm_and_sbi_monomer_dimer_alp.io import load_theta_set
     rows = []
     for task in range(n_tasks):
         path = R["paths"].theta_set_path(task, R["data_bank_root"], R["timing_label"],
                                          compress=True, split="EVAL")
         if not path.exists():
             return None, None, None
-        rows.append(np.asarray(load_data(str(path))))
+        rows.append(np.asarray(load_theta_set(str(path), R["parameterization"])))
     keys = R["parameter_keys"]
     labmap = {e["KEY"]: (e.get("LABEL") or e["KEY"]) for e in R["parameterization"]}
     return np.vstack(rows), keys, [labmap.get(k, k) for k in keys]
@@ -692,7 +692,7 @@ _PARAM_MEANING_DETECTOR = _PARAM_MEANING
 _PARAM_MEANING_BIOLOGY = {
     # stoichiometry block
     "count_total": "stoichiometry: conserved receptor-subunit total N_R = n_A + 2 n_B of the simulated patch",
-    "fraction_dimer_initial": "stoichiometry: initial fraction of receptors in dimers x_B = 2 n_B / N_R (linear on [0, 1])",
+    "ratio_dimer_monomer_initial": "stoichiometry: initial dimer-to-monomer ratio r = n_B / n_A (log10 on [-2, 2]; receptor fraction x_B = 2r / (1 + 2r))",
     "rate_dissociation": "dissociation: dimer unbinding rate kappa_OFF (B -> A + A, mode conserved), per second",
     # mobility block
     "diffusivity_alp": "mobility: monomer scale diffusion coefficient D_A = D[A, fast] (um^2/s)",

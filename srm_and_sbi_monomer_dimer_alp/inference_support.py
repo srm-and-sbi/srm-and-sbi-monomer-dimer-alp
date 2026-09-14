@@ -125,9 +125,9 @@ class VideoDataset(Dataset):
                  paths=None,
                  parameterization=None):
         # `parameterization` is the learnable table whose per-row scale converts the stored
-        # PHYSICAL theta to the estimator's space (parameterization.to_flow): the biology
-        # table carries a linear row (the initial dimer fraction), so a blanket log10 would
-        # corrupt it. None -> the biology table.
+        # PHYSICAL theta to the estimator's space (parameterization.to_flow): the per-row
+        # scale is the table's contract (a linear row, if one is ever declared, must not be
+        # log-transformed), so no blanket log10 here. None -> the biology table.
         from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERIZATION
         self.parameterization = PARAMETERIZATION if parameterization is None else parameterization
         # `paths` selects the filename namespace. Default is the canonical
@@ -147,6 +147,12 @@ class VideoDataset(Dataset):
                 str(paths.theta_set_path(
                     task_alias, data_bank_root, timing_label, compress, split))
             )
+
+        # Every theta file must carry the schema of this workflow's table (keys, bounds,
+        # scales); a tier drawn under another table is refused here, before any training.
+        from srm_and_sbi_monomer_dimer_alp.io import check_theta_set_schema
+        for theta_path in theta_paths:
+            check_theta_set_schema(theta_path, self.parameterization)
 
         # Probe the last theta file to determine how many examples per file.
         probe = load_data(theta_paths[-1])

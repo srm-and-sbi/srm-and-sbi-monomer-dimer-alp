@@ -6,6 +6,8 @@ engine `srm_and_sbi_monomer_dimer_alp/horizon_audit_runner.py` (statistics kerne
 phases, and how to read its report — so the analysis can be used and understood without
 reverse-engineering the code.
 
+> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A` (log10 on [−2, 2]; `x_B = 2r / (1 + 2r)` is derived) and gave every learnable row its decided prior range (`PROJECT_CONTEXT.md` §2); the composition a drawn theta sets is realized from `(N_R, r)`. Where this note names `x_B`, read the derived fraction. Results quoted from earlier runs stand as recorded.
+
 ## The question
 
 The estimator is trained on **independently initialized model-window simulations**: every training

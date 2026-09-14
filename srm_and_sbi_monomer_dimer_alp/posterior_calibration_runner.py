@@ -47,7 +47,7 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import collect_score_prex, collect_theta_prex
 from srm_and_sbi_monomer_dimer_alp.experiment_support import shard_by_rank
 from srm_and_sbi_monomer_dimer_alp.inference_support import normalize_video, resolve_topology
-from srm_and_sbi_monomer_dimer_alp.io import load_data
+from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow
 from srm_and_sbi_monomer_dimer_alp.visualization_calibration import (
     figure_coverage, figure_pairwise, figure_sbc_ranks, figure_stratified, figure_tarp)
@@ -681,9 +681,10 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
                   ("EVAL theta set (task 0)", eval_theta_path)]
         missing = 0
         for role, path in inputs:
-            ok = Path(path).exists()
-            missing += 0 if ok else 1
-            print(f"  reads {role}: {path}  [{'OK' if ok else 'MISSING'}]")
+            status = (theta_set_status(path, spec.draw_spec, condition=args.condition) if "theta" in role
+                      else ("OK" if Path(path).exists() else "MISSING"))
+            missing += 0 if status == "OK" else 1
+            print(f"  reads {role}: {path}  [{status}]")
         _parse_tests(args.tests)
         _parse_stratify(args.stratify, list(spec.parameter_keys))
         print(f"\n[DRY RUN] configuration validated; "
@@ -722,8 +723,9 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
     # a single video. See the same reasoning in ``evaluation_runner``.
     per_task_sims = {}
     for task in range(args.eval_tasks):
-        theta_set = load_data(
-            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"))
+        theta_set = load_theta_set(
+            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"),
+            spec.draw_spec, condition=args.condition)
         n_sims = theta_set.shape[0]
         per_task_sims[task] = min(n_sims, args.max_sims) if args.max_sims > 0 else n_sims
     all_videos = [(t, s) for t in range(args.eval_tasks) for s in range(per_task_sims[t])]
@@ -744,8 +746,9 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
     for task, task_videos in groupby(my_videos, key=lambda pair: pair[0]):
         video_set = load_data(
             paths.video_set_path(task, data_bank_root, timing_label, compress, "EVAL"))
-        theta_set = load_data(
-            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"))
+        theta_set = load_theta_set(
+            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"),
+            spec.draw_spec, condition=args.condition)
         task_start = time.time()
         n_task = 0
         for _, sim in task_videos:

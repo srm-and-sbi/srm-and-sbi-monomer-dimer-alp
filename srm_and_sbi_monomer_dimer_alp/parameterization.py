@@ -21,17 +21,21 @@ Public interface:
     to_physical(theta_flow)     -- the ONE conversion estimator space -> physical values
     to_flow(theta_physical)     -- its inverse (physical -> estimator space)
     prior_center(entry)         -- physical value at the center of a ranged row
-    realize_initial_composition -- integer (n_A, n_B) from the sampled (N_R, x_B)
+    realize_initial_composition -- integer (n_A, n_B) from the sampled (N_R, r), r = n_B/n_A
     association_ratio_of(cond)  -- the declared association ratio R_ON of a condition (FAB 0, INLB 1)
+    occupancy_of(cond)          -- the declared (INLB) or derived (FAB) probe occupancy per subunit
+    visibility_of(cond)         -- occupancy x P(dye >= 1) under the condition's labeling law
 
 Model blocks (the declarative records the reaction-diffusion generator is built from):
     StoichiometryBlock          -- molecular species A (1 subunit) and B (2), the dissociation
                                    channel's parameter key and the composition keys
     MobilityBlock               -- mobility modes, their diffusion-ratio keys, the sequential
                                    switching chain and its rate keys, the inheritance rule
-    ConditionSetting            -- the per-condition setting of the reaction-diffusion model:
-                                   the association ratio R_ON (0 = no association channels;
-                                   a declared constant, never inferred)
+    ConditionSetting            -- the per-condition settings: the association ratio R_ON
+                                   (0 = no association channels; a declared constant, never
+                                   inferred) and the probe OCCUPANCY of the visibility layer
+                                   (declared for MET-INLB; derived for MET-FAB from a declared
+                                   Fab/InlB visibility ratio and the InlB anchor)
     PARAMETERS.simulation.rds   -- carries the blocks and the condition settings and derives
                                    the PARTICLE TYPES (species x mode), their subunit counts
                                    and the maps type -> species / mode
@@ -40,8 +44,18 @@ The estimator space ("flow space"). Every ranged row declares its scale: LOG_FLA
 the prior box and the estimator coordinate are log10 of the physical value; LOG_FLAG False
 means the coordinate IS the physical value (a linear row). `to_physical` / `to_flow` apply
 the per-row rule and are the only sanctioned conversion -- no consumer exponentiates or
-log-transforms a theta vector by hand, because the initial dimer fraction is linear on
-[0, 1] and a blanket ``10 ** theta`` would silently corrupt it.
+log-transforms a theta vector by hand. The decided table (2026-09-14) has no linear row --
+the initial composition is the log10 dimer-to-monomer ratio -- but the per-row rule stays
+the contract, so a linear row can be declared without touching any consumer.
+
+Prior ranges. Every range is a DECIDED box (2026-09-14; PROJECT_CONTEXT.md sec. 2, "How the
+prior ranges and the declared inputs are set"): box-uniform in the estimator coordinate,
+covering the plausible support with a margin and never encoding the answer an experiment is
+expected to give; both conditions share the one table. Each row's DOC names its source:
+the frozen baseline ranges of the earlier model (dimer-alp 0.4.23), the per-recording analysis
+of the deposited MET localization tables (Special_Analyses A9), the literature anchors of the
+model specification (sec. 9), or the tracking pipelines' resolution and classification
+thresholds.
 """
 
 import os
@@ -725,10 +739,14 @@ class StoichiometryBlock:
     parameter keys it reads.
 
     - ``count_total_key``: the conserved receptor-subunit total N_R = n_A + 2 n_B (a count).
-    - ``fraction_dimer_key``: the REQUESTED initial fraction of receptors in dimers, x_B in
-      [0, 1]; realized as integers by ``realize_initial_composition``. Under a condition
-      without association it is read as the fraction of receptors in dimers PRESENT at the
-      start of the recording, not a fraction formed.
+    - ``composition_ratio_key``: the REQUESTED initial dimer-to-monomer ratio r = n_B / n_A
+      (a log10 row on [-2, 2], i.e. one dimer per hundred monomers to a hundred dimers per
+      monomer); realized as integers by ``realize_initial_composition``. The receptor fraction
+      in dimers x_B = 2r / (1 + 2r) and the complex fraction f_B = r / (1 + r) are DERIVED
+      quantities (``ratio_to_receptor_fraction``, ``ratio_to_complex_fraction``). The log ratio
+      is symmetric about an even split (f_B = 1/2), so the prior is even-handed between
+      mostly-monomer and mostly-dimer populations. Under a condition without association it
+      is read as the composition PRESENT at the start of the recording, not one formed.
     - ``dissociation_rate_key``: kappa_OFF, the dimer unbinding rate (1/s), one for every
       dimer mode; dissociation is not governed by contact; inferred in every condition.
     The association intensity is NOT a learnable row. It is a declared per-condition constant
@@ -747,7 +765,7 @@ class StoichiometryBlock:
     monomer: MolecularSpecies = MolecularSpecies("A", 1)
     dimer: MolecularSpecies = MolecularSpecies("B", 2)
     count_total_key: str = "count_total"
-    fraction_dimer_key: str = "fraction_dimer_initial"
+    composition_ratio_key: str = "ratio_dimer_monomer_initial"
     dissociation_rate_key: str = "rate_dissociation"
 
     def __post_init__(self):
@@ -767,7 +785,7 @@ class StoichiometryBlock:
 
     @property
     def parameter_keys(self) -> tuple:
-        return (self.count_total_key, self.fraction_dimer_key, self.dissociation_rate_key)
+        return (self.count_total_key, self.composition_ratio_key, self.dissociation_rate_key)
 
 
 @dataclass(frozen=True)
@@ -849,7 +867,7 @@ class MobilityBlock:
 
 @dataclass(frozen=True)
 class ConditionSetting:
-    """The reaction-diffusion setting of one experimental condition: the association ratio.
+    """The declared settings of one experimental condition: association ratio and probe occupancy.
 
     ``token`` is the stored condition token (``FAB`` = MET-FAB, ``INLB`` = MET-INLB; the one
     definition of the naming lives in ``experiment_support.CONDITION_DISPLAY`` and the
@@ -870,9 +888,28 @@ class ConditionSetting:
     estimates are conditional on it. Because the two settings produce different trajectories,
     each condition has its own RDS trajectory tier (``Paths.rds_alias``), shared by both
     workflows. Unbinding stays inferred in both conditions.
+
+    ``occupancy`` is the probability that a receptor subunit carries a probe at all (the
+    visibility layer's declared input; labeling.py composes it with the condition's dye-count
+    law). It is a CONVENTION with a source, not a measurement, and it is provisional until the
+    experimental collaborators answer the questions sent on 2026-09-11 (probe concentration in
+    the imaging medium, occupancy within dimers, probe residence). MET-INLB declares 0.5 (the
+    collaborators' statement: 5 nM against a 5 nM dissociation constant; the published uPAINT
+    protocol reports 0.25 nM in the medium, unreconciled). MET-FAB has no published affinity,
+    so its occupancy is DERIVED: the code stores a declared Fab/InlB VISIBILITY RATIO
+    (``visibility_ratio`` = 0.5, a rounded convention over the measured Fab/InlB spot-density
+    ratios of the deposited recordings, 0.38-0.48 depending on the window; Special_Analyses
+    A9) and the anchor condition (``visibility_ratio_to`` = INLB), and
+    ``SimulationRDS.occupancy_of`` resolves p_FAB = ratio x a_INLB / P_FAB(dye >= 1) =
+    0.5 x 0.25 / 0.806 = 0.155, so a revised InlB anchor propagates. Exactly one of
+    ``occupancy`` and ``visibility_ratio`` is set per condition. The code default of full
+    occupancy is retired: uPAINT labels a sparse subset by design.
     """
     token: str
     association_ratio: float
+    occupancy: Optional[float] = None
+    visibility_ratio: Optional[float] = None
+    visibility_ratio_to: Optional[str] = None
 
     def __post_init__(self):
         token = str(self.token)
@@ -887,12 +924,29 @@ class ConditionSetting:
             raise ValueError(f"ConditionSetting {token}: association_ratio {ratio!r} is a disguised "
                              f"zero; switch association off with exactly 0.0 (no channels are "
                              f"generated), never with a small positive stand-in.")
+        declared = self.occupancy is not None
+        derived = self.visibility_ratio is not None
+        if declared == derived:
+            raise ValueError(f"ConditionSetting {token}: declare EXACTLY ONE of occupancy (a declared "
+                             f"probability) or visibility_ratio (derived from an anchor condition).")
+        if declared and not (np.isfinite(self.occupancy) and 0.0 < float(self.occupancy) <= 1.0):
+            raise ValueError(f"ConditionSetting {token}: occupancy must lie in (0, 1] (got {self.occupancy!r}).")
+        if derived:
+            if not (np.isfinite(self.visibility_ratio) and float(self.visibility_ratio) > 0.0):
+                raise ValueError(f"ConditionSetting {token}: visibility_ratio must be finite and > 0 "
+                                 f"(got {self.visibility_ratio!r}).")
+            if not self.visibility_ratio_to or self.visibility_ratio_to == token:
+                raise ValueError(f"ConditionSetting {token}: a derived occupancy names a DIFFERENT anchor "
+                                 f"condition in visibility_ratio_to (got {self.visibility_ratio_to!r}).")
 
 
-# The declared per-condition association settings (see ConditionSetting for the decision).
+# The declared per-condition settings (see ConditionSetting for the decisions and their sources).
 CONDITION_SETTINGS: tuple = (
-    ConditionSetting("FAB", 0.0),    # MET-FAB: no association channels; pre-existing dimers may dissociate
-    ConditionSetting("INLB", 1.0),   # MET-INLB: lambda_on = lambda_ref, the reference convention
+    # MET-FAB: no association channels; pre-existing dimers may dissociate. Occupancy DERIVED from the
+    # declared Fab/InlB visibility ratio 0.5 and the InlB anchor (-> 0.155 under the baseline laws).
+    ConditionSetting("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB"),
+    # MET-INLB: lambda_on = lambda_ref, the reference convention. Occupancy 0.5 declared (provisional).
+    ConditionSetting("INLB", 1.0, occupancy=0.5),
 )
 
 
@@ -903,8 +957,9 @@ class SimulationRDS:
     The particle types are DERIVED here (species x modes, species-major, modes fastest
     first), as are their subunit counts and the maps back to species and mode; nothing
     downstream lists them by hand. ``conditions`` declares the per-condition association
-    ratio (``association_ratio_of``); the reaction network of a run is generated from the
-    blocks AND the run's condition.
+    ratio (``association_ratio_of``) and probe occupancy (``occupancy_of``, ``visibility_of``);
+    the reaction network of a run is generated from the blocks AND the run's condition, and
+    the DLI stage labels the tier under the condition's occupancy unless overridden.
     """
     prior_seed: Optional[int] = None               # None = OS-determined
     stoichiometry: StoichiometryBlock = field(default_factory=StoichiometryBlock)
@@ -926,6 +981,36 @@ class SimulationRDS:
     def association_ratio_of(self, condition: str) -> float:
         """R_ON of ``condition``: 0.0 = no association channels; > 0 scales lambda_ref."""
         return float(self.condition_setting(condition).association_ratio)
+
+    @staticmethod
+    def dye_probability_of(condition: str) -> float:
+        """P(dye >= 1) for one BOUND probe under the condition's baseline labeling law
+        (INLB Bernoulli 0.5 -> 0.5; FAB Poisson 1.64 -> 1 - exp(-1.64) = 0.806)."""
+        from .labeling import resolve_labeling_law      # local import: labeling imports only experiment_support
+        return float(resolve_labeling_law(condition)[1].visible_probability)
+
+    def occupancy_of(self, condition: str) -> float:
+        """Probe occupancy per subunit of ``condition``: the declared value, or the derived one
+        p = visibility_ratio x visibility(anchor) / P(dye >= 1 | condition). Declared values are
+        conventions with sources (ConditionSetting); the derivation is one step deep by
+        construction (an anchor must itself be declared)."""
+        setting = self.condition_setting(condition)
+        if setting.occupancy is not None:
+            return float(setting.occupancy)
+        anchor = self.condition_setting(setting.visibility_ratio_to)
+        if anchor.occupancy is None:
+            raise ValueError(f"ConditionSetting {condition}: anchor {anchor.token} must declare its own "
+                             f"occupancy (derivations are one step deep).")
+        anchor_visibility = float(anchor.occupancy) * self.dye_probability_of(anchor.token)
+        return float(setting.visibility_ratio) * anchor_visibility / self.dye_probability_of(condition)
+
+    def visibility_of(self, condition: str) -> float:
+        """Probability that a receptor subunit is visible: occupancy x P(dye >= 1)."""
+        return self.occupancy_of(condition) * self.dye_probability_of(condition)
+
+    def occupancy_source_of(self, condition: str) -> str:
+        """'declared' or 'derived' (provenance for the labeling record)."""
+        return "declared" if self.condition_setting(condition).occupancy is not None else "derived"
 
     @staticmethod
     def type_name(species: str, mode: str) -> str:
@@ -983,7 +1068,9 @@ class SimulationRDS:
     # candidate search degrades to O(N^2). The optimum is a broad plateau (~10x-100x
     # the diameter). The default 10x (= 100 nm) sits on that plateau and clears the
     # worst-case per-step displacement (~47 nm at max diffusivity) with margin, so no
-    # reaction is missed. Overridable per run via --skin-factor / SKIN_FACTOR.
+    # eligible pair within the reaction distance at a sub-step boundary is missed by the
+    # neighbor search (encounters BETWEEN sub-step boundaries are a separate, documented
+    # approximation of the 2 ms sub-step). Overridable per run via --skin-factor / SKIN_FACTOR.
     neighbor_list_skin_factor: float = 10.0
 
 
@@ -1257,35 +1344,37 @@ _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
 _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
     # ----- Reaction-Diffusion System: the two model blocks -----
-    # DEVELOPMENT SETTINGS. Every range below is a broad development placeholder for building
-    # and checking the generator; none is a scientifically approved training prior (those are
-    # a later, separate decision recorded in the model specification's decision log).
-    'stoichiometry': [  # StoichiometryBlock: conserved total, requested initial dimer fraction, dissociation (the association ratio is a per-condition CONSTANT, not a row)
-        {'KEY': 'count_total', 'VALUE': 10**1.75, 'PRIOR_RANGE': (0.5, 3.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{R}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the SIMULATED patch (the in-field count is a distinct, time-dependent quantity under the open lateral boundary). Realized as an integer by realize_initial_composition. Development range.'},
-        {'KEY': 'fraction_dimer_initial', 'VALUE': 0.5, 'PRIOR_RANGE': (0.0, 1.0), 'LOG_FLAG': False, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$x_{B}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'REQUESTED initial fraction of receptors belonging to dimers, x_B = 2 n_B(0) / N_R, LINEAR on [0, 1] inclusive (the estimator coordinate is the value itself). Realized as n_B(0) = min(round(N_R x_B / 2), floor(N_R / 2)); the realized fraction is recorded beside the requested one (Labeling_Set). The complex fraction is f_B = x_B / (2 - x_B).'},
+    # DECIDED PRIOR RANGES (2026-09-14). Box-uniform in the estimator coordinate; each DOC names its
+    # source (baseline = dimer-alp 0.4.23; A9 = Special_Analyses per-recording analysis of the
+    # deposited MET tables; spec = model specification sec. 9 anchors; thresholds = tracking
+    # pipelines). Rationale: PROJECT_CONTEXT.md sec. 2, "How the prior ranges and the declared
+    # inputs are set". The receptor count is CONDITIONAL on the declared occupancies.
+    'stoichiometry': [  # StoichiometryBlock: conserved total, requested initial dimer-to-monomer ratio, dissociation (the association ratio is a per-condition CONSTANT, not a row)
+        {'KEY': 'count_total', 'VALUE': 10**3.0, 'PRIOR_RANGE': (2.5, 3.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{R}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the SIMULATED patch (the in-field count is a distinct, time-dependent quantity under the open lateral boundary). Realized as an integer by realize_initial_composition. Range 316-3162 (A9): spots per frame in the first 2 s of the 120 deposited recordings, divided by the declared visibility per subunit (INLB 0.25, FAB 0.125), give log10 N_R peaked at 3.0-3.1 (sd 0.21 InlB, 0.30 Fab), 94% inside the box; localizations UNDERCOUNT receptors (bleached bound probes, missed detections, two-dye dimers as one spot), so the tail below 2.5 is empty in truth. The box is wider than the empirical shape on purpose: posterior width comes from the data, prior width steers the training budget. CONDITIONAL on the declared occupancies. Baseline 0.4.23: three per-species counts, each (0, 2.5).'},
+        {'KEY': 'ratio_dimer_monomer_initial', 'VALUE': 10**0, 'PRIOR_RANGE': (-2.0, 2.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$r_{B/A}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'REQUESTED initial dimer-to-monomer ratio r = n_B(0) / n_A(0), log10 on [-2, 2]: from one dimer per hundred monomers to a hundred dimers per monomer, i.e. complex fraction f_B = r / (1 + r) from 1% to 99%, SYMMETRIC about an even split (median f_B = 1/2), so the prior is even-handed between mostly-monomer and mostly-dimer populations; the resting (5-18% complexes) and activated (63%) anchors lie inside. Realized as n_B(0) = min(round(N_R r / (1 + 2 r)), floor(N_R / 2)), n_A = N_R - 2 n_B; the receptor fraction x_B = 2 r / (1 + 2 r) and f_B are DERIVED and recorded beside the requested ratio (Labeling_Set). Rejected: log10 x_B on [-2, 0] (65% of the prior mass on f_B < 0.1 and 5% on f_B > 0.6, forcing the resting answer) and the linear x_B on [0, 1] (median f_B = 1/3). Replaces the earlier per-species counts of the baseline.'},
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{CAP}$', 'NOTE': 'Known Parameter'},
-        {'KEY': 'rate_dissociation', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Dimer unbinding rate, B_m -> A_m + A_m for every mode m (dissociation conserves the mode); inferred in every condition. Development range; the lower bound needed for dimers that PERSIST over a 20 s recording under the MET-FAB setting (no association) is part of the later range decisions.'},
+        {'KEY': 'rate_dissociation', 'VALUE': 10**(-1), 'PRIOR_RANGE': (-3, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Dimer unbinding rate, B_m -> A_m + A_m for every mode m (dissociation conserves the mode); inferred in every condition. Range 0.001-10 per s: the lower bound is widened from the baseline (-1, 1) so that under MET-FAB, where no association exists, dimers can PERSIST through a 20 s recording (0.001 per s loses 2% in 20 s); the upper bound, a 0.1 s lifetime (five frames), is the baseline value. Under MET-FAB kappa_OFF is the dimer lifetime rate directly.'},
     ],
     'mobility': [  # MobilityBlock: monomer scale, dimer factor, mode factors, the four shared switching rates
         {'KEY': 'diffusivity_alp', 'VALUE': 10**(-0.75), 'PRIOR_RANGE': (-1.25, -0.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Square Micrometer Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$D_{A}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Monomer scale coefficient D_A = D[A, fast]; every other coefficient is a declared ratio of it. Development range.'},
+         'DOC': 'Monomer scale coefficient D_A = D[A, fast]; every other coefficient is a declared ratio of it. Range 0.056-0.56 um^2/s, the baseline 0.4.23 range unchanged; the fast-class anchors 0.13 (segment analysis) and 0.25 (hidden Markov analysis) of the specification sec. 9.3 lie inside.'},
         {'KEY': 'relative_diffusivity_dimer', 'VALUE': 10**(-0.5), 'PRIOR_RANGE': (-1, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{B}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Dimer factor within a mode: D[B, m] = R_B * D[A, m], 0 < R_B <= 1 (at 1 dimerization adds no slowdown; population-level differences then come from mode occupancy and inheritance). Development range.'},
+         'DOC': 'Dimer factor within a mode: D[B, m] = R_B * D[A, m], 0 < R_B <= 1. Range 0.1-1: the baseline 0.4.23 range (-0.625, -0.125), i.e. 0.24-0.75 around the 1.65x-slower-dimer anchor, widened to 1 by the lead so that dimerization may add no slowdown; population-level slowing then comes from mode occupancy and inheritance.'},
         {'KEY': 'relative_diffusivity_slow', 'VALUE': 10**(-0.5), 'PRIOR_RANGE': (-1, 0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{s}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Slow-mode factor: D[X, s] = R_s * D[X, f]. R_s <= 1 by range; R_s = 1 does NOT reduce the model to two modes (the chain still passes through s). Development range, disjoint from R_i.'},
-        {'KEY': 'relative_diffusivity_immobile', 'VALUE': 10**(-2.15), 'PRIOR_RANGE': (-3.0, -1.3), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{i}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Immobile-mode factor: D[X, i] = R_i * D[X, f]; a practical resolution floor, not zero. R_i < R_s is guaranteed by the disjoint ranges (upper edge 10^-1.3 ~ 0.05 below the slow range). Development range.'},
+         'DOC': 'Slow-mode factor: D[X, s] = R_s * D[X, f]. Range 0.1-1 (a new row; the baseline had no slow mode): the confined/free anchors 0.7 (segment analysis) and 0.28 (hidden Markov analysis) lie inside. R_s = 1 does NOT reduce the model to two modes (the chain still passes through s); at 1 the slow mode coincides with the fast one, a degeneracy to report, not to remove. Disjoint from R_i by a full decade.'},
+        {'KEY': 'relative_diffusivity_immobile', 'VALUE': 10**(-2.5), 'PRIOR_RANGE': (-3.0, -2.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Square Micrometer Per Second', 'LABEL': r'$R_{i}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Immobile-mode factor: D[X, i] = R_i * D[X, f]. Range 0.001-0.01. IMMOBILITY IS IMPOSED BY CONSTRUCTION: over nearly the whole D_A range the immobile coefficient stays below the tracking pipelines\' immobility thresholds (0.0028 and 0.0065 um^2/s; only the top of the range at the D_A ceiling exceeds the stricter one), so the third mode IS the class the pipelines call immobile, and the data decide its occupancy and exchange rates, not whether it is immobile. The lower half lies below the 2 s resolution floor (~0.0005-0.001 um^2/s), so the posterior of R_i is flat there; accepted. Baseline 0.4.23 (-2, -1) rejected: at 0.1 the mode reaches 0.018-0.056 um^2/s (classified confined) and touches R_s. A full decade below the slow range guarantees R_i < R_s.'},
         {'KEY': 'rate_fast_slow', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{fs}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Switching fast -> slow, shared by both species. Development range.'},
+         'DOC': 'Switching fast -> slow, shared by both species. Range 0.1-10 per s: the baseline 0.4.23 band of the earlier mobile/immobile switching, kept for all four shared rates; resolvable between the 20 ms frame and the 2 s window; the observed class fractions (67/22/11 Fab, 43/29/28 InlB) imply rate ratios between 0.3 and 1, well inside.'},
         {'KEY': 'rate_slow_fast', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{sf}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Switching slow -> fast, shared by both species. Development range.'},
+         'DOC': 'Switching slow -> fast, shared by both species. Range 0.1-10 per s: the baseline 0.4.23 band of the earlier mobile/immobile switching, kept for all four shared rates; resolvable between the 20 ms frame and the 2 s window; the observed class fractions (67/22/11 Fab, 43/29/28 InlB) imply rate ratios between 0.3 and 1, well inside.'},
         {'KEY': 'rate_slow_immobile', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{si}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Switching slow -> immobile, shared by both species. Development range.'},
+         'DOC': 'Switching slow -> immobile, shared by both species. Range 0.1-10 per s: the baseline 0.4.23 band of the earlier mobile/immobile switching, kept for all four shared rates; resolvable between the 20 ms frame and the 2 s window; the observed class fractions (67/22/11 Fab, 43/29/28 InlB) imply rate ratios between 0.3 and 1, well inside.'},
         {'KEY': 'rate_immobile_slow', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{is}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Switching immobile -> slow, shared by both species. Development range.'},
+         'DOC': 'Switching immobile -> slow, shared by both species. Range 0.1-10 per s: the baseline 0.4.23 band of the earlier mobile/immobile switching, kept for all four shared rates; resolvable between the 20 ms frame and the 2 s window; the observed class fractions (67/22/11 Fab, 43/29/28 InlB) imply rate ratios between 0.3 and 1, well inside.'},
     ],
     # ----- Diffraction-Limited Imaging -----
     'camera': [  # EMCCD camera chain (REFERENCE_EMCCD_NOISE_MODEL.md): gamma, kappa_o, kappa_b, kappa_s, kappa_q marginalized as the SCOPE camera nuisance (non-identifiable; DETECTOR_WORKFLOW.md sec. 9.3, marginalized in both workflows); kappa_g, kappa_c fixed nominal spec metadata (gamma = kappa_g/kappa_c).
@@ -1462,7 +1551,7 @@ def prior_center(entry: dict) -> float:
 
 
 # =============================================================================
-# Initial composition: integer realization of the sampled (N_R, x_B)
+# Initial composition: integer realization of the sampled (N_R, r), r = n_B / n_A
 # =============================================================================
 
 @dataclass(frozen=True)
@@ -1470,14 +1559,16 @@ class InitialComposition:
     """The realized initial state of the stoichiometry layer for one simulation.
 
     ``n_total`` is the integer receptor-subunit total actually placed (N_R rounded, at least
-    one); ``n_dimers`` and ``n_monomers`` the particles placed; ``fraction_requested`` the
-    sampled x_B and ``fraction_realized`` = 2 n_dimers / n_total, which differs from it by
+    one); ``n_dimers`` and ``n_monomers`` the particles placed; ``ratio_requested`` the
+    sampled dimer-to-monomer ratio r; ``fraction_requested`` = 2r / (1 + 2r) the receptor
+    fraction it implies; ``fraction_realized`` = 2 n_dimers / n_total, which differs from it by
     rounding and by the cap n_dimers <= floor(n_total / 2). Every derived fraction is
     computed from the realized counts.
     """
     n_total: int
     n_monomers: int
     n_dimers: int
+    ratio_requested: float
     fraction_requested: float
     fraction_realized: float
 
@@ -1490,22 +1581,49 @@ class InitialComposition:
         """f_B = n_B / (n_A + n_B), the fraction of complexes that are dimers."""
         return self.n_dimers / self.n_complexes if self.n_complexes else float("nan")
 
+    @property
+    def ratio_realized(self) -> float:
+        """r = n_B / n_A of the realized counts (inf when no monomer was placed)."""
+        return self.n_dimers / self.n_monomers if self.n_monomers else float("inf")
 
-def realize_initial_composition(count_total: float, fraction_dimer: float) -> InitialComposition:
-    """Integer (n_A, n_B) from the sampled receptor total and requested dimer fraction.
 
-    n_total = max(1, round(N_R));  n_B = min(round(n_total * x_B / 2), floor(n_total / 2));
+def ratio_to_receptor_fraction(ratio) -> np.ndarray:
+    """x_B = 2r / (1 + 2r): the receptor fraction in dimers implied by the ratio r = n_B / n_A."""
+    r = np.asarray(ratio, dtype=float)
+    return 2.0 * r / (1.0 + 2.0 * r)
+
+
+def ratio_to_complex_fraction(ratio) -> np.ndarray:
+    """f_B = r / (1 + r): the fraction of complexes that are dimers implied by r = n_B / n_A."""
+    r = np.asarray(ratio, dtype=float)
+    return r / (1.0 + r)
+
+
+def receptor_fraction_to_ratio(fraction) -> np.ndarray:
+    """r = x_B / (2 (1 - x_B)): the inverse of ``ratio_to_receptor_fraction`` (inf at x_B = 1)."""
+    x = np.asarray(fraction, dtype=float)
+    with np.errstate(divide="ignore"):
+        return x / (2.0 * (1.0 - x))
+
+
+def realize_initial_composition(count_total: float, ratio_dimer_monomer: float) -> InitialComposition:
+    """Integer (n_A, n_B) from the sampled receptor total and requested dimer-to-monomer ratio.
+
+    n_total = max(1, round(N_R));  n_B = min(round(n_total * r / (1 + 2 r)), floor(n_total / 2));
     n_A = n_total - 2 n_B.  Conservation N_R = n_A + 2 n_B holds exactly for the realized
-    integers; an odd total at x_B = 1 leaves one monomer.
+    integers. At r = 0.01 and n_total = 316 three dimers are placed (the decided box never
+    realizes zero dimers at its count floor); the cap binds only for r beyond the box.
     """
-    if not np.isfinite(count_total) or not np.isfinite(fraction_dimer):
-        raise ValueError(f"realize_initial_composition: non-finite input ({count_total}, {fraction_dimer}).")
-    if not 0.0 <= fraction_dimer <= 1.0:
-        raise ValueError(f"realize_initial_composition: x_B must lie in [0, 1] (got {fraction_dimer}).")
+    if not np.isfinite(count_total) or not np.isfinite(ratio_dimer_monomer):
+        raise ValueError(f"realize_initial_composition: non-finite input ({count_total}, {ratio_dimer_monomer}).")
+    if ratio_dimer_monomer < 0.0:
+        raise ValueError(f"realize_initial_composition: the dimer-to-monomer ratio must be >= 0 "
+                         f"(got {ratio_dimer_monomer}).")
+    r = float(ratio_dimer_monomer)
     n_total = int(max(1, round(float(count_total))))
-    n_dimers = int(min(round(n_total * float(fraction_dimer) / 2.0), n_total // 2))
+    n_dimers = int(min(round(n_total * r / (1.0 + 2.0 * r)), n_total // 2))
     n_monomers = n_total - 2 * n_dimers
-    return InitialComposition(n_total, n_monomers, n_dimers, float(fraction_dimer),
+    return InitialComposition(n_total, n_monomers, n_dimers, r, float(ratio_to_receptor_fraction(r)),
                               2.0 * n_dimers / n_total)
 
 
@@ -1527,9 +1645,16 @@ def _validate_model_blocks() -> None:
             raise ValueError(f"parameter {entry['KEY']!r}: a ranged row declares LOG_FLAG True or False.")
         if is_log_row(entry) and entry['LOG_BASE'] != 10:
             raise ValueError(f"parameter {entry['KEY']!r}: log rows are base 10.")
-    frac = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.fraction_dimer_key]]
-    if is_log_row(frac) or frac['PRIOR_RANGE'][0] < 0.0 or frac['PRIOR_RANGE'][1] > 1.0:
-        raise ValueError("the initial dimer fraction is a LINEAR row on a sub-range of [0, 1].")
+    ratio = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.composition_ratio_key]]
+    if not is_log_row(ratio):
+        raise ValueError("the initial dimer-to-monomer ratio is a LOG row (symmetric about an even split).")
+    if abs(ratio['PRIOR_RANGE'][0] + ratio['PRIOR_RANGE'][1]) > 1e-12:
+        raise ValueError("the initial dimer-to-monomer ratio's box must be symmetric about 0 (an even split).")
+    count = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.count_total_key]]
+    n_floor = int(round(entry_to_physical(count, count['PRIOR_RANGE'][0])))
+    if realize_initial_composition(n_floor, entry_to_physical(ratio, ratio['PRIOR_RANGE'][0])).n_dimers < 1:
+        raise ValueError("the composition box realizes zero dimers at the count floor; widen the count "
+                         "floor or raise the ratio's lower edge.")
     # Mobility ordering R_immobile < R_slow <= 1 and 0 < R_dimer <= 1, by the declared ranges.
     def phys_range(key):
         e = PARAMETERIZATION[PARAMETER_FIND[key]]
@@ -1560,6 +1685,19 @@ def _validate_model_blocks() -> None:
     if not any(rds.association_ratio_of(t) > 0.0 for t in tokens):
         raise ValueError("SimulationRDS.conditions: no condition has association switched on; the "
                          "model family is A + A -> B in at least one condition.")
+    # Occupancy: declared or derived, every value a probability in (0, 1]; the derived MET-FAB
+    # value guards the anchor arithmetic (0.5 x 0.25 / 0.806 = 0.155 under the baseline laws).
+    for t in tokens:
+        p = rds.occupancy_of(t)
+        if not (np.isfinite(p) and 0.0 < p <= 1.0):
+            raise ValueError(f"SimulationRDS.conditions: occupancy of {t} resolves to {p!r}, not a probability.")
+        if rds.condition_setting(t).visibility_ratio_to is not None and \
+                rds.condition_setting(rds.condition_setting(t).visibility_ratio_to).occupancy is None:
+            raise ValueError(f"SimulationRDS.conditions: {t} derives its occupancy from an anchor that is itself derived.")
+    if abs(rds.occupancy_of("FAB") - 0.155) > 5e-4 or abs(rds.occupancy_of("INLB") - 0.5) > 1e-12:
+        raise ValueError(f"SimulationRDS.conditions: occupancies resolve to FAB {rds.occupancy_of('FAB'):.4f} / "
+                         f"INLB {rds.occupancy_of('INLB'):.4f}; the decided values are 0.155 (derived) / 0.5. "
+                         f"Change the declared settings AND this guard together.")
 
 
 _validate_model_blocks()
@@ -1569,6 +1707,23 @@ def association_ratio_of(condition: str) -> float:
     """The declared association ratio R_ON of ``condition`` (``SimulationRDS.association_ratio_of``):
     0.0 means the condition has no association channel; a positive value scales lambda_ref."""
     return PARAMETERS.simulation.rds.association_ratio_of(condition)
+
+
+def occupancy_of(condition: str) -> float:
+    """Probe occupancy per subunit of ``condition`` (``SimulationRDS.occupancy_of``): INLB 0.5
+    declared; FAB 0.155 derived from the declared Fab/InlB visibility ratio and the InlB anchor."""
+    return PARAMETERS.simulation.rds.occupancy_of(condition)
+
+
+def occupancy_source_of(condition: str) -> str:
+    """'declared' or 'derived': how the condition's occupancy is set (``SimulationRDS.occupancy_source_of``)."""
+    return PARAMETERS.simulation.rds.occupancy_source_of(condition)
+
+
+def visibility_of(condition: str) -> float:
+    """Probability that a receptor subunit is visible under ``condition``: occupancy x P(dye >= 1)
+    (INLB 0.25, FAB 0.125 under the baseline labeling laws)."""
+    return PARAMETERS.simulation.rds.visibility_of(condition)
 
 
 # =============================================================================

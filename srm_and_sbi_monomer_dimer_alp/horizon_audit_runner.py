@@ -27,7 +27,8 @@ CLI subcommand so the expensive stages can be split across machines and resumed:
 DESIGN DECISIONS.
 
 * STATE TRUTH = THE WINDOW-START POPULATION. The estimator's stoichiometry labels (receptor total
-  N_R, initial dimer fraction x_B) are the initial populations of its training windows, so the
+  N_R, initial dimer-to-monomer ratio r, read as the receptor fraction x_B) are the initial
+  populations of its training windows, so the
   start state is what it was trained to report.
   The within-window mean and end populations, and the unrounded theta label, are retained as
   explicitly secondary sensitivity references -- judging against them manufactures an estimand
@@ -85,7 +86,7 @@ import numpy as np
 from . import horizon_audit as ha
 from . import population_composition as pc
 from .diagnostics import DiagnosticReporter
-from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical
+from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical, ratio_to_receptor_fraction
 from .labeling import LABELING_CONDITIONS, resolve_labeling_law
 from .simulation_rds_support import (
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
@@ -94,9 +95,10 @@ from .simulation_rds_support import (
 from .workflow import parameter_table
 
 # The stoichiometry coordinates, in the order the composition kernel expects: the receptor total
-# N_R (a log row) and the initial dimer fraction x_B (a linear row on [0, 1]).
+# N_R and the initial dimer-to-monomer ratio r (both log rows); the kernel reads the second as the
+# receptor fraction x_B = 2r / (1 + 2r), so every binding below composes ratio_to_receptor_fraction.
 _COUNT_KEYS = (PARAMETERS.simulation.rds.stoichiometry.count_total_key,
-               PARAMETERS.simulation.rds.stoichiometry.fraction_dimer_key)
+               PARAMETERS.simulation.rds.stoichiometry.composition_ratio_key)
 # Species-count column order of every per-frame trace: monomer first, dimer second.
 _SPECIES_ORDER = PARAMETERS.simulation.rds.molecular_species_names
 
@@ -713,13 +715,14 @@ def _fd_of_counts(counts):
 def _fd_of_parameters(theta_flow, count_index, table):
     """Dimer-complex fraction from estimator-space theta rows ``(..., D)`` (draws, labels, MAPs).
 
-    Selects the two stoichiometry coordinates, maps them to physical ``(N_R, x_B)`` with the ONE
-    conversion rule bound to their table rows (the total is a log row, the fraction a linear one),
-    and forms the fraction through the same kernel definition the trajectory path uses.
+    Selects the two stoichiometry coordinates, maps them to physical ``(N_R, r)`` with the ONE
+    conversion rule bound to their table rows, reads the ratio as x_B = 2r / (1 + 2r), and forms
+    the fraction through the same kernel definition the trajectory path uses.
     """
     idx = list(count_index)
     rows = [table[i] for i in idx]
-    pair = to_physical(np.asarray(theta_flow, dtype=float)[..., idx], rows)
+    pair = np.array(to_physical(np.asarray(theta_flow, dtype=float)[..., idx], rows), dtype=float)
+    pair[..., 1] = ratio_to_receptor_fraction(pair[..., 1])
     return pc.composition(pair)[..., pc.DIMER_INDEX]
 
 
@@ -1219,14 +1222,16 @@ def _phase_analyze(spec, args):
                         "(rounding) effect of the initial composition.")
 
     # ---- state-support drift + flow mass outside the training box ----
-    # The trained box is over the stoichiometry coordinates (N_R, x_B), so the TRUE start
+    # The trained box is over the stoichiometry coordinates (N_R, r), so the TRUE start
     # populations (species counts) are read back as (total receptors, receptors in dimers) through
-    # the kernel and compared with the box mapped to physical units. N_R is conserved by
-    # construction and x_B is bounded on [0, 1], so only the integer realization of a draw near the
-    # N_R edges can leave the box; the statistic is kept as the honest sanity check of that.
+    # the kernel and compared with the box mapped to physical units, the ratio edges mapped to
+    # x_B = 2r / (1 + 2r) (monotone, so the box maps to a box). N_R is conserved by construction,
+    # so only the integer realization of a draw near an edge can leave the box; the statistic is
+    # kept as the honest sanity check of that.
     count_rows = [table[i] for i in count_index]
-    lo_c = to_physical(spec["lower"][list(count_index)], count_rows)
-    hi_c = to_physical(spec["upper"][list(count_index)], count_rows)
+    lo_c = np.array(to_physical(spec["lower"][list(count_index)], count_rows), dtype=float)
+    hi_c = np.array(to_physical(spec["upper"][list(count_index)], count_rows), dtype=float)
+    lo_c[1], hi_c[1] = ratio_to_receptor_fraction(lo_c[1]), ratio_to_receptor_fraction(hi_c[1])
     start_comp = pc.composition_from_counts(data["cont_true_start"])           # (T, W, 5)
     start_pairs = start_comp[..., [pc.RECEPTORS_INDEX, pc.RECEPTORS_IN_DIMERS_INDEX]]
     outside = (start_pairs < lo_c) | (start_pairs > hi_c)

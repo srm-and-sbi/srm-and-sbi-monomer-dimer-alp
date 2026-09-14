@@ -6,7 +6,7 @@ This repository is a self-contained pipeline within the `srm-and-sbi` project: i
 
 ## Repository status
 
-**In development (0.1.3).** The codebase began as a copy of the tracked tree of
+**In development (0.1.4).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
 of the earlier three-species DIMER model with the stationary OU brightness photo-physics — and implements
 the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the
@@ -18,9 +18,11 @@ calibration that marginalizes the full reactive biology prior, and the separated
 stoichiometry–mobility model (two molecular species × three mobility modes; the reaction channels
 generated from the model blocks and the condition's association setting, seventeen under MET-INLB
 and eleven under MET-FAB; eleven learnable parameters, identical for both conditions, led by the
-conserved receptor total `N_R` and the initial dimer fraction `x_B`; all parameter ranges are
-development settings, not approved training priors). Pending: the per-condition `Nuisance_DLI`
-recalibration under the DOL-explicit model.
+conserved receptor total `N_R` and the initial dimer-to-monomer ratio `r`, from which the receptor
+fraction `x_B` is derived), and the decided prior ranges of every learnable row together with the
+declared per-condition probe occupancies (2026-09-14; the occupancies are provisional until the
+collaborators' answers). Pending: the per-condition `Nuisance_DLI` recalibration under the
+DOL-explicit model, and the first per-condition trajectory tier under the decided ranges.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the Fab-labeled
 monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,
@@ -181,7 +183,7 @@ then open the printed `http://localhost:8888/...` URL in your browser and run th
 
 ## Structure
 
-- `Script_Bank/Analysis` — post-hoc diagnostics, run on completed outputs (not pipeline stages): paired `.py`/`.md` scripts (each script ships with a companion `.md` explaining its interpretation) serving both the biology and detector workflows, grouped by family — posterior calibration, estimator comparison, test-loss distribution, embedding-space distance, posterior-predictive video, sample-geometric-median, temporal dynamics, population composition, seeding validation, and `Nuisance_DLI` construction
+- `Script_Bank/Analysis` — post-hoc diagnostics, run on completed outputs (not pipeline stages): paired `.py`/`.md` scripts (each script ships with a companion `.md` explaining its interpretation) serving both the biology and detector workflows, grouped by family — posterior calibration, estimator comparison, test-loss distribution, embedding-space distance, posterior-predictive video, sample-geometric-median, temporal dynamics, population composition, seeding validation, `Nuisance_DLI` construction, and the model audits (the deterministic structure audit of the generator, `..._Model_Structure_Audit`, and the read-only prior-realization audit of generated products against the prior box and the declared occupancies, `..._Prior_Realization_Audit`)
 - `Script_Bank/HPC` — HPC-mode submission and orchestration scripts
 - `Script_Bank/Prime` — stage entry points: the trajectory-tier simulation (`Simulation_RDS`, one entry point for both workflows, run once per condition), the biology stages (`Simulation_DLI`, training with `Inference`, validation with `Evaluation` on synthetic EVAL data and `Experiment` on experimental microscopy), dataset generation (`Generate_Datasets`, fanning the DLI passes out over workflows and conditions) — plus the `DETECTOR_`-prefixed mirrors of the four stages past RDS for the Detector calibration workflow
 - `srm_and_sbi_monomer_dimer_alp/` — main Python package (modules, support functions)

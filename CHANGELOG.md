@@ -5,6 +5,119 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.4 - 2026-09-14
+
+The decided prior ranges and the declared visibility inputs: every learnable row leaves its
+development range for a decided box with a named source, the initial composition becomes the
+log dimer-to-monomer ratio, and probe occupancy becomes a declared per-condition input.
+
+### Added
+
+- **The Theta_Set schema** (`io.theta_set_schema` / `write_theta_set` / `load_theta_set` /
+  `theta_set_status`, `ThetaSetSchemaError`). Every `Theta_Set` now carries, beside the numbers, its
+  ordered parameter keys, prior bounds and per-row scales, condition, timing label, generating stage,
+  and package version (`.zarr` attributes; a JSON sidecar beside a plain `.npy`). The RDS stage writes
+  it for the eleven-row tier; the DLI stage writes the six-row imaging schema on the detector's
+  `Theta_Set` (and on the biology `Nuisance_DLI` record, provenance only). Every reader -- the
+  training dataset, the DLI stage's read of the RDS labels, evaluation, calibration, the
+  embedding-distance analysis, the prior-realization audit (new P0) -- refuses a `Theta_Set` whose
+  schema is absent or differs in keys, bounds, scales, or condition, naming the difference; the
+  dry runs print the schema status per file. Structure-audit D10 exercises the round trip and the
+  refusals. Motivation: two tables with the same row count are indistinguishable by shape, so a tier
+  generated under an earlier table could otherwise be consumed silently.
+- **Decided prior ranges for all eleven learnable rows** (`parameterization.py`,
+  `_PARAMETERIZATION_RAW_NESTED`; rationale in `PROJECT_CONTEXT.md` sec. 2, "How the prior ranges
+  and the declared inputs are set"), log10 estimator coordinate: `count_total` [2.5, 3.5]
+  (316-3162 subunits; from the first-2 s spot counts of the 120 deposited recordings divided by
+  the declared visibility per subunit, Special_Analyses A9: log10 N_R peaked at 3.0-3.1, sd 0.21
+  InlB / 0.30 Fab, 94% inside the box; localizations undercount the visible receptors, which is the
+  reason for not extending the box downward; the box is at least as wide as the empirical shape
+  on purpose), `ratio_dimer_monomer_initial`
+  [-2, 2], `rate_dissociation` [-3, 1] (the lower bound lets MET-FAB dimers persist through a
+  20 s recording: 0.001 per s loses 2% in 20 s), `diffusivity_alp` [-1.25, -0.25],
+  `relative_diffusivity_dimer` [-1, 0], `relative_diffusivity_slow` [-1, 0],
+  `relative_diffusivity_immobile` [-3, -2], and the four switching rates [-1, 1] each. Every
+  row's `DOC` names its source (the dimer-alp 0.4.23 baseline, Special_Analyses A9, the model
+  specification's sec. 9 anchors, the tracking pipelines' thresholds); both conditions share the
+  one table, and no range encodes a condition's expected answer.
+- **Probe occupancy as a declared per-condition input** (`ConditionSetting.occupancy` /
+  `visibility_ratio` / `visibility_ratio_to`; `SimulationRDS.occupancy_of`, `visibility_of`,
+  `occupancy_source_of` and the module-level `occupancy_of`, `visibility_of`): MET-INLB 0.5
+  declared (the collaborators' statement; the published uPAINT protocol reports 0.25 nM in the
+  imaging medium, unreconciled; questions sent 2026-09-11; provisional). MET-FAB DERIVED from a
+  declared Fab/InlB VISIBILITY RATIO of 0.5 (a rounded convention over the measured Fab/InlB
+  spot-density ratios 0.38-0.48 of the deposited recordings, Special_Analyses A9) and the INLB
+  anchor: p_FAB = 0.5 x (0.5 x 0.5) / 0.806 = 0.155 (0.806 = 1 - exp(-1.64), the Poisson
+  probability a Fab carries at least one dye). Visibility per subunit INLB 0.25, FAB 0.125;
+  both-labeled share among visible dimers 14% and 6.7%. Exactly one of `occupancy` and
+  `visibility_ratio` per condition is enforced at import; derivations are one step deep.
+- **`Labeling_Set` columns `occupancy_monomer` and `occupancy_dimer`** (`labeling.LABELING_SET_COLUMNS`,
+  ten columns now): the occupancy actually applied to each species -- declared, derived, or override.
+- **Structure audit D9** (`..._Model_Structure_Audit.py`): the table equals the decided ranges,
+  immobility by construction (D_i below the pipelines' thresholds 0.0028 / 0.0065 um^2/s), the
+  dissociation floor, and the symmetric composition box; D8 extended with the declared
+  occupancies; D3/D4 rewritten for the ratio row; R3 at the declared occupancies with the both-labeled
+  share; R6 timing at the count ceiling. Deterministic tier PASSED 9/9 on 2026-09-14 (profile
+  `mars_pc`).
+- **Prior-realization audit** (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py`
+  with its companion `.md`): read-only checks of GENERATED products -- the `Theta_Set` against the
+  prior box (P1) and the composition rule (P2), trajectories against the realized composition and
+  the stationary mode law at frame 0 (P3, `--trajectories K`), the `Labeling_Set` against the
+  declared occupancies (P4: per-subunit visibility, visible fractions, both-labeled share, emitters per
+  subunit), a descriptive comparison of the simulated visible counts against the deposited spot
+  counts (P5, Special_Analyses A9), and the theoretical visibility chain corroborated through the
+  DLI stage's own labeling functions on a synthetic lineage for both conditions, with the
+  FAB/INLB visibility ratio against the declared one (P6; `--visibility` runs it alone). The report
+  ends with theory, code path, and products side by side. `--selftest` PASSED for both conditions
+  on 2026-09-14. Listed in `PROJECT_CONTEXT.md` sec. 2 and 5, `README.md`, and `VALIDATION.md`
+  (run after any tier or DLI pass).
+
+### Changed
+
+- **The initial composition row**: `ratio_dimer_monomer_initial` (r = n_B / n_A, log10 on [-2, 2],
+  label r_{B/A}; complex fraction f_B = r / (1 + r) from 1% to 99%, symmetric about an even split)
+  replaces the linear `fraction_dimer_initial` (x_B on [0, 1]). `realize_initial_composition(N_R, r)`:
+  `n_B = min(round(N_R r / (1 + 2 r)), floor(N_R / 2))`, `n_A = N_R - 2 n_B`; x_B = 2 r / (1 + 2 r)
+  and f_B are DERIVED. The decided table has no linear row; the per-row `LOG_FLAG` rule stays the
+  contract. The sample-geometric-median plane is the log ratio r against `kappa_OFF`; the
+  population-composition kernel forms x_B from (N_R, r) inside each draw.
+- **The immobile mode is immobile by construction**: R_i in [0.001, 0.01] keeps D_i = R_i D_A below
+  the tracking pipelines' immobility thresholds over nearly the whole D_A range; the lower half is
+  below the 2 s resolution floor (~0.0005-0.001 um^2/s), so the posterior of R_i is flat there
+  (accepted). The baseline [-2, -1] was rejected: at 0.1 the mode is classified confined and
+  touches R_s.
+- **The receptor count is conditional on the declared occupancies**: the data constrain the visible
+  subset; an absolute count inherits the occupancy convention, within-visible ratios and
+  compositions do not. A revised occupancy anchor shifts the count range by a constant in log10.
+- **`--occupancy` on the DLI stage** (`simulation_dli_runner`) is an explicit OVERRIDE for
+  sensitivity runs, recorded as `override`; by default the stage reads the condition's declared or
+  derived value and prints it with its source. Full occupancy is retired as a baseline (uPAINT
+  labels a sparse subset by design).
+- **Documentation**: `PROJECT_CONTEXT.md` sec. 2 carries the decided table and the new subsection
+  "How the prior ranges and the declared inputs are set" (rules, the eleven rows with sources, the
+  declared inputs, the structural statements, what would change them), the neighbor-list skin
+  statement names what the search guarantees at sub-step boundaries, and sec. 3-5 follow (the
+  declared occupancy at the DLI stage, the ten `Labeling_Set` columns, the prior-realization audit
+  in the script map); `DETECTOR_WORKFLOW.md` sec. 6.1 carries the decided ranges with a pointer to
+  the rationale, sec. 6.4 and 6.5 the declared occupancies, and sec. 8 states that the detector
+  infers no biological rate because the reaction-diffusion side is marginalized from the
+  condition's tier; `README.md`, `VALIDATION.md` (the occupancy default and its override, the
+  prior-realization audit recipe), and the analysis companion notes follow, with a dated note in
+  the companions whose text involved the linear fraction or the occupancy default. Wording
+  reviewed the same day: the share `a / (2 - a)` is named the share of visible dimers with BOTH
+  SUBUNITS LABELED (it equals a two-dye share only under the one-dye-per-ligand InlB law); the
+  count, immobile-mode, and switching-rate rationales state expectations, not demonstrated
+  posterior behavior; the visible composition is stated to depend on the visibility `a`; the
+  Special_Analyses A9 all-dimer receptor bound gained its missing factor of two.
+
+### Removed
+
+- The learnable row `fraction_dimer_initial`. Estimator artifacts and resurrect states of the
+  earlier table are rejected by the schema guard (`parameter_keys`); `Theta_Set` files of the
+  earlier table carry no schema and are refused by every reader (see the Theta_Set schema under
+  Added). A fresh per-condition tier under the decided ranges is required, and none exists yet.
+- The full-occupancy default of the DLI stage.
+
 ## 0.1.3 - 2026-09-10
 
 The per-condition association setting: the association ratio leaves the learnable table and
