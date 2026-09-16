@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.6 - 2026-09-16
+
+HPC housekeeping for the FAB production campaign on JUWELS and JUPITER.
+
+### Added
+
+- **`Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Bulk_Delete.sh`** and the runbook recipe
+  "Freeing a scratch tier under an inode quota" (HPC README §6): parallel deletion of a data
+  tier's contents (16 `rm -rf` streams over the top-level entries, `READY_TRACT` expanded one
+  level), dry-run by default, refusing paths outside a `Data_Bank` tree or inside the legacy
+  read-only trees, keeping the tier directory the machine profiles require. Measured on a JUWELS
+  login node: ~400 K files/min against ~30 K files/min for a single `find -delete`; the retired
+  dimer-alp and dimer-bet TRAIN/TEST scratch tiers (3.75 M files) went in 11 minutes.
+
+### Changed
+
+- Generation controller: the 2 s arrays run with `--time=24:00:00` (the JUWELS `batch` maximum),
+  matching the 5 s arrays and the detector controller; they carried 18 h.
+- `hpc_local.env.example` documents the `TIME` override; JUPITER's machine env pins
+  `export TIME=12:00:00`, the only wall time its booster partition allows.
+
 ## 0.1.5 - 2026-09-16
 
 Report fixes found while reading the smoke campaign's reports on rcl01, and two report columns

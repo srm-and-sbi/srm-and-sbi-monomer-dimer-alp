@@ -6,7 +6,7 @@ This repository is a self-contained pipeline within the `srm-and-sbi` project: i
 
 ## Repository status
 
-**In development (0.1.5).** The codebase began as a copy of the tracked tree of
+**In development (0.1.6).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
 of the earlier three-species DIMER model with the stationary OU brightness photo-physics — and implements
 the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the

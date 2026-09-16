@@ -6,7 +6,7 @@ question, the molecular system, the two-stage inference architecture, the data
 and computational flow, the inference network, the validation methodology, and
 the design rationale that shapes the implementation.
 
-**Repository status.** In development (0.1.5). The codebase began as a copy of
+**Repository status.** In development (0.1.6). The codebase began as a copy of
 the tracked tree of `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release
 `v0.4.23` and implements the MONOMER_DIMER model family on top of it. Landed:
 the DOL-explicit observation layer (the measured degree of labeling as a static

@@ -269,7 +269,10 @@ sbatch --partition=general1 --array=0-0 --ntasks-per-node=1 --export=ALL,REPO=$P
 
 Larger campaigns pack 10 tasks/node with `--cpus-per-task=4` (10 × 4 = 40 cores,
 matching `--extra-node-info=2:20:1`) and fan out over `--array`; the generation
-controller (§5) drives this.
+controller (§5) drives this. Its per-case wall time is 24 h for every 2 s and 5 s array
+(the JUWELS `batch` maximum). On JUPITER every submission is 12 h, pinned by
+`export TIME=12:00:00` in that machine's `hpc_local.env` (the booster partition allows
+nothing else).
 
 **Check (`test`), 1 s smoke — TRAIN 16 / TEST 4 / EVAL 2 tasks, 10 sims/task:**
 
@@ -476,6 +479,41 @@ directory, submitted directly with `sbatch`:
   (`WORKFLOW=biology|detector`). Its engine is single-GPU by design (no sharding,
   no merge) on a whole-node allocation; do not read the allocated GPUs as data
   parallelism.
+
+- `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Bulk_Delete.sh` — parallel bulk deletion that empties a
+  data tier (its contents, never the directory) on a GPFS/Lustre filesystem; dry-run by
+  default, `DRYRUN=0` deletes, `P=16` streams. The recipe below says when and how.
+
+### Freeing a scratch tier under an inode quota
+
+A parallel filesystem refuses writes with "Disk quota exceeded" when the **file-count**
+quota is hit, however many bytes are free: on JUWELS `$SCRATCH` (2026-09-16) 4.26 M files
+against a 4.0 M soft / 4.4 M hard limit blocked a `mkdir` with 80 TB free. Diagnose with
+`jutil project dataquota -p <project>` (both byte and inode columns) and `df -i <tier>`.
+What fills a scratch tier is the regenerable TRAIN/TEST data of retired campaigns — video
+and theta zarr stores and, above all, the `READY_TRACT/` trajectory folder (one `.h5`
+per simulation). EVAL, Posit, Labor and Experiment live on the permanent tier and are
+never deletion targets. Confirm what a tier holds before deleting (count `_TRAIN` /
+`_TEST` / `_EVAL` entries and list any `Posit`, `Labor`, `Experiment` subdirectory).
+
+Delete with the utility above, detached, never inside a timeout:
+
+```bash
+# dry-run (default) prints the top-level entry counts and deletes nothing
+bash Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Bulk_Delete.sh \
+    /p/scratch/<project>/.../<retired-repo>/Data_Bank/Video /p/scratch/<project>/.../<retired-repo>/Data_Bank/Theta
+DRYRUN=0 nohup bash Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Bulk_Delete.sh <same dirs> \
+    > ~/bulk_delete_$(date +%F).log 2>&1 < /dev/null &
+```
+
+Rates measured on a JUWELS login node: a single `find -delete` ~30 K files/min; 16 parallel
+`rm -rf` streams over the top-level entries ~400 K files/min (3.75 M files in 11 min, load
+~20). The `Data_Bank` directories themselves are kept because the machine profiles require
+`data_bank_root` and `scratch_data_bank_root` to exist. Two gotchas: `df -i` reads low for
+the first minute while the quota accounting catches up, so measure the rate over a full
+minute before judging it; and when stopping a deletion from an ssh command, anchor the
+pattern (`pkill -f "^find /p/scratch/..."`) — an unanchored `pkill -f <name>` also matches
+the remote shell running that very command and kills the session.
 
 The rest are run by hand — single-process with plain `python`, not `torchrun` —
 and each is documented in its own companion `.md`. When one of those needs a GPU,
