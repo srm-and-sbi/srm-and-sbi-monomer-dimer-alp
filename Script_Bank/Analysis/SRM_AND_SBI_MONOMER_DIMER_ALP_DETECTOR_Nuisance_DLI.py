@@ -504,6 +504,26 @@ def _write_nuisance_report(nu, R, art, n_draws=10000):
         run_label=f"{R['paths'].project_alias}_{R['timing_label']}")
     draws = nu.sample(n_draws)
     plo, phi = np.asarray(R["plo"], dtype=float), np.asarray(R["phi"], dtype=float)
+    # Checks: the invariants a built artifact must satisfy before the biology DLI draws from it.
+    reporter.check_file("artifact", art)
+    reporter.check("parameter_keys_in_table_order",
+                   list(nu.parameter_keys) == list(R["imaging_keys"]),
+                   f"{len(nu.parameter_keys)} keys: {', '.join(nu.parameter_keys)}",
+                   note="the artifact's parameter order equals the detector table's, so the DLI "
+                        "stage maps every draw onto the right imaging row.")
+    reporter.check_shape("draws", draws, (n_draws, len(nu.parameter_keys)))
+    reporter.check_no_nan_inf("draws", draws)
+    outside_any = float(np.mean(np.any((draws < plo) | (draws > phi), axis=1)))
+    if nu.pool_mode == "unrestricted":
+        reporter.stat("frac_draws_outside_prior", outside_any,
+                      note="share of draws with at least one parameter outside the imaging prior "
+                           "box; permitted only under pool_mode='unrestricted', where it is a "
+                           "property of the calibration pool, not a defect.")
+    else:
+        reporter.check("draws_inside_prior_box", outside_any == 0.0,
+                       f"{outside_any:.4f} of {n_draws} draws have a parameter outside the box",
+                       note="the bounded pool and the box constructions must stay inside the imaging "
+                            "prior box; only pool_mode='unrestricted' may place mass outside it.")
     reporter.table(
         "Nuisance_DLI provenance", ["field", "value"],
         [["artifact", str(art)],

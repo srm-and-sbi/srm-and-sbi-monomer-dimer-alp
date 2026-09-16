@@ -6,7 +6,7 @@ This repository is a self-contained pipeline within the `srm-and-sbi` project: i
 
 ## Repository status
 
-**In development (0.1.4).** The codebase began as a copy of the tracked tree of
+**In development (0.1.5).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
 of the earlier three-species DIMER model with the stationary OU brightness photo-physics — and implements
 the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the
@@ -28,8 +28,10 @@ DOL-explicit model, and the first per-condition trajectory tier under the decide
 monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,
 schema field, and CLI argument; display surfaces prepend the receptor (MET-FAB / MET-INLB). The
 repo-iteration suffixes (`alp`, `bet`, ...) are a separate namespace and never name a condition.
-Experimental recordings enter this repository's data bank under the `FAB`/`INLB` names, with a
-provenance mapping to their public accession recorded at staging time.
+Experimental recordings enter this repository's data bank under the `FAB`/`INLB` names: all sixty
+20 s recordings per condition of BioStudies S-BSST712, indexed `Cell_0` to `Cell_59` in the archive's
+coverslip-and-cell order, with the mapping to the archive members in `Catalog_Note_Experiment.tsv`
+beside them.
 
 ## Naming conventions
 

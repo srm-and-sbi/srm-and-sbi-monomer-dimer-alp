@@ -6,7 +6,7 @@ question, the molecular system, the two-stage inference architecture, the data
 and computational flow, the inference network, the validation methodology, and
 the design rationale that shapes the implementation.
 
-**Repository status.** In development (0.1.4). The codebase began as a copy of
+**Repository status.** In development (0.1.5). The codebase began as a copy of
 the tracked tree of `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release
 `v0.4.23` and implements the MONOMER_DIMER model family on top of it. Landed:
 the DOL-explicit observation layer (the measured degree of labeling as a static
@@ -36,8 +36,10 @@ Fab-labeled monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer
 condition) in every filename, schema field, and CLI argument; display surfaces
 prepend the receptor. The repo-iteration suffixes (`alp`, `bet`, ...) are a
 separate namespace and never name a condition. Experimental recordings enter
-this repository's data bank under the `FAB`/`INLB` names, with a provenance
-mapping to their public accession recorded at staging time.
+this repository's data bank under the `FAB`/`INLB` names: all sixty 20 s
+recordings per condition of BioStudies S-BSST712, indexed `Cell_0` to `Cell_59`
+in the archive's coverslip-and-cell order, with the mapping to the archive
+members in `Catalog_Note_Experiment.tsv` beside them.
 
 ---
 

@@ -147,7 +147,11 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
              f"{band_label(guide)} is +/-{guide:g} in log10 (a factor of two) and "
              f"{band_label(guide_tight)} is +/-{guide_tight:g} (a factor of the "
              f"square root of two). A value inside {band_label(guide_tight)} is "
-             f"also inside {band_label(guide)}.")
+             f"also inside {band_label(guide)}. 'outside prior' is the share of MAP "
+             f"estimates beyond the row's prior box (possible only under --pool-mode "
+             f"unrestricted); 'corr(inf, true)' is the correlation between inferred and "
+             f"true values -- near zero when the estimator's output does not depend on "
+             f"its input, which the error columns alone do not show.")
 
     # View B: posterior calibration (coverage of truth by credible intervals).
     if post_q is not None:

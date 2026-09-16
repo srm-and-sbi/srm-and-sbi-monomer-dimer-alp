@@ -633,21 +633,34 @@ def r3_visible(lineage, tray, species_of_rank) -> dict:
 
 
 def r4_both_conditions(runs: dict) -> dict:
-    """``runs``: condition -> (lineage, tray) of THAT condition's own trajectory."""
+    """``runs``: condition -> (lineage, tray, species_of_rank) of THAT condition's own trajectory.
+
+    Labels the lineage exactly as the DLI stage does -- ``draw_dye_counts`` with the per-subunit
+    occupancy of the condition's DECLARED probe occupancy -- and renders 20 frames through the
+    production renderer; reports labeled subunits beside the dye total.
+    """
     from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
     from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
     rng = np.random.default_rng(SEED + 4)
     imaging = np.array([10 ** ((e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2) for e in det.DETECTOR_IMAGING])
     out = {}
     for condition in lab.LABELING_CONDITIONS:
-        lineage, tray = runs[condition]
+        lineage, tray, species_of_rank = runs[condition]
         poses = rds.collapse_species_axis(rds.extract_trajectory_poses(tray))[:20]
         _, law = lab.resolve_labeling_law(condition)
-        dyes = lab.draw_dye_counts(law, lineage.n_subunits, rng)
+        p_occ = par.occupancy_of(condition)
+        initial_species = [species_of_rank[int(r)] for r in lineage.host_rank[0]]
+        dyes = lab.draw_dye_counts(law, lineage.n_subunits, rng,
+                                   occupancy=lab.occupancy_per_subunit(p_occ, initial_species))
         frames = render_dli_video(poses, lineage.host_index[:20], dyes, imaging, seed=SEED)
-        out[condition] = dict(frames=int(frames.shape[2]), n_dyes=int(dyes.sum()), pixel_max=float(frames.max()),
-                              own_trajectory=True,
-                              ok=bool(frames.shape[2] == 20 and frames.max() > 0 and np.isfinite(frames).all()))
+        n_labeled = int((dyes >= 1).sum())
+        expected_labeled = p_occ * law.visible_probability * lineage.n_subunits
+        out[condition] = dict(frames=int(frames.shape[2]), n_subunits=int(lineage.n_subunits),
+                              occupancy=float(p_occ), n_labeled=n_labeled,
+                              expected_labeled=float(expected_labeled), n_dyes=int(dyes.sum()),
+                              pixel_max=float(frames.max()), own_trajectory=True,
+                              ok=bool(frames.shape[2] == 20 and frames.max() > 0 and np.isfinite(frames).all()
+                                      and n_labeled > 0))
     out["ok"] = all(v["ok"] for k, v in out.items() if isinstance(v, dict))
     return out
 
@@ -753,8 +766,11 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
                      f"monomer {v['visible_monomer_emp']:.3f} vs {v['visible_monomer']:.3f}; dimer {v['visible_dimer_emp']:.3f} vs "
                      f"{v['visible_dimer']:.3f}; both-labeled share among visible dimers {v['both_labeled_share_emp']:.3f} vs "
                      f"{v['both_labeled_share']:.3f}; occupancy recorded in the labeling row: {v['occupancy_recorded']} |")
-        L.append(f"| R4 both conditions, each from its own trajectory | {passed(r['r4']['ok'])} | "
-                 + "; ".join(f"{c}: {r['r4'][c]['frames']} frames, {r['r4'][c]['n_dyes']} dyes, max {r['r4'][c]['pixel_max']:.0f}"
+        L.append(f"| R4 both conditions, each from its own trajectory, at the declared occupancy | {passed(r['r4']['ok'])} | "
+                 + "; ".join(f"{c}: {r['r4'][c]['frames']} frames, {r['r4'][c]['n_labeled']} labeled subunits of "
+                             f"{r['r4'][c]['n_subunits']} at occupancy {r['r4'][c]['occupancy']:.3f} "
+                             f"(expected {r['r4'][c]['expected_labeled']:.0f}; {r['r4'][c]['n_dyes']} dyes), "
+                             f"pixel max {r['r4'][c]['pixel_max']:.0f}"
                              for c in lab.LABELING_CONDITIONS) + " |")
         L.append(f"| R5 boundary | {passed(r['r5']['ok'])} | particles outside the field at the last frame: "
                  f"{r['r5']['particles_outside_last_frame']}; mean fraction outside {r['r5']['fraction_outside_mean']:.4f}; "
@@ -833,7 +849,7 @@ def main() -> None:
             for condition in RDS.condition_tokens:      # one 2 s run per condition (its own network)
                 r1_c, r5_c, lineage_c, tray_c, species_c = r1_r5_reactive(workdir, condition)
                 r1[condition] = r1_c
-                runs[condition] = (lineage_c, tray_c)
+                runs[condition] = (lineage_c, tray_c, species_c)
                 if condition == "INLB":
                     r5, lineage, tray, species_of_rank = r5_c, lineage_c, tray_c, species_c
             r1["ok"] = all(v["ok"] for k, v in r1.items() if k != "ok")

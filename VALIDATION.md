@@ -344,8 +344,9 @@ python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --condition 
 **Expected**: because the inference smoke test (§2.3) left a full-state resume file
 beside the checkpoint, this run **hot-restarts** — it prints a
 `HOT RESTART: resumed full state ...` line reporting the resumed global epoch and
-learning rate, then runs one more epoch continuing the exact optimizer + learning-rate
-schedule (no re-converging, no LR reset). Because it passes `--test-tasks 5`, it loads
+learning rate, then trains the requested `--epochs` more (five here, numbered globally
+6–10 in the epoch lines) continuing the exact optimizer + learning-rate schedule (no
+re-converging, no LR reset). Because it passes `--test-tasks 5`, it loads
 the held-out TEST set and selects the checkpoint on best test loss (overwritten only on
 a new best), continuing the best-on-test bookkeeping §2.3 began. If the resume file is
 absent (for example deleted, or a run predating this feature), the same command falls

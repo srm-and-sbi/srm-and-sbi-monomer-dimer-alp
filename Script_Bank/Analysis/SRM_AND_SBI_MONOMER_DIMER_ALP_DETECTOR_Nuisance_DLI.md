@@ -192,7 +192,9 @@ Detector-namespaced project alias `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR`):
   `posterior_sample_pool_choice` and `pool_mode` it was built with. Being self-contained, it is sampled
   at generation with neither the estimator nor the recordings.
 - **Build** also writes a `<alias>_<timing_label>_Nuisance_DLI_Analysis/` directory beside the artifact:
-  a `report.md` (provenance and a per-parameter marginal summary — median, 5th/95th percentiles, prior
+  a `report.md` (a checks table — artifact written, parameter keys in the detector table's order, draw
+  shape, finite draws, and, for the bounded and box constructions, every draw inside the imaging prior
+  box — then provenance and a per-parameter marginal summary — median, 5th/95th percentiles, prior
   box, and the fraction of each parameter's mass outside the prior box) and
   `figures/nuisance_marginals.png` (the 1-D marginal of each imaging parameter, with the prior bounds
   marked). This is the record a person reads to judge, and choose between, nuisance constructions.

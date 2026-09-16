@@ -175,7 +175,9 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
     reporter.table("Inferred theta by condition (log10 units)", headers, rows,
                    note=f"no ground truth for real data; values are the distribution "
                         f"of inferred MAP theta per condition ({agg_desc}). Compare "
-                        f"conditions to read out parameter differences.")
+                        f"conditions to read out parameter differences. 'outside prior' "
+                        f"is the share of estimates beyond the row's prior box (possible "
+                        f"only under --pool-mode unrestricted).")
 
     if post_q is not None:
         reporter.stat("posterior_samples", posterior_samples,

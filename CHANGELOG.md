@@ -5,6 +5,49 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.5 - 2026-09-16
+
+Report fixes found while reading the smoke campaign's reports on rcl01, and two report columns
+that make an estimator's failure modes visible without opening the arrays.
+
+### Added
+
+- **MAP recovery report: `outside prior` and `corr(inf, true)` columns** (`evaluation.recovery_table`,
+  `fraction_outside_prior`, `correlation_with_truth`). The first is the share of MAP estimates that
+  left the row's prior box, which only `--pool-mode unrestricted` permits; the second is the
+  correlation between inferred and true values, `n/a` below three pairs or at zero spread. On the
+  smoke tiers the biology FAB estimator placed every N_R estimate above the box ceiling and returned
+  a near-constant vector for the other ten rows; neither was visible in the error columns.
+- **Experiment report: `outside prior` column** (`evaluation.experiment_table`), per parameter and
+  condition.
+- **Nuisance_DLI report: a checks table** (artifact written, parameter keys in the detector table's
+  order, draw shape, finite draws, and, for the bounded and box constructions, every draw inside the
+  imaging prior box; under `pool_mode = "unrestricted"` the outside share is reported as a statistic).
+  The report carried an empty checks table that could not fail.
+
+### Changed
+
+- **The experimental set is the whole accession**: sixty 20 s recordings per condition (BioStudies
+  S-BSST712) staged as `Experiment_{FAB,INLB}_Cell_{0..59}_20S_RAW.tif` in the archive's
+  coverslip-and-cell order, with `Catalog_Note_Experiment.tsv` (index, kind, working filename, source
+  archive, source member) beside them. The earlier set of 25 curated recordings per condition, a
+  computational-capacity cap, and its spreadsheet note are retired. No code change: cell discovery
+  globs the directory, `--max-cells` defaults to all, and the HPC Experiment scripts default
+  `MAX_CELLS=0`. The Experiment stage now estimates 600 windows per condition.
+
+### Fixed
+
+- Prior-realization audit P5: the share of deposited recordings inside the simulated range printed
+  `None` wherever the Special_Analyses tree is absent (every rcl01 report). The 60 + 60 first-2 s
+  per-recording spot counts of A9 are embedded in the script (`A9_FIRST2S_SPOTS`), so the share is
+  computed on every machine; the CSV, when present, still takes precedence.
+- Structure audit R4 drew dye counts for every subunit and skipped the occupancy step the DLI stage
+  applies, so its dye totals (1688 Fab, 486 InlB for 1000 subunits) were not the pipeline's labeled
+  counts. R4 now labels through `occupancy_per_subunit` at the condition's declared occupancy, as R3
+  and the DLI stage do, and reports labeled subunits beside the expectation and the dye total.
+- VALIDATION §2.4: the resurrect run trains the requested `--epochs` more (five in the recipe, numbered
+  globally 6 to 10), not "one more epoch".
+
 ## 0.1.4 - 2026-09-14
 
 The decided prior ranges and the declared visibility inputs: every learnable row leaves its

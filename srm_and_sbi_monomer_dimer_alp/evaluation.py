@@ -419,12 +419,14 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
 
     For real microscopy data there is no ground truth, so this reports, per
     learnable parameter and per condition (kind), the distribution of the
-    inferred MAP theta: count, median and IQR in log10, and the median in
-    physical units. ``inferred_by_kind`` maps each kind to an ``(N, D)`` array
-    of inferred log10 theta (N = cells x chunks for that kind).
+    inferred MAP theta: count, median and IQR in log10, the median in physical
+    units, and the share of estimates outside the row's prior box
+    (``fraction_outside_prior``; non-zero only under the unrestricted pool).
+    ``inferred_by_kind`` maps each kind to an ``(N, D)`` array of inferred log10
+    theta (N = cells x chunks for that kind).
     """
     headers = ["parameter", "label", "kind", "n", "median log10",
-               "IQR log10", "median value"]
+               "IQR log10", "median value", "outside prior"]
     rows = []
     for i, para in enumerate(parameterization):
         for kind in kinds:
@@ -436,10 +438,11 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
                 q1, q3 = np.quantile(col, [0.25, 0.75])
                 rows.append([para["KEY"], para.get("LABEL") or "-", kind,
                              str(col.size), f"{med:+.3f}", f"{q3 - q1:.3f}",
-                             f"{float(entry_to_physical(para, med)):.4g}"])
+                             f"{float(entry_to_physical(para, med)):.4g}",
+                             f"{fraction_outside_prior(para, col) * 100:.0f}%"])
             else:
                 rows.append([para["KEY"], para.get("LABEL") or "-", kind,
-                             "0", "nan", "nan", "nan"])
+                             "0", "nan", "nan", "nan", "n/a"])
     return headers, rows
 
 
@@ -473,6 +476,32 @@ def posterior_coverage_table(parameterization, true_log10: np.ndarray,
     return headers, rows
 
 
+def fraction_outside_prior(para, values) -> float:
+    """Share of ``values`` (in the table's coordinate: log10 for a log row) outside the
+    row's ``PRIOR_RANGE``. NaN when no finite value is present. Non-zero only when the
+    estimator placed a MAP estimate beyond the prior box, which the unrestricted pool permits."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if not v.size:
+        return float("nan")
+    lo, hi = (float(b) for b in para["PRIOR_RANGE"])
+    return float(np.mean((v < lo) | (v > hi)))
+
+
+def correlation_with_truth(true_values, inferred_values, min_pairs: int = 3):
+    """Pearson correlation between inferred and true values over the finite pairs, or
+    ``None`` below ``min_pairs`` pairs or when either side has zero spread. Near zero for
+    an estimator whose output does not depend on its input (an undertrained network
+    returns a near-constant vector), which no error statistic exposes on its own."""
+    x = np.asarray(true_values, dtype=float)
+    y = np.asarray(inferred_values, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    if x.size < min_pairs or np.std(x) == 0.0 or np.std(y) == 0.0:
+        return None
+    return float(np.corrcoef(x, y)[0, 1])
+
+
 def recovery_table(parameterization, true_log10: np.ndarray,
                    inferred_log10: np.ndarray, guide: float = 0.3,
                    guide_tight: float = 0.15) -> tuple:
@@ -484,15 +513,23 @@ def recovery_table(parameterization, true_log10: np.ndarray,
     headed by the multiplicative range the tolerance permits rather than its log10
     half-width -- ``[0.50x, 2.00x]`` for 0.3 dex and ``[0.71x, 1.41x]`` for 0.15 --
     because that is the form in which a reader can judge whether a parameter is
-    usable, without doing the arithmetic first. ``parameterization`` is the
-    learnable-only ``PARAMETERIZATION`` list (its order matches the theta columns).
+    usable, without doing the arithmetic first. Two further columns expose failure
+    modes the error statistics hide: ``outside prior`` is the share of MAP estimates
+    beyond the row's prior box (``fraction_outside_prior``), and ``corr(inf, true)`` is
+    the correlation between inferred and true values (``correlation_with_truth``; ``n/a``
+    below three pairs or at zero spread). ``parameterization`` is the learnable-only
+    ``PARAMETERIZATION`` list (its order matches the theta columns).
     """
     headers = ["parameter", "label", "n", "median err", "MAE", "RMSE",
                "q95|err|", f"within {band_label(guide)}",
-               f"within {band_label(guide_tight)}"]
+               f"within {band_label(guide_tight)}", "outside prior", "corr(inf, true)"]
     stats = recovery_stats(true_log10, inferred_log10, guide, guide_tight)
+    true_log10 = np.asarray(true_log10, dtype=float)
+    inferred_log10 = np.asarray(inferred_log10, dtype=float)
     rows = []
-    for para, st in zip(parameterization, stats):
+    for i, (para, st) in enumerate(zip(parameterization, stats)):
+        outside = fraction_outside_prior(para, inferred_log10[:, i]) if inferred_log10.size else float("nan")
+        corr = correlation_with_truth(true_log10[:, i], inferred_log10[:, i]) if inferred_log10.size else None
         rows.append([
             para["KEY"],
             para.get("LABEL") or "-",
@@ -503,5 +540,7 @@ def recovery_table(parameterization, true_log10: np.ndarray,
             f"{st['q95_abs_error']:.3f}",
             f"{st['frac_within_guide'] * 100:.0f}%",
             f"{st['frac_within_guide_tight'] * 100:.0f}%",
+            "n/a" if not np.isfinite(outside) else f"{outside * 100:.0f}%",
+            "n/a" if corr is None else f"{corr:+.2f}",
         ])
     return headers, rows

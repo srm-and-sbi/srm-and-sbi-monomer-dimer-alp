@@ -96,9 +96,23 @@ TOL_MODE = 0.03               # P3: absolute tolerance on pooled frame-0 mode oc
 KS_ALPHA = 1e-3               # P1: a row is flagged when its KS p-value falls below this
 A9_CSV = os.path.join(REPO_ROOT, "..", "Special_Analyses", "MET_NEXT_MODEL_DESIGN_PLAN", "results",
                       "A9_per_recording.csv")
-# Fallback reference (A9, 2026-09-14): first-2 s localizations per frame, per recording, 60 per condition.
-A9_FALLBACK = {"Fab": dict(min=17, q25=79, median=143, q75=218, max=307),
-               "InlB": dict(min=72, q25=251, median=348, q75=448, max=794)}
+# Embedded A9 reference (2026-09-14): first-2 s localizations per frame, per deposited recording,
+# 60 per condition, copied from A9_per_recording.csv (column spots_first2s) so that P5 computes the
+# per-recording share on a machine without the Special_Analyses tree (the CSV, when present, takes
+# precedence). Quantiles min/q25/median/q75/max: Fab 17/79/143/218/307, InlB 72/251/348/448/794.
+A9_FIRST2S_SPOTS = {"Fab": [
+    28.84, 23.72, 35.37, 61.64, 66.81, 76.89, 59.95, 62.87, 70.93, 96.81, 133.4, 96.47, 138.56,
+    141.82, 157.21, 169.48, 278.96, 148.79, 266.97, 166.81, 24.37, 16.67, 57.97, 64.9, 93.82,
+    91.86, 104.98, 220.27, 143.79, 226.38, 299.46, 238.24, 303.73, 192.91, 138.2, 189.15, 306.72,
+    231.26, 273.34, 279.09, 55.1, 74.39, 86.11, 91.55, 120.75, 79.06, 143.86, 180.24, 162.49,
+    221.96, 291.87, 270.94, 216.63, 237.44, 198.49, 111.99, 81.83, 156.4, 188.08, 214.37,
+], "InlB": [
+    177.54, 190.63, 209.26, 184.61, 312.84, 296.55, 254.85, 382.74, 313.87, 365.92, 247.53, 219.96,
+    355.04, 461.56, 348.47, 436.91, 323.01, 293.89, 364.43, 643.17, 191.39, 251.95, 415.58, 72.27,
+    241.41, 577.55, 375.95, 521.05, 793.64, 604.5, 379.54, 716.7, 649.84, 663.03, 641.85, 521,
+    546.54, 279.02, 490.77, 365.32, 443.92, 417.68, 329.73, 107.76, 167.13, 102.15, 247.29, 255.03,
+    408.82, 313.7, 520.92, 408.53, 252.87, 375.04, 487.89, 347.83, 291.04, 246.19, 301.29, 153.04,
+]}
 A9_TOKEN = {"FAB": "Fab", "INLB": "InlB"}
 
 
@@ -355,7 +369,11 @@ def a9_reference(condition: str) -> dict:
         v = d.loc[d["cond"] == token, "spots_first2s"].to_numpy(dtype=float)
         if v.size:
             out = quantiles(v); out["source"] = A9_CSV; out["values"] = v.tolist(); return out
-    q = dict(A9_FALLBACK[token]); q["source"] = "A9 fallback quantiles (2026-09-14)"; q["n"] = 60; return q
+    v = np.asarray(A9_FIRST2S_SPOTS[token], dtype=float)
+    out = quantiles(v)
+    out["source"] = "A9 per-recording values embedded in this script (A9_per_recording.csv, 2026-09-14)"
+    out["values"] = v.tolist()
+    return out
 
 
 def p5_predictive(labeling_rows: np.ndarray, condition: str) -> dict:
