@@ -55,7 +55,7 @@
 #SBATCH --mem=480G
 #SBATCH --time=1-00:00:00
 #SBATCH --mail-type=FAIL
-#SBATCH --output=%x_%A.out   # submit-directory; the controller overrides this via MON_OUT for packed jobs
+#SBATCH --output=%x_%j.out   # submit-directory; the controller overrides this via MON_OUT for packed jobs
 
 set -eo pipefail
 
@@ -127,13 +127,10 @@ INFER_ARGS=( --condition "$CONDITION" --tasks "$TRAIN_TASKS" --test-tasks "$TEST
 
 echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} resurrect=${RESURRECT:-0} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
-# torch-elastic's exit barrier defaults to 300 s: the ranks that finish first wait only five
-# minutes for the rest and then tear down the rendezvous -- which KILLS any rank still
-# working, discarding its results. The sharded stages are embarrassingly parallel and
-# routinely skewed (a rank drawing two tasks takes twice as long as one drawing a single
-# task), so five minutes is far tighter than the real spread and the teardown destroys
-# completed work. Raise it well past any plausible skew; the job wall time is the real bound.
-export TORCHELASTIC_EXIT_BARRIER_TIMEOUT="${EXIT_BARRIER:-3600}"
+# Training keeps torchrun: DistributedDataParallel needs its rendezvous, and its ranks finish
+# together (every step is synchronized), so torchrun's fixed 300 s exit barrier -- which no
+# launcher setting changes in torch 2.9 -- is never reached here. The sharded stages do not
+# use torchrun for exactly that reason (see the Evaluation wrapper).
 
 if [ "${NNODES:-1}" -gt 1 ]; then
     # Multi-node data-parallel: srun places ONE torchrun launcher per node, each

@@ -578,14 +578,16 @@ sharding balances any combination to within a single video, so the task count ne
 relation to `world_size` (`world_size = NODES × GPUs-per-node`) and no configuration is
 penalized.
 
-That imbalance was also, historically, a **failure mode** worth understanding. `torchrun`'s
-exit barrier defaults to 300 s: ranks that finish early wait five minutes for the rest and
-then tear down the rendezvous, killing any rank still working and discarding its shard,
-after which the wrapper's `set -e` aborts before the merge and no report is written. A
-single-node launch (`torchrun --standalone`) has one agent and so never hits this; the
-multi-node launch places one agent per node and does. The wrappers now raise that timeout
-(`TORCHELASTIC_EXIT_BARRIER_TIMEOUT`, override with `EXIT_BARRIER=`) as a safety net, but
-with video-level sharding the skew that triggered it no longer arises.
+Skew is also why the sharded stages are not launched through `torchrun`. Its elastic
+agent enforces a 300 s exit barrier that no launcher setting changes (torch 2.9 never reads
+`TORCHELASTIC_EXIT_BARRIER_TIMEOUT`): ranks that finish early wait five minutes for the rest
+and then tear down the rendezvous, killing any rank still working and discarding its shard,
+after which the wrapper's `set -e` aborts before the merge and no report is written. Even
+with video-level sharding, sixteen ranks on four nodes finished eighteen minutes apart on
+JUPITER and one shard was lost that way. The wrappers therefore launch one plain Slurm task
+per GPU (`srun --ntasks-per-node=$GPUS`); `resolve_topology()` reads the rank from Slurm and
+nothing waits on anything. The `--merge` step additionally refuses an incomplete shard set
+unless `--allow-partial` is passed.
 
 Evaluation uses `--pool-mode bounded` — the well-trained-posterior default, in
 contrast to the smoke's `unrestricted` — because the EVAL parameters *are* prior
@@ -836,6 +838,19 @@ posterior at the wrong location and a broad posterior at the right one are
 distinguishable only when both are shown. Each stage writes a self-contained
 report (figures, tables, arrays, and a live, tail-able `progress.log`) under
 `Posit/`.
+
+Within View B, three point estimates are tabulated for every observation: the
+MAP, the 1-D posterior median (Q50 of each marginal) and the sample geometric
+median (SGM; the posterior sample closest, in prior-width-scaled log10 distance,
+to all other samples, so a joint summary that is itself a probable point). A
+point-estimate agreement table reports the median gaps between them and the
+share of observations whose MAP lies outside the posterior's central 90%
+interval. Read a large gap with a high outside share as the optimizer having
+climbed into a density spike the posterior samples do not visit (the flow's
+density is unconstrained outside its training support, which the `unrestricted`
+pool exposes): the medians, not the MAP, are then the point estimate to use.
+Evaluation repeats its recovery table for the median and the SGM, so the three
+summaries are judged against the truth on the same videos.
 
 For a small or undertrained posterior whose probability mass can fall outside
 the prior box, use the `unrestricted` candidate pool (`--pool-mode unrestricted`)

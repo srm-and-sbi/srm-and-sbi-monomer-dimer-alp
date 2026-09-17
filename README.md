@@ -6,7 +6,7 @@ This repository is a self-contained pipeline within the `srm-and-sbi` project: i
 
 ## Repository status
 
-**In development (0.1.6).** The codebase began as a copy of the tracked tree of
+**In development (0.1.9).** The codebase began as a copy of the tracked tree of
 `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release `v0.4.23` — the reference implementation
 of the earlier three-species DIMER model with the stationary OU brightness photo-physics — and implements
 the MONOMER_DIMER model family on top of it. Landed: the DOL-explicit observation layer (the
@@ -109,7 +109,8 @@ allocation — across GPUs on one node and across nodes. `--gres` is per node, s
 data-parallel (`DistributedDataParallel`): on one node under `torchrun`, across
 nodes under `srun` + `torchrun` with a c10d rendezvous binding every rank, with
 `SyncBatchNorm` and the loss all-reduced across all ranks (so the batch size stays
-per-rank and the effective batch is `batch*world_size`). Evaluation shards its
+per-rank and the effective batch is `batch*world_size`). Evaluation and Experiment
+run as plain Slurm tasks, one per GPU, without torchrun. Evaluation shards its
 EVAL videos across every rank and the experiment stage shards its
 `(condition, cell)` work, each writing its own shard and then merging the
 per-shard results into one report. With a single GPU the same code collapses to

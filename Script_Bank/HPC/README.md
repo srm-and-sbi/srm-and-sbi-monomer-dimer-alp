@@ -36,13 +36,13 @@ runs the matching entry point under `Script_Bank/Prime/`.
   on that node (`torchrun --standalone`); one GPU uses the single-GPU path.
 - **Evaluation** estimates the maximum-a-posteriori parameter vector on the
   held-out EVAL set and reports per-parameter recovery accuracy and posterior
-  calibration. It shards EVAL across one worker per GPU on every allocated node
-  (`torchrun`, or `srun` + `torchrun` across nodes), each writing its own shard,
+  calibration. It shards EVAL across one Slurm task per GPU on every allocated node
+  (`srun --ntasks-per-node=$GPUS`, no torchrun), each writing its own shard,
   then merges the per-shard results into one report; one GPU uses the single-GPU path.
 - **Experiment** applies the trained estimator to real microscopy `.tif`
   recordings (no ground truth) and reports the inferred-parameter distribution
-  per condition. It shards its `(kind, cell)` work across one worker per GPU on
-  every allocated node (`torchrun`, or `srun` + `torchrun` across nodes), then
+  per condition. It shards its `(kind, cell)` work across one Slurm task per GPU on
+  every allocated node (`srun --ntasks-per-node=$GPUS`, no torchrun), then
   merges the per-shard results into one report. It is the scientific end use, not
   a correctness check.
 
@@ -156,7 +156,7 @@ sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Simulation_TRAIN \
 cd /path/to/srm-and-sbi-monomer-dimer-alp
 sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Inference \
        --partition=gpu \
-       --output="$MON_OUT/%x_%A.out" \
+       --output="$MON_OUT/%x_%j.out" \
        --export=ALL,REPO=$PWD,TRAIN_TASKS=8,TEST_TASKS=2,EPOCHS=50,TOTAL_TIME=2.0 \
        Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Inference.sh
 # Continue a wall-stopped run from its checkpoint: add RESURRECT=1 to the --export
@@ -168,7 +168,7 @@ sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Inference \
 cd /path/to/srm-and-sbi-monomer-dimer-alp
 sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Evaluation \
        --partition=gpu \
-       --output="$MON_OUT/%x_%A.out" \
+       --output="$MON_OUT/%x_%j.out" \
        --export=ALL,REPO=$PWD,EVAL_TASKS=1,SUMMARY=both,POOL_MODE=bounded,TOTAL_TIME=2.0 \
        Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh
 ```
@@ -183,7 +183,7 @@ sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Evaluation \
 cd /path/to/srm-and-sbi-monomer-dimer-alp
 sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment \
        --partition=gpu \
-       --output="$MON_OUT/%x_%A.out" \
+       --output="$MON_OUT/%x_%j.out" \
        --export=ALL,REPO=$PWD,SUMMARY=both,TOTAL_TIME=2.0 \
        Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 ```
@@ -227,7 +227,7 @@ Set the job name with `--job-name` and direct the batch log into the monitoring
 directory:
 
 - Simulation (an array, one element per node): `--output="$MON_OUT/%x_%A_Node_%a.out"`
-- All other stages: `--output="$MON_OUT/%x_%A.out"`
+- All other stages: `--output="$MON_OUT/%x_%j.out"` (`%j` = the job id. `%A`, the array master id, resolved to 0 for a non-array job on JUPITER's Slurm, so two same-name jobs would have shared and truncated one log.)
 
 `%x` is the job name, `%A` the array job id, `%a` the array element (the node
 number). The Simulation array element is always a clean node number because the
@@ -293,18 +293,17 @@ The GPU scripts bake a single-node default that scales out with `NODES`:
 Inference, Evaluation, and Experiment adapt to the allocation. `--gres` is per
 node, so `--nodes=N --gres=gpu:G` gives `world_size = N*G` ranks:
 
-- **More than one node** runs the multi-node path (`srun` places one `torchrun`
-  launcher per node, all ranks bound by a c10d rendezvous). Inference trains
-  data-parallel across every rank on every node (SyncBatchNorm + the loss
-  all-reduced across all ranks, so `--batch-size` stays per-rank and the effective
-  batch is `batch*world_size`); Evaluation and Experiment shard their work across
-  every rank (each writes its own shard to the shared filesystem — the rendezvous
-  is unused there, kept only for one uniform GPU-binding path), then a single
-  `--merge` pass combines the shards.
-- **One node, more than one GPU** runs the single-node path (`torchrun
-  --standalone`) — data-parallel training (Inference) or work-sharded estimation
-  (Evaluation shards its EVAL videos; Experiment shards its `(kind, cell)` work),
-  each followed by the merge.
+- **Inference, more than one node**: `srun` places one `torchrun` launcher per node,
+  all ranks bound by a c10d rendezvous, and training runs data-parallel across every
+  rank on every node (SyncBatchNorm + the loss all-reduced across all ranks, so
+  `--batch-size` stays per-rank and the effective batch is `batch*world_size`).
+  **One node, more than one GPU** uses `torchrun --standalone`.
+- **Evaluation and Experiment, more than one GPU** (one node or many): plain Slurm
+  tasks, one per GPU on every allocated node (`srun --ntasks-per-node=$GPUS`), each
+  writing its own shard to the shared filesystem, then a single `--merge` pass
+  combines the shards. No torchrun and no rendezvous: `resolve_topology()` reads the
+  rank from `SLURM_PROCID`, so nothing waits on anything and a slow rank can never
+  be killed by a fast one (see the straggler note below).
 - **One GPU** runs the original single-GPU path.
 
 The GPU count per node is `SLURM_GPUS_ON_NODE`, capped by the optional
@@ -354,16 +353,19 @@ starting (peak) learning rate; left unset, the entry point's default peak applie
 (`learning_rate_minimum × max_factor` = 1.28e-03). Useful when continuing a
 wall-stopped run (`RESURRECT=1`) at a chosen rate.
 
-**Straggler protection: `EXIT_BARRIER`.** Every GPU wrapper that launches through
-`torchrun` — Inference, Evaluation, and Experiment in both workflows, plus the
-standalone `Posterior_Calibration` and DETECTOR `Nuisance_DLI` wrappers (§6) —
-exports `TORCHELASTIC_EXIT_BARRIER_TIMEOUT="${EXIT_BARRIER:-3600}"`. torch-elastic's
-own default is 300 s: the ranks that finish first wait only five minutes for the
-rest and then tear down the rendezvous, which kills any rank still working and
-discards its results. The sharded stages are embarrassingly parallel and routinely
-skewed (a rank drawing two tasks takes twice as long as one drawing a single task),
-so the wrappers raise the barrier to 3600 s by default; set `EXIT_BARRIER` higher
-if a run's skew demands it — the job wall time is the real bound.
+**Stragglers and the merge guard.** The sharded stages (Evaluation, Experiment, the
+`Posterior_Calibration` and DETECTOR `Nuisance_DLI` wrappers, §6) are embarrassingly
+parallel and routinely skewed: the FAB detector Evaluation's 16 ranks finished 18
+minutes apart. They therefore run as plain Slurm tasks, never through `torchrun`,
+whose elastic agent enforces a 300 s exit barrier that no launcher setting changes
+(torch 2.9 ignores `TORCHELASTIC_EXIT_BARRIER_TIMEOUT`); under torchrun the first
+node's agent tore the rendezvous down after five minutes and the other nodes' agents
+killed their still-working ranks, losing their shards. With Slurm tasks nothing waits
+on anything. Should a rank still die (node failure, wall time), `--merge` refuses the
+incomplete shard set and names the missing ranks; recompute just that rank with
+`RANK=<r> WORLD_SIZE=<n> LOCAL_RANK=0 python <stage>.py <same args>` on one GPU (the
+video-level sharding is deterministic) and merge again, or pass `--allow-partial` to
+merge what exists (the report then records `shards_merged`).
 
 **Smoke / check evaluation uses `--pool-mode unrestricted`.** An undertrained
 posterior's probability mass can fall outside the prior box, and the default

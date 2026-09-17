@@ -180,6 +180,27 @@ def merge_shard_arrays(shard_paths, *, concat_keys, first_keys=(),
     return merged, n_used
 
 
+def assert_complete_shard_set(shard_paths, *, allow_partial: bool = False) -> int:
+    """Guard a shard set against MISSING shards before merging (on top of the consistency
+    check of :func:`assert_consistent_shard_set`).
+
+    A sharded run writes exactly ``world_size`` shards; fewer means a rank died before
+    saving (a killed worker, a node failure) and merging the rest would silently produce
+    a report over a subset of the work while deleting the evidence. Raises ``ValueError``
+    naming the missing ranks unless ``allow_partial`` is set, in which case the caller is
+    expected to record the incomplete coverage in its report. Returns the ``world_size``.
+    """
+    world_size = assert_consistent_shard_set(shard_paths)
+    present = sorted(int(re.search(r"_shard_(\d+)_of_", Path(p).name).group(1)) for p in shard_paths)
+    missing = sorted(set(range(world_size)) - set(present))
+    if missing and not allow_partial:
+        raise ValueError(
+            f"{len(shard_paths)} of {world_size} shards present; missing rank(s) {missing}. A rank "
+            f"died before saving its shard (see the job log). Rerun the stage, or pass "
+            f"--allow-partial to merge what exists (the report then covers only the present shards).")
+    return world_size
+
+
 def assert_consistent_shard_set(shard_paths):
     """Guard a shard set against a stale-plus-fresh mix before merging.
 

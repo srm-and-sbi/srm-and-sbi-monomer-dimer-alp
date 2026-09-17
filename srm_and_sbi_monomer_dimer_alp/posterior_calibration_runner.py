@@ -45,7 +45,7 @@ from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp import posterior_calibration as pcal
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import collect_score_prex, collect_theta_prex
-from srm_and_sbi_monomer_dimer_alp.experiment_support import shard_by_rank
+from srm_and_sbi_monomer_dimer_alp.experiment_support import assert_complete_shard_set, shard_by_rank
 from srm_and_sbi_monomer_dimer_alp.inference_support import normalize_video, resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow
@@ -595,6 +595,13 @@ def _merge_shards(reporter, args, cfg, spec, cal_dir: Path, cal_array_path: Path
     shard_paths = sorted(cal_dir.glob("_shard_*_of_*.npz"))
     if not shard_paths:
         raise SystemExit(f"--merge: no shard files (_shard_*_of_*.npz) in {cal_dir}")
+    try:
+        world_size = assert_complete_shard_set(shard_paths, allow_partial=args.allow_partial)
+    except ValueError as exc:
+        raise SystemExit(f"--merge: {exc}")
+    reporter.stat("shards_merged", f"{len(shard_paths)}/{world_size}",
+                  note="per-rank shards combined into this report; fewer than world_size means "
+                       "--allow-partial was used and the EVAL coverage is incomplete.")
     print(f"Merging {len(shard_paths)} shard file(s) from {cal_dir}", flush=True)
     truths, samples, truth_lp, sample_lp, emb = [], [], [], [], []
     for shard_path in shard_paths:
@@ -853,6 +860,11 @@ def build_posterior_calibration_parser() -> argparse.ArgumentParser:
         "--seed", type=lambda v: None if str(v).strip().lower() in ("none", "") else int(v),
         default=None,
         help="Master RNG seed. Default None -> non-deterministic (consistent with generation).")
+    parser.add_argument(
+        "--allow-partial", action="store_true",
+        help="With --merge: combine the shards that exist even when some ranks never saved "
+             "theirs (the report then covers only the present shards and says so). Without "
+             "it an incomplete shard set aborts the merge, naming the missing ranks.")
     parser.add_argument(
         "--merge", action="store_true",
         help="Combine-only mode: concatenate the per-shard calibration .npz files from a "

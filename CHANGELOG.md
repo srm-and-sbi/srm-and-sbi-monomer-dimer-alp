@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.9 - 2026-09-17
+
+### Fixed
+
+- The sharded GPU stages (Evaluation, Experiment, the `Posterior_Calibration` and DETECTOR
+  `Nuisance_DLI` wrappers, both workflows) launch as plain Slurm tasks -- one per GPU on
+  every allocated node, `srun --ntasks-per-node=$GPUS` -- instead of through `torchrun`.
+  torchrun's elastic agent enforces a 300 s exit barrier that no launcher setting changes
+  (torch 2.9 never reads `TORCHELASTIC_EXIT_BARRIER_TIMEOUT`, which the wrappers exported as
+  a safety net); when ranks finished more than five minutes apart, the first node's agent
+  tore down the rendezvous, the other nodes' agents died with a connection error and killed
+  any rank still working, and its shard was lost (Evaluation of the FAB detector estimator
+  on JUPITER: 16 ranks spread over 18 minutes, 15 shards saved, no report). The runner's
+  `resolve_topology()` already reads `SLURM_NTASKS / SLURM_PROCID / SLURM_LOCALID`, so the
+  sharding is unchanged; there is simply no rendezvous and no barrier any more. Inference
+  keeps `torchrun` (DistributedDataParallel needs it, and its ranks finish together).
+- `resolve_topology()` binds the GPU robustly under per-task GPU binding: when Slurm hides
+  the other GPUs from a task, the local rank is folded onto the visible devices.
+- Every `--merge` refuses an incomplete shard set (`experiment_support.assert_complete_shard_set()`),
+  naming the missing ranks, instead of silently concatenating whatever exists and deleting
+  the shards; `--allow-partial` merges what is present and records the fraction in the report
+  (`shards_merged`).
+
+## 0.1.8 - 2026-09-17
+
+### Added
+
+- Evaluation and Experiment report three point estimates of every posterior side by side:
+  the MAP (the optimizer's mode, as before), the 1-D posterior median (Q50 of each
+  marginal) and the sample geometric median (SGM: the posterior sample closest, in
+  prior-width-scaled log10 distance, to all other samples -- a joint point estimate that
+  is itself a probable point; `evaluation.sample_geometric_median()`, `prior_scale()`).
+  `posterior_summary()` returns the SGM of the same draws on request (`return_sgm`), both
+  runners store it as `posterior_sgm` beside `posterior_quantiles` (shards and merged
+  arrays), Evaluation repeats the recovery table for the median and the SGM, Experiment
+  repeats the per-condition table for both, and a new point-estimate agreement table
+  (`point_estimate_agreement_table()`) gives the median |MAP - median|, |MAP - SGM| and
+  |SGM - median| gaps plus the share of observations whose MAP lies outside the
+  posterior's central 90% interval. Motivation: on the MET-FAB recordings the
+  unrestricted-pool MAP of the detector estimator landed in flow density spikes outside
+  the prior box (mu_r bands 0.125 dex above and below the mode, with a higher
+  log-density than the mode) while the posterior medians stayed put; the medians beside
+  the MAP make that diagnosis immediate instead of a side computation.
+
+## 0.1.7 - 2026-09-16
+
+### Fixed
+
+- Non-array HPC stage logs are named by the job id (`--output="$MON_OUT/%x_%j.out"`) in both
+  dispatchers, in the stage scripts' baked fallbacks and in the runbook. The previous `%x_%A.out`
+  used the array master id, which JUPITER's Slurm resolves to 0 for a non-array job, so every
+  Inference, Evaluation or Experiment submission with the same job name (a resurrect follow-up,
+  for instance) would have shared and truncated one log file. Array stages keep
+  `%x_%A_Node_%a.out`.
+
 ## 0.1.6 - 2026-09-16
 
 HPC housekeeping for the FAB production campaign on JUWELS and JUPITER.

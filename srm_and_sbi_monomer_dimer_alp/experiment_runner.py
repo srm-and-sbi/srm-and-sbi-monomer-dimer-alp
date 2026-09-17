@@ -43,8 +43,10 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
     experiment_table,
     posterior_summary,
     _theta_repr,
+    point_estimate_agreement_table, prior_scale,
 )
 from srm_and_sbi_monomer_dimer_alp.experiment_support import (
+    assert_complete_shard_set,
     condition_display,
     discover_cells,
     load_shards,
@@ -109,12 +111,16 @@ def _aggregate_by_kind(inferred_log10, kind_index, cell_arr, kinds, mode, n_para
 
 def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Path,
                              scores, inferred_log10, kind_index, cell_of, chunk_of,
-                             post_quantiles, post_samples, kinds, run_start) -> None:
+                             post_quantiles, post_samples, kinds, run_start,
+                             post_sgm=None) -> None:
     """Save the inferred-theta arrays and write the report + figures.
 
     Shared by the single-process path and the ``--merge`` combine step, so both
     emit an identical report. ``post_quantiles`` may be a list (built by the
     estimation loop) or an array (concatenated by a merge); both are handled.
+    ``post_sgm`` (optional, ``(N, D)``) is the per-window sample geometric median of the
+    same posterior draws; when present the inferred-theta table is repeated for it and
+    for the 1-D posterior median, and the point-estimate agreement table is written.
     ``draw_spec`` is the workflow's learnable table.
     """
     do_map = args.summary in ("map", "both")
@@ -133,6 +139,8 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
     # (N, n_samples, D) raw draws, only when the run was asked to keep them.
     post_s_arr = np.asarray(post_samples)
     post_s = post_s_arr if (do_posterior and post_s_arr.size > 0) else None
+    sgm_arr = np.asarray(post_sgm if post_sgm is not None else [])
+    sgm = sgm_arr if (post_q is not None and sgm_arr.size > 0) else None
 
     # ---- Save the inferred-theta arrays ----------------------------------
     save_arrays = dict(
@@ -142,6 +150,8 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
         save_arrays["posterior_quantiles"] = post_q
     if post_s is not None:
         save_arrays["posterior_samples_cloud"] = post_s
+    if sgm is not None:
+        save_arrays["posterior_sgm"] = sgm              # (N, D) sample geometric median
     np.savez_compressed(str(array_path), **save_arrays)
     print(f"\nExperiment MAP arrays saved to {array_path}")
 
@@ -182,6 +192,39 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
     if post_q is not None:
         reporter.stat("posterior_samples", posterior_samples,
                       note="samples per chunk used to summarize the posterior (View B).")
+        # The same per-condition table for the two posterior-derived point estimates, so
+        # the MAP, the 1-D posterior median and the SGM stand side by side.
+        med_by_kind = _aggregate_by_kind(post_q[:, :, 2], kind_index, cell_of, kinds,
+                                         args.aggregation, len(draw_spec))
+        med_shown = {condition_display(k): v for k, v in med_by_kind.items()}
+        med_headers, med_rows = experiment_table(draw_spec, med_shown, shown)
+        reporter.table("Posterior-median theta by condition (log10 units)",
+                       med_headers, med_rows,
+                       note=f"same table for the 1-D posterior median (Q50 of each "
+                            f"marginal) of every window ({agg_desc}).")
+        if sgm is not None:
+            sgm_by_kind = _aggregate_by_kind(sgm, kind_index, cell_of, kinds,
+                                             args.aggregation, len(draw_spec))
+            sgm_shown = {condition_display(k): v for k, v in sgm_by_kind.items()}
+            sgm_headers, sgm_rows = experiment_table(draw_spec, sgm_shown, shown)
+            reporter.table("SGM theta by condition (log10 units)", sgm_headers, sgm_rows,
+                           note=f"same table for the sample geometric median (SGM) of "
+                                f"every window's posterior cloud -- the sample closest, in "
+                                f"prior-width-scaled log10 distance, to all other samples, "
+                                f"so a joint point estimate that is itself a probable point "
+                                f"({agg_desc}).")
+        agr_headers, agr_rows = point_estimate_agreement_table(
+            draw_spec, inferred_log10, post_q, sgm,
+            groups=[condition_display(kinds[k]) for k in kind_index])
+        reporter.table("Point-estimate agreement (per parameter, log10 units)",
+                       agr_headers, agr_rows,
+                       note="gaps between the MAP and the two posterior-derived summaries per "
+                            "window, and the share of windows whose MAP falls outside the "
+                            "posterior's central 90% interval. Large gaps with a high outside "
+                            "share mean the optimizer found density the posterior samples do "
+                            "not visit (a flow spike, typically outside the training support "
+                            "under --pool-mode unrestricted); read the medians as the point "
+                            "estimate in that case.")
 
     if reporter.dump and n_estimates:
         for i, para in enumerate(draw_spec):
@@ -218,7 +261,8 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
 
 
 def _save_shard(topo, out_dir: Path, scores, inferred_log10, kind_index, cell_of,
-                chunk_of, post_quantiles, post_samples, kinds, run_start) -> None:
+                chunk_of, post_quantiles, post_samples, kinds, run_start,
+                post_sgm=None) -> None:
     """Write this worker's partial experiment arrays (multi-GPU sharded run)."""
     arrays = dict(
         scores=np.asarray(scores),
@@ -232,6 +276,8 @@ def _save_shard(topo, out_dir: Path, scores, inferred_log10, kind_index, cell_of
         arrays["posterior_quantiles"] = np.asarray(post_quantiles)
     if post_samples:
         arrays["posterior_samples_cloud"] = np.asarray(post_samples)
+    if post_sgm:
+        arrays["posterior_sgm"] = np.asarray(post_sgm)
     path = save_shard(out_dir, topo, arrays, count=len(scores))
     if path is None:
         print(f"\n[rank {topo.rank}/{topo.world_size}] no cells assigned -- "
@@ -249,22 +295,32 @@ def _merge_shards(reporter, args, eval_cfg, draw_spec, out_dir: Path,
     if not shard_paths:
         raise SystemExit(
             f"--merge: no shard files (_shard_*_of_*.npz) found in {out_dir}")
+    try:
+        world_size = assert_complete_shard_set(shard_paths, allow_partial=args.allow_partial)
+    except ValueError as exc:
+        raise SystemExit(f"--merge: {exc}")
+    reporter.stat("shards_merged", f"{len(shard_paths)}/{world_size}",
+                  note="per-rank shards combined into this report; fewer than world_size means "
+                       "--allow-partial was used and some (kind, cell) work is missing.")
     print(f"Merging {len(shard_paths)} shard file(s) from {out_dir}", flush=True)
     merged, n_used = merge_shard_arrays(
         shard_paths,
         concat_keys=["scores", "inferred_log10", "kind_index", "cell", "chunk"],
         first_keys=["kinds"],
-        optional_concat_keys=["posterior_quantiles", "posterior_samples_cloud"])
+        optional_concat_keys=["posterior_quantiles", "posterior_samples_cloud",
+                              "posterior_sgm"])
     kinds = [str(k) for k in merged["kinds"]]
     # An absent posterior_quantiles key -> empty array signals "not computed" to
     # write_experiment_outputs.
     post_quantiles = merged.get("posterior_quantiles", np.asarray([]))
     post_samples = merged.get("posterior_samples_cloud", np.asarray([]))
+    post_sgm = merged.get("posterior_sgm")
     print(f"Merged {merged['scores'].shape[0]} estimates from {n_used} shard(s).", flush=True)
     write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path,
                              merged["scores"], merged["inferred_log10"],
                              merged["kind_index"], merged["cell"], merged["chunk"],
-                             post_quantiles, post_samples, kinds, run_start)
+                             post_quantiles, post_samples, kinds, run_start,
+                             post_sgm=post_sgm)
     for shard_path in shard_paths:
         shard_path.unlink()
     print(f"Removed {len(shard_paths)} shard file(s).", flush=True)
@@ -477,6 +533,8 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     # ---- MAP estimation over (kind, cell, chunk) -------------------------
     scores, inferred_log10, post_quantiles = [], [], []
+    post_sgm = []                # sample geometric median per window (View B)
+    sgm_scale = prior_scale(spec.draw_spec)
     post_samples = []            # raw draws per window, only under --dump-posterior-samples
     kind_index, cell_of, chunk_of = [], [], []
     shard_note = (f" [shard rank {topo.rank}/{topo.world_size}: {len(my_work)} of "
@@ -519,14 +577,18 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     scores.append(score)
                     inferred_log10.append(theta_log)
                     if do_posterior:
-                        summary = posterior_summary(
+                        out = posterior_summary(
                             posterior, chunk, device, vista_device,
                             posterior_samples, eval_cfg.theta_prex_batch_size,
-                            pool_mode=pool_mode, return_samples=dump_samples)
+                            pool_mode=pool_mode, return_samples=dump_samples,
+                            return_sgm=True, sgm_scale=sgm_scale)
                         if dump_samples:
-                            summary, cloud = summary
+                            summary, cloud, sgm_vec = out
                             post_samples.append(cloud)
+                        else:
+                            summary, sgm_vec = out
                         post_quantiles.append(summary)
+                        post_sgm.append(sgm_vec)
                     kind_index.append(ki)
                     cell_of.append(cell)
                     chunk_of.append(c)
@@ -552,12 +614,13 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # ---- Write outputs ---------------------------------------------------
     if topo.is_distributed:
         _save_shard(topo, out_dir, scores, inferred_log10, kind_index, cell_of,
-                    chunk_of, post_quantiles, post_samples, kinds, run_start)
+                    chunk_of, post_quantiles, post_samples, kinds, run_start,
+                    post_sgm=post_sgm)
     else:
         write_experiment_outputs(reporter, args, eval_cfg, spec.draw_spec, array_path,
                                  scores, inferred_log10, kind_index, cell_of,
                                  chunk_of, post_quantiles, post_samples, kinds,
-                                 run_start)
+                                 run_start, post_sgm=post_sgm)
 
 
 def build_experiment_parser() -> argparse.ArgumentParser:
@@ -654,6 +717,11 @@ def build_experiment_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug-dump", action="store_true",
                         help="Implies --debug; tees the console transcript to "
                              "Labor/Debug/<run>/Experiment/console.log.")
+    parser.add_argument(
+        "--allow-partial", action="store_true",
+        help="With --merge: combine the shards that exist even when some ranks never saved "
+             "theirs (the report then covers only the present shards and says so). Without "
+             "it an incomplete shard set aborts the merge, naming the missing ranks.")
     parser.add_argument(
         "--merge", action="store_true",
         help="Combine-only mode: read the per-shard .npz files written by a "

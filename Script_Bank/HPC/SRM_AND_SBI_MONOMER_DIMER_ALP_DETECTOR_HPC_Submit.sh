@@ -157,7 +157,7 @@ case "$STAGE" in
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
-    [ -n "${MON_OUT:-}" ]  && SB+=( --output="$MON_OUT/%x_%A.out" )
+    [ -n "${MON_OUT:-}" ]  && SB+=( --output="$MON_OUT/%x_%j.out" )
     ;;
   evaluation)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh"
@@ -166,7 +166,7 @@ case "$STAGE" in
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
-    [ -n "${MON_OUT:-}" ]  && SB+=( --output="$MON_OUT/%x_%A.out" )
+    [ -n "${MON_OUT:-}" ]  && SB+=( --output="$MON_OUT/%x_%j.out" )
     ;;
   experiment)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh"
@@ -178,7 +178,7 @@ case "$STAGE" in
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
-    [ -n "${MON_OUT:-}" ]  && SB+=( --output="$MON_OUT/%x_%A.out" )
+    [ -n "${MON_OUT:-}" ]  && SB+=( --output="$MON_OUT/%x_%j.out" )
     ;;
   *)
     echo "FATAL: unknown stage '$STAGE' (use simulation|inference|evaluation|experiment)." >&2

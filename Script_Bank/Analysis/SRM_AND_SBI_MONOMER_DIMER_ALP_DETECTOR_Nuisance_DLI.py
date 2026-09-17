@@ -61,7 +61,7 @@ from matplotlib.figure import Figure
 
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.experiment_support import (
-    assert_consistent_shard_set,
+    assert_complete_shard_set,
     discover_cells,
     load_shards,
     merge_shard_arrays,
@@ -272,10 +272,10 @@ def _merge_pool_shards(R, args, out_dir, n_per):
     if not shard_paths:
         raise SystemExit(f"--merge: no pool shard files (_shard_*_of_*.npz) found in {out_dir}")
     try:
-        assert_consistent_shard_set(shard_paths)
+        assert_complete_shard_set(shard_paths, allow_partial=args.allow_partial)
     except ValueError as exc:
-        raise SystemExit(f"--merge: inconsistent pool shard set in {out_dir} -- {exc} "
-                         f"Remove the stale _shard_*.npz and re-run the sharded --emit-template.")
+        raise SystemExit(f"--merge: unusable pool shard set in {out_dir} -- {exc} "
+                         f"Remove any stale _shard_*.npz and re-run the sharded --emit-template.")
     print(f"Merging {len(shard_paths)} pool shard file(s) from {out_dir}", flush=True)
     try:
         merged, n_used = merge_shard_arrays(
@@ -688,6 +688,10 @@ def parse_args(argv):
                         "sits largely outside the prior box (bounded rejection then barely accepts).")
     p.add_argument("--repool", action="store_true",
                    help="force recomputing the pool on the GPU even if a fresh cache exists.")
+    p.add_argument("--allow-partial", action="store_true",
+                   help="With --merge: combine the pool shards that exist even when some ranks never "
+                        "saved theirs. Without it an incomplete shard set aborts the merge, naming the "
+                        "missing ranks.")
     p.add_argument("--merge", action="store_true",
                    help="emit-only combine mode: read the per-rank pool shards written by a "
                         "multi-GPU --emit-template run (in the Posit dir), concatenate them into "

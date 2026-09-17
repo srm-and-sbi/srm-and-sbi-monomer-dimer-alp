@@ -325,7 +325,8 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
                       n_samples: int, theta_prex_batch_size: int,
                       pool_mode: str = "bounded",
                       quantiles=(0.05, 0.25, 0.50, 0.75, 0.95),
-                      return_samples: bool = False):
+                      return_samples: bool = False,
+                      return_sgm: bool = False, sgm_scale=None):
     """Per-parameter posterior quantile summary for one observation (View B).
 
     Complements the MAP point estimate: draws ``n_samples`` from the posterior
@@ -342,11 +343,21 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
     same ones the summary used, not a second independent set, so the returned cloud and
     quantiles are guaranteed consistent with each other.
 
+    ``return_sgm`` additionally returns the sample geometric median of the same draws
+    (:func:`sample_geometric_median`, distances measured after dividing each dimension
+    by ``sgm_scale`` -- pass :func:`prior_scale` of the learnable table so no parameter
+    dominates the norm). The SGM is a joint point estimate that is itself a posterior
+    sample: it summarizes the cloud without leaving it, which the per-marginal medians
+    (a vector of 1-D medians need not be a probable point) and the MAP (an optimizer
+    climbing the flow's density, possibly into a spike outside the training support)
+    do not guarantee.
+
     Returns:
         ``(D, len(quantiles))`` numpy array (log10 space): per parameter, the
         sampled quantiles in the order given by ``quantiles``. With
         ``return_samples``, the tuple ``(summary, draws)`` where ``draws`` is
-        ``(n_samples, D)`` float32 in log10 space.
+        ``(n_samples, D)`` float32 in log10 space. With ``return_sgm`` the SGM
+        vector ``(D,)`` is appended as the last element of the returned tuple.
     """
     omega = torch.tensor(normalize_video(video_chunk), dtype=torch.float32,
                          device=train_device)
@@ -357,9 +368,91 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
                                  n_samples, theta_prex_batch_size, pool_mode)
     arr = samples.detach().cpu().numpy()                       # (n_samples, D)
     summary = np.quantile(arr, list(quantiles), axis=0).T      # (D, len(quantiles))
+    out = [summary]
     if return_samples:
-        return summary, arr.astype(np.float32)
-    return summary
+        out.append(arr.astype(np.float32))
+    if return_sgm:
+        out.append(sample_geometric_median(arr, scale=sgm_scale)[0])
+    return out[0] if len(out) == 1 else tuple(out)
+
+
+def prior_scale(parameterization) -> np.ndarray:
+    """Per-parameter prior-box width ``(D,)`` in the table's coordinate (log10 for a log
+    row) -- the natural scale for a joint distance between parameter vectors, so that a
+    parameter with a wide prior does not dominate one with a narrow prior."""
+    return np.asarray([float(p["PRIOR_RANGE"][1]) - float(p["PRIOR_RANGE"][0])
+                       for p in parameterization], dtype=float)
+
+
+def sample_geometric_median(samples: np.ndarray, scale=None):
+    """The sample geometric median (SGM) of a posterior cloud: the sample minimizing the
+    summed Euclidean distance to all other samples, i.e. the multivariate median snapped
+    to a REAL sample (unlike a vector of per-dimension medians, which destroys the joint
+    structure and can land in a gap between modes; see the SGM discussion in Mach.
+    Learn.: Sci. Technol. 2025, doi 10.1088/2632-2153/ada0a3).
+
+    ``samples`` is ``(N, D)``; ``scale`` (optional, ``(D,)``) divides each dimension
+    before the distance is taken (pass the prior widths). Returns ``(vector, index)``:
+    the SGM in the ORIGINAL coordinates ``(D,)`` and its row index. Exact O(N^2 D) --
+    fine for the ~10^3-sample clouds the stages draw per observation.
+    """
+    arr = np.asarray(samples, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] == 0:
+        raise ValueError("sample_geometric_median: expected a non-empty (N, D) array.")
+    z = arr / np.asarray(scale, dtype=float) if scale is not None else arr
+    sq = np.einsum("ij,ij->i", z, z)
+    d2 = sq[:, None] + sq[None, :] - 2.0 * (z @ z.T)
+    np.maximum(d2, 0.0, out=d2)
+    idx = int(np.argmin(np.sqrt(d2).sum(axis=1)))
+    return arr[idx].copy(), idx
+
+
+def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
+                                   post_q: np.ndarray, sgm_log10=None,
+                                   groups=None, group_header: str = "kind") -> tuple:
+    """Build ``(headers, rows)`` comparing the three point estimates of one posterior.
+
+    Per parameter (and per group when ``groups`` -- a label per observation -- is
+    given): the median absolute gap between the MAP and the 1-D posterior median
+    (``post_q[:, :, 2]``), between the MAP and the SGM, and between the SGM and the 1-D
+    median, all in log10 units; and the share of observations whose MAP lies outside the
+    posterior's central 90% interval ``[Q05, Q95]``. A MAP far from both medians and
+    outside the 90% interval marks an optimizer that climbed into a density spike the
+    posterior samples do not visit (the flow's density is unconstrained outside its
+    training support, which the unrestricted pool exposes) -- the medians, not the MAP,
+    are then the point estimate to read. ``sgm_log10`` may be ``None`` (columns show
+    ``n/a``).
+    """
+    map_log10 = np.asarray(map_log10, dtype=float)
+    post_q = np.asarray(post_q, dtype=float)
+    sgm = None if sgm_log10 is None else np.asarray(sgm_log10, dtype=float)
+    n_obs = map_log10.shape[0]
+    labels = np.asarray(["all"] * n_obs) if groups is None else np.asarray(groups)
+    headers = ["parameter", "label"] + ([group_header] if groups is not None else []) + [
+        "n", "median |MAP - median|", "median |MAP - SGM|", "median |SGM - median|",
+        "MAP outside 90%"]
+    rows = []
+    for i, para in enumerate(parameterization):
+        for g in (dict.fromkeys(labels) if groups is not None else ["all"]):
+            m = labels == g
+            mp, q = map_log10[m, i], post_q[m, i, :]
+            ok = np.isfinite(mp) & np.all(np.isfinite(q), axis=1)
+            mp, q = mp[ok], q[ok]
+            cells = [para["KEY"], para.get("LABEL") or "-"] + ([str(g)] if groups is not None else [])
+            if not mp.size:
+                rows.append(cells + ["0", "-", "-", "-", "-"])
+                continue
+            med = q[:, 2]
+            outside = float(np.mean((mp < q[:, 0]) | (mp > q[:, 4])))
+            if sgm is not None:
+                sg = sgm[m, i][ok]
+                map_sgm = f"{np.median(np.abs(mp - sg)):.3f}"
+                sgm_med = f"{np.median(np.abs(sg - med)):.3f}"
+            else:
+                map_sgm = sgm_med = "n/a"
+            rows.append(cells + [str(mp.size), f"{np.median(np.abs(mp - med)):.3f}",
+                                 map_sgm, sgm_med, f"{outside * 100:.0f}%"])
+    return headers, rows
 
 
 # =============================================================================

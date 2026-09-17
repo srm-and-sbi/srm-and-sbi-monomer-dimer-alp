@@ -33,7 +33,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --time=02:00:00
 #SBATCH --mail-type=FAIL
-#SBATCH --output=%x_%A.out
+#SBATCH --output=%x_%j.out
 
 set -eo pipefail
 

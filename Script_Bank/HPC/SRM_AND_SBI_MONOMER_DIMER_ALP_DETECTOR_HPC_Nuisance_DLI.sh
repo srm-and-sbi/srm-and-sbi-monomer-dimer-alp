@@ -7,10 +7,10 @@
 # pooled posterior-sample pool (the GPU cost), caches it, and emits the value-based
 # spec pre-filled with the calibrated-imaging percentiles for a person to finalize.
 # Adapts to the allocation: with >1 node it shards the (kind, cell) work across one
-# worker per GPU on EVERY node (srun places one torchrun launcher per node) into
+# worker per GPU on EVERY node (one Slurm task per GPU on every node) into
 # per-rank pool shards on the shared filesystem, then a single-process, no-GPU
 # --merge step concatenates every shard into the cached pool + spec; with 1 node
-# and >1 GPU it shards across that node's GPUs (torchrun --standalone) then merges;
+# and >1 GPU it shards across that node's GPUs (one Slurm task per GPU) then merges;
 # with 1 GPU it is the original single-process path. --gres is per node, so
 # --nodes=N --gres=gpu:G gives N*G shard workers (world_size = N*G); the sharding is
 # embarrassingly parallel (workers just need the shared output dir for the merge). A
@@ -46,7 +46,7 @@
 #SBATCH --mem=480G
 #SBATCH --time=1-00:00:00
 #SBATCH --mail-type=FAIL
-#SBATCH --output=%x_%A.out   # submit-directory; the controller overrides this via MON_OUT for packed jobs
+#SBATCH --output=%x_%j.out   # submit-directory; the controller overrides this via MON_OUT for packed jobs
 
 set -eo pipefail
 
@@ -104,39 +104,26 @@ NDLI_ARGS=( --condition "$CONDITION" --emit-template --pool-mode "$POOL_MODE"
 
 echo "=== Nuisance_DLI (emit-template) | pool=${POOL_MODE} time=${TOTAL_TIME}s span=${SPAN}s nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) | node $(hostname) ==="
 
-# torch-elastic's exit barrier defaults to 300 s: the ranks that finish first wait only five
-# minutes for the rest and then tear down the rendezvous -- which KILLS any rank still
-# working, discarding its results. The sharded stages are embarrassingly parallel and
-# routinely skewed (a rank drawing two tasks takes twice as long as one drawing a single
-# task), so five minutes is far tighter than the real spread and the teardown destroys
-# completed work. Raise it well past any plausible skew; the job wall time is the real bound.
-export TORCHELASTIC_EXIT_BARRIER_TIMEOUT="${EXIT_BARRIER:-3600}"
-
-if [ "${NNODES:-1}" -gt 1 ]; then
-    # Multi-node sharding: srun places ONE torchrun launcher per node, each spawning
-    # GPUS local workers, so the (kind, cell) work shards round-robin across all
-    # NNODES*GPUS ranks into per-rank pool shards on the shared output dir (a worker
-    # that draws no cells writes no shard; no cross-rank communication); a single
-    # no-GPU --merge pass then concatenates every shard into the cached pool + spec.
-    MASTER_ADDR="$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)"
-    MASTER_PORT="${MASTER_PORT:-29500}"
-    echo "    multi-node: nnodes=$NNODES nproc_per_node=$GPUS rdzv=$MASTER_ADDR:$MASTER_PORT"
-    srun --nodes="$NNODES" --ntasks-per-node=1 --cpu-bind=none \
-        torchrun \
-            --nnodes="$NNODES" \
-            --nproc_per_node="$GPUS" \
-            --rdzv-id="${SLURM_JOB_ID:-0}" \
-            --rdzv-backend=c10d \
-            --rdzv-endpoint="$MASTER_ADDR:$MASTER_PORT" \
-            "$NDLI_PY" "${NDLI_ARGS[@]}"
-    python -u "$NDLI_PY" "${NDLI_ARGS[@]}" --merge
-elif [ "${GPUS:-1}" -gt 1 ]; then
-    # Single-node sharding: one worker per GPU (torchrun --standalone) into per-rank
-    # pool shards, then merge them into the cached pool + emitted spec (no GPU).
-    torchrun --standalone --nproc_per_node="$GPUS" "$NDLI_PY" "${NDLI_ARGS[@]}"
+# The sharded stages are embarrassingly parallel: every rank draws its own share and writes
+# its own shard, and one --merge pass combines them. They are therefore launched as plain
+# Slurm tasks -- one per GPU on every allocated node -- and NOT through torchrun: torchrun's
+# elastic agent enforces a 300 s exit barrier that no launcher setting changes (torch 2.9
+# ignores TORCHELASTIC_EXIT_BARRIER_TIMEOUT), so when ranks finish more than five minutes
+# apart the first node's agent tears down the rendezvous, the other nodes' agents die with a
+# connection error and kill any rank still working, and that rank's shard is lost.
+# resolve_topology() reads SLURM_NTASKS / SLURM_PROCID / SLURM_LOCALID, so every task knows
+# its rank and binds its own GPU; there is no rendezvous, no barrier, and nothing to time out.
+# --merge refuses to combine an incomplete shard set (see --allow-partial in the stage's --help).
+WORLD=$((NNODES * GPUS))
+if [ "$WORLD" -gt 1 ]; then
+    CPT_PER_TASK=$(( ${SLURM_CPUS_ON_NODE:-$((GPUS * 4))} / GPUS ))
+    echo "    sharded: nodes=$NNODES tasks_per_node=$GPUS world_size=$WORLD cpus_per_task=$CPT_PER_TASK"
+    srun --nodes="$NNODES" --ntasks="$WORLD" --ntasks-per-node="$GPUS" \
+         --cpus-per-task="$CPT_PER_TASK" --cpu-bind=none \
+         python -u "$NDLI_PY" "${NDLI_ARGS[@]}"
     python -u "$NDLI_PY" "${NDLI_ARGS[@]}" --merge
 else
-    # Single GPU: the original path (builds the full pool, caches it, emits the spec; no merge).
+    # Single GPU: the original path (writes the report directly; no merge).
     python -u "$NDLI_PY" "${NDLI_ARGS[@]}"
 fi
 

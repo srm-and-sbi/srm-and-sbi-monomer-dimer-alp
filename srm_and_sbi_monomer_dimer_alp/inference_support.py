@@ -300,6 +300,12 @@ def resolve_topology() -> "Topology":
 
     if gpu_backend:
         index = local_rank if world_size > 1 else (machine.gpu_device_index or 0)
+        n_visible = torch.cuda.device_count()
+        if world_size > 1 and n_visible and index >= n_visible:
+            # Per-task GPU binding (Slurm's --gpus-per-task / CUDA_VISIBLE_DEVICES) hides the
+            # other GPUs from this process, so its local rank exceeds what it can see: the
+            # GPU it may use is then always among the visible ones.
+            index = index % n_visible
         torch.cuda.set_device(index)   # bind this process's default CUDA device to its own GPU (no-op for the usual index 0)
         device = torch.device(f"cuda:{index}")
         backend = "GPU"

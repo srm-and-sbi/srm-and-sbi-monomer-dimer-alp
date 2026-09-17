@@ -5,15 +5,13 @@
 # Scores a trained posterior's calibration on the held-out EVAL set. An Analysis
 # diagnostic, not a pipeline stage (never wired into Submit.sh), but it shares the
 # Evaluation stage's shard-then-merge execution so it runs at scale: with >1 node it
-# shards the EVAL set across one worker per GPU on EVERY node (srun places one torchrun
-# launcher per node), each writing its own shard to the shared filesystem, then a single
+# shards the EVAL set across one worker per GPU on EVERY node (one Slurm task per GPU), each writing its own shard to the shared filesystem, then a single
 # --merge pass concatenates them and runs the calibration statistics (SBC/TARP/L-C2ST are
 # global) on the full set; with 1 node and >1 GPU it shards across that node's GPUs
-# (torchrun --standalone) then merges; with 1 GPU it is the single-process path (writes
+# (one Slurm task per GPU) then merges; with 1 GPU it is the single-process path (writes
 # the report directly, no merge). --gres is per node, so --nodes=N --gres=gpu:G gives N*G
-# shard workers (world_size = N*G). The sharding is embarrassingly parallel (no cross-rank
-# communication -- the c10d rendezvous torchrun sets up is unused here, shared with
-# training only for one uniform GPU-binding path); workers just need the shared output dir
+# shard workers (world_size = N*G). The sharding is embarrassingly parallel (no cross-rank communication, hence no torchrun and no
+# rendezvous); workers just need the shared output dir
 # for the merge. Reads the trained posterior + EVAL data, writes the calibration report
 # (Posit/..._Posterior_Calibration/).
 #
@@ -46,7 +44,7 @@
 #SBATCH --mem=480G
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=FAIL
-#SBATCH --output=%x_%A.out
+#SBATCH --output=%x_%j.out
 
 set -eo pipefail
 
@@ -115,33 +113,26 @@ CAL_ARGS=( --condition "$CONDITION" --total-time-seconds "$TOTAL_TIME" --eval-ta
 
 echo "=== Posterior Calibration | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} L=${POSTERIOR_SAMPLES} tests=${TESTS} stratify=${STRATIFY} pool=${POOL_MODE} time=${TOTAL_TIME}s max_sims=${MAX_SIMS} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
-# torch-elastic's exit barrier defaults to 300 s: the ranks that finish first wait only five
-# minutes for the rest and then tear down the rendezvous -- which KILLS any rank still
-# working, discarding its results. The sharded stages are embarrassingly parallel and
-# routinely skewed (a rank drawing two tasks takes twice as long as one drawing a single
-# task), so five minutes is far tighter than the real spread and the teardown destroys
-# completed work. Raise it well past any plausible skew; the job wall time is the real bound.
-export TORCHELASTIC_EXIT_BARRIER_TIMEOUT="${EXIT_BARRIER:-3600}"
-
-if [ "${NNODES:-1}" -gt 1 ]; then
-    MASTER_ADDR="$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)"
-    MASTER_PORT="${MASTER_PORT:-29500}"
-    echo "    multi-node: nnodes=$NNODES nproc_per_node=$GPUS rdzv=$MASTER_ADDR:$MASTER_PORT"
-    srun --nodes="$NNODES" --ntasks-per-node=1 --cpu-bind=none \
-        torchrun \
-            --nnodes="$NNODES" \
-            --nproc_per_node="$GPUS" \
-            --rdzv-id="${SLURM_JOB_ID:-0}" \
-            --rdzv-backend=c10d \
-            --rdzv-endpoint="$MASTER_ADDR:$MASTER_PORT" \
-            "$CAL_PY" "${CAL_ARGS[@]}"
-    python -u "$CAL_PY" "${CAL_ARGS[@]}" --merge
-elif [ "${GPUS:-1}" -gt 1 ]; then
-    # Single-node sharding: one worker per GPU (torchrun --standalone), then merge.
-    torchrun --standalone --nproc_per_node="$GPUS" "$CAL_PY" "${CAL_ARGS[@]}"
+# The sharded stages are embarrassingly parallel: every rank draws its own share and writes
+# its own shard, and one --merge pass combines them. They are therefore launched as plain
+# Slurm tasks -- one per GPU on every allocated node -- and NOT through torchrun: torchrun's
+# elastic agent enforces a 300 s exit barrier that no launcher setting changes (torch 2.9
+# ignores TORCHELASTIC_EXIT_BARRIER_TIMEOUT), so when ranks finish more than five minutes
+# apart the first node's agent tears down the rendezvous, the other nodes' agents die with a
+# connection error and kill any rank still working, and that rank's shard is lost.
+# resolve_topology() reads SLURM_NTASKS / SLURM_PROCID / SLURM_LOCALID, so every task knows
+# its rank and binds its own GPU; there is no rendezvous, no barrier, and nothing to time out.
+# --merge refuses to combine an incomplete shard set (see --allow-partial in the stage's --help).
+WORLD=$((NNODES * GPUS))
+if [ "$WORLD" -gt 1 ]; then
+    CPT_PER_TASK=$(( ${SLURM_CPUS_ON_NODE:-$((GPUS * 4))} / GPUS ))
+    echo "    sharded: nodes=$NNODES tasks_per_node=$GPUS world_size=$WORLD cpus_per_task=$CPT_PER_TASK"
+    srun --nodes="$NNODES" --ntasks="$WORLD" --ntasks-per-node="$GPUS" \
+         --cpus-per-task="$CPT_PER_TASK" --cpu-bind=none \
+         python -u "$CAL_PY" "${CAL_ARGS[@]}"
     python -u "$CAL_PY" "${CAL_ARGS[@]}" --merge
 else
-    # Single GPU: the single-process path (writes the report directly; no merge).
+    # Single GPU: the original path (writes the report directly; no merge).
     python -u "$CAL_PY" "${CAL_ARGS[@]}"
 fi
 
