@@ -26,7 +26,7 @@ steps.
    the remaining autocorrelation is the physical flicker correlation time `tau_corr` (≈ 0.13 s for
    MET).
 
-2. **Model.** Under the stationary OU flicker (`generate_brightness_photons`,
+2. **Model.** For a single emitter, under the stationary OU flicker (`generate_brightness_photons`,
    `simulation_dli_support.py`) the model autocorrelation is exact and closed-form,
    `ACF(lag) = exp(−lambda_rate·lag)`, so `lambda_rate = 1/tau_corr` up to the finite-track detrend
    bias. To null that bias, the utility simulates OU trajectories over a grid of `lambda_rate`, cuts
@@ -36,8 +36,8 @@ steps.
    summary) to convert `tau_corr → lambda_rate`; the 1/e crossing and the bare closed form
    `1/tau_corr` are reported as cross-checks, for each condition — the rate is photophysical and
    should be condition-independent. `mu_pc` shifts ln-brightness additively and `sigma_pc` scales it
-   linearly, so both cancel exactly in the normalized ln-autocorrelation: no parameter sweep is
-   needed.
+   linearly, so both cancel exactly in the normalized ln-autocorrelation of a single emitter: no
+   parameter sweep is needed.
 
 ## Requirements
 
@@ -76,8 +76,16 @@ number. The prior is locked to log-uniform `(0.0, 1.0)` = `[1, 10]`, bracketing 
   ground truth.
 - **Reads only.** No file under the data root is modified; the utility emits a printed report, not an
   artifact.
-- **`mu_pc` and `sigma_pc` are immaterial** to the result — the additive shift and the linear scale
-  of ln-brightness both cancel in the normalized ln-autocorrelation (`DETECTOR_WORKFLOW.md` §6.3).
+- **`mu_pc` and `sigma_pc` are immaterial for a single emitter** — the additive shift and the linear
+  scale of ln-brightness both cancel in the normalized ln-autocorrelation of one dye
+  (`DETECTOR_WORKFLOW.md` §6.3).
+- **Single-emitter assumption.** The model arm simulates one dye per trace and takes the logarithm per
+  trace; it does not sum several dyes before the logarithm. A localized spot may carry more than one
+  dye under the FAB labeling law (`DETECTOR_WORKFLOW.md` §6.4), and the logarithm of a multi-dye
+  intensity sum is not a single-dye OU process: its normalized autocorrelation depends on `sigma_pc`
+  as well as on `lambda_rate`. The derived value is therefore a single-dye-equivalent reference under
+  that assumption, not a measurement that accounts for dye multiplicity; the matched model arm
+  corrects the finite-track detrending bias and nothing else.
 - **Reproducible from the public accession alone**: no bundled data and no trained model are needed.
 
 ## Data source

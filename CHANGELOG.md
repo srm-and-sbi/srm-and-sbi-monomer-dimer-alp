@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.11 - 2026-09-18
+
+Documentation and release bookkeeping only: no parameter role, preprocessing step, or executable
+model changes. Version 0.1.10 is the `one-dye-sensitivity` branch and is not part of `main`.
+
+### Fixed
+
+- Corrected descriptions of existing calculations, without new claims. The camera block is described
+  as externally constrained rather than jointly inferred in this workflow, with the structural
+  degeneracies (`gamma = g/C`; the products `gamma·kappa_q` and `gamma·kappa_q·kappa_o`) kept
+  separate from the empirical recovery failure observed when the predecessor detector inferred the
+  camera jointly; controlled-illumination photon transfer constrains `gamma` on its own
+  (`DETECTOR_WORKFLOW.md` §5, §6.2, §9.3; `REFERENCE_EMCCD_NOISE_MODEL.md` §6, §9;
+  `PROJECT_CONTEXT.md` §2; `detector_parameterization.py` comments). The renderer is described as
+  sampling positions and brightness at the frame interval without integrating motion during exposure;
+  the experimental exposure duration is separate acquisition metadata. The flicker-rate derivation is
+  described as a single-emitter log-brightness match that corrects finite-track detrending only and
+  does not model multi-dye intensity sums, so its result is a single-dye-equivalent reference
+  (`DETECTOR_WORKFLOW.md` §6.3; the derivation's companion note). The within-recording fall of the
+  inferred bleaching probability is described as an observation that motivates investigation, not as
+  evidence that a single-rate bleaching model is misspecified (`DETECTOR_WORKFLOW.md` §6.2).
+- Provenance of every externally supplied value is recorded as two separate properties, evidence
+  (acquisition setting, measured quantity, datasheet value, convention, assumption) and source
+  (ThunderSTORM protocol or output column, publication, code definition), in a new table in
+  `DETECTOR_WORKFLOW.md` §6.2 and in the camera table of `REFERENCE_EMCCD_NOISE_MODEL.md` §6. The
+  table names two conventions the code fixed silently: no exposure integration, and the fixed global
+  16-bit to 8-bit video map.
+
+### Added
+
+- `DETECTOR_WORKFLOW.md` §6.6, the calibration outcome of the MET-FAB detector under the Poisson
+  labeling law: run identity, metric definitions, per-parameter and joint results from the Evaluation
+  and Posterior_Calibration reports, the separate calculations on the saved draws (including the
+  stratification by realized dye multiplicity), the limits of what the results support, and the
+  status and pre-specified comparisons of the one-dye sensitivity run. Cross-referenced from
+  `PROJECT_CONTEXT.md` §7.
+
+### Changed
+
+- `DETECTOR_WORKFLOW.md` §9.4 records a proposal, explicitly not implemented: the acquisition-
+  information contract (what the pipeline needs from outside and from where), a reduced inferred block
+  of `mu_pc`, `sigma_pc`, and provisionally `lambda_rate`, the treatment of quantities that leave the
+  block as nuisances with explicit uncertainty, the adoption gates (external inputs, replacement
+  measurements, reduced SBI, experimental adequacy), the validation-data tiers, and the decision
+  statement. The implemented six-parameter detector remains in force. `PROJECT_CONTEXT.md` §8 gains
+  open question S6 pointing to it.
+
 ## 0.1.9 - 2026-09-17
 
 ### Fixed

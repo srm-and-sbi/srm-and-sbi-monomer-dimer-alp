@@ -91,9 +91,9 @@ The Detector parameterization lives in its **own module** (`detector_parameteriz
 | category | role | members | rationale |
 |---|---|---|---|
 | **Inferred imaging** — the calibration targets | learnable | the 6 identifiable emitter parameters of §6.2: PSF (`mu_r`, `sigma_r`), brightness (`mu_pc`, `sigma_pc`), photophysics (`prob_photo_bleach`, `lambda_rate`) | the imaging model the workflow calibrates, inferred within the data-anchored priors of §6.2 |
-| **SCOPE camera nuisance** — the camera | nuisance | the 5 EMCCD camera parameters (`gamma`, `kappa_o`, `kappa_b`, `kappa_s`, `kappa_q`) of §6.2 | non-identifiable from the videos; marginalized over a-priori boxes, drawn at the DLI stage, and shared with the production workflow (§9.3) |
+| **SCOPE camera nuisance** — the camera | nuisance | the 5 EMCCD camera parameters (`gamma`, `kappa_o`, `kappa_b`, `kappa_s`, `kappa_q`) of §6.2 | externally constrained rather than jointly inferred in this workflow: the gain and conversion enter the image likelihood only through their ratio, and the amplitude and floor depend on the products `gamma·kappa_q` and `gamma·kappa_q·kappa_o`, so the individual camera quantities are confounded in the biological recordings, while camera-calibration measurements constrain them individually (`REFERENCE_EMCCD_NOISE_MODEL.md` §8); marginalized over a-priori boxes, drawn at the DLI stage, and shared with the production workflow (§9.3) |
 | **RDS nuisance** — the biology | nuisance | the stoichiometry block (`count_total`, `ratio_dimer_monomer_initial`, `rate_dissociation`) and the mobility block (`diffusivity_alp`, `relative_diffusivity_dimer`, `relative_diffusivity_slow`, `relative_diffusivity_immobile`, `rate_fast_slow`, `rate_slow_fast`, `rate_slow_immobile`, `rate_immobile_slow`) of §6.1 — eleven rows, the biology prior | marginalized while the imaging is calibrated, by re-imaging the condition's trajectory tier (nuisance-from-object, §4); the reaction-diffusion biology is not the target here |
-| **Conditioned by the coordinate frame / acquisition** | fixed | pixel size, field size (`root_size_px`), and frame time (`delta_frame`) | a coordinate frame and cadence, not physics — degenerate with the emitter dynamics and geometry, hence unidentifiable from the videos; supplied per dataset as acquisition metadata |
+| **Conditioned by the coordinate frame / acquisition** | fixed | pixel size, field size (`root_size_px`), and frame time (`delta_frame`) | a coordinate frame and cadence, not physics — degenerate with the emitter dynamics and geometry, hence supplied per dataset as acquisition metadata rather than inferred. The renderer samples positions and brightness at the frame interval and does not integrate motion during exposure; the experimental exposure duration is separate acquisition metadata |
 | **Fixed modeling hyperparameters and spec metadata** | fixed | the bleaching reference window (`numb_photo_bleach`) and the nominal EM gain / conversion (`kappa_g`, `kappa_c`) | modeling choices and spec constants held fixed by design; `kappa_g`/`kappa_c` are retained only as metadata for the `γ = g/C` drift check (§8) |
 
 The gain/conversion pair is the one subtlety: `kappa_g` (`g`) and `kappa_c` (`C`) are individually fixed spec metadata, and their ratio `gamma = g/C` — the only gain quantity identifiable from the videos — is marginalized as part of the SCOPE camera nuisance (§6.2; §9.3; `REFERENCE_EMCCD_NOISE_MODEL.md` §9). The counterpart categorization for the production (biology) workflow makes the biology the inference target and marginalizes the whole imaging block — which is the value-based scheme's reason for existing (§2).
@@ -137,25 +137,24 @@ Log-uniform priors; the prior center shown is the range's geometric midpoint (a 
 | `prob_photo_bleach` | (−2, −0.5) | 0.01–0.316 | — (no public anchor; see the within-recording evidence below) | photobleaching probability over the reference frame count; sets the rate into the dark state |
 | `lambda_rate` | (0.0, 1.0) | 1.0–10.0 | ≈5 — flicker correlation-time of track `intensity[photon]` (§6.3) | brightness-switching rate — the inferred flicker parameter (§6.3) |
 
-**No external anchor, but not without evidence — and the evidence indicts a single rate.** No
-public measurement pins `prob_photo_bleach`, so its prior is placed on range alone. The temporal
-analysis of the Experiment estimates supplies internal evidence instead, and it is unambiguous: the
-inferred value falls by roughly half a decade **within** a single recording, coherently and in
-nearly every recording of both conditions, while the PSF median and the brightness spread stay flat
-over the same windows. A falling *apparent* bleach probability is the signature of heterogeneous
-bleaching — the labile fluorophores go first, so later windows hold a progressively more photostable
-surviving subpopulation — which a model carrying one mono-exponential rate can only absorb by
-reporting a smaller rate as the recording proceeds. Two limits on how far this may be read. It is a
-measured non-stationarity of the *inferred parameter*, not a measurement of the true bleaching
-kinetics, and the analysis that produces it cannot attribute a cause on its own (see
-`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.md`). What it does establish
-is that a single-rate bleaching model is misspecified over a recording of this length, which bounds
-what any calibration of this parameter can mean: the calibrated value is an average over a
-non-stationary process, not a constant of the acquisition.
+**No external anchor; within-recording evidence that motivates investigation.** No public measurement pins
+`prob_photo_bleach`, so its prior is placed on range alone. The temporal analysis of the Experiment
+estimates supplies an observation: the inferred value falls by roughly half a decade **within** a single
+recording, coherently and in nearly every recording of both conditions, while the PSF median and the
+brightness spread stay flat over the same windows. Heterogeneous bleaching (the labile fluorophores go
+first, so later windows hold a progressively more photostable surviving subpopulation) would produce this
+signature in a model carrying one rate, but so would an estimator bias that varies with the observation
+conditions that change across the windows of a recording, a declining emitter density among them. The
+observation is a measured non-stationarity of the *inferred parameter*; the analysis that produces it does
+not identify the cause (see `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.md`),
+and it does not by itself establish that a single-rate bleaching model is misspecified. It bounds what a
+calibration of this parameter may be read to mean until a full-recording fluorescence-loss analysis has
+been made (§9.4): the calibrated value is an average over the windows of a recording, not a demonstrated
+constant of the acquisition.
 
 **Prior placement.** The two population *spreads* `sigma_r` and `sigma_pc` are kept broad-but-capped: their ThunderSTORM-fitted values are upper-biased (§6.5 caveat 1), so the prior is broad enough to contain the fitted spread yet capped below the runaway-tail regime, letting the calibration likelihood pull the inferred spread down toward its fit-corrected value. Every reference is the monomer-control (Fab) statistic where the two conditions differ, because InlB's higher brightness and wider PSF are dimer artifacts the model reproduces by other means — the brightness sum (§6.4), not the priors (§6.5 caveats).
 
-**SCOPE camera nuisance (marginalized).** The five EMCCD camera parameters are non-identifiable from the videos (§9.3) and are not inference targets: each is drawn per simulation from the a-priori box below, rendered into every video, and recorded as `Nuisance_SCOPE`. The boxes mirror the authoritative camera-parameter specification in `REFERENCE_EMCCD_NOISE_MODEL.md` §6, the source of record for the EMCCD parameterization. `kappa_g` and `kappa_c` (nominal EM gain and conversion) are held fixed as spec metadata for the `γ = g/C` drift check.
+**SCOPE camera nuisance (marginalized).** The five EMCCD camera parameters are externally constrained rather than jointly inferred in this workflow (§9.3) and are not inference targets: each is drawn per simulation from the a-priori box below, rendered into every video, and recorded as `Nuisance_SCOPE`. The boxes mirror the authoritative camera-parameter specification in `REFERENCE_EMCCD_NOISE_MODEL.md` §6, the source of record for the EMCCD parameterization. `kappa_g` and `kappa_c` (nominal EM gain and conversion) are held fixed as spec metadata for the `γ = g/C` drift check.
 
 | parameter | log10 range | absolute | reference (source) | forward-model role |
 |---|---|---|---|---|
@@ -167,15 +166,34 @@ non-stationary process, not a constant of the acquisition.
 
 The camera boxes are *tight anchors* around the acquisition-protocol values rather than broad decade brackets: the ADU floor is `gamma·kappa_q·kappa_o`, so a broad camera range would let the floor dominate the video-to-video variation and collapse the detector embedding onto that single axis, keeping the marginalization within the realistic camera manifold. The read noise `kappa_s` — a datasheet quantity, weakly identifiable — is likewise pinned to a tight band at its datasheet value (its wide band would be harmless, but the tight band keeps every camera axis minimal).
 
+**Evidence and source of every externally supplied value.** Two properties are recorded separately for each value the workflow does not infer: the *evidence* it rests on (an acquisition setting, a measured quantity, a datasheet value, a convention, or an assumption) and the *source* it was read from (an acquisition record, a ThunderSTORM protocol file or output column, a publication, or a code definition). The two are not competing categories: the camera baseline is an acquisition setting that was read from a ThunderSTORM protocol file. Removing the dependence on ThunderSTORM's files removes a source, not the need for the evidence; every acquisition setting below must then come from the microscope's own records, and every measured quantity from an analysis of the raw frames (§9.4).
+
+| value | evidence | source used here |
+|---|---|---|
+| pixel size 158 nm, frame interval 20 ms | acquisition settings | per-cell ThunderSTORM camera protocol of `S-BSST712`; the frame interval is the fixed cadence of `PROJECT_CONTEXT.md` §2 |
+| field 256 × 256 px | convention (the crop the model consumes) | code definition (`root_size_px`) |
+| exposure duration | acquisition setting that the model does not represent: the renderer samples positions and brightness at the frame interval and does not integrate motion during exposure | none (a modeling convention) |
+| `kappa_g` = 200, `kappa_c` = 4.78, `kappa_q` = 0.90, `kappa_b` ≈ 175 | acquisition settings | per-cell ThunderSTORM camera protocol of `S-BSST712` |
+| `kappa_o` ≈ 28.7 photons | measured quantity, conditional on the camera settings above | median of the ThunderSTORM `offset[photon]` output column |
+| `kappa_s` ≈ 10.5 ADU | datasheet value | public camera specification (`S-BIAD1369`) |
+| the six imaging reference values above | measured medians, and derived quantities for the fit-corrected spreads and the matched flicker rate | ThunderSTORM output columns (`intensity [photon]`, `sigma [nm]`) and the derivations of §6.3 and §6.5 |
+| labeling mean 1.64 dyes per Fab | measured quantity (the preparation's degree of labeling) | `PROJECT_CONTEXT.md` §2 |
+| Poisson form of the labeling law | assumption | code definition (`labeling.py`), with matched-mean dispersion alternatives registered for sensitivity runs |
+| occupancy 0.155 | derived from a declared visibility ratio (an assumption) | `PROJECT_CONTEXT.md` §2 |
+| `numb_photo_bleach` = 100 frames | convention (how the bleaching probability is expressed) | code definition |
+| 16-bit to 8-bit video conversion | convention: a fixed global map of 0–65535 onto 0–255 with clipping and no per-video normalization, applied identically to synthetic and experimental frames | code definition (`io.convert_video_dtype`) |
+
+The camera boxes were sized for the computational reason recorded above, not from a measured uncertainty. A measured per-session uncertainty would be narrower than a decade in any case, so the two justifications are compatible once the values are measured (§9.4).
+
 ### 6.3 The brightness-flicker model: a stationary rate process
 
 Per-dye ln-brightness follows a stationary Ornstein-Uhlenbeck (OU) process, discretized per frame as an AR(1) (`generate_brightness_photons`, `simulation_dli_support.py`):
 
 `z_0 ~ N(0, sigma_pc²)`, `z_{t+1} = rho·z_t + sigma_pc·sqrt(1 − rho²)·eps_t` with `rho = exp(−lambda_rate·delta_frame)`, and `photons_t = mu_pc·exp(z_t)`.
 
-By induction the per-frame marginal is exactly `LogNormal(ln mu_pc, sigma_pc²)` at every frame and for every clip duration: the documented brightness law holds without an initialization transient or a brightness ceiling, and `sigma_pc` carries its marginal meaning directly. `lambda_rate` is the correlation-decay rate of ln-brightness — `ACF(lag) = exp(−lambda_rate·lag)`, so the flicker correlation time is `tau_corr = 1/lambda_rate` — not a jump-event rate. Photobleaching is a state-independent absorbing process applied as an independent per-frame Bernoulli (`prob_1 = 1 − (1 − prob_photo_bleach)^(1/numb_photo_bleach)`); because it is independent of brightness, the brightness law among still-active dyes is unchanged by it. The flicker dynamics carry a single free parameter: `mu_pc` shifts ln-brightness additively and `sigma_pc` scales it linearly, so both cancel exactly in the normalized ln-autocorrelation, leaving `lambda_rate` alone to set the tempo — there is no locality/rate degeneracy to break. The stationarity of the law and the exactness of the correlation-decay semantics are verified mechanically by the brightness stationarity audit (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit.py`), whose acceptance suite also demonstrates, as its positive control, the occupancy drift of the finite-state jump-chain alternative it supersedes.
+By induction the per-frame marginal is exactly `LogNormal(ln mu_pc, sigma_pc²)` at every frame and for every clip duration: the documented brightness law holds without an initialization transient or a brightness ceiling, and `sigma_pc` carries its marginal meaning directly. `lambda_rate` is the correlation-decay rate of ln-brightness — `ACF(lag) = exp(−lambda_rate·lag)`, so the flicker correlation time is `tau_corr = 1/lambda_rate` — not a jump-event rate. Photobleaching is a state-independent absorbing process applied as an independent per-frame Bernoulli (`prob_1 = 1 − (1 − prob_photo_bleach)^(1/numb_photo_bleach)`); because it is independent of brightness, the brightness law among still-active dyes is unchanged by it. For a single emitter the flicker dynamics carry a single free parameter: `mu_pc` shifts ln-brightness additively and `sigma_pc` scales it linearly, so both cancel exactly in the normalized ln-autocorrelation, leaving `lambda_rate` alone to set the tempo — there is no locality/rate degeneracy to break. For a spot carrying several dyes (§6.4) the recorded intensity is a sum of exponentiated processes; the logarithm of that sum is not a single-dye OU process, and its normalized autocorrelation depends on `sigma_pc` as well as on `lambda_rate`. The stationarity of the law and the exactness of the correlation-decay semantics are verified mechanically by the brightness stationarity audit (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit.py`), whose acceptance suite also demonstrates, as its positive control, the occupancy drift of the finite-state jump-chain alternative it supersedes.
 
-**Setting the rate from the data.** Organic-dye emission flickers: the per-frame brightness of a single label fluctuates on a photophysical timescale set by the dye and its environment (Dempsey et al. 2011, *Nat. Methods* 8:1027–1036; Ha & Tinnefeld 2012, *Annu. Rev. Phys. Chem.* 63:595–617). The `lambda_rate` prior is anchored to reproduce that timescale, measured directly from the real recordings. For each MET track the log of the ThunderSTORM `intensity[photon]` series is linearly detrended — removing bleaching and the per-emitter mean, both multiplicative and hence additive in the log — and a temporal autocorrelation is formed and pooled over tracks. Its lag-0→1 drop is per-localization fit noise (white, hence confined to lag 0), and the decay of the remainder is the physical flicker correlation time: `tau_corr(1/e) ≈ 0.135 s` (Fab) / `0.145 s` (InlB). The bare closed form `lambda_rate = 1/tau_corr ≈ 7` overestimates the rate, because the per-track linear detrend removes low-frequency power and shortens the apparent correlation time on finite tracks; the derivation therefore simulates OU trajectories cut to the empirical track-length distribution and detrended identically, and matches the early autocorrelation shape, giving `lambda_rate = 5.1` (Fab) / `4.7` (InlB) — condition-independent within the cell-to-cell scatter, as a photophysical quantity should be (the video-level calibration on the real recordings, reported in §8, instead resolves a condition-dependent rate). The condition-independence claim also admits a finer check than the pooled fit: the temporal analysis resolves the inferred rate per window of each recording, so a systematic within-recording trend would show there even where the pooled per-condition values agree.
+**Setting the rate from the data.** Organic-dye emission flickers: the per-frame brightness of a single label fluctuates on a photophysical timescale set by the dye and its environment (Dempsey et al. 2011, *Nat. Methods* 8:1027–1036; Ha & Tinnefeld 2012, *Annu. Rev. Phys. Chem.* 63:595–617). The `lambda_rate` prior is anchored to reproduce that timescale, measured directly from the real recordings. For each MET track the log of the ThunderSTORM `intensity[photon]` series is linearly detrended — removing bleaching and the per-emitter mean, both multiplicative and hence additive in the log — and a temporal autocorrelation is formed and pooled over tracks. Its lag-0→1 drop is per-localization fit noise (white, hence confined to lag 0), and the decay of the remainder is the physical flicker correlation time: `tau_corr(1/e) ≈ 0.135 s` (Fab) / `0.145 s` (InlB). The bare closed form `lambda_rate = 1/tau_corr ≈ 7` overestimates the rate, because the per-track linear detrend removes low-frequency power and shortens the apparent correlation time on finite tracks; the derivation therefore simulates OU trajectories cut to the empirical track-length distribution and detrended identically, and matches the early autocorrelation shape, giving `lambda_rate = 5.1` (Fab) / `4.7` (InlB) — condition-independent within the cell-to-cell scatter, as a photophysical quantity should be (the video-level calibration on the real recordings, reported in §8, instead resolves a condition-dependent rate). The condition-independence claim also admits a finer check than the pooled fit: the temporal analysis resolves the inferred rate per window of each recording, so a systematic within-recording trend would show there even where the pooled per-condition values agree. The matched model arm is a single-emitter process: each simulated trace is one dye's ln-brightness, cut and detrended like a track, so the derivation corrects the finite-track detrending bias and nothing else. The measured tracks are spots, and under the FAB law a spot may carry several dyes (§6.4), whose summed intensity has the autocorrelation dependence stated above; the derived `≈ 5` is therefore a single-dye-equivalent reference under the single-emitter assumption, not a measurement that accounts for dye multiplicity.
 
 `lambda_rate` therefore carries a log-uniform prior `(0.0, 1.0)` (linear `1–10`), bracketing the measured `≈5`. The derivation is reproducible from the public localization tables alone by the committed utility `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Flicker_Rate_Derivation.py`.
 
@@ -211,6 +229,113 @@ Three caveats govern how these values are used.
 Across all three, the reliable quantities are the **medians** (`mu_pc`, `mu_r`) from the monomer control — a median is far more robust to per-spot fitting noise than a spread — while the **spreads** and the **density** are the biased quantities the caveats correct for. This is the emitter-signal analog of the background-side caution in `REFERENCE_EMCCD_NOISE_MODEL.md` §5, that post-detection localization summaries are not latent model parameters.
 
 **A stated assumption beside the caveats: probe kinetics.** The observation layer holds every dye count fixed for the recording, so it removes a dye only by photobleaching and never adds one; ligand binding and unbinding within a recording are not modeled, and for MET-INLB the probe *is* the ligand. The unbinding channel is absorbed by construction: this workflow calibrates `prob_photo_bleach` per condition on the condition's own recordings, so the INLB value is photobleaching plus first-order unbinding, and the biology DLI draws that value — a first-order, state-independent unbinding is statistically indistinguishable from the modeled bleaching. Two residuals are declared rather than modeled: a labeled InlB binding from solution during a recording would create a spot the simulator never creates (relevant only if free labeled ligand was present during imaging, a property of the source acquisition), and a ligand affinity that differs between monomeric and dimeric MET would make disappearances stoichiometry-dependent, which a state-independent bleach cannot absorb. Partial ligand occupancy is the declared per-condition probe occupancy of §6.4 (MET-INLB 0.5, provisional until the collaborators' answers), applied by default and overridable with `--occupancy` for a sensitivity run. The posterior-predictive video comparison is where a violated assumption shows, as appearances in the experimental clip with none in the synthetic one.
+
+### 6.6 Calibration outcome under the Poisson labeling law (MET-FAB, 2 s)
+
+This subsection records measurements, not conclusions. Every number below is either copied from a
+report the pipeline wrote or computed separately from the draws those reports saved; each table says
+which. The report folders live in the Data_Bank `Posit/` tier under the names given; the reports'
+own threshold labels ("ok", "check", "calibrated") are not reproduced here.
+
+**Run identity.** Condition MET-FAB (token `FAB`); labeling law `FAB_POISSON` (Poisson, mean 1.64
+dyes per Fab) composed with the derived occupancy 0.155; recordings of 2 s at 50 fps (100 frames),
+256 × 256 px, 8-bit; imaging drawn from the six-parameter prior of §6.2, the camera from the SCOPE
+box, the biology from the FAB trajectory tier. Estimator artifact
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Estimator.npz` (weights SHA-256 beginning
+`363a2614`, torch 2.9.1), trained on 200,000 TRAIN videos with 50,000 TEST videos for 100 epochs over
+two chained runs (50 epochs plus a 50-epoch resurrect), best mean test loss −5.693 at global epoch 87.
+Evaluation: 25 EVAL tasks, 25,000 videos, bounded candidate pool, 1,000 posterior draws per video,
+report dated 2026-09-17 18:04 UTC, folder `…_DETECTOR_FAB_2S_50FPS_MAP_Recovery`. Posterior
+calibration: the same 25,000 videos and 1,000 draws each, report dated 2026-09-17 12:23 UTC, folder
+`…_DETECTOR_FAB_2S_50FPS_Posterior_Calibration`. Stratification by dye multiplicity: a separate
+calculation on the saved draws and the EVAL `Labeling_Set`, folder
+`…_DETECTOR_FAB_2S_50FPS_Dye_Multiplicity_Stratification`.
+
+**Metric definitions.** The point estimate throughout is the per-video posterior median, the 50 %
+quantile of each marginal over the 1,000 draws; the MAP is reported separately. *corr* is the Pearson
+correlation across videos between the posterior-median `log10` value and the true `log10` value.
+*MAE* is the mean absolute error of the posterior median in `log10` units; *median error* is the median
+signed error (estimate minus truth, `log10`), so its sign is the direction of the offset; *within ±0.15*
+is the share of videos whose absolute error is at most 0.15 dex (a factor 1.41). *Marginal coverage at
+c* is the share of videos whose true value lies inside the central `c` interval of that marginal,
+read from quantiles. *Joint coverage at c* is the share of videos whose true parameter vector has a
+flow log-density above the `1 − c` quantile of the log-densities of that video's own draws. The
+*standardized error* is `z = (truth − median) / posterior sd`; *bias* is its mean and *spread* its
+standard deviation over videos, so a well-calibrated marginal has bias 0 and spread 1; *sharpness* is
+the posterior standard deviation as a fraction of the prior width. *SBC KS D* is the largest deviation
+of the rank CDF of the truth among the draws from uniform; *TARP ATC* is the area between the expected
+coverage curve and the diagonal, negative when the posterior is too narrow; the *L-C2ST reject
+fraction* is the share of 1,000 observations at which a local classifier rejects calibration at
+α = 0.05.
+
+**Results, per parameter (from the Evaluation report).**
+
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | marginal coverage 50 % / 90 % |
+|---|---|---|---|---|---|
+| `mu_r` | 0.96 | 0.025 | +0.018 | 100 % | 23 % / 59 % |
+| `sigma_r` | 0.17 | 0.186 | −0.020 | 41 % | 34 % / 76 % |
+| `mu_pc` | 0.95 | 0.054 | +0.021 | 94 % | 40 % / 80 % |
+| `sigma_pc` | 0.89 | 0.082 | +0.006 | 86 % | 42 % / 85 % |
+| `prob_photo_bleach` | 0.79 | 0.206 | −0.006 | 48 % | 48 % / 87 % |
+| `lambda_rate` | 0.54 | 0.201 | −0.002 | 43 % | 42 % / 83 % |
+
+The MAP disagrees with the posterior-derived point estimates on three parameters: the MAP falls
+outside the central 90 % interval of its own posterior in 56 % of videos for `mu_r`, 44 % for `mu_pc`,
+and 22 % for `sigma_pc` (2 % or less for the other three), while the sample geometric median and the
+per-dimension median agree within 0.004–0.028 dex on every parameter. Under the bounded pool 26 % of
+the `mu_r` MAP estimates lie outside the prior box. The posterior median and the sample geometric
+median are therefore the point estimates read here.
+
+**Results, joint and standardized (from the Posterior_Calibration report).** Joint coverage 0.24 at
+nominal 0.50 and 0.62 at nominal 0.90, largest gap 0.31 (at nominal 0.75); TARP ATC −0.05; L-C2ST
+reject fraction 0.998. Per parameter, in the order of the table above: SBC KS D 0.447, 0.121, 0.178,
+0.061, 0.036, 0.053; standardized bias +1.22, −0.11, +0.53, +0.02, +0.08, −0.03; standardized spread
+1.33, 1.29, 1.17, 1.09, 1.02, 1.12; sharpness 5.3 %, 22.3 %, 6.7 %, 11.6 %, 16.2 %, 20.8 % of the prior
+width.
+
+**Results from separate calculations on the saved draws.** The `mu_r` truth lies below the marginal
+90 % interval in 39 % of videos and above it in 2 %. Among the 14,737 videos whose `mu_r` truth lies
+inside its marginal 90 % interval the joint 90 % coverage is 0.83; among the remaining 10,263 it is
+0.31. Stratifying the 25,000 videos into ten equal-count bins of the realized number of dyes per
+labeled subunit (10th to 90th percentile 1.90 to 2.17; the join to the `Labeling_Set` inverts the
+Evaluation stage's round-robin sharding and reproduces the recorded truths exactly): the
+posterior-median error of `mu_pc` rises monotonically from +0.014 dex in the lowest bin to +0.087 dex
+in the highest (difference 0.073 ± 0.002 dex; Pearson correlation of the signed error with the dye
+count +0.31); `lambda_rate` changes by −0.038 ± 0.007 dex from lowest to highest bin; `sigma_r`
+changes by +0.016 ± 0.006 dex with a truth-tracking correlation of 0.15 in the lowest and 0.13 in the
+highest bin; `mu_r` is non-monotonic with a −0.005 dex end-to-end difference.
+
+**Comparison available on disk, not controlled.** The predecessor detector (`srm-and-sbi-dimer-alp`,
+one dye per labeled subunit by construction, 10,000 EVAL videos) reported MAP MAE 0.013, 0.044,
+0.025, 0.024, 0.162, 0.040 in the same parameter order, marginal 90 % coverage 85, 81, 90, 92, 88,
+92 %, joint coverage 0.85 at nominal 0.90 (gap 0.08), TARP ATC −0.04, L-C2ST reject fraction 0.53.
+Its simulator, priors, and labeling model differ from the present ones in more than the dye law, so
+this is context, not a controlled comparison.
+
+**Limits.** All results are on synthetic data drawn from the same generator the estimator was trained
+on; nothing here measures transfer to experimental recordings, which have no ground truth. The
+causes of the two clearest features are unresolved: the constant positive `mu_r` offset in a very
+narrow posterior, and the flat `sigma_r` estimate that does not follow the truth while its interval
+stays narrow. The dye-multiplicity stratification varies only the realized *mean* dye count per spot
+between videos; the within-video *variance* of the dye count is fixed by the law and identical in
+every video, so that analysis carries no leverage on any mechanism acting through that variance, and
+its null result for `sigma_r` is uninformative rather than exculpatory. The `mu_pc` trend is a
+measured association within the sampled range; extrapolating it to one dye per spot is not
+supported by these data.
+
+**One-dye comparison (in progress).** A sensitivity branch (`one-dye-sensitivity`, version 0.1.10,
+product namespace `…_ALP_ONEDYE_…`) regenerates the DLI products with the labeling law
+`FAB_BERNOULLI`, Bernoulli with `q = 1 − e^{−1.64} = 0.806`, so that a labeled Fab is visible with the
+same probability as under the Poisson law (derived occupancy 0.1551 and visible fraction 0.125
+unchanged) and every visible subunit carries exactly one dye. Everything else is identical: the same
+FAB trajectory tier file for file, 200/50/25 tasks, architecture, epochs, batch, and analysis
+settings. The one-dye EVAL labeling records verify the intent (dyes equal labeled subunits in every
+one of 3,000 checked recordings, against a mean ratio of 2.03 under the Poisson law). The comparisons
+were specified on 2026-09-17, before any one-dye data existed: the `sigma_r` truth-tracking
+correlation against 0.17, the `lambda_rate` MAE against 0.201, and whether the +0.02 dex `mu_r` offset
+persists. Their thresholds indicate recovery improvements under a changed labeling law; they do not
+establish identifiability in general, a mechanism, or the validity of any replacement measurement
+(§9.4).
 
 ---
 
@@ -382,16 +507,16 @@ The chosen treatment is the whole-imaging marginalization, realized in the biolo
 
 The imaging inference target is the six identifiable emitter parameters — the PSF pair (`mu_r`, `sigma_r`), the brightness pair (`mu_pc`, `sigma_pc`), and the photophysics pair (`prob_photo_bleach`, `lambda_rate`). The five EMCCD camera parameters (`gamma`, `kappa_o`, `kappa_b`, `kappa_s`, `kappa_q`) are marginalized as the SCOPE camera nuisance rather than inferred. This section gives the rationale and the implementation.
 
-**Why the camera is a nuisance, not a target.** The five camera parameters are not identifiable from the videos. Held-out recovery (§9.2, B5), read as a per-parameter error against the width of each prior, exceeds the prior width for `gamma`, `kappa_o`, and `kappa_q`, sits near it for `kappa_b`, and leaves `kappa_s` only weakly constrained; the emitter parameters, by the same measure, are recovered well within their priors. The algebra is explicit. A spot's peak signal scales as `mu_pc·kappa_q·gamma / sigma_r²`, so inferring `gamma` splits the brightness amplitude with `mu_pc` and degrades the brightness calibration, which is a target; the data pin only the products `gamma·kappa_q` and the optical floor `gamma·kappa_q·kappa_o`, not the camera factors separately (§6.2; `REFERENCE_EMCCD_NOISE_MODEL.md` §9). The read noise `kappa_s` does not dominate the signal-to-noise ratio: the electron-multiplication register amplifies the signal above the read-noise floor, so its standard deviation stays subordinate to shot noise even for dim spots (`REFERENCE_EMCCD_NOISE_MODEL.md`). Carrying five non-identifiable axes in the inference prior inflates the dimension of a low-dimensional problem and lets those axes absorb variation that belongs to the brightness and PSF targets. Integrating them out over their a-priori range is the Bayesian treatment of a nuisance block, and it is a treatment the value-based role scheme already expresses (§5): a camera row set to nuisance-from-spec carries its §6.2 range as the box it is drawn from and is excluded from the inference prior.
+**Why the camera is a nuisance, not a target.** The five camera parameters are externally constrained rather than jointly inferred in this workflow, for two facts that are kept distinct. The first is structural: the algebra below shows which camera combinations the image likelihood confounds. The second is empirical: when the predecessor detector inferred the camera block jointly with the emitter parameters, its held-out recovery, read as a per-parameter error against the width of each prior, exceeded the prior width for `gamma`, `kappa_o`, and `kappa_q`, sat near it for `kappa_b`, and left `kappa_s` only weakly constrained, while the emitter parameters were recovered well within their priors. Neither fact says the camera cannot be measured: under controlled illumination the mean–variance relation constrains `gamma` on its own (`REFERENCE_EMCCD_NOISE_MODEL.md` §8). The algebra is explicit. A spot's peak signal scales as `mu_pc·kappa_q·gamma / sigma_r²`, so inferring `gamma` splits the brightness amplitude with `mu_pc` and degrades the brightness calibration, which is a target; the data pin only the products `gamma·kappa_q` and the optical floor `gamma·kappa_q·kappa_o`, not the camera factors separately (§6.2; `REFERENCE_EMCCD_NOISE_MODEL.md` §9). The read noise `kappa_s` does not dominate the signal-to-noise ratio: the electron-multiplication register amplifies the signal above the read-noise floor, so its standard deviation stays subordinate to shot noise even for dim spots (`REFERENCE_EMCCD_NOISE_MODEL.md`). Carrying five externally constrained camera axes in the inference prior inflates the dimension of a low-dimensional problem and lets those axes absorb variation that belongs to the brightness and PSF targets. Integrating them out over their a-priori range is the Bayesian treatment of a nuisance block, and it is a treatment the value-based role scheme already expresses (§5): a camera row set to nuisance-from-spec carries its §6.2 range as the box it is drawn from and is excluded from the inference prior.
 
 The imaging categorization of §5 is:
 
 | category | role | members | rationale |
 |---|---|---|---|
 | **Inferred imaging** — the calibration targets | learnable | PSF (`mu_r`, `sigma_r`), brightness (`mu_pc`, `sigma_pc`), photophysics (`prob_photo_bleach`, `lambda_rate`) — six | the identifiable emitter model the workflow calibrates |
-| **SCOPE nuisance** — the camera | nuisance | `gamma`, `kappa_o`, `kappa_b`, `kappa_s`, `kappa_q` — five | non-identifiable given the EM-gain degeneracies; marginalized over a fixed a-priori box; the one block **both** workflows marginalize |
+| **SCOPE nuisance** — the camera | nuisance | `gamma`, `kappa_o`, `kappa_b`, `kappa_s`, `kappa_q` — five | externally constrained rather than jointly inferred: the EM-gain degeneracies confound the individual quantities in the image likelihood; marginalized over a fixed a-priori box; the one block **both** workflows marginalize |
 | **RDS nuisance** — the biology | nuisance | the stoichiometry and mobility blocks (§6.1) — eleven rows, the biology prior | reaction-diffusion biology marginalized while the imaging is calibrated; detector-only |
-| **Conditioned by the coordinate frame** | fixed | pixel size, field size, `delta_frame` | a coordinate frame and cadence, not physics — unidentifiable from the videos |
+| **Conditioned by the coordinate frame** | fixed | pixel size, field size, `delta_frame` | a coordinate frame and cadence, not physics — supplied as acquisition metadata, not inferred; positions and brightness are sampled at the frame interval without integrating motion during exposure |
 | **Fixed hyperparameters and spec metadata** | fixed | `numb_photo_bleach`; `kappa_g`, `kappa_c` | modeling choices; `kappa_g`/`kappa_c` retained as `γ = g/C` drift-check metadata (§8) |
 
 **Three nuisance blocks, and the first shared one.** The camera joins the reaction-diffusion biology and the imaging photophysics as a marginalized block, but it is distinguished by being marginalized in *both* workflows. The detector infers the imaging and marginalizes the biology; the production workflow infers the biology and marginalizes the imaging. The imaging in turn separates into the photophysics — which the detector calibrates and production then marginalizes — and the camera, which *neither* workflow infers. The camera is therefore the block common to both marginalizations, and it is recorded under a single shared token:
@@ -411,3 +536,81 @@ The imaging categorization of §5 is:
 **Distributional invariant.** The camera is drawn from its independent uniform box in both workflows and is never drawn from the `Nuisance_DLI` pool. The camera and the photophysics are independent in the generative model; their apparent coupling — the `mu_pc·gamma` amplitude, the `gamma·kappa_q·kappa_o` floor — is a property of the likelihood, not of the prior, so the pool, which preserves the joint structure of whatever it holds, holds only the photophysics. The calibrated `Nuisance_DLI` therefore covers the six photophysics parameters, and the camera degeneracies it would otherwise carry are represented by the a-priori SCOPE box instead — consistent with the camera's role as a nuisance rather than a calibration target.
 
 **Implementation.** In `detector_parameterization.py` the five camera rows carry `VALUE = 'NUISANCE'` with their `PRIOR_RANGE` and `LOG_FLAG`/`LOG_BASE` retained, so each resolves to a nuisance-from-spec (§5): the learnable subset (`DETECTOR_PARAMETERIZATION`) is the six emitter parameters, and the five camera form the SCOPE block (`DETECTOR_NUISANCE_SCOPE`), the selectors keying on the sentinel (§5, constraint 2). The RDS biology block (`DETECTOR_NUISANCE`) is nuisance-from-object, supplied by the condition's trajectory tier whose `Theta_Set` records the eleven biology parameters (§4). The full imaging vector (`DETECTOR_IMAGING`, eleven keys = the six learnable then the five SCOPE) is the render contract: the source-agnostic renderer `render_dli_video` (in `simulation_dli_support`, re-exported by `detector_simulation_dli_support` as `render_detector_video` for the Detector callers) reads every value by key and is unchanged, agnostic to whether a value arrives as a target or a nuisance; its fixed hyperparameter (`numb_photo_bleach`) comes from the biology parameter table, whose value matches the Detector table so the Detector's rendered output is unchanged. The Detector DLI stage draws the six learnable (→ `Theta_Set`, the inference target) and the five SCOPE camera (→ `Nuisance_SCOPE_Theta_Set`, columns in `DETECTOR_SCOPE_KEYS` order, minted by the `Theta_Set`-token swap of `Paths.record_set_path`), assembles the eleven-key vector, and renders every video. On the production (biology) side the Simulation_DLI stage marginalizes the whole imaging block: it draws the six photophysics from the `Nuisance_DLI` artifact and records them as `Nuisance_DLI_Theta_Set` (columns in `DETECTOR_PARAMETER_KEYS` order), draws the five camera from the shared SCOPE box and records them as `Nuisance_SCOPE_Theta_Set`, and concatenates them into the eleven-key vector — realizing the whole-imaging marginalization. In `parameterization.py` the six photophysics rows carry `VALUE = 'NUISANCE'` with `PRIOR_RANGE = None`, so each resolves to a nuisance-from-object (drawn from the supplied `Nuisance_DLI` artifact), while the five camera rows carry `VALUE = 'NUISANCE'` with their box retained (nuisance-from-spec); the learnable subset stays exactly the eleven reaction-diffusion parameters.
+
+
+### 9.4 The acquisition-information contract and the reduced inferred block (proposal)
+
+Two statements are recorded separately, because they are true at once. **The implemented detector
+infers six parameters** — the design of §5, §6.2, and §9.3 is in force and unchanged by this
+subsection. **Its current calibration results (§6.6) do not establish reliable posterior
+uncertainty**; retaining the implementation is not a validation of it. What follows is a proposal
+and the conditions under which it would be adopted. Nothing in it changes a parameter role, a
+preprocessing step, or the executable model.
+
+**What the pipeline needs from outside.** The pipeline can drop its dependence on ThunderSTORM's
+file format; it cannot drop the need for acquisition information and calibration assumptions.
+Supplying some quantities externally is a defensible way to make the inference tractable, provided
+their sources, uncertainties, and consequences are recorded (the evidence-and-source table of §6.2).
+
+| required information | why it is needed | acceptable source |
+|---|---|---|
+| pixel size, frame timing, exposure duration, image dimensions | connect simulated distances and dynamics to recorded pixels and time | acquisition metadata; image dimensions from the frames themselves |
+| effective camera gain (`gamma`), baseline, read noise | separate signal intensity from camera amplification and noise | acquisition settings, a camera calibration (dark stacks and uniform-illumination stacks, `REFERENCE_EMCCD_NOISE_MODEL.md` §8), or an explicitly qualified specification |
+| quantum efficiency | convert detected photoelectrons into incident photons | camera characterization or a declared assumption; gain calibration alone does not determine it |
+| optical background | separate emitter signal from background | raw-image analysis, conditional on the camera calibration: background photons ≈ (mean background ADU − baseline) / (`gamma` · QE) |
+| labeling law and occupancy | relate visible spots and their brightness to receptors and dyes | preparation measurements, collaborator information, and declared assumptions, each labeled as such |
+
+Two conventions the code fixes silently belong in this contract: the renderer samples positions and
+brightness at the frame interval and does not integrate motion during exposure; and stored videos map
+16-bit ADU onto 8 bits by a fixed global rule (0–65535 onto 0–255, clipped, no per-video
+normalization), applied identically to synthetic and experimental frames. Both must hold for a
+recording the estimator is applied to.
+
+**The proposed inferred block.** Three parameters: `mu_pc`, `sigma_pc`, and `lambda_rate`. The
+brightness pair stays inferred because a spot's brightness is the sum over an unknown number of dyes
+(§6.4), so its per-dye interpretation needs the labeling and imaging model that the simulator
+provides and a brightness histogram does not. The fluctuation rate stays inferred provisionally: the
+cheaper correlation-based estimator is plausible but must fit the model's own multi-dye intensity
+autocorrelation (§6.3), account for motion and noise, and be validated before it replaces inference;
+if that validation passes, the block reduces to two. The quantities that leave the block are the PSF
+median and spread, constrained by noise-aware fits to isolated spots, and the fluorescence-loss
+rate, constrained from full-length recordings. For the latter the observable is background-corrected
+total fluorescence, which in the simulator is linear in the number of surviving dyes and therefore
+decays at the per-dye rate whatever the dye count per spot, whereas a visible-spot count is not (a
+two-dye spot survives the loss of one dye). Probe replenishment cannot in general be represented by
+lowering an irreversible loss rate: total intensity may match while appearances, lifetimes, and
+fluctuations do not, so a rate measured in its presence is an effective quantity and is labeled as
+such.
+
+**Uncertainty is retained, not removed.** A quantity that leaves the inferred block enters the
+biology stage as a nuisance with an explicit range set by its measurement and its assumptions
+(§7, §9.3), never as a point value. Where a replacement measurement fails or is weak, the quantity
+keeps a justified nuisance range or the proposed split is revisited; it is not forced into a narrow
+band. Dependencies between quantities that the measurements reveal are preserved in how they are
+drawn, rather than everything being drawn independently.
+
+**Adoption gates.**
+
+| gate | required evidence |
+|---|---|
+| external inputs | acquisition settings and camera assumptions have documented sources and defensible uncertainties (the evidence-and-source table of §6.2, extended to the acquisition in hand) |
+| replacement measurements | each direct estimator recovers the corresponding simulator quantity adequately over the intended operating range, on synthetic recordings with known truth; the full-recording loss estimator is tested on full-length simulations, not on 2 s clips |
+| reduced SBI | the three-target estimator receives its own recovery and calibration assessment (§6.6's measures), including conditional failures and interval widths; a smaller inferred block is not assumed to fix coverage or the MAP density spikes |
+| experimental adequacy | recordings generated with the measured inputs reproduce relevant raw-image and temporal statistics of the experimental recordings, not only the learned embedding |
+
+Synthetic validation establishes performance under the tested generator, not experimental
+correctness. For it, three tiers of data are kept apart: development data used to build a method;
+data reserved from further method tuning; and, where a claim requires it, a genuinely fresh final
+evaluation. Of the 25 existing EVAL tasks, five can be reserved from future tuning, but they cannot
+be described as untouched, since the full set has already entered the calibration analyses of §6.6.
+
+**What the one-dye comparison (§6.6) can and cannot settle for this proposal.** It tests the
+sensitivity of the six-parameter estimator to the labeling model. It cannot by itself establish
+fundamental non-identifiability of `sigma_r` or `lambda_rate`, nor the validity of the replacement
+measurements; those are the gates above.
+
+**Decision statement.** We propose reducing detector SBI to brightness, brightness variation, and
+fluctuation rate. Acquisition and camera information remain external inputs. Dedicated analyses will
+constrain PSF properties and fluorescence loss where validated; unresolved quantities will retain
+explicit nuisance uncertainty. Adoption depends on validating both the replacement measurements and
+the reduced estimator.

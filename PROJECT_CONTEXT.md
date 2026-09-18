@@ -6,7 +6,7 @@ question, the molecular system, the two-stage inference architecture, the data
 and computational flow, the inference network, the validation methodology, and
 the design rationale that shapes the implementation.
 
-**Repository status.** In development (0.1.9). The codebase began as a copy of
+**Repository status.** In development (0.1.11). The codebase began as a copy of
 the tracked tree of `srm-and-sbi/srm-and-sbi-dimer-alp` at its frozen release
 `v0.4.23` and implements the MONOMER_DIMER model family on top of it. Landed:
 the DOL-explicit observation layer (the measured degree of labeling as a static
@@ -464,15 +464,19 @@ calibrated-imaging nuisance for molecular inference (see §3):
 - The five EMCCD camera parameters — gain-conversion ratio `gamma = g/C`, optical
   background `kappa_o`, read noise `kappa_s`, baseline `kappa_b`, and quantum
   efficiency `kappa_q`: **marginalized as the SCOPE camera nuisance**, not inferred.
-  They are non-identifiable from the videos (only the product `gamma·kappa_q` sets the
-  amplitude), so each is drawn from an a-priori box and integrated over
+  They are externally constrained rather than jointly inferred in this workflow: the
+  products `gamma·kappa_q` and `gamma·kappa_q·kappa_o` set the amplitude and the floor, so
+  the individual quantities are confounded in the biological recordings, while camera
+  calibration constrains them one by one; each is drawn from a tight a-priori box and integrated over
   (`DETECTOR_WORKFLOW.md` §9.3); `g` and `C` are fixed nominal spec metadata for the
   `gamma` drift check.
 - Labeling (the degree of labeling): **measured, fixed, never inferred** — the
   per-subunit dye-count law of the condition (MET-INLB: Bernoulli with labeling
   probability 0.5; MET-FAB: Poisson at the measured mean of 1.64 dyes per probe),
   drawn once per recording at the DLI stage (§4, *DLI Imaging*).
-- Video frame rate: 50 Hz (20 ms per frame) — a fixed sampling cadence.
+- Video frame rate: 50 Hz (20 ms per frame) — a fixed sampling cadence. The renderer
+  samples positions and brightness at the frame interval and does not integrate motion
+  during exposure; the experimental exposure duration is separate acquisition metadata.
 - Recording length: supplied per run via `total_time_seconds` (commonly 2 s,
   5 s, or 10 s)
 
@@ -1495,6 +1499,16 @@ because the two answer different questions: a sharp posterior at the wrong
 location and a broad posterior at the right one are distinguishable only when
 both are shown.
 
+**Outcome for the MET-FAB detector (2 s, Poisson labeling).** The first production
+calibration of the detector under the DOL-explicit observation layer is recorded, as
+measurements with their definitions and limits, in `DETECTOR_WORKFLOW.md` §6.6: on
+25,000 held-out synthetic videos the posterior median tracks the truth for the PSF
+median and the brightness pair (correlation 0.89–0.96) but not for the PSF spread
+(0.17), the joint 90 % credible region covers 62 % of truths, and the brightness
+error grows monotonically with the realized number of dyes per labeled subunit. A
+one-dye sensitivity run and the proposal that follows from these results are in
+`DETECTOR_WORKFLOW.md` §6.6 and §9.4.
+
 ### Estimator generalization and test-loss interpretation
 
 The Inference stage reports one per-epoch scalar, the **mean test loss** (the
@@ -1693,6 +1707,13 @@ trained jointly on multiple durations?
 **S5. Multi-cell heterogeneity.** Real microscopy data contains cells with
 varying expression levels, spatial organization, and cell-cycle phase. Can the
 single-cell, per-video model extend to population posteriors?
+
+**S6. Which imaging parameters the detector should infer.** Under the Poisson labeling
+law two of the six inferred imaging parameters are not recovered from 2 s recordings
+and the joint posterior is too narrow (`DETECTOR_WORKFLOW.md` §6.6). Which of the six
+are better supplied from acquisition metadata or from cheaper direct measurements on
+the raw frames, with explicit uncertainty, and which must remain coupled inference
+targets? The proposal and its adoption gates are `DETECTOR_WORKFLOW.md` §9.4.
 
 ---
 

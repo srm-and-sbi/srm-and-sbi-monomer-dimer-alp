@@ -44,8 +44,8 @@ Three design constraints (enforced at import by ``_validate_table``):
 Camera parameters and the SCOPE nuisance
 ----------------------------------------
 The five EMCCD camera parameters (``gamma``, ``kappa_o``, ``kappa_b``, ``kappa_s``,
-``kappa_q``) are not identifiable from the videos and are marginalized as the SCOPE
-camera nuisance rather than inferred (DETECTOR_WORKFLOW.md sec. 9.3): the videos
+``kappa_q``) are externally constrained rather than jointly inferred in this workflow and
+are marginalized as the SCOPE camera nuisance (DETECTOR_WORKFLOW.md sec. 9.3): the videos
 identify the gain and conversion only through their ratio ``gamma = kappa_g / kappa_c``,
 and only the product ``gamma * kappa_q`` sets the amplitude, so inferring these
 splits the brightness amplitude with ``mu_pc`` instead of constraining it. They are
@@ -165,13 +165,13 @@ _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
     ],
     # ----- Learnable imaging parameters (calibration targets) -----
     # Ranges from the learnable-imaging-parameter section of DETECTOR_WORKFLOW.md; VALUE = 10**mid(range) (center).
-    'camera': [  # EMCCD detector camera chain (REFERENCE_EMCCD_NOISE_MODEL.md): gamma, kappa_o, kappa_b, kappa_s, kappa_q marginalized as the SCOPE camera nuisance (non-identifiable; DETECTOR_WORKFLOW.md sec. 9.3); kappa_g, kappa_c fixed nominal spec metadata (gamma = kappa_g/kappa_c).
+    'camera': [  # EMCCD detector camera chain (REFERENCE_EMCCD_NOISE_MODEL.md): gamma, kappa_o, kappa_b, kappa_s, kappa_q marginalized as the SCOPE camera nuisance (externally constrained, not jointly inferred; DETECTOR_WORKFLOW.md sec. 9.3); kappa_g, kappa_c fixed nominal spec metadata (gamma = kappa_g/kappa_c).
         {'KEY': 'gamma', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (1.62, 1.625), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'ADU Per Electron', 'LABEL': r'$\gamma$',
          'NOTE': 'Gain-conversion ratio gamma = kappa_g/kappa_c (ADU per photoelectron) -- the only gain quantity the videos identify. Marginalized as a SCOPE camera nuisance: inferring it splits the peak-ADU amplitude with mu_pc (only gamma*kappa_q is identifiable), so it is drawn from its a-priori box rather than treated as a calibration target (DETECTOR_WORKFLOW.md sec. 9.3). Config-exact reference: kappa_g/kappa_c = 200/4.78 = 41.84, identical across all MET cells (both Fab and InlB camera protocols); box [41.7, 42.2].'},
         {'KEY': 'kappa_o', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (1.455, 1.465), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Photon', 'LABEL': r'$\kappa_{o}$',
-         'NOTE': 'Optical background offset: incident photons per pixel per frame, pre-gain, one scalar per movie; amplified by gamma*kappa_q to set the ADU floor. Marginalized as a SCOPE camera nuisance (non-identifiable; DETECTOR_WORKFLOW.md sec. 9.3). Reference = ThunderSTORM offset[photon] median, a condition-independent background: Fab 28.9 / InlB 28.6 (pooled 28.7). Narrow box [28.5, 29.2] around the measured value: a broad offset lets the gain*offset floor dominate the video-to-video variation (detector-embedding collapse).'},
+         'NOTE': 'Optical background offset: incident photons per pixel per frame, pre-gain, one scalar per movie; amplified by gamma*kappa_q to set the ADU floor. Marginalized as a SCOPE camera nuisance (externally constrained, not jointly inferred; DETECTOR_WORKFLOW.md sec. 9.3). Reference = ThunderSTORM offset[photon] median, a condition-independent background: Fab 28.9 / InlB 28.6 (pooled 28.7). Narrow box [28.5, 29.2] around the measured value: a broad offset lets the gain*offset floor dominate the video-to-video variation (detector-embedding collapse).'},
         {'KEY': 'kappa_b', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (2.24, 2.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'ADU', 'LABEL': r'$\kappa_{b}$',
-         'NOTE': 'Camera baseline: post-gain ADU constant, added last. Marginalized as a SCOPE camera nuisance (non-identifiable; DETECTOR_WORKFLOW.md sec. 9.3). Config-exact reference: MET configured baseline = 175, identical across all cells (both conditions); box [173.8, 177.8].'},
+         'NOTE': 'Camera baseline: post-gain ADU constant, added last. Marginalized as a SCOPE camera nuisance (externally constrained, not jointly inferred; DETECTOR_WORKFLOW.md sec. 9.3). Config-exact reference: MET configured baseline = 175, identical across all cells (both conditions); box [173.8, 177.8].'},
         {'KEY': 'kappa_s', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (1.02, 1.025), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'ADU', 'LABEL': r'$\kappa_{s}$',
          'NOTE': 'Read noise: post-register Gaussian sigma (ADU). Marginalized as a SCOPE camera nuisance: it does not dominate the SNR (the EM register amplifies signal above the read-noise floor) and is only weakly identifiable (DETECTOR_WORKFLOW.md sec. 9.3). Reference = camera datasheet ~10.5 ADU; box [10.5, 10.6] (weakly identifiable but pinned tight to the datasheet value, like the other camera constants).'},
         {'KEY': 'kappa_q', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': (-0.05, -0.04), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': None, 'LABEL': r'$\kappa_{q}$',
