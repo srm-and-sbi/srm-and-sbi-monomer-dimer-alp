@@ -556,17 +556,17 @@ their sources, uncertainties, and consequences are recorded (the evidence-and-so
 
 | required information | why it is needed | acceptable source |
 |---|---|---|
-| pixel size, frame timing, exposure duration, image dimensions | connect simulated distances and dynamics to recorded pixels and time | acquisition metadata; image dimensions from the frames themselves |
-| effective camera gain (`gamma`), baseline, read noise | separate signal intensity from camera amplification and noise | acquisition settings, a camera calibration (dark stacks and uniform-illumination stacks, `REFERENCE_EMCCD_NOISE_MODEL.md` §8), or an explicitly qualified specification |
-| quantum efficiency | convert detected photoelectrons into incident photons | camera characterization or a declared assumption; gain calibration alone does not determine it |
-| optical background | separate emitter signal from background | raw-image analysis, conditional on the camera calibration: background photons ≈ (mean background ADU − baseline) / (`gamma` · QE) |
-| labeling law and occupancy | relate visible spots and their brightness to receptors and dyes | preparation measurements, collaborator information, and declared assumptions, each labeled as such |
+| pixel size, frame interval, exposure duration, image dimensions | set the spatial and temporal scales; assess whether neglecting motion blur is reasonable, since the exposure need not equal the frame interval | acquisition metadata; image dimensions from the frames |
+| effective camera gain, baseline, read noise | map photoelectrons to camera values and describe the measurement noise | acquisition-matched calibration (dark stacks and uniform-illumination stacks, `REFERENCE_EMCCD_NOISE_MODEL.md` §8), acquisition settings, or qualified specifications |
+| quantum efficiency | convert detected photoelectrons into incident photons; otherwise brightness must keep a detected-signal interpretation | camera characterization or an explicit assumption; gain calibration alone does not determine it |
+| optical background | separate emitter signal from background | analysis of the original raw frames, conditional on the camera calibration: background photons ≈ (mean background ADU − baseline) / (`gamma` · QE) |
+| labeling properties and probe occupancy | relate visible spots and their brightness to receptors and dyes; distinguish the measured mean labeling from the assumed dye-count distribution and occupancy | preparation measurements, collaborator information, and declared assumptions, each labeled as such |
+| intensity encoding and preprocessing | ensure synthetic and experimental pixels undergo compatible scaling, clipping, and quantization | file metadata and the verified preprocessing code, including the fixed 16-bit to 8-bit conversion (`io.convert_video_dtype`: 0–65535 onto 0–255, clipped, no per-video normalization) |
 
-Two conventions the code fixes silently belong in this contract: the renderer samples positions and
-brightness at the frame interval and does not integrate motion during exposure; and stored videos map
-16-bit ADU onto 8 bits by a fixed global rule (0–65535 onto 0–255, clipped, no per-video
-normalization), applied identically to synthetic and experimental frames. Both must hold for a
-recording the estimator is applied to.
+The renderer's own conventions belong in this contract as well: it samples positions and brightness
+at the frame interval and does not integrate motion during exposure, and the stored videos use the
+fixed 8-bit map of the last row, applied identically to synthetic and experimental frames. Both must
+hold for a recording the estimator is applied to.
 
 **The proposed inferred block.** Three parameters: `mu_pc`, `sigma_pc`, and `lambda_rate`. The
 brightness pair stays inferred because a spot's brightness is the sum over an unknown number of dyes
