@@ -1711,7 +1711,7 @@ single-cell, per-video model extend to population posteriors?
 **S6. Which imaging parameters the detector should infer.** Under the Poisson labeling
 law two of the six inferred imaging parameters are not recovered from 2 s recordings
 and the joint posterior is too narrow (`DETECTOR_WORKFLOW.md` §6.6). Which of the six
-are better supplied from acquisition metadata or from cheaper direct measurements on
+are better supplied from acquisition metadata or from direct, non-neural estimators on
 the raw frames, with explicit uncertainty, and which must remain coupled inference
 targets? The proposal and its adoption gates are `DETECTOR_WORKFLOW.md` §9.4.
 

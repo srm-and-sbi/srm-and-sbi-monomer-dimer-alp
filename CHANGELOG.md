@@ -48,9 +48,11 @@ model changes. Version 0.1.10 is the `one-dye-sensitivity` branch and is not par
   information contract (what the pipeline needs from outside and from where), a reduced inferred block
   of `mu_pc`, `sigma_pc`, and provisionally `lambda_rate`, the treatment of quantities that leave the
   block as nuisances with explicit uncertainty, the adoption gates (external inputs, replacement
-  measurements, reduced SBI, experimental adequacy), the validation-data tiers, and the decision
+  measurements, reduced neural estimator, experimental adequacy), the validation-data tiers, and the decision
   statement. The implemented six-parameter detector remains in force. `PROJECT_CONTEXT.md` §8 gains
-  open question S6 pointing to it.
+  open question S6 pointing to it. Terminology fixed throughout: the amortized flow is the neural
+  posterior estimator and the replacement methods are direct estimators; both are validated on
+  simulated data, so neither is opposed to simulation-based inference.
 
 ## 0.1.9 - 2026-09-17
 

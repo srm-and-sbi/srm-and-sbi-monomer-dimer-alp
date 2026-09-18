@@ -547,6 +547,8 @@ uncertainty**; retaining the implementation is not a validation of it. What foll
 and the conditions under which it would be adopted. Nothing in it changes a parameter role, a
 preprocessing step, or the executable model.
 
+**Terminology.** Two kinds of estimator appear below. The *neural posterior estimator* is the amortized flow trained on simulated videos. The *direct estimators* fit a quantity from the frames without a trained network: spot fits, a decay fit, a simulation-matched autocorrelation. Both are validated against the simulator's truth, and the autocorrelation match is itself simulation-based inference in the classical sense, so the distinction is neural versus direct, not simulation-based versus not.
+
 **What the pipeline needs from outside.** The pipeline can drop its dependence on ThunderSTORM's
 file format; it cannot drop the need for acquisition information and calibration assumptions.
 Supplying some quantities externally is a defensible way to make the inference tractable, provided
@@ -570,7 +572,7 @@ recording the estimator is applied to.
 brightness pair stays inferred because a spot's brightness is the sum over an unknown number of dyes
 (§6.4), so its per-dye interpretation needs the labeling and imaging model that the simulator
 provides and a brightness histogram does not. The fluctuation rate stays inferred provisionally: the
-cheaper correlation-based estimator is plausible but must fit the model's own multi-dye intensity
+direct correlation-based estimator is plausible but must fit the model's own multi-dye intensity
 autocorrelation (§6.3), account for motion and noise, and be validated before it replaces inference;
 if that validation passes, the block reduces to two. The quantities that leave the block are the PSF
 median and spread, constrained by noise-aware fits to isolated spots, and the fluorescence-loss
@@ -595,7 +597,7 @@ drawn, rather than everything being drawn independently.
 |---|---|
 | external inputs | acquisition settings and camera assumptions have documented sources and defensible uncertainties (the evidence-and-source table of §6.2, extended to the acquisition in hand) |
 | replacement measurements | each direct estimator recovers the corresponding simulator quantity adequately over the intended operating range, on synthetic recordings with known truth; the full-recording loss estimator is tested on full-length simulations, not on 2 s clips |
-| reduced SBI | the three-target estimator receives its own recovery and calibration assessment (§6.6's measures), including conditional failures and interval widths; a smaller inferred block is not assumed to fix coverage or the MAP density spikes |
+| reduced neural estimator | the three-target estimator receives its own recovery and calibration assessment (§6.6's measures), including conditional failures and interval widths; a smaller inferred block is not assumed to fix coverage or the MAP density spikes |
 | experimental adequacy | recordings generated with the measured inputs reproduce relevant raw-image and temporal statistics of the experimental recordings, not only the learned embedding |
 
 Synthetic validation establishes performance under the tested generator, not experimental
@@ -609,7 +611,7 @@ sensitivity of the six-parameter estimator to the labeling model. It cannot by i
 fundamental non-identifiability of `sigma_r` or `lambda_rate`, nor the validity of the replacement
 measurements; those are the gates above.
 
-**Decision statement.** We propose reducing detector SBI to brightness, brightness variation, and
+**Decision statement.** We propose reducing the detector's neural posterior estimator to brightness, brightness variation, and
 fluctuation rate. Acquisition and camera information remain external inputs. Dedicated analyses will
 constrain PSF properties and fluorescence loss where validated; unresolved quantities will retain
 explicit nuisance uncertainty. Adoption depends on validating both the replacement measurements and
