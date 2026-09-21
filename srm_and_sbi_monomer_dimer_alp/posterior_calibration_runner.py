@@ -647,9 +647,12 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
     torch._dynamo.config.suppress_errors = True
 
     timing_label = timing.label
-    estimator_path = paths.estimator_path(data_bank_root, timing_label)
-    cal_dir = _calibration_dir(paths, data_bank_root, timing_label)
-    cal_array_path = _calibration_array_path(cal_dir, timing_label, paths.project_alias)
+    # The estimator and every product derived from it carry the optional artifact tag
+    # (Paths.product_label); the EVAL inputs never do.
+    product_label = paths.product_label(timing_label, args.artifact_tag)
+    estimator_path = paths.estimator_path(data_bank_root, product_label)
+    cal_dir = _calibration_dir(paths, data_bank_root, product_label)
+    cal_array_path = _calibration_array_path(cal_dir, product_label, paths.project_alias)
 
     n_samples = args.posterior_samples or eval_cfg.posterior_samples
     pool_mode = args.pool_mode or eval_cfg.pool_mode
@@ -702,7 +705,7 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
     run_start = time.time()
     reporter = DiagnosticReporter(
         stage="Posterior_Calibration", enabled=True, dump=True, dump_dir=cal_dir,
-        run_label=f"{paths.project_alias}_{timing_label}",
+        run_label=f"{paths.project_alias}_{product_label}",
         timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
 
@@ -870,6 +873,14 @@ def build_posterior_calibration_parser() -> argparse.ArgumentParser:
         help="Combine-only mode: concatenate the per-shard calibration .npz files from a "
              "multi-GPU sharded run and write the final report + figures, then exit. Does no "
              "drawing and needs no GPU; the launcher runs it once the sharded workers finish.")
+    parser.add_argument(
+        "--artifact-tag", default=None,
+        help="Optional SCREAMING_SNAKE token ([A-Z0-9]+, e.g. CAP256) appended to the timing "
+             "label of every PRODUCT this stage reads and writes (the estimator it loads, the calibration directory and arrays), so a named experiment lives "
+             "beside the canonical run instead of overwriting it (Paths.product_label). The "
+             "shared inputs (video/theta sets, recordings) are always read under the plain "
+             "timing label. Default: no tag (canonical names).",
+    )
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Validate configuration and inputs, print what would be read/written, then exit "

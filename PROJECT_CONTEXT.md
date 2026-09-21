@@ -492,6 +492,17 @@ optical and sensor effects from the biological reaction-diffusion parameters,
 reduces the dimensionality of each inference problem, improves posterior
 geometry, and speeds convergence.
 
+The two stages are not equal in standing. Stage 2 carries the scientific question:
+inferring composition, diffusion, switching, and reaction parameters from videos,
+for which there is no direct replacement. Stage 1 exists to keep imaging error out
+of those estimates, because an incorrect or overly narrow imaging assumption is
+absorbed into the inferred biology. Its target is therefore defensible imaging
+values with uncertainty ranges, obtained from acquisition information, direct
+measurements, and neural inference where those do not reach, not perfect recovery
+of every imaging parameter. The practical objective is to constrain imaging well
+enough, propagate what remains uncertain, and assess which biological quantities
+the videos support (`DETECTOR_WORKFLOW.md` §2).
+
 ### Stage 1: Detector Parameters (this repository — the Detector calibration workflow)
 
 **Input:** Synthetic videos rendered from the SAME reactive trajectory tiers the

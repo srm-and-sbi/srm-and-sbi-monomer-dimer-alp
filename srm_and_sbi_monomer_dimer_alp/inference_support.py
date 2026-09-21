@@ -1182,12 +1182,19 @@ def train_loop(estimator: nn.Module,
             replay_str = f"{epoch_replay:.5f}" if replay_loss else "off"
             epoch_tag = (f"Epoch {epoch + 1}|{epochs} (global {global_epoch + 1})"
                          if start_epoch else f"Epoch {epoch + 1}|{epochs}")
+            # Peak device memory of THIS rank since the start of the run (allocated by
+            # tensors / reserved by the caching allocator), in GiB: the record of a
+            # configuration's memory use that a capacity comparison needs.
+            mem_str = ""
+            if torch.cuda.is_available() and device.type == "cuda":
+                mem_str = (f"    peak_mem={torch.cuda.max_memory_allocated(device) / 2 ** 30:.1f}"
+                           f"/{torch.cuda.max_memory_reserved(device) / 2 ** 30:.1f}GiB")
             print(
                 f"{epoch_tag}    "
                 f"train={epoch_train:.5f}    test={epoch_test:.5f}    "
                 f"replay={replay_str}    lr={scheduler.get_last_lr()[0]:.2e}    "
                 f"epoch={epoch_secs:.1f}s    elapsed={time.strftime('%H:%M:%S', time.gmtime(elapsed))}    "
-                f"ETA={time.strftime('%H:%M:%S', time.gmtime(eta))}",
+                f"ETA={time.strftime('%H:%M:%S', time.gmtime(eta))}{mem_str}",
                 flush=True,
             )
 

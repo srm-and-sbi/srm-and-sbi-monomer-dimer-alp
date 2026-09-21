@@ -113,6 +113,13 @@ hiding it.
 
 ## Result and interpretation
 
+**Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
+the accuracy step of those rules; §9.6 adds the evidence-adequacy, operational-success, operating-subgroup,
+and uncertainty-coverage requirements and the order in which they are evaluated, and defines the verdicts
+`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. The implementation of those
+steps in this utility is the 0.1.13 work in progress; until it lands, a report from this script states only
+the accuracy step.
+
 The report states, for each parameter, the accuracy against the prespecified thresholds:
 
 | parameter | criterion | threshold | basis |
@@ -120,12 +127,92 @@ The report states, for each parameter, the accuracy against the prespecified thr
 | `mu_r` | mean absolute log10 error | ≤ 0.02 dex | 6.7% of its 0.3 dex prior width |
 | `mu_r` | absolute mean signed error | ≤ 0.01 dex | a systematic offset propagates into every downstream use, so it is held tighter than the scatter |
 | `sigma_r` | Pearson correlation with truth | ≥ 0.80 | whether the quantity is measured at all |
-| `sigma_r` | mean absolute error | ≤ 0.08 | 10.7% of its prior width, in linear units because `sigma_r` is itself a spread |
+| `sigma_r` | mean absolute error | ≤ 0.08 | **linear units**, because `sigma_r` is itself a spread: 17 % of its 0.10 to 0.56 linear range (a comparison against the 0.75 dex log-prior width, given here earlier, mixed units and is withdrawn) |
 
 A parameter meeting its thresholds is a **candidate** to leave the inferred block — not an
 instruction to remove it. §9.4 requires more than accuracy: the quantity must also enter the
 downstream stage as a nuisance with an explicit range rather than a point value, so that
 uncertainty is retained rather than discarded.
+
+## Acceptance mechanics (0.1.13)
+
+The utility evaluates the frozen rules of `DETECTOR_WORKFLOW.md` §9.6 through the shared kernel
+`srm_and_sbi_monomer_dimer_alp.direct_acceptance`, which every direct estimator uses so that a rule
+cannot drift between them. The report carries the five verdicts side by side (evidence adequacy of
+the run, operational success, evidence adequacy for accuracy, accuracy, uncertainty coverage), the
+prior-fixed quartile table, and the dropped recordings by reason code. The exit status is 0 when
+nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence. A
+`--selftest` reaches no verdict: its few scenes are reported as `SELFTEST (informational)`.
+
+**Reason codes.** Every attempted recording that returns no valid estimate carries one of the codes
+listed below; a dropped recording without a code fails the run itself. The saved arrays hold the
+full true parameter row (`theta`, physical units, six columns in the detector's order), the
+validity mask, the reason codes, and the per-recording range bounds, so any stratum can be
+recomputed from the arrays without rerunning the estimator.
+
+| reason code | meaning |
+|---|---|
+| `no_spots` | the matched filter detected nothing above threshold in any sampled frame |
+| `too_few_tracks` | fewer linked tracks than the population summary needs |
+
+**Range construction (validated by coverage, not assumed).** Two nominal 90 % ranges per recording:
+
+- `mu_r`, in log10: the mean of the linked tracks' log widths has standard error
+  `sqrt(var_raw / n_tracks)` (`log_mean_se`, natural log); the range is the estimate
+  `± 1.645 · log_mean_se / ln 10`.
+- `sigma_r`, linear: by the delta method on the trim-corrected sample variance,
+  `se(sigma_r) = (sigma_r² + v) / (sigma_r · sqrt(2 (n_tracks − 1)))`, where `v` is the mean per-track
+  measurement variance that the errors-in-variables step subtracts; the range is the estimate
+  `± 1.645 · se`, floored at zero. This is the same expression as the information budget's
+  population bound evaluated at the estimate. It is a sampling error for the summary; it carries no
+  allowance for detection truncation or linking defects, which is exactly what the coverage
+  measurement is there to expose.
+
+Both ranges are checked against the truth, overall and in the operating subgroup, and their median
+width is reported against the prior width in the same coordinates (0.30 dex for `mu_r`; 0.46 linear
+for `sigma_r`, the 0.10 to 0.56 range). On the nine self-test scenes (2026-09-21) the `mu_r` range
+covered 8 of 9 and the `sigma_r` range 4 of 9: the `sigma_r` sampling error (median 0.036 linear) is
+of the size of the systematic error the estimator carries (bias −0.015, MAE 0.034), so a range built
+from sampling error alone is too narrow. This is reported, not corrected; the full-scale coverage
+measurement is the one of record.
+
+## Development outcome (2026-09-21, code 2b9c32e, EVAL tasks 0-1)
+
+2000 of 2000 recordings estimated (tracks 22 to 548, median 114). Overall within every threshold
+(`mu_r` MAE 0.0155 dex, bias −0.003 dex; `sigma_r` MAE 0.027, correlation 0.96). Operating subgroup
+(1026 recordings, true `log10 mu_pc` in [2.00, 2.375)): `mu_r` bias −0.0118 dex misses the 0.01 dex
+bound (about 2.7 % low); everything else meets. Under the frozen rules of `DETECTOR_WORKFLOW.md` §9.6:
+`FAIL (accuracy)` on that one criterion; no ranges existed in that code, so coverage was not evaluated.
+The signed `mu_r` error runs from −0.020 dex at the dim end of the brightness prior to +0.009 dex at the
+bright end; `sigma_r` is underestimated most where the true spread is broadest (−0.057 in the broad
+quarter of the operating subgroup). The brightness dependence does not by itself establish the mechanism
+(detection selection, fitting bias, and track selection are all candidates). Outputs preserved under
+`..._Direct_PSF_Width_DEV_2b9c32e` with `PROVENANCE.md`, `DEV_CHECK.md`, and `ACCEPTANCE_9_6_DEV.md`.
+
+Decisions: continue with this estimator; rerun under the 0.1.13 mechanics for ranges and reason codes;
+thresholds and operating range unchanged; `mu_r` and `sigma_r` judged separately; any bias correction is
+calibrated on development data from quantities available on experimental recordings (never the true
+synthetic brightness or spread) and validated on the reserved EVAL tasks.
+
+**Regression run of record (0.1.13 mechanics, same 2000 recordings, 36 min).** Point estimates
+identical; steps 1 to 3 pass with reason codes; step 4a again `FAIL (accuracy)` on the operating
+`mu_r` bias. Step 4b `FAIL (uncertainty)`: nominal 90 % ranges cover 65.9 % (`mu_r`) and 63.3 %
+(`sigma_r`) overall, 60.0 % and 55.7 % in the operating subgroup (rule 85 %); median widths 0.105 and
+0.113 of the prior widths. The sampling-only standard error is about 2.3 times too small at every
+track count (inflation 1.85 to 1.95 needed for 90 % coverage, with or without debiasing), the dim
+subgroup adds a negative offset, and `sigma_r` shrinks toward its prior center (standardized error
++1.05 in the narrowest quarter, −1.42 in the broadest). The `mu_r` error correlates with the true
+brightness (+0.46) more than with the observable spot count (+0.25); a measured per-recording spot
+brightness or signal-to-noise ratio, not yet emitted, is the candidate experimental proxy. Full
+numbers in the run folder's `COVERAGE_DIAGNOSIS.md`.
+
+**Head-to-head with the neural estimator on point values** (`..._PSF_Direct_vs_Neural`, two-panel figures,
+each method on its own sample): `mu_r` direct slope 0.97 / bias −0.003 dex against neural posterior median
+slope 0.93 / bias +0.021 dex; `sigma_r` direct slope 0.89 / correlation 0.96 against neural slope 0.04 /
+correlation 0.17. The direct estimator supersedes the neural point estimates for both PSF parameters on
+synthetic recordings, pending the experimental cross-check (`DETECTOR_WORKFLOW.md` §9.6, conclusion of
+record). Point estimates are the deliverable: the biology workflow consumes the imaging block as a frozen
+vector; the ranges are secondary.
 
 ## Essential notes
 

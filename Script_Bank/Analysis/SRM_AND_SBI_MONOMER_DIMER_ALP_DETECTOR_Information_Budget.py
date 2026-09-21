@@ -15,10 +15,13 @@ Reading the three together grades each parameter:
 
     neural at the bound         already inferred as well as the data permit; a change of
                                 estimator or a wider inferred block will not improve it
-    neural far from the bound   recoverable headroom; the defect is in the estimator or
-                                its training, not in the recordings
-    bound wider than the prior  not identifiable from one recording at all; it belongs
-                                outside the inferred block whatever estimator is used
+    neural far from the bound   probable headroom; the estimator or its training is the
+                                first place to look
+    bound wider than the prior  the reduced model expects one recording to constrain the
+                                parameter poorly: a candidate to leave the inferred block,
+                                not a proof of non-identifiability (the bound is approximate,
+                                treats a reduced observable, and constrains an unbiased
+                                estimator's standard deviation)
 
 This is the quantitative criterion behind `DETECTOR_WORKFLOW.md` sec. 9.4, which proposes a
 reduced inferred block. That section is a proposal and is not in force; this utility supplies

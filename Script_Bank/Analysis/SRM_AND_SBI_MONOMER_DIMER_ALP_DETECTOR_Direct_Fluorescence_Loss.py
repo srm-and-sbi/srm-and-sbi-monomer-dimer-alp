@@ -37,11 +37,15 @@ Why the observable is total fluorescence, and why the recording must be long
 | 20 s (1000 frames) | 6.01 | 0.65 | **0.083** | **0.019** |
 | 60 s (3000 frames) | 0.43 | **0.057** | **0.014** | **0.011** |
 
-    So this parameter is NOT identifiable anywhere in its prior from a 2 s clip, and at 20 s it
-    is identifiable only in the upper half. That is a property of the recordings, not of this
-    estimator, and it applies to the neural posterior equally. The acceptance threshold is
-    therefore stated at 1000 frames AND restricted to the range where the bound permits it;
-    outside that range the report records the estimate and states that no threshold applies.
+    Under this reduced model the benchmark exceeds the 0.10 dex threshold by more than an order
+    of magnitude everywhere at 2 s and falls inside it only in the upper half of the prior at
+    20 s. It is an approximate benchmark (an effective-sample-size adjustment stands in for the
+    correlated decay likelihood) and it constrains an unbiased estimator, so it is explanatory
+    context, not an eligibility rule. Eligibility is OBSERVABLE (DETECTOR_WORKFLOW.md sec. 9.6):
+    a converged fit whose fitted decay is visible above the residual scatter and whose own
+    standard error on log10 p is small enough to report classes a recording as usable; the
+    accuracy threshold, stated at 1000 frames, applies to usable recordings, and the recovery of
+    rejected recordings is reported beside them so that selection cannot hide a failure.
 
 Prespecified acceptance (fixed before the first run)
 
@@ -69,6 +73,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -79,6 +84,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_imaging_estimates as die  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import information_budget as ib  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
@@ -97,6 +103,20 @@ STAGE = "Direct_Fluorescence_Loss"
 # Fixed before the first run. 0.10 dex is 6.7% of the 1.5 dex prior width of
 # prob_photo_bleach. It applies at 1000 frames; at 100 frames the information budget bound
 # already exceeds it, so no threshold is set there and the report says so.
+# Observable eligibility diagnostic (DETECTOR_WORKFLOW.md sec. 9.6, bleaching): a recording is
+# USABLE when its fit converged, the fitted decay is visible above the residual scatter, and the
+# fit's own standard error on log10 p is small enough to be worth reporting. It never reads the
+# true value. Frozen before the full-length validation; calibrated only on the four self-test
+# scenes (2026-09-21): a standard-error cap of 0.15 dex rejected the p = 0.1 scene that was
+# recovered to 0.025 dex (its flicker-inflated standard error is 0.195 dex); 0.25 dex accepts the
+# two scenes recovered within 0.03 dex and rejects the two with errors of 0.3 and 0.6 dex, whose
+# standard errors are 5 and 6 dex. The decay-visibility floor of 3 alone would have accepted the
+# p = 0.0316 scene (signal-to-noise 4.2, error -0.61 dex), so both criteria are needed.
+ELIGIBILITY = {"min_decay_snr": 3.0, "max_se_log10": 0.25}
+# Flicker rate used for the effective-sample-size correction of the fit's standard error when the
+# caller supplies none: the prior center, a deployable value. The true per-recording rate is never
+# used -- it is unavailable on an experimental recording.
+LAMBDA_RATE_DEFAULT = 10 ** (0.5 * sum(det.DETECTOR_PARAMETERIZATION[det.DETECTOR_FIND["lambda_rate"]]["PRIOR_RANGE"]))
 ACCEPTANCE = {"prob_bleach_mae_dex": 0.10, "acceptance_frames": 1000}
 # Relative noise of the total-fluorescence curve per frame at the MET-FAB emitter density,
 # measured on rendered recordings. Used only to state the information bound beside the result.
@@ -120,20 +140,50 @@ def estimate_one(video_levels, scope: dict, *, lambda_rate=None,
     only for diagnosis, because on diffusing emitters the spots walk out of their apertures
     and the resulting decay is dominated by motion rather than bleaching.
     """
+    def _out(prob=np.nan, se=np.nan, n_ap=-1, n_eff=np.nan, snr=np.nan, se10=np.nan,
+             outcome="failed", reason=None, low=np.nan, high=np.nan):
+        return dict(prob_photo_bleach=prob, prob_se=se, n_apertures=n_ap, n_eff=n_eff,
+                    decay_snr=snr, se_log10=se10, outcome=outcome, reason=reason,
+                    low=low, high=high)
+
     if observable == "apertures":
         curve = die.spot_flux_curve(video_levels, scope, n_sigma=n_sigma,
                                     detect_frames=detect_frames)
         n_ap = curve["n_apertures"]
         if n_ap == 0:
-            return dict(prob_photo_bleach=np.nan, prob_se=np.nan, n_apertures=0, n_eff=np.nan)
+            return _out(n_ap=0, reason="no_apertures")
     else:
         curve = die.frame_flux_curve(video_levels)
         n_ap = -1
+    lam = LAMBDA_RATE_DEFAULT if lambda_rate is None else float(lambda_rate)
     fit = die.fit_fluorescence_loss(
-        curve["flux"], lambda_rate=lambda_rate,
+        curve["flux"], lambda_rate=lam,
         frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)
-    return dict(prob_photo_bleach=fit["prob_photo_bleach"], prob_se=fit["prob_se"],
-                n_apertures=n_ap, n_eff=fit["n_eff"])
+    prob, se = fit["prob_photo_bleach"], fit["prob_se"]
+    if not fit["success"]:
+        return _out(prob, se, n_ap, fit["n_eff"], reason="fit_failed")
+    if not (np.isfinite(prob) and prob > 0):
+        return _out(prob, se, n_ap, fit["n_eff"], reason="nonpositive_estimate")
+    # Three outcomes (sec. 9.6): a VALID estimate is classed usable or uninformative by two
+    # observable diagnostics -- the visibility of the fitted decay above the residual scatter,
+    # and the fit's own standard error on log10 p. Neither reads the true value.
+    total_drop = fit["amplitude"] * (1.0 - np.exp(-fit["rate_per_frame"] * fit["n_frames"]))
+    snr = float(total_drop / fit["resid_sd"]) if fit["resid_sd"] > 0 else float("inf")
+    se10 = float(se / (prob * np.log(10.0))) if np.isfinite(se) else float("nan")
+    usable = bool(snr >= ELIGIBILITY["min_decay_snr"] and np.isfinite(se10)
+                  and se10 <= ELIGIBILITY["max_se_log10"])
+    z = 1.6448536269514722
+    if np.isfinite(se10):
+        # In log10, with the exponent clipped: an uninformative fit can carry a standard error of
+        # hundreds of dex, and 10 ** that overflows a float. Such a range is reported as-is (it
+        # simply spans the whole prior and beyond); the recording is uninformative, not failed.
+        log_c = float(np.log10(prob))
+        low = 10.0 ** max(log_c - z * se10, -300.0)
+        high = 10.0 ** min(log_c + z * se10, 300.0)
+    else:
+        low, high = np.nan, np.nan
+    return _out(prob, se, n_ap, fit["n_eff"], snr, se10,
+                outcome="usable" if usable else "uninformative", reason=None, low=low, high=high)
 
 
 _STORE_CACHE: dict = {}
@@ -161,7 +211,7 @@ def run_selftest(n_subunits: int, n_frames: int, n_sigma: float, detect_frames: 
     scope = _scope_center()
     grid = [0.01, 0.0316, 0.1, 0.316]
 
-    truths, ests = [], []
+    truths, ests, outs, thetas = [], [], [], []
     for i, p in enumerate(grid):
         rng = np.random.default_rng(SELFTEST_SEED + i)
         step_nm = np.sqrt(2.0 * 0.05 * 1e6 * dt)
@@ -177,119 +227,24 @@ def run_selftest(n_subunits: int, n_frames: int, n_sigma: float, detect_frames: 
         img = {e["KEY"]: 10 ** (0.5 * (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]))
                for e in det.DETECTOR_IMAGING}
         img["prob_photo_bleach"] = p
+        thetas.append([img[k] for k in det.DETECTOR_FIND])
         vec = np.array([img[k] for k in det.DETECTOR_IMAGING_KEYS])
         frames = render_dli_video(poses, host, np.ones(n_subunits, dtype=np.int64), vec,
                                   seed=SELFTEST_SEED + i)
         video = sio.convert_video_dtype(np.moveaxis(frames, 2, 0), bits_from=16, bits_to=8)
-        r = estimate_one(video, scope, lambda_rate=img["lambda_rate"],
+        r = estimate_one(video, scope, lambda_rate=None,          # never the scene's true rate
                          n_sigma=n_sigma, detect_frames=detect_frames,
                          observable=observable)
         truths.append(p)
         ests.append(r["prob_photo_bleach"])
+        outs.append(r)
         err = (np.log10(max(r["prob_photo_bleach"], 1e-9)) - np.log10(p)
                if np.isfinite(r["prob_photo_bleach"]) else np.nan)
         print(f"  [{i + 1}/{len(grid)}] p {p:.4f} -> {r['prob_photo_bleach']:.4f}   "
               f"err {err:+.4f} dex   ({r['n_apertures']} apertures, "
               f"n_eff {r['n_eff']:.1f})", flush=True)
-    return dict(truth=np.asarray(truths, float), estimate=np.asarray(ests, float))
-
-
-def score(truth, estimate, n_frames, reporter) -> dict:
-    ok = np.isfinite(estimate) & np.isfinite(truth) & (estimate > 0) & (truth > 0)
-    t, e = truth[ok], estimate[ok]
-    err = np.log10(e) - np.log10(t)
-    mae, bias = float(np.abs(err).mean()), float(err.mean())
-    corr = (float(np.corrcoef(np.log10(t), np.log10(e))[0, 1])
-            if t.size > 2 and np.std(np.log10(t)) > 0 else float("nan"))
-
-    # The bound this recording length supports AT EACH TRUTH. It varies enormously across the
-    # prior -- from well inside the threshold at the top to hundreds of dex at the bottom --
-    # so a single pooled error would average the measurable range together with a range where
-    # no estimator can say anything, and would report the mixture as a failure of this one.
-    lam = 10 ** (0.5 * sum(det.DETECTOR_PARAMETERIZATION[det.DETECTOR_FIND["lambda_rate"]]["PRIOR_RANGE"]))
-    bounds = np.array([ib.crb_prob_bleach_dex(float(p), int(n_frames), RELATIVE_NOISE,
-                                              lambda_rate=lam,
-                                              frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)["sd_dex"]
-                       for p in t])
-    mean_bound = float(np.mean(bounds)) if bounds.size else float("nan")
-
-    # Acceptance applies only where the recording can support it.
-    within = bounds <= ACCEPTANCE["prob_bleach_mae_dex"]
-    mae_within = float(np.abs(err[within]).mean()) if within.any() else float("nan")
-    mae_outside = float(np.abs(err[~within]).mean()) if (~within).any() else float("nan")
-
-    reporter.stat("recordings scored", int(ok.sum()))
-    reporter.stat("recordings dropped", int((~ok).sum()),
-                  note="no apertures found, or a non-positive estimate")
-    reporter.stat("prob_photo_bleach MAE (dex)", mae,
-                  expected=f"<= {ACCEPTANCE['prob_bleach_mae_dex']} at "
-                           f"{ACCEPTANCE['acceptance_frames']} frames",
-                  note="mean absolute log10 error; 0.10 dex is 6.7% of the prior width")
-    reporter.stat("prob_photo_bleach bias (dex)", bias,
-                  note="mean signed log10 error; positive means the estimate runs high")
-    reporter.stat("correlation", corr, note="Pearson r of log10 estimate against log10 truth")
-    reporter.stat("mean information bound (dex)", mean_bound,
-                  note="Cramer-Rao floor at this recording length, including the flicker "
-                       "correlation; no estimator can do better than this")
-    reporter.stat("frames", int(n_frames),
-                  note="recording length; decay-rate information grows as its cube")
-
-    reporter.stat("recordings inside the identifiable range", int(within.sum()),
-                  note="those whose information bound is itself below the threshold; only "
-                       "these can be held to it")
-    reporter.stat("MAE inside the identifiable range (dex)", mae_within,
-                  expected=f"<= {ACCEPTANCE['prob_bleach_mae_dex']}",
-                  note="the acceptance quantity")
-    reporter.stat("MAE outside the identifiable range (dex)", mae_outside,
-                  note="reported for information only; no estimator can meet the threshold "
-                       "here, so a large value is a property of the recording")
-
-    at_acceptance_length = int(n_frames) >= ACCEPTANCE["acceptance_frames"]
-    testable = bool(at_acceptance_length and within.any())
-    passed = reporter.check(
-        "prob_photo_bleach MAE within acceptance, where identifiable",
-        bool(testable and mae_within <= ACCEPTANCE["prob_bleach_mae_dex"]),
-        (f"{mae_within:.4f} dex over {int(within.sum())} of {int(ok.sum())} recordings "
-         f"vs <= {ACCEPTANCE['prob_bleach_mae_dex']}"
-         if testable else
-         (f"no recording is inside the identifiable range at {n_frames} frames"
-          if at_acceptance_length else
-          f"{n_frames} frames is below the {ACCEPTANCE['acceptance_frames']}-frame length "
-          f"the threshold is stated at")),
-        fatal=False,
-        note="Accuracy of the photobleaching probability, over the part of the prior the "
-             "recording can actually support. Outside that part the information bound exceeds "
-             "the threshold, so a miss there measures the recording rather than the estimator "
-             "and is reported separately instead of being pooled in.")
-    # A real comparison, not a formality. For an unbiased estimator the mean absolute error of
-    # a normal variate is sqrt(2/pi) ~ 0.8 of its standard deviation, so the bound on the sd
-    # implies a floor of about 0.8 * bound on the MAE. Falling clearly under that floor is
-    # worth inspecting; the factor below leaves room for the small-sample scatter of an MAE
-    # taken over a handful of recordings.
-    bound_within = float(np.mean(bounds[within])) if within.any() else float("nan")
-    mae_floor = 0.8 * bound_within
-    respects_bound = bool(not np.isfinite(mae_within) or not np.isfinite(mae_floor)
-                          or mae_within >= 0.5 * mae_floor)
-    reporter.check(
-        "measurement respects the information bound", respects_bound,
-        (f"MAE inside the identifiable range {mae_within:.4f} dex against an implied MAE floor "
-         f"of {mae_floor:.4f} dex (from a mean bound of {bound_within:.4f} dex on the standard "
-         f"deviation), over {int(within.sum())} recording(s)"),
-        fatal=False,
-        note="A measured error far BELOW the Cramer-Rao floor points to a defect -- ground truth "
-             "leaking into the estimate, or a mis-stated bound -- rather than an unusually good "
-             "estimator. Two caveats keep this a prompt to look rather than an automatic "
-             "failure: the bound constrains an UNBIASED estimator, and a fit with bounded "
-             "parameters can legitimately beat it by shrinking toward the middle of its range; "
-             "and an MAE over few recordings is itself noisy.")
-
-    return dict(mae_dex=mae, mae_within_dex=mae_within, mae_outside_dex=mae_outside,
-                bound_within_dex=bound_within, respects_bound=bool(respects_bound),
-                bias_dex=bias, corr=corr, mean_bound_dex=mean_bound,
-                bounds_dex=[float(b) for b in bounds],
-                n_within=int(within.sum()), n_frames=int(n_frames), n_scored=int(ok.sum()),
-                at_acceptance_length=at_acceptance_length, testable=testable,
-                acceptance=ACCEPTANCE, passed=bool(passed))
+    return dict(truth=np.asarray(truths, float), estimate=np.asarray(ests, float),
+                out=outs, theta=np.asarray(thetas, float))
 
 
 def main(argv=None):
@@ -304,6 +259,10 @@ def main(argv=None):
     ap.add_argument("--n-sigma", type=float, default=4.0)
     ap.add_argument("--detect-frames", type=int, default=5,
                     help="frames whose detections seed the fixed aperture set (apertures only).")
+    ap.add_argument("--lambda-rate", type=float, default=None,
+                    help="flicker rate for the standard-error correction (default: the prior "
+                         "center); a measured value from the direct flicker estimator may be "
+                         "supplied. The true per-recording rate is never used.")
     ap.add_argument("--observable", default="field", choices=["field", "apertures"],
                     help="how the flux curve is formed. 'field' sums the whole frame and is "
                          "immune to emitter motion; 'apertures' pins apertures to the opening "
@@ -383,8 +342,7 @@ def main(argv=None):
                             recordings=4)
         res = run_selftest(args.selftest_subunits, n_frames, args.n_sigma,
                            args.detect_frames, observable=args.observable)
-        truth, estimate = res["truth"], res["estimate"]
-        extra = dict(n_apertures=np.array([]), n_eff=np.array([]))
+        truth, estimate, out, theta_all = res["truth"], res["estimate"], res["out"], res["theta"]
     else:
         truth_rows, jobs = [], []
         opts = dict(n_sigma=args.n_sigma, detect_frames=args.detect_frames,
@@ -412,54 +370,102 @@ def main(argv=None):
             for i in range(n_here):
                 scope_row = {k: float(scope_arr[i, j])
                              for j, k in enumerate(det.DETECTOR_SCOPE_KEYS)}
-                lam = float(theta[i, det.DETECTOR_FIND["lambda_rate"]])
-                jobs.append((str(vpath), i, scope_row, lam, opts))
-                truth_rows.append(theta[i, det.DETECTOR_FIND["prob_photo_bleach"]])
+                jobs.append((str(vpath), i, scope_row, args.lambda_rate, opts))
+                truth_rows.append(theta[i, :len(det.DETECTOR_FIND)])
             if len(jobs) >= args.max_videos:
                 break
         reporter.stat("videos queued", len(jobs))
         if args.workers and args.workers > 1:
+            # Ordered map (results stay aligned with truth_rows) with a progress line every ~5 %.
+            out = []
+            every = max(1, len(jobs) // 20)
+            t0 = time.time()
             with ProcessPoolExecutor(max_workers=args.workers) as pool:
-                out = list(pool.map(_worker, jobs, chunksize=1))
+                for i, o in enumerate(pool.map(_worker, jobs, chunksize=1), 1):
+                    out.append(o)
+                    if i % every == 0 or i == len(jobs):
+                        el = time.time() - t0
+                        print(f"  [progress] {i}/{len(jobs)} recordings  elapsed {el/60:.1f} min  "
+                              f"ETA {el/i*(len(jobs)-i)/60:.1f} min", flush=True)
         else:
             out = [_worker(j) for j in jobs]
-        truth = np.asarray(truth_rows, dtype=float)
+        theta_all = np.asarray(truth_rows, dtype=float)          # PHYSICAL units, all six columns
+        truth = theta_all[:, det.DETECTOR_FIND["prob_photo_bleach"]]
         estimate = np.asarray([o["prob_photo_bleach"] for o in out], dtype=float)
-        extra = dict(n_apertures=np.array([o["n_apertures"] for o in out]),
-                     n_eff=np.array([o["n_eff"] for o in out]))
 
-    summary = score(truth, estimate, n_frames, reporter)
+    extra = dict(n_apertures=np.array([o["n_apertures"] for o in out]),
+                 n_eff=np.array([o["n_eff"] for o in out]),
+                 decay_snr=np.array([o["decay_snr"] for o in out], dtype=float),
+                 se_log10=np.array([o["se_log10"] for o in out], dtype=float),
+                 range_low=np.array([o["low"] for o in out], dtype=float),
+                 range_high=np.array([o["high"] for o in out], dtype=float))
+    reasons = [o["reason"] for o in out]
+    outcome = np.array([o["outcome"] for o in out])
+    valid = np.isfinite(estimate) & (estimate > 0) & np.isfinite(truth) & (truth > 0) & (outcome != "failed")
+    usable = valid & (outcome == "usable")
 
+    # ---- the frozen rules of DETECTOR_WORKFLOW.md sec. 9.6, evaluated by the shared kernel ----
+    def accuracy(mask):
+        lt, le = np.log10(truth[mask]), np.log10(estimate[mask])
+        err = le - lt
+        corr = (float(np.corrcoef(lt, le)[0, 1])
+                if lt.size > 2 and np.std(lt) > 0 and np.std(le) > 0 else None)
+        mae = float(np.abs(err).mean())
+        return {
+            "prob_photo_bleach MAE (dex)": (mae, f"<= {ACCEPTANCE['prob_bleach_mae_dex']}",
+                                            mae <= ACCEPTANCE["prob_bleach_mae_dex"]),
+            "prob_photo_bleach bias (dex, reported)": (float(err.mean()), "--", True),
+            "prob_photo_bleach corr (log10, reported)": (corr if corr is not None else float("nan"), "--", True),
+        }
+
+    at_length = int(n_frames) >= ACCEPTANCE["acceptance_frames"]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cov = (truth >= extra["range_low"]) & (truth <= extra["range_high"])
+        width = np.log10(extra["range_high"]) - np.log10(extra["range_low"])
+    lo_p, hi_p = da.prior_range("prob_photo_bleach")
+    result = da.evaluate(theta_all, valid, reasons, accuracy, target_key="prob_photo_bleach",
+                         ranges={"prob_photo_bleach (log10)": (cov, width, hi_p - lo_p)},
+                         usable=usable, selftest=bool(args.selftest) or not at_length)
+    if not at_length and not args.selftest:
+        for k in list(result["verdicts"]):
+            result["verdicts"][k] = (f"NOT APPLICABLE ({n_frames} frames is below the "
+                                     f"{ACCEPTANCE['acceptance_frames']}-frame length the threshold is stated at)")
+        result["exit_code"] = 0
+    da.render(reporter, result, estimator=STAGE, target_key="prob_photo_bleach")
     reporter.table(
-        "Acceptance", ["criterion", "threshold", "observed", "verdict"],
-        [["prob_photo_bleach MAE (dex), where identifiable",
-          f"<= {ACCEPTANCE['prob_bleach_mae_dex']} at {ACCEPTANCE['acceptance_frames']} frames",
-          (f"{summary['mae_within_dex']:.4f} over {summary['n_within']} of "
-           f"{summary['n_scored']} at {n_frames} frames"
-           if summary["testable"] else f"n/a at {n_frames} frames"),
-          "PASS" if summary["passed"] else
-          ("FAIL" if summary["testable"] else "NOT APPLICABLE")],
-         ["prob_photo_bleach MAE (dex), outside", "-- (no threshold)",
-          f"{summary['mae_outside_dex']:.4f}", "informational"]],
-        note="The threshold is stated at the full recording length and applied only where the "
-             "information bound is itself below it. A 2 s clip cannot support this parameter "
-             "anywhere in its prior, and a 20 s recording only in its upper half, for any "
-             "estimator -- see DETECTOR_WORKFLOW.md sec. 9.5.")
+        "Bleaching outcomes against all attempted recordings", ["outcome", "count", "share of attempted", "rule"],
+        [["failed measurement", str(int((outcome == "failed").sum())),
+          f"{100 * (outcome == 'failed').mean():.1f} %", "counted against operational success"],
+         ["valid but uninformative", str(int((outcome == "uninformative").sum())),
+          f"{100 * (outcome == 'uninformative').mean():.1f} %", "reported; recovery shown beside usable"],
+         ["usable", str(int((outcome == "usable").sum())),
+          f"{100 * (outcome == 'usable').mean():.1f} %",
+          f">= {da.RULES['bleach_usable_min']:.0f} overall, {da.RULES['bleach_usable_operating_min']:.0f} operating"]],
+        note=f"Eligibility is observable and never reads the true value: a converged fit, a fitted total decay at "
+             f"least {ELIGIBILITY['min_decay_snr']:.0f}x the residual scatter, and a fit standard error on log10 p "
+             f"of at most {ELIGIBILITY['max_se_log10']} dex. The flicker correction uses the supplied rate "
+             f"({LAMBDA_RATE_DEFAULT:.2f} at the prior center unless --lambda-rate is given).")
+    lam_ctx = LAMBDA_RATE_DEFAULT if args.lambda_rate is None else args.lambda_rate
+    p_ctx = 10 ** (0.5 * (lo_p + hi_p))
+    bound_ctx = ib.crb_prob_bleach_dex(float(p_ctx), int(n_frames), RELATIVE_NOISE, lambda_rate=lam_ctx,
+                                       frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)["sd_dex"]
+    reporter.stat("information-budget benchmark at the prior center (dex)", float(bound_ctx),
+                  note="explanatory context only, not an eligibility rule: the approximate standard deviation an "
+                       "unbiased total-fluorescence estimator is not expected to beat at this recording length "
+                       "(DETECTOR_WORKFLOW.md sec. 9.5)")
 
     np.savez_compressed(os.path.join(out_dir, "direct_fluorescence_loss.npz"),
-                        truth=truth, estimate=estimate, **extra)
+                        truth=truth, estimate=estimate, theta=theta_all, valid=valid, usable=usable,
+                        outcome=outcome, reasons=np.asarray([r or "" for r in reasons]), **extra)
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
-        json.dump(summary, fh, indent=2, default=float)
+        json.dump(dict(acceptance=ACCEPTANCE, eligibility=ELIGIBILITY, evaluation=result),
+                  fh, indent=2, default=float)
 
     reporter.summary()
     path = reporter.write_report()
     print(f"\n[{STAGE}] report -> {path}")
-    # A failed acceptance must reach a caller that reads the exit status. A run that is not
-    # testable at this recording length is not a failure -- it is reported as not applicable.
-    if summary["testable"] and not summary["passed"]:
-        print(f"[{STAGE}] ACCEPTANCE NOT MET: prob_photo_bleach MAE where identifiable")
-        return 1
-    return 0
+    print(f"[{STAGE}] verdicts: " + "; ".join(f"{k}: {v}" for k, v in result["verdicts"].items()))
+    return int(result["exit_code"])
 
 
 if __name__ == "__main__":

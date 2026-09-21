@@ -63,6 +63,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -73,6 +74,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_imaging_estimates as die  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
@@ -100,7 +102,7 @@ def _scope_center() -> dict:
 
 
 def estimate_one(video_levels, scope: dict, *, min_track_length: int, n_sigma: float,
-                 half_px: int, n_model_traces: int) -> dict:
+                 half_px: int, n_model_traces: int, n_boot: int = 40) -> dict:
     """Estimate ``lambda_rate`` from one stored video.
 
     The measurement pass is the same one the width estimator runs; its fitted per-spot
@@ -108,24 +110,31 @@ def estimate_one(video_levels, scope: dict, *, min_track_length: int, n_sigma: f
     pinned to 1 because the autocorrelation is indexed in frames and a stride would rescale
     every lag.
     """
+    def _none(n_tr, reason):
+        return dict(lambda_rate=np.nan, n_traces=int(n_tr), tau_seconds=np.nan, residual=np.nan,
+                    low=np.nan, high=np.nan, refined=False, at_grid_edge=False, reason=reason)
+
     m = die.measure_spot_widths(video_levels, scope, frame_stride=1, n_sigma=n_sigma,
                                 half_px=half_px)
     if m["sqrt2sigma"].size == 0:
-        return dict(lambda_rate=np.nan, n_traces=0, tau_seconds=np.nan, residual=np.nan)
+        return _none(0, "no_spots")
     tid = die.link_spot_tracks(m["frame_index"], m["x"], m["y"], frame_stride=1)
     traces, spans = die.spot_intensity_traces(m, tid, min_length=min_track_length)
     if len(traces) < 5:
-        return dict(lambda_rate=np.nan, n_traces=len(traces), tau_seconds=np.nan,
-                    residual=np.nan)
-    shape, _ = die.flicker_data_shape(traces)
+        return _none(len(traces), "too_few_traces")
+    shape, tau_lag = die.flicker_data_shape(traces)
     if shape is None:
-        return dict(lambda_rate=np.nan, n_traces=len(traces), tau_seconds=np.nan,
-                    residual=np.nan)
-    r = die.match_flicker_rate(
-        shape, spans, frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds,
-        n_traces=n_model_traces)
+        return _none(len(traces), "too_few_pairs")
+    dt = PARAMETERS.simulation.timing.frame_time_seconds
+    # The model-arm shapes depend on the recording only through its spans: computed once, they
+    # serve the point estimate and every bootstrap resample of the traces.
+    grid, shapes = die.flicker_model_shapes(spans, frame_time_seconds=dt, n_traces=n_model_traces)
+    r = die.match_shapes(shape, grid, shapes)
+    boot = die.flicker_bootstrap_range(traces, grid, shapes, n_boot=n_boot)
     return dict(lambda_rate=r["lambda_rate"], n_traces=len(traces),
-                tau_seconds=r["tau_seconds"], residual=r["residual"])
+                tau_seconds=float(tau_lag * dt) if np.isfinite(tau_lag) else np.nan,
+                residual=r["residual"], low=boot["low"], high=boot["high"],
+                refined=r["refined"], at_grid_edge=r["at_grid_edge"], reason=None)
 
 
 _STORE_CACHE: dict = {}
@@ -157,7 +166,7 @@ def run_selftest(n_subunits: int, n_frames: int, opts: dict) -> dict:
     scope = _scope_center()
     grid = [1.5, 3.0, 5.0, 8.0]
 
-    truths, ests, extra = [], [], []
+    truths, ests, extra, lows, highs, reasons, thetas = [], [], [], [], [], [], []
     for i, lam in enumerate(grid):
         rng = np.random.default_rng(SELFTEST_SEED + i)
         step_nm = np.sqrt(2.0 * 0.05 * 1e6 * dt)
@@ -173,6 +182,7 @@ def run_selftest(n_subunits: int, n_frames: int, opts: dict) -> dict:
         img = {e["KEY"]: 10 ** (0.5 * (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]))
                for e in det.DETECTOR_IMAGING}
         img.update(lambda_rate=lam, prob_photo_bleach=1e-12)
+        thetas.append([img[k] for k in det.DETECTOR_FIND])
         vec = np.array([img[k] for k in det.DETECTOR_IMAGING_KEYS])
         frames = render_dli_video(poses, host, np.ones(n_subunits, dtype=np.int64), vec,
                                   seed=SELFTEST_SEED + i)
@@ -181,56 +191,16 @@ def run_selftest(n_subunits: int, n_frames: int, opts: dict) -> dict:
         truths.append(lam)
         ests.append(r["lambda_rate"])
         extra.append(r["n_traces"])
+        lows.append(r["low"]); highs.append(r["high"]); reasons.append(r["reason"])
         err = (np.log10(r["lambda_rate"]) - np.log10(lam)
                if np.isfinite(r["lambda_rate"]) and r["lambda_rate"] > 0 else np.nan)
         print(f"  [{i + 1}/{len(grid)}] lambda {lam:5.2f} -> {r['lambda_rate']:7.3f}   "
               f"err {err:+.4f} dex   ({r['n_traces']} traces, "
               f"tau {r['tau_seconds']:.4f} s)", flush=True)
     return dict(truth=np.asarray(truths, float), estimate=np.asarray(ests, float),
-                n_traces=np.asarray(extra))
-
-
-def score(truth, estimate, reporter) -> dict:
-    ok = np.isfinite(estimate) & np.isfinite(truth) & (estimate > 0) & (truth > 0)
-    t, e = truth[ok], estimate[ok]
-    err = np.log10(e) - np.log10(t)
-    mae, bias = float(np.abs(err).mean()), float(err.mean())
-    corr = (float(np.corrcoef(np.log10(t), np.log10(e))[0, 1])
-            if t.size > 2 and np.std(np.log10(t)) > 0 else float("nan"))
-    typ, worst = die.flicker_multiplicity_band(float(np.median(e)) if e.size else np.nan)
-
-    reporter.stat("recordings scored", int(ok.sum()))
-    reporter.stat("recordings dropped", int((~ok).sum()),
-                  note="too few usable traces, or too few pooled autocorrelation pairs")
-    reporter.stat("lambda_rate MAE (dex)", mae,
-                  expected=f"<= {ACCEPTANCE['lambda_mae_dex']}",
-                  note="mean absolute log10 error; 0.08 dex is 8% of the 1.0 dex prior width")
-    reporter.stat("lambda_rate bias (dex)", bias,
-                  note="mean signed log10 error; positive means the estimate runs fast")
-    reporter.stat("lambda_rate correlation", corr,
-                  expected=f">= {ACCEPTANCE['lambda_corr']}",
-                  note="Pearson r of log10 estimate against log10 truth")
-    reporter.stat("multiplicity systematic (dex)", typ,
-                  expected=f"up to {worst} at the top of the sigma_pc prior",
-                  note="the price of keeping the estimator free of mu_pc and sigma_pc; a band, "
-                       "not a correction, so that no sigma_pc value is needed")
-
-    passes = {
-        "corr": reporter.check(
-            "lambda_rate correlation within acceptance",
-            bool(np.isfinite(corr) and corr >= ACCEPTANCE["lambda_corr"]),
-            f"{corr:.4f} vs >= {ACCEPTANCE['lambda_corr']}", fatal=False,
-            note="Whether the estimate tracks the true flicker rate at all."),
-        "mae": reporter.check(
-            "lambda_rate MAE within acceptance", mae <= ACCEPTANCE["lambda_mae_dex"],
-            f"{mae:.4f} dex vs <= {ACCEPTANCE['lambda_mae_dex']}", fatal=False,
-            note="Accuracy of the flicker rate. The multiplicity systematic reported above is "
-                 "inside this threshold at the center of the sigma_pc prior and consumes most "
-                 "of it at the top corner."),
-    }
-    return dict(mae_dex=mae, bias_dex=bias, corr=corr, n_scored=int(ok.sum()),
-                multiplicity_typical_dex=typ, multiplicity_worst_dex=worst,
-                acceptance=ACCEPTANCE, passes={k: bool(v) for k, v in passes.items()})
+                n_traces=np.asarray(extra), low=np.asarray(lows, float),
+                high=np.asarray(highs, float), reasons=reasons,
+                theta=np.asarray(thetas, float))
 
 
 def main(argv=None):
@@ -245,6 +215,8 @@ def main(argv=None):
     ap.add_argument("--min-track-length", type=int, default=DEFAULT_MIN_TRACK)
     ap.add_argument("--n-sigma", type=float, default=4.0)
     ap.add_argument("--half-px", type=int, default=14)
+    ap.add_argument("--n-boot", type=int, default=40,
+                    help="bootstrap resamples of the traces for the per-recording 90 %% range.")
     ap.add_argument("--model-traces", type=int, default=4000,
                     help="traces in the Ornstein-Uhlenbeck model arm, per grid point.")
     ap.add_argument("--workers", type=int, default=0,
@@ -262,7 +234,7 @@ def main(argv=None):
     data_bank_root = PARAMETERS.machine.data_bank_root
     dt = PARAMETERS.simulation.timing.frame_time_seconds
     opts = dict(min_track_length=args.min_track_length, n_sigma=args.n_sigma,
-                half_px=args.half_px, n_model_traces=args.model_traces)
+                half_px=args.half_px, n_model_traces=args.model_traces, n_boot=args.n_boot)
 
     if args.selftest:
         timing_label = RunTiming(total_time_seconds=args.selftest_frames * dt).label
@@ -319,6 +291,7 @@ def main(argv=None):
                             recordings=4)
         res = run_selftest(args.selftest_subunits, n_frames, opts)
         truth, estimate, n_traces = res["truth"], res["estimate"], res["n_traces"]
+        low, high, reasons, theta_all = res["low"], res["high"], res["reasons"], res["theta"]
     else:
         truth_rows, jobs = [], []
         for (t, vpath), (_, tpath), (_, spath) in zip(video_paths, theta_paths, scope_paths):
@@ -340,50 +313,86 @@ def main(argv=None):
                 scope_row = {k: float(scope_arr[i, j])
                              for j, k in enumerate(det.DETECTOR_SCOPE_KEYS)}
                 jobs.append((str(vpath), i, scope_row, opts))
-                truth_rows.append(theta[i, det.DETECTOR_FIND["lambda_rate"]])
+                truth_rows.append(theta[i, :len(det.DETECTOR_FIND)])
             if len(jobs) >= args.max_videos:
                 break
         reporter.stat("videos queued", len(jobs))
         if args.workers and args.workers > 1:
+            # Ordered map (results stay aligned with truth_rows) with a progress line every ~5 %.
+            out = []
+            every = max(1, len(jobs) // 20)
+            t0 = time.time()
             with ProcessPoolExecutor(max_workers=args.workers) as pool:
-                out = list(pool.map(_worker, jobs, chunksize=1))
+                for i, o in enumerate(pool.map(_worker, jobs, chunksize=1), 1):
+                    out.append(o)
+                    if i % every == 0 or i == len(jobs):
+                        el = time.time() - t0
+                        print(f"  [progress] {i}/{len(jobs)} recordings  elapsed {el/60:.1f} min  "
+                              f"ETA {el/i*(len(jobs)-i)/60:.1f} min", flush=True)
         else:
             out = [_worker(j) for j in jobs]
-        truth = np.asarray(truth_rows, dtype=float)
+        theta_all = np.asarray(truth_rows, dtype=float)          # PHYSICAL units, all six columns
+        truth = theta_all[:, det.DETECTOR_FIND["lambda_rate"]]
         estimate = np.asarray([o["lambda_rate"] for o in out], dtype=float)
         n_traces = np.asarray([o["n_traces"] for o in out])
+        low = np.asarray([o["low"] for o in out], dtype=float)
+        high = np.asarray([o["high"] for o in out], dtype=float)
+        reasons = [o["reason"] for o in out]
+        n_edge = int(sum(bool(o["at_grid_edge"]) for o in out))
+        n_unrefined = int(sum((not o["refined"]) and np.isfinite(o["lambda_rate"]) for o in out))
 
-    summary = score(truth, estimate, reporter)
+    # ---- the frozen rules of DETECTOR_WORKFLOW.md sec. 9.6, evaluated by the shared kernel ----
+    valid = np.isfinite(estimate) & (estimate > 0) & np.isfinite(truth) & (truth > 0)
+
+    def accuracy(mask):
+        lt, le = np.log10(truth[mask]), np.log10(estimate[mask])
+        err = le - lt
+        corr = (float(np.corrcoef(lt, le)[0, 1])
+                if lt.size > 2 and np.std(lt) > 0 and np.std(le) > 0 else None)
+        mae = float(np.abs(err).mean())
+        return {
+            "lambda_rate corr (log10)": (corr if corr is not None else float("nan"),
+                                         f">= {ACCEPTANCE['lambda_corr']}",
+                                         None if corr is None else corr >= ACCEPTANCE["lambda_corr"]),
+            "lambda_rate MAE (dex)": (mae, f"<= {ACCEPTANCE['lambda_mae_dex']}", mae <= ACCEPTANCE["lambda_mae_dex"]),
+            "lambda_rate bias (dex, reported)": (float(err.mean()), "--", True),
+        }
+
+    # The nominal 90 % range is the 5th-95th percentile of a bootstrap over the recording's
+    # traces against the fixed model shapes (companion note). Its coverage is what validates it.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cov = (truth >= low) & (truth <= high)
+        width = np.log10(high) - np.log10(low)
+    lo_l, hi_l = da.prior_range("lambda_rate")
+    result = da.evaluate(theta_all, valid, reasons, accuracy, target_key="lambda_rate",
+                         ranges={"lambda_rate (log10)": (cov, width, hi_l - lo_l)},
+                         selftest=bool(args.selftest))
+    da.render(reporter, result, estimator=STAGE, target_key="lambda_rate")
+    typ, worst = die.flicker_multiplicity_band(float(np.nanmedian(estimate[valid])) if valid.any() else np.nan)
+    reporter.stat("multiplicity systematic (dex)", typ, expected=f"up to {worst} at the top of the sigma_pc prior",
+                  note="the price of a single-dye model arm, reported as a band rather than corrected; it is "
+                       "NOT an uncertainty for the detection-and-tracking chain, which the coverage above tests")
     if n_traces.size:
         reporter.stat("median usable traces per recording", float(np.median(n_traces)),
                       note="linked tracks long enough to enter the pooled autocorrelation")
-
-    reporter.table(
-        "Acceptance", ["criterion", "threshold", "observed", "verdict"],
-        [["lambda_rate correlation", f">= {ACCEPTANCE['lambda_corr']}",
-          f"{summary['corr']:.4f}", "PASS" if summary["passes"]["corr"] else "FAIL"],
-         ["lambda_rate MAE (dex)", f"<= {ACCEPTANCE['lambda_mae_dex']}",
-          f"{summary['mae_dex']:.4f}", "PASS" if summary["passes"]["mae"] else "FAIL"],
-         ["multiplicity systematic (dex)", "-- (reported, not thresholded)",
-          f"{summary['multiplicity_typical_dex']} typical, "
-          f"{summary['multiplicity_worst_dex']} worst", "informational"]],
-        note="The systematic is the price of a model arm that needs no value of mu_pc or "
-             "sigma_pc. Modeling the dye multiplicity would remove it, at the cost of making "
-             "this estimator depend on a parameter that is itself under inference.")
+    if not args.selftest:
+        reporter.stat("estimates at a grid edge", n_edge,
+                      note="grid minimum at lambda 1 or 14: unrefined and possibly outside the grid")
+        reporter.stat("interior estimates left unrefined", n_unrefined,
+                      note="the bracketing parabola did not curve upward or its vertex fell outside the bracket")
 
     np.savez_compressed(os.path.join(out_dir, "direct_flicker_rate.npz"),
-                        truth=truth, estimate=estimate, n_traces=n_traces)
+                        truth=truth, estimate=estimate, n_traces=n_traces, theta=theta_all,
+                        valid=valid, reasons=np.asarray([r or "" for r in reasons]),
+                        range_low=low, range_high=high)
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
-        json.dump(summary, fh, indent=2, default=float)
+        json.dump(dict(acceptance=ACCEPTANCE, evaluation=result), fh, indent=2, default=float)
 
     reporter.summary()
     path = reporter.write_report()
     print(f"\n[{STAGE}] report -> {path}")
-    failed = [k for k, v in summary["passes"].items() if not v]
-    if failed:
-        print(f"[{STAGE}] ACCEPTANCE NOT MET: {', '.join(failed)}")
-        return 1
-    return 0
+    print(f"[{STAGE}] verdicts: " + "; ".join(f"{k}: {v}" for k, v in result["verdicts"].items()))
+    return int(result["exit_code"])
 
 
 if __name__ == "__main__":

@@ -37,6 +37,11 @@ What it measures, and why those estimators
         track first reduces the per-fit noise by the square root of the track length and
         demotes the errors-in-variables correction from dominant term to perturbation.
 
+Acceptance is governed by DETECTOR_WORKFLOW.md sec. 9.6 (frozen 2026-09-21): evidence adequacy,
+operational success, accuracy overall AND in the operating subgroup, and coverage of the nominal
+90 % ranges, evaluated in that order by the shared `direct_acceptance` kernel. The accuracy
+thresholds below are that rule's step 4a.
+
 Prespecified acceptance (fixed before the first run; see ACCEPTANCE below)
 
     mu_r       mean absolute log10 error <= 0.02 dex AND |mean signed error| <= 0.01 dex
@@ -72,6 +77,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -82,6 +88,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_imaging_estimates as die  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
@@ -138,19 +145,25 @@ def estimate_one(video_levels, scope: dict, *, frame_stride: int, min_track_leng
         half_px: fit patch half-width.
 
     Returns:
-        ``dict`` with ``mu_r``, ``sigma_r``, ``sigma_r_raw``, ``n_tracks``, ``n_spots``.
+        ``dict`` with ``mu_r``, ``sigma_r``, ``sigma_r_raw``, ``log_mean_se`` (standard error of
+        ``ln mu_r``), ``sigma_r_se``, ``n_tracks``, ``n_spots``, and ``reason`` -- ``None`` for a
+        valid estimate, else the code for why none was produced (``no_spots``,
+        ``too_few_tracks``).
     """
     m = die.measure_spot_widths(video_levels, scope, frame_stride=frame_stride,
                                 n_sigma=n_sigma, half_px=half_px)
     if m["sqrt2sigma"].size == 0:
-        return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan,
-                    n_tracks=0, n_spots=0)
+        return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan, log_mean_se=np.nan,
+                    sigma_r_se=np.nan, n_tracks=0, n_spots=0, reason="no_spots")
     tid = die.link_spot_tracks(m["frame_index"], m["x"], m["y"],
                                frame_stride=frame_stride)
     r = die.psf_width_population(m["sqrt2sigma"], m["sqrt2sigma_se"],
                                  track_id=tid, min_track_length=min_track_length)
+    valid = bool(np.isfinite(r["mu_r"]) and np.isfinite(r["sigma_r"]))
     return dict(mu_r=r["mu_r"], sigma_r=r["sigma_r"], sigma_r_raw=r["sigma_r_raw"],
-                n_tracks=int(r.get("n_tracks", 0)), n_spots=int(m["sqrt2sigma"].size))
+                log_mean_se=r["log_mean_se"], sigma_r_se=r["sigma_r_se"],
+                n_tracks=int(r.get("n_tracks", 0)), n_spots=int(m["sqrt2sigma"].size),
+                reason=None if valid else "too_few_tracks")
 
 
 # -- worker-side lazy handle, so a pool process opens each store once ----------------------
@@ -207,11 +220,12 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
                           0.02 * box, 0.98 * box)
         return poses, np.tile(np.arange(n_subunits)[None, :], (n_frames, 1))
 
-    truths, ests = [], []
+    truths, ests, ses, reasons, thetas = [], [], [], [], []
     for i, (mu_r, sigma_r) in enumerate(grid):
         img = {e["KEY"]: 10 ** (0.5 * (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]))
                for e in det.DETECTOR_IMAGING}
         img.update(mu_r=mu_r, sigma_r=sigma_r, prob_photo_bleach=1e-12)
+        thetas.append([img[k] for k in det.DETECTOR_FIND])
         vec = np.array([img[k] for k in det.DETECTOR_IMAGING_KEYS])
         poses, host = scene(SELFTEST_SEED + i)
         frames = render_dli_video(poses, host, np.ones(n_subunits, dtype=np.int64), vec,
@@ -222,77 +236,21 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
                          half_px=half_px)
         truths.append((mu_r, sigma_r))
         ests.append((r["mu_r"], r["sigma_r"]))
+        ses.append((r["log_mean_se"], r["sigma_r_se"]))
+        reasons.append(r["reason"])
         print(f"  [{i + 1}/{len(grid)}] mu_r {mu_r:.3f} -> {r['mu_r']:.4f}   "
               f"sigma_r {sigma_r:.3f} -> {r['sigma_r']:.4f}   "
               f"({r['n_tracks']} tracks, {r['n_spots']} spot-frames)", flush=True)
 
     truths = np.asarray(truths, dtype=float)
     ests = np.asarray(ests, dtype=float)
-    return dict(truth=truths, estimate=ests, grid=grid)
+    return dict(truth=truths, estimate=ests, se=np.asarray(ses, dtype=float), reasons=reasons,
+                theta=np.asarray(thetas, dtype=float), grid=grid)
 
 
 # ==========================================================================================
 # Scoring against the prespecified acceptance
 # ==========================================================================================
-
-def score(truth: np.ndarray, estimate: np.ndarray, reporter: DiagnosticReporter) -> dict:
-    """Score estimates against truth and record every acceptance decision."""
-    ok = np.isfinite(estimate).all(axis=1) & np.isfinite(truth).all(axis=1)
-    n_drop = int((~ok).sum())
-    t, e = truth[ok], estimate[ok]
-
-    mu_err = np.log10(e[:, 0]) - np.log10(t[:, 0])
-    mu_mae, mu_bias = float(np.abs(mu_err).mean()), float(mu_err.mean())
-
-    sg_err = e[:, 1] - t[:, 1]
-    sg_mae, sg_bias = float(np.abs(sg_err).mean()), float(sg_err.mean())
-    sg_corr = (float(np.corrcoef(t[:, 1], e[:, 1])[0, 1])
-               if t.shape[0] > 2 and np.std(t[:, 1]) > 0 else float("nan"))
-    mu_corr = (float(np.corrcoef(np.log10(t[:, 0]), np.log10(e[:, 0]))[0, 1])
-               if t.shape[0] > 2 and np.std(t[:, 0]) > 0 else float("nan"))
-
-    reporter.stat("videos scored", int(ok.sum()),
-                  note="estimates that produced a finite (mu_r, sigma_r)")
-    reporter.stat("videos dropped", n_drop,
-                  note="too few linked tracks to estimate a population")
-
-    reporter.stat("mu_r MAE (dex)", mu_mae, expected=f"<= {ACCEPTANCE['mu_r_mae_dex']}",
-                  note="mean absolute log10 error; 0.02 dex is 6.7% of the mu_r prior width")
-    reporter.stat("mu_r bias (dex)", mu_bias, expected=f"|.| <= {ACCEPTANCE['mu_r_abs_bias_dex']}",
-                  note="mean signed log10 error; positive means the estimate runs high")
-    reporter.stat("mu_r correlation", mu_corr, note="Pearson r of log10 estimate against log10 truth")
-    reporter.stat("sigma_r MAE", sg_mae, expected=f"<= {ACCEPTANCE['sigma_r_mae']}",
-                  note="mean absolute error in linear units (sigma_r is itself a spread)")
-    reporter.stat("sigma_r bias", sg_bias, note="mean signed error; positive means the spread runs high")
-    reporter.stat("sigma_r correlation", sg_corr, expected=f">= {ACCEPTANCE['sigma_r_corr']}",
-                  note="Pearson r against truth; does the estimate track the parameter at all")
-
-    passes = {
-        "mu_r_mae": reporter.check(
-            "mu_r MAE within acceptance", mu_mae <= ACCEPTANCE["mu_r_mae_dex"],
-            f"{mu_mae:.4f} dex vs <= {ACCEPTANCE['mu_r_mae_dex']}", fatal=False,
-            note="Accuracy of the median PSF width, against the threshold fixed before the run."),
-        "mu_r_bias": reporter.check(
-            "mu_r bias within acceptance", abs(mu_bias) <= ACCEPTANCE["mu_r_abs_bias_dex"],
-            f"{mu_bias:+.4f} dex vs |.| <= {ACCEPTANCE['mu_r_abs_bias_dex']}", fatal=False,
-            note="A systematic offset would propagate into every downstream use, so it is "
-                 "held to a tighter bound than the scatter."),
-        "sigma_r_corr": reporter.check(
-            "sigma_r correlation within acceptance",
-            bool(np.isfinite(sg_corr) and sg_corr >= ACCEPTANCE["sigma_r_corr"]),
-            f"{sg_corr:.4f} vs >= {ACCEPTANCE['sigma_r_corr']}", fatal=False,
-            note="Whether the estimate tracks the true spread at all; a low correlation means "
-                 "the quantity is not being measured, whatever its mean error."),
-        "sigma_r_mae": reporter.check(
-            "sigma_r MAE within acceptance", sg_mae <= ACCEPTANCE["sigma_r_mae"],
-            f"{sg_mae:.4f} vs <= {ACCEPTANCE['sigma_r_mae']}", fatal=False,
-            note="Accuracy of the emitter-to-emitter PSF variability."),
-    }
-    return dict(mu_r_mae_dex=mu_mae, mu_r_bias_dex=mu_bias, mu_r_corr=mu_corr,
-                sigma_r_mae=sg_mae, sigma_r_bias=sg_bias, sigma_r_corr=sg_corr,
-                n_scored=int(ok.sum()), n_dropped=n_drop,
-                acceptance=ACCEPTANCE, passes={k: bool(v) for k, v in passes.items()})
-
 
 def make_figure(truth, estimate, out_name, reporter):
     """Truth-versus-estimate scatter for both parameters."""
@@ -439,7 +397,8 @@ def main(argv=None):
                             frames=args.selftest_frames, scenes=9)
         res = run_selftest(reporter, n_subunits=args.selftest_subunits,
                            n_frames=args.selftest_frames, **opts)
-        truth, estimate = res["truth"], res["estimate"]
+        truth, estimate, se, reasons, theta_all = (res["truth"], res["estimate"], res["se"],
+                                                   res["reasons"], res["theta"])
         per_video = dict(n_tracks=np.array([]), n_spots=np.array([]))
     else:
         truth_rows, jobs = [], []
@@ -462,19 +421,30 @@ def main(argv=None):
                 scope_row = {k: float(scope_arr[i, j])
                              for j, k in enumerate(det.DETECTOR_SCOPE_KEYS)}
                 jobs.append((str(vpath), i, scope_row, opts))
-                truth_rows.append((theta[i, det.DETECTOR_FIND["mu_r"]],
-                                   theta[i, det.DETECTOR_FIND["sigma_r"]]))
+                truth_rows.append(theta[i, :len(det.DETECTOR_FIND)])
             if len(jobs) >= args.max_videos:
                 break
 
         reporter.stat("videos queued", len(jobs), note="videos the estimator will read")
         if args.workers and args.workers > 1:
+            # Ordered map (results stay aligned with truth_rows) with a progress line every ~5 %.
+            out = []
+            every = max(1, len(jobs) // 20)
+            t0 = time.time()
             with ProcessPoolExecutor(max_workers=args.workers) as pool:
-                out = list(pool.map(_worker, jobs, chunksize=1))
+                for i, o in enumerate(pool.map(_worker, jobs, chunksize=1), 1):
+                    out.append(o)
+                    if i % every == 0 or i == len(jobs):
+                        el = time.time() - t0
+                        print(f"  [progress] {i}/{len(jobs)} recordings  elapsed {el/60:.1f} min  "
+                              f"ETA {el/i*(len(jobs)-i)/60:.1f} min", flush=True)
         else:
             out = [_worker(j) for j in jobs]
-        truth = np.asarray(truth_rows, dtype=float)
+        theta_all = np.asarray(truth_rows, dtype=float)          # PHYSICAL units, all six columns
+        truth = theta_all[:, [det.DETECTOR_FIND["mu_r"], det.DETECTOR_FIND["sigma_r"]]]
         estimate = np.asarray([[o["mu_r"], o["sigma_r"]] for o in out], dtype=float)
+        se = np.asarray([[o["log_mean_se"], o["sigma_r_se"]] for o in out], dtype=float)
+        reasons = [o["reason"] for o in out]
         per_video = dict(n_tracks=np.array([o["n_tracks"] for o in out]),
                          n_spots=np.array([o["n_spots"] for o in out]))
 
@@ -486,42 +456,69 @@ def main(argv=None):
                    f"{truth.shape[0]} truths against {estimate.shape[0]} estimates", fatal=False,
                    note="A mismatch would mean the worker pool dropped or reordered results, "
                         "which would silently pair each estimate with the wrong ground truth.")
-    summary = score(truth, estimate, reporter)
+    # ---- the frozen rules of DETECTOR_WORKFLOW.md sec. 9.6, evaluated by the shared kernel ----
+    valid = np.isfinite(estimate).all(axis=1) & np.isfinite(truth).all(axis=1)
+
+    def accuracy(mask):
+        tm, em = truth[mask], estimate[mask]
+        mu_err = np.log10(em[:, 0]) - np.log10(tm[:, 0])
+        sg_err = em[:, 1] - tm[:, 1]
+        sg_corr = (float(np.corrcoef(tm[:, 1], em[:, 1])[0, 1])
+                   if tm.shape[0] > 2 and np.std(tm[:, 1]) > 0 and np.std(em[:, 1]) > 0 else None)
+        mu_mae, mu_bias = float(np.abs(mu_err).mean()), float(mu_err.mean())
+        sg_mae = float(np.abs(sg_err).mean())
+        return {
+            "mu_r MAE (dex)": (mu_mae, f"<= {ACCEPTANCE['mu_r_mae_dex']}", mu_mae <= ACCEPTANCE["mu_r_mae_dex"]),
+            "mu_r |bias| (dex)": (abs(mu_bias), f"<= {ACCEPTANCE['mu_r_abs_bias_dex']}",
+                                  abs(mu_bias) <= ACCEPTANCE["mu_r_abs_bias_dex"]),
+            "sigma_r corr (linear)": (sg_corr if sg_corr is not None else float("nan"),
+                                      f">= {ACCEPTANCE['sigma_r_corr']}",
+                                      None if sg_corr is None else sg_corr >= ACCEPTANCE["sigma_r_corr"]),
+            "sigma_r MAE (linear)": (sg_mae, f"<= {ACCEPTANCE['sigma_r_mae']}", sg_mae <= ACCEPTANCE["sigma_r_mae"]),
+            "sigma_r bias (linear, reported)": (float(sg_err.mean()), "--", True),
+        }
+
+    # Nominal 90 % ranges, constructed as the companion note specifies: mu_r from the standard
+    # error of the mean log width (normal, in log10); sigma_r from its own delta-method standard
+    # error (normal, linear, floored at zero). Coverage against the truth is what validates them.
+    z = 1.6448536269514722
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mu_c, mu_se10 = np.log10(estimate[:, 0]), se[:, 0] / np.log(10.0)
+        mu_lo, mu_hi = mu_c - z * mu_se10, mu_c + z * mu_se10
+        sg_lo, sg_hi = np.maximum(estimate[:, 1] - z * se[:, 1], 0.0), estimate[:, 1] + z * se[:, 1]
+        mu_cov = (np.log10(truth[:, 0]) >= mu_lo) & (np.log10(truth[:, 0]) <= mu_hi)
+        sg_cov = (truth[:, 1] >= sg_lo) & (truth[:, 1] <= sg_hi)
+    lo_r, hi_r = da.prior_range("mu_r")
+    lo_s, hi_s = da.prior_range("sigma_r")
+    ranges = {"mu_r (log10)": (mu_cov, mu_hi - mu_lo, hi_r - lo_r),
+              "sigma_r (linear)": (sg_cov, sg_hi - sg_lo, 10 ** hi_s - 10 ** lo_s)}
+
+    result = da.evaluate(theta_all, valid, reasons, accuracy, target_key="mu_r",
+                         ranges=ranges, selftest=bool(args.selftest))
+    da.render(reporter, result, estimator=STAGE, target_key="mu_r")
     if per_video["n_tracks"].size:
         reporter.stat("median tracks per video", float(np.median(per_video["n_tracks"])),
                       note="linked spot tracks entering the population estimate")
         reporter.stat("median spot-frames per video", float(np.median(per_video["n_spots"])),
                       note="individual spot fits before linking")
 
-    reporter.table(
-        "Acceptance", ["criterion", "threshold", "observed", "verdict"],
-        [["mu_r MAE (dex)", f"<= {ACCEPTANCE['mu_r_mae_dex']}",
-          f"{summary['mu_r_mae_dex']:.4f}", "PASS" if summary["passes"]["mu_r_mae"] else "FAIL"],
-         ["mu_r |bias| (dex)", f"<= {ACCEPTANCE['mu_r_abs_bias_dex']}",
-          f"{abs(summary['mu_r_bias_dex']):.4f}", "PASS" if summary["passes"]["mu_r_bias"] else "FAIL"],
-         ["sigma_r correlation", f">= {ACCEPTANCE['sigma_r_corr']}",
-          f"{summary['sigma_r_corr']:.4f}", "PASS" if summary["passes"]["sigma_r_corr"] else "FAIL"],
-         ["sigma_r MAE", f"<= {ACCEPTANCE['sigma_r_mae']}",
-          f"{summary['sigma_r_mae']:.4f}", "PASS" if summary["passes"]["sigma_r_mae"] else "FAIL"]],
-        note="Thresholds were fixed before the run; see the module docstring for their basis.")
-
     make_figure(truth, estimate, "direct_psf_width_truth_vs_estimate", reporter)
 
     np.savez_compressed(os.path.join(out_dir, "direct_psf_width.npz"),
-                        truth=truth, estimate=estimate, **per_video)
+                        truth=truth, estimate=estimate, theta=theta_all, valid=valid,
+                        reasons=np.asarray([r or "" for r in reasons]), se=se,
+                        range_mu_r_log10=np.column_stack([mu_lo, mu_hi]),
+                        range_sigma_r=np.column_stack([sg_lo, sg_hi]), **per_video)
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
-        json.dump({k: v for k, v in summary.items()}, fh, indent=2, default=float)
+        json.dump(dict(acceptance=ACCEPTANCE, evaluation=result), fh, indent=2, default=float)
 
     reporter.summary()
     path = reporter.write_report()
     print(f"\n[{STAGE}] report -> {path}")
-    # These scripts answer a binary gating question, so a failed acceptance must be visible to
-    # a caller that reads the exit status, not only to a reader of report.md.
-    failed = [k for k, v in summary["passes"].items() if not v]
-    if failed:
-        print(f"[{STAGE}] ACCEPTANCE NOT MET: {', '.join(failed)}")
-        return 1
-    return 0
+    # The verdicts of sec. 9.6 must reach a caller that reads the exit status, not only a reader
+    # of report.md: 0 = nothing failed, 1 = a FAIL verdict, 2 = insufficient evidence only.
+    print(f"[{STAGE}] verdicts: " + "; ".join(f"{k}: {v}" for k, v in result["verdicts"].items()))
+    return int(result["exit_code"])
 
 
 if __name__ == "__main__":

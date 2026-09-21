@@ -679,7 +679,7 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
     ok &= (se / np.maximum(w, 1e-12)) <= float(max_relative_se)
     w, se = w[ok], se[ok]
     if w.size < 8:
-        return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan,
+        return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan, sigma_r_se=np.nan,
                     noise_variance=np.nan, n=int(w.size), log_mean_se=np.nan)
 
     log_w = np.log(w)
@@ -696,7 +696,7 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
         swx = np.bincount(inv, weights=wt * log_w)
         keep = counts >= int(min_track_length)
         if keep.sum() < 8:
-            return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan,
+            return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan, sigma_r_se=np.nan,
                         noise_variance=np.nan, n=int(keep.sum()),
                         n_tracks=int(keep.sum()), log_mean_se=np.nan)
         log_w = (swx / sw)[keep]
@@ -723,12 +723,25 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
     var_noise = float(np.mean(log_se ** 2))
     sigma_r = float(np.sqrt(max(var_raw - var_noise, 0.0)))
 
+    # Standard error of sigma_r by the delta method on the sample variance: var(s^2) is about
+    # 2 (sigma_r^2 + v)^2 / (n - 1) for a roughly normal sample, and d(sigma_r)/d(s^2) is
+    # 1 / (2 sigma_r), so se(sigma_r) = (sigma_r^2 + v) / (sigma_r sqrt(2 (n - 1))). This is the
+    # same expression as the information budget's population bound, evaluated at the estimate;
+    # it is a sampling error for the summary, not an allowance for detection or linking defects,
+    # which the coverage measurement of DETECTOR_WORKFLOW.md sec. 9.6 is there to expose.
+    n_units = int(log_w.size)
+    if sigma_r > 0 and n_units > 2:
+        sigma_r_se = float(var_raw / (sigma_r * np.sqrt(2.0 * (n_units - 1))))
+    else:
+        sigma_r_se = float("nan")
+
     return dict(
         mu_r=float(np.exp(np.mean(log_w))),
         sigma_r=sigma_r,
         sigma_r_raw=float(np.sqrt(var_raw)),   # trim-corrected, BEFORE the noise subtraction
+        sigma_r_se=sigma_r_se,
         noise_variance=var_noise,
-        n=int(log_w.size),
+        n=n_units,
         n_tracks=n_tracks,
         log_mean_se=float(np.sqrt(var_raw / log_w.size)),
     )
@@ -853,30 +866,46 @@ def fit_fluorescence_loss(flux: np.ndarray, *, numb_photo_bleach: int = 100,
 
     Returns:
         ``dict`` with ``prob_photo_bleach``, ``prob_se``, ``amplitude``, ``offset``,
-        ``rate_per_frame``, ``n_eff``, and ``success``.
+        ``rate_per_frame``, ``n_eff``, ``success``, ``resid_sd`` (standard deviation of the fit
+        residuals, the scale the decay's visibility is judged against), and ``n_frames``.
     """
     y = np.asarray(flux, dtype=np.float64)
     n = y.size
     t = np.arange(n, dtype=np.float64)
     if n < 20 or not np.all(np.isfinite(y)):
         return dict(prob_photo_bleach=np.nan, prob_se=np.nan, amplitude=np.nan,
-                    offset=np.nan, rate_per_frame=np.nan, n_eff=np.nan, success=False)
+                    offset=np.nan, rate_per_frame=np.nan, n_eff=np.nan, success=False,
+                    resid_sd=np.nan, n_frames=int(n))
 
     npb = int(numb_photo_bleach)
-    a0 = float(max(y[:max(n // 10, 1)].mean(), 1.0))
-    b0 = float(np.median(y[-max(n // 10, 1):]))
+    k = max(n // 10, 1)
+    b0 = float(np.median(y[-k:]))
+    # The amplitude is the total DROP over the recording, not the opening level: the curve is
+    # a frame total minus a constant background estimate, so its absolute level is arbitrary
+    # and can be far below zero. Started from the opening level with a slow rate, the optimizer
+    # collapsed a fast decay (p = 0.316) to a flat line -- amplitude 9.5 on an offset of
+    # -900,000 -- and reported success. A multi-start over the rate, keeping the lowest cost,
+    # removes that dependence on the guess.
+    a0 = float(max(y[:k].mean() - b0, 1.0))
 
     def residual(p):
         amp, rate, off = p
         return amp * np.exp(-rate * t) + off - y
 
-    try:
-        fit = least_squares(residual, x0=[a0, 1e-3, b0],
-                            bounds=([0.0, 0.0, -np.inf], [np.inf, 1.0, np.inf]),
-                            x_scale=[max(a0, 1.0), 1e-3, max(abs(b0), 1.0)], max_nfev=400)
-    except Exception:
+    fit = None
+    for r0 in (3e-4, 1e-3, 3e-3, 1e-2, 3e-2):
+        try:
+            cand = least_squares(residual, x0=[a0, r0, b0],
+                                 bounds=([0.0, 0.0, -np.inf], [np.inf, 1.0, np.inf]),
+                                 x_scale=[max(a0, 1.0), r0, max(abs(b0), 1.0)], max_nfev=400)
+        except Exception:
+            continue
+        if fit is None or cand.cost < fit.cost:
+            fit = cand
+    if fit is None:
         return dict(prob_photo_bleach=np.nan, prob_se=np.nan, amplitude=np.nan,
-                    offset=np.nan, rate_per_frame=np.nan, n_eff=np.nan, success=False)
+                    offset=np.nan, rate_per_frame=np.nan, n_eff=np.nan, success=False,
+                    resid_sd=np.nan, n_frames=int(n))
 
     amp, rate, off = float(fit.x[0]), float(fit.x[1]), float(fit.x[2])
     prob = float(1.0 - np.exp(-npb * rate))
@@ -885,9 +914,10 @@ def fit_fluorescence_loss(flux: np.ndarray, *, numb_photo_bleach: int = 100,
     # when the flicker rate is known, by the loss of independent samples.
     prob_se = np.nan
     n_eff = float(n)
+    dof = max(n - 3, 1)
+    resid_sd = float(np.sqrt(2.0 * fit.cost / dof))
     try:
-        dof = max(n - 3, 1)
-        s2 = float(2.0 * fit.cost / dof)
+        s2 = resid_sd ** 2
         cov = np.linalg.inv(fit.jac.T @ fit.jac) * s2
         rate_se = float(np.sqrt(max(cov[1, 1], 0.0)))
         if lambda_rate is not None:
@@ -899,7 +929,8 @@ def fit_fluorescence_loss(flux: np.ndarray, *, numb_photo_bleach: int = 100,
         pass
 
     return dict(prob_photo_bleach=prob, prob_se=prob_se, amplitude=amp, offset=off,
-                rate_per_frame=rate, n_eff=n_eff, success=bool(fit.success))
+                rate_per_frame=rate, n_eff=n_eff, success=bool(fit.success),
+                resid_sd=resid_sd, n_frames=int(n))
 
 
 def frame_flux_curve(video_levels: np.ndarray, *, background_quantile: float = 0.5) -> dict:
@@ -1149,44 +1180,106 @@ def flicker_model_shape(lambda_rate: float, spans: np.ndarray, *,
     return _acf_shape(csum, cnt)
 
 
+FLICKER_GRID_DEFAULT = np.array([1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 14.0])
+
+
+def flicker_model_shapes(spans: np.ndarray, *, grid: Optional[np.ndarray] = None,
+                         frame_time_seconds: float = 0.02, n_traces: int = 4000) -> Tuple[np.ndarray, list]:
+    """The model-arm shapes for every grid point, computed once per recording.
+
+    They depend on the recording only through its span distribution, so a bootstrap over the
+    recording's traces can reuse them; recomputing them is the dominant cost of the estimator.
+    """
+    grid = FLICKER_GRID_DEFAULT if grid is None else np.asarray(grid, dtype=float)
+    shapes = [flicker_model_shape(lam, spans, n_traces=n_traces,
+                                  frame_time_seconds=frame_time_seconds) for lam in grid]
+    return grid, shapes
+
+
+def match_shapes(data_shape: np.ndarray, grid: np.ndarray, shapes: list) -> dict:
+    """Grid search plus an exact parabolic refinement in log-lambda on the real grid coordinates.
+
+    The refinement fits the parabola through the three bracketing ``(log lambda, residual)``
+    points in their actual coordinates. The grid is uneven in log-lambda, so the classical
+    equal-spacing formula does not apply: it returned 4.3506 for a quadratic objective whose
+    minimum was at 4.3. Two checks guard the refinement -- the parabola must curve upward and
+    its vertex must fall inside the bracketing interval -- and when either fails the grid
+    minimum is returned unrefined, with ``refined=False``.
+    """
+    k = min(_ACF_FIT_LAGS, data_shape.size, min(s.size for s in shapes))
+    l2 = np.array([float(np.sum((s[:k] - data_shape[:k]) ** 2)) for s in shapes])
+    i = int(np.argmin(l2))
+    ll = np.log(np.asarray(grid, dtype=float))
+    lam, refined = float(grid[i]), False
+    if 0 < i < len(grid) - 1:
+        x, y = ll[i - 1:i + 2], l2[i - 1:i + 2]
+        a2, a1, _ = np.polyfit(x, y, 2)
+        if a2 > 0:
+            vertex = -a1 / (2.0 * a2)
+            if x[0] <= vertex <= x[2]:
+                lam, refined = float(np.exp(vertex)), True
+    return dict(lambda_rate=lam, lambda_grid_best=float(grid[i]), residual=float(l2[i]),
+                refined=refined, at_grid_edge=bool(i == 0 or i == len(grid) - 1))
+
+
 def match_flicker_rate(data_shape: np.ndarray, spans: np.ndarray, *,
                        grid: Optional[np.ndarray] = None,
                        frame_time_seconds: float = 0.02,
                        n_traces: int = 4000) -> dict:
     """Recover ``lambda_rate`` by matching the early shape against the model arm.
 
-    Sum of squares over the first ``_ACF_FIT_LAGS`` lags, then a parabolic refinement in
-    log-lambda between the bracketing grid points, exactly as the derivation of record does.
+    Sum of squares over the first ``_ACF_FIT_LAGS`` lags, then the exact parabolic refinement
+    of `match_shapes` in log-lambda between the bracketing grid points.
 
     Returns:
-        ``dict`` with ``lambda_rate``, ``lambda_grid_best``, ``residual``, and
-        ``tau_seconds`` (from the data shape's 1/e crossing, as a cross-check).
+        ``dict`` with ``lambda_rate``, ``lambda_grid_best``, ``residual``, ``refined``,
+        ``at_grid_edge``, and ``tau_seconds`` (from the data shape's 1/e crossing, as a
+        cross-check).
     """
     if data_shape is None:
         return dict(lambda_rate=np.nan, lambda_grid_best=np.nan, residual=np.nan,
-                    tau_seconds=np.nan)
-    if grid is None:
-        grid = np.array([1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 14.0])
-    grid = np.asarray(grid, dtype=float)
-    ll = np.log(grid)
-
-    shapes = [flicker_model_shape(lam, spans, n_traces=n_traces,
-                                  frame_time_seconds=frame_time_seconds) for lam in grid]
-    k = min(_ACF_FIT_LAGS, data_shape.size, min(s.size for s in shapes))
-    l2 = np.array([float(np.sum((s[:k] - data_shape[:k]) ** 2)) for s in shapes])
-    i = int(np.argmin(l2))
-
-    lam = float(grid[i])
-    if 0 < i < grid.size - 1:
-        a, b, c = l2[i - 1], l2[i], l2[i + 1]
-        denom = a - 2.0 * b + c
-        off = 0.5 * (a - c) / denom if denom != 0 else 0.0
-        lam = float(np.exp(ll[i] + off * (ll[i + 1] - ll[i])))
-
+                    refined=False, at_grid_edge=False, tau_seconds=np.nan)
+    grid, shapes = flicker_model_shapes(spans, grid=grid, frame_time_seconds=frame_time_seconds,
+                                        n_traces=n_traces)
+    out = match_shapes(data_shape, grid, shapes)
     tau_lag = _one_over_e_lag(data_shape)
-    return dict(lambda_rate=lam, lambda_grid_best=float(grid[i]), residual=float(l2[i]),
-                tau_seconds=float(tau_lag * frame_time_seconds) if np.isfinite(tau_lag)
-                else float("nan"))
+    out["tau_seconds"] = (float(tau_lag * frame_time_seconds) if np.isfinite(tau_lag)
+                          else float("nan"))
+    return out
+
+
+def flicker_bootstrap_range(traces: list, grid: np.ndarray, shapes: list, *,
+                            n_boot: int = 40, seed: int = 0,
+                            quantiles: Tuple[float, float] = (0.05, 0.95)) -> dict:
+    """Per-recording nominal 90 % range of ``lambda_rate`` by bootstrapping the traces.
+
+    Traces are resampled with replacement, the pooled data shape is recomputed for each
+    resample, and each is matched against the SAME model shapes (which depend on the span
+    distribution, left at the original recording's). The range therefore carries the
+    trace-to-trace scatter of the measurement -- detection, photometry, linking and gaps
+    included, since those are what shaped the traces -- but not the single-dye model
+    approximation, the detrending approximation, or the fixed-span approximation; those are
+    what the coverage measurement of DETECTOR_WORKFLOW.md sec. 9.6 tests.
+
+    Returns ``dict`` with ``low``, ``high`` (in lambda units), ``n_boot_valid`` and the
+    bootstrap ``sd_log10``.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(traces)
+    vals = []
+    if n >= 5:
+        for _ in range(int(n_boot)):
+            idx = rng.integers(0, n, n)
+            shape, _ = flicker_data_shape([traces[j] for j in idx])
+            if shape is None:
+                continue
+            vals.append(match_shapes(shape, grid, shapes)["lambda_rate"])
+    vals = np.asarray([v for v in vals if np.isfinite(v) and v > 0], dtype=float)
+    if vals.size < max(8, n_boot // 4):
+        return dict(low=np.nan, high=np.nan, n_boot_valid=int(vals.size), sd_log10=np.nan)
+    lo, hi = np.quantile(vals, quantiles)
+    return dict(low=float(lo), high=float(hi), n_boot_valid=int(vals.size),
+                sd_log10=float(np.std(np.log10(vals), ddof=1)))
 
 
 def flicker_multiplicity_band(lambda_rate: float) -> Tuple[float, float]:

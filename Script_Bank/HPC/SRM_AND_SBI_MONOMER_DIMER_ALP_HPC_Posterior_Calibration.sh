@@ -20,6 +20,8 @@
 # POSTERIOR_SAMPLES (L per video), TESTS (comma-list; NOTE: commas break --export, so pass
 # it only via a quoted --export or leave the all-four default), STRATIFY (all|none|KEY),
 # MAX_SIMS (cap videos/task; 0 = all), POOL_MODE (bounded|unrestricted), TOTAL_TIME,
+# ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256, appended to the timing label of the
+# estimator it loads and of the calibration products -- Paths.product_label; unset = canonical),
 # MIN_STRATUM, LC2ST_N_EVAL, LC2ST_NULL_TRIALS, N_JOBS (stratum-loop worker processes;
 # default auto = largest power of two up to 16 fitting the allocated cores -- note the
 # statistics run in the SINGLE-PROCESS merge step, so this, not the GPU count, sets how
@@ -107,11 +109,12 @@ CAL_ARGS=( --condition "$CONDITION" --total-time-seconds "$TOTAL_TIME" --eval-ta
            --posterior-samples "$POSTERIOR_SAMPLES" --tests "$TESTS" --stratify "$STRATIFY" )
 [ "${MAX_SIMS:-0}" -gt 0 ] && CAL_ARGS+=( --max-sims "$MAX_SIMS" )
 [ -n "${MIN_STRATUM:-}" ] && CAL_ARGS+=( --min-stratum "$MIN_STRATUM" )
+[ -n "${ARTIFACT_TAG:-}" ] && CAL_ARGS+=( --artifact-tag "$ARTIFACT_TAG" )   # tagged estimator + tagged products
 [ -n "${N_JOBS:-}" ] && CAL_ARGS+=( --n-jobs "$N_JOBS" )
 [ -n "${LC2ST_N_EVAL:-}" ] && CAL_ARGS+=( --lc2st-n-eval "$LC2ST_N_EVAL" )
 [ -n "${LC2ST_NULL_TRIALS:-}" ] && CAL_ARGS+=( --lc2st-null-trials "$LC2ST_NULL_TRIALS" )
 
-echo "=== Posterior Calibration | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} L=${POSTERIOR_SAMPLES} tests=${TESTS} stratify=${STRATIFY} pool=${POOL_MODE} time=${TOTAL_TIME}s max_sims=${MAX_SIMS} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Posterior Calibration | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} L=${POSTERIOR_SAMPLES} tests=${TESTS} stratify=${STRATIFY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} max_sims=${MAX_SIMS} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain

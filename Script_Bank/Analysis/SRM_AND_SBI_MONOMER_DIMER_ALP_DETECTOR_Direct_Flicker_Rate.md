@@ -100,27 +100,34 @@ intended operating conditions: the estimator has not been validated on multiple-
 spanning brightness, multiplicity, bleaching, and track length, and until it is, its result on
 experimental recordings is a cross-check, not an arbiter (`DETECTOR_WORKFLOW.md` §6.11).
 
-On four 6 s scenes spanning the prior, the estimator passed both criteria — correlation 0.9975
-against the 0.80 threshold, mean absolute error 0.0637 dex against 0.08 — with these points:
+On four 6 s scenes spanning the prior, the estimator passed both criteria — correlation 0.9997
+against the 0.80 threshold, mean absolute error 0.0596 dex against 0.08 — with these points
+(re-run 2026-09-21 under the exact log-grid refinement of 0.1.13; the 2026-09-18 run under the
+equal-spacing formula gave 1.839, 3.614, 5.310, 9.173 and a mean absolute error of 0.0637 dex):
 
-| true λ | estimate | error (dex) | usable traces |
-|---|---|---|---|
-| 1.5 | 1.839 | +0.0885 | 257 |
-| 3.0 | 3.614 | +0.0808 | 292 |
-| 5.0 | 5.310 | +0.0261 | 290 |
-| 8.0 | 9.173 | +0.0594 | 294 |
+| true λ | estimate | error (dex) | bootstrap 90 % range | usable traces |
+|---|---|---|---|---|
+| 1.5 | 1.776 | +0.0734 | [1.51, 2.03] | 257 |
+| 3.0 | 3.495 | +0.0664 | [3.06, 4.16] | 292 |
+| 5.0 | 5.533 | +0.0440 | [4.96, 6.23] | 290 |
+| 8.0 | 9.069 | +0.0545 | [8.15, 10.17] | 294 |
 
-Two features are worth stating rather than leaving to be read off the table. **The error is
+Three features are worth stating rather than leaving to be read off the table. **The error is
 almost entirely systematic**: the mean absolute error and the mean signed error are the same
-number to four decimals, because every point runs fast, and the correlation of 0.9975 says the
-ordering is essentially perfect. The estimator ranks flicker rates far better than it places
+number to four decimals, because every point runs fast, and the correlation of 0.9997 says the
+ordering is essentially perfect. **The bootstrap range covers only one of the four truths**: its
+width, about 0.11 dex, is the trace-to-trace scatter of the measurement, and the systematic offset
+of about 0.06 dex is of the same size, so a range built from scatter alone sits above the truth.
+Correcting or widening it would be a tuning decision that needs a justification and a
+validation on the reserved set; until then the range is reported as it is and its coverage on
+the full-scale runs is the measurement of record. The estimator ranks flicker rates far better than it places
 them. **Dye multiplicity does not explain it** — the multiplicity band is 0.009 dex at the
-center of the `sigma_pc` prior, about a seventh of the observed offset — so the remainder is a
+center of the `sigma_pc` prior, about a sixth of the observed offset — so the remainder is a
 property of the measurement chain, most plausibly track fragmentation: a linker that splits one
 emitter into two traces decorrelates the series faster than the model arm, which assumes intact
 traces, and a faster decay reads as a higher rate.
 
-The predicted low-λ-worst pattern holds at the ends (0.0885 at the bottom against 0.0594 at the
+The predicted low-λ-worst pattern holds at the ends (0.0734 at the bottom against 0.0545 at the
 top) but not monotonically — the best point is λ=5, not λ=8. Four scenes is too few to resolve
 the shape of the bias, and nothing here licenses correcting for it; it is reported so that a
 user reads the estimate as running fast by roughly 0.06 dex rather than as scatter.
@@ -147,11 +154,83 @@ for the ten-point grid. `--dry-run` resolves settings and prints what it would r
 
 ## Result and interpretation
 
+**Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
+the accuracy step of those rules; §9.6 adds the evidence-adequacy, operational-success, operating-subgroup,
+and uncertainty-coverage requirements and the order in which they are evaluated, and defines the verdicts
+`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. The implementation of those
+steps in this utility is the 0.1.13 work in progress; until it lands, a report from this script states only
+the accuracy step.
+
 The report gives the Pearson correlation and mean absolute log10 error against the prespecified
 thresholds — correlation ≥ 0.80 and MAE ≤ 0.08 dex, the latter being 8% of the 1.0 dex prior
 width — together with the multiplicity systematic as a band. That band sits inside the threshold
 at the center of the `sigma_pc` prior and consumes most of it at the top corner, which the
 report says explicitly rather than leaving it to be inferred.
+
+## Acceptance mechanics (0.1.13)
+
+The utility evaluates the frozen rules of `DETECTOR_WORKFLOW.md` §9.6 through the shared kernel
+`srm_and_sbi_monomer_dimer_alp.direct_acceptance`, which every direct estimator uses so that a rule
+cannot drift between them. The report carries the five verdicts side by side (evidence adequacy of
+the run, operational success, evidence adequacy for accuracy, accuracy, uncertainty coverage), the
+prior-fixed quartile table, and the dropped recordings by reason code. The exit status is 0 when
+nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence. A
+`--selftest` reaches no verdict: its few scenes are reported as `SELFTEST (informational)`.
+
+**Reason codes.** Every attempted recording that returns no valid estimate carries one of the codes
+listed below; a dropped recording without a code fails the run itself. The saved arrays hold the
+full true parameter row (`theta`, physical units, six columns in the detector's order), the
+validity mask, the reason codes, and the per-recording range bounds, so any stratum can be
+recomputed from the arrays without rerunning the estimator.
+
+| reason code | meaning |
+|---|---|
+| `no_spots` | nothing detected above threshold |
+| `too_few_traces` | fewer than five intensity traces reach the minimum track length |
+| `too_few_pairs` | the pooled autocorrelation has too few lag-one pairs |
+
+**Refinement on the real grid.** The grid `[1, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 14]` is uneven in
+log-rate, so the parabolic refinement between the bracketing points is fitted on the actual
+log-grid coordinates. An equal-spacing formula used before 0.1.13 returned 4.3506 for an exactly
+quadratic objective with its minimum at 4.3; the corrected fit returns 4.3. The refinement is applied
+only when the parabola curves upward and its vertex lies inside the bracket; otherwise the grid
+minimum is kept and counted under "interior estimates left unrefined". Grid minima at 1 or 14 are
+counted as "estimates at a grid edge" and are never refined.
+
+**Range construction (validated by coverage, not assumed).** The model-arm shapes depend on the
+recording only through its span distribution, so they are computed once per recording and reused.
+The traces are then resampled with replacement (`--n-boot`, default 40), the pooled data shape is
+recomputed for each resample and matched against those same shapes, and the 5th to 95th percentile
+of the resampled rates is the nominal 90 % range. It carries the trace-to-trace scatter of the
+measurement, detection, photometry, linking and gaps included, since those shaped the traces. It
+does not carry the single-dye model approximation, the detrending approximation, or the fixed-span
+approximation, and the fixed multiplicity band of 0.009 to 0.05 dex is not an uncertainty for the
+detection-and-tracking chain either. Whether the range is nevertheless reliable is what its coverage
+against the truth, overall and in the operating subgroup, measures.
+
+## Development outcome (2026-09-21, code 2b9c32e, EVAL tasks 0-1)
+
+1909 of 2000 two-second MET-FAB recordings estimated; the 91 drops all had fewer than 29 usable traces
+and 73 % of them lie in the dimmest brightness quarter (success 95.5 % overall, 91.6 % in the operating
+subgroup, both within the rules; the drops carried no reason code, a reporting failure, `FAIL (protocol)`
+under §9.6, not a measurement failure). Correlation 0.847 meets its threshold. MAE 0.144 dex and bias
++0.110 dex fail the 0.08 dex bound; operating-subgroup bias +0.142 dex, about 39 % overestimation. The
+bias depends on the true rate (+0.26 dex near 1 per second, +0.04 dex above 5 per second) and on
+brightness (+0.16 dex dim, +0.06 dex bright). The signed errors are the evidence; within-quarter
+correlations shrink with the truth range by construction. The 6 s single-dye self-test at the prior
+center (0.06 dex) probed none of these conditions, and the exact-parabola correction accounts for about
+0.005 dex. Outputs preserved under `..._Direct_Flicker_Rate_DEV_2b9c32e` with `PROVENANCE.md` and
+`DEV_CHECK.md`.
+
+Decisions: the unchanged two-second rerun is paused. The model arm matches track spans and detrends but
+does not represent gaps, detection and linking selection, measurement noise, dye multiplicity, or
+bleaching in the observed traces; which omission drives the bias is not isolated. Next: a mismatch study
+on a small representative development subset (spanning the rate and brightness quarters), adding the
+omitted effects to the model arm one at a time and recording which closes the signed error; and a
+comparison against estimation over the full experimental recording with one rate and its uncertainty
+propagated to the windows, contingent on validating that the rate is constant over a recording at that
+duration. The comparator is the multiple-dye neural posterior estimator on the same recordings (bias, MAE,
+uncertainty, and correlation together), not the one-dye estimator.
 
 ## Essential notes
 

@@ -20,6 +20,9 @@
 #   SRM_AND_SBI_GPUS (cap the GPUs used; default = all allocated),
 #   EXIT_BARRIER (seconds; raises torch-elastic's 300 s exit barrier so straggler
 #     ranks are not killed; default 3600 -- the job wall time is the real bound).
+#   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
+#     PRODUCT of this stage and to the estimator it loads -- Paths.product_label -- so a named experiment lives beside the
+#     canonical run; the shared inputs are read under the plain timing label; unset = canonical),
 #   A worker that draws no cells writes no shard.
 #   Non-deterministic (no seed).
 # Submit from the repo root and forward REPO: Slurm spools this script to
@@ -111,13 +114,16 @@ EXP_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py"
 # re-images the trajectories per condition), so the token is required and forwarded.
 case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
 
+ARTIFACT_TAG="${ARTIFACT_TAG:-}"   # empty -> canonical product names; else e.g. CAP256 (Paths.product_label)
+TAG_ARG=()
+[ -n "$ARTIFACT_TAG" ] && TAG_ARG=(--artifact-tag "$ARTIFACT_TAG")
 EXP_ARGS=( --condition "$CONDITION" --kinds "$KINDS" --max-cells "$MAX_CELLS"
-           --summary "$SUMMARY" --pool-mode "$POOL_MODE" --total-time-seconds "$TOTAL_TIME" )
+           --summary "$SUMMARY" --pool-mode "$POOL_MODE" --total-time-seconds "$TOTAL_TIME" "${TAG_ARG[@]}" )
 # Forward --chunk-step-seconds only when explicitly set; otherwise let the entry
 # point default it to the model window (see the CHUNK_STEP note above).
 [ -n "$CHUNK_STEP" ] && EXP_ARGS+=( --chunk-step-seconds "$CHUNK_STEP" )
 
-echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain

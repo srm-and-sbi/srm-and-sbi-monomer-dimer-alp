@@ -27,6 +27,19 @@ The Detector workflow is a **complete, first-class calibration workflow**, perma
 
 Its output is a **versioned, provenanced DLI-parameter artifact**: for each imaging parameter, the calibrated estimate with a credible interval, an in/out-of-prior flag, the source video conditions and public accessions, the estimator checksum, and the training configuration.
 
+**Priority between the two workflows.** The biology workflow carries the scientific question: it infers
+composition, diffusion, switching, and reaction parameters from videos, and nothing replaces that
+inference. The Detector workflow and the direct imaging estimators are supporting tools whose purpose is
+to keep imaging error out of those biological estimates: an incorrect or overly narrow imaging assumption
+is absorbed into the inferred biology, which is why the imaging block must be constrained and its
+remaining uncertainty propagated rather than assumed away. The imaging work therefore aims at defensible
+values with uncertainty ranges, obtained through acquisition information (§9.4), direct measurements
+(§9.5, §9.6), and neural inference where those do not reach, not at perfect recovery of every imaging
+parameter. The practical objective is to constrain imaging well enough, propagate what remains uncertain,
+and assess which biological quantities the videos actually support. Estimator developments tested on the
+Detector problem (§9.7) are controlled benchmarks: success there does not establish better biological
+inference, which requires its own recovery and calibration tests against known biological truth.
+
 That artifact **feeds the production model's imaging parameters**. The production treatment of those parameters — holding them fixed at the calibrated values, inferring them jointly under priors *centered on the calibrated values*, or marginalizing them as a nuisance (§7) — is decided when the artifact is ported into production; the calibration itself is agnostic to that choice, and the guess → refinement → prior chain stays fully auditable under any of them.
 
 **Workflow architecture.** The biology and Detector workflows are two mirrored passes over the same stages — simulate → infer → evaluate → experiment — differing only in the target: the biology workflow infers the reaction-diffusion parameters and marginalizes the imaging block, while the Detector infers the imaging parameters and marginalizes the reaction-diffusion domain and the camera. Both run on one shared engine per stage — `run_<stage>(cfg, args)` in the stage-runner modules (`simulation_rds_runner.py`, `simulation_dli_runner.py`, `inference_runner.py`, `evaluation_runner.py`, `experiment_runner.py`) — selected by the `WorkflowConfig` a thin Prime shim builds (`biology_workflow()` / `detector_workflow()`). Because the learnable target is what every stage samples, places priors over, trains on, and recovers, the genuine per-workflow differences — the parameterization module, the alias-qualified paths, the workflow tag, and the DLI imaging source (the `Nuisance_DLI` artifact for biology, the imaging prior box for the Detector) — are carried by the config and localized in a `_<stage>_spec(cfg)` resolver, so the two workflows mirror each other and neither can silently drift. The production treatment of the calibrated imaging is decided at the shared parameterization (§9.2 Phase D); §5 identifies the exact hazard.
@@ -885,8 +898,9 @@ included (bold = inside the 0.10 dex threshold the direct estimator is held to; 
 | 60 s (3000 frames) | 0.43 | **0.057** | **0.014** | **0.011** |
 
 Read plainly: under this reduced model the estimated standard deviation of an unbiased
-`prob_photo_bleach` estimate exceeds the 1.5 dex prior width everywhere at 2 s, and falls inside the
-0.10 dex threshold only in the upper half of the prior at 20 s. The budget provides an approximate
+`prob_photo_bleach` estimate exceeds the 0.10 dex threshold by more than an order of magnitude
+everywhere at 2 s (1.26 dex at the top of the prior, thousands of dex at the bottom, against a 1.5 dex
+prior width), and falls inside that threshold only in the upper half of the prior at 20 s. The budget provides an approximate
 precision benchmark for an unbiased decay-rate estimator using total fluorescence; the
 effective-sample-size adjustment approximates the correlated decay likelihood rather than treating it
 exactly, and the benchmark does not establish a fundamental recovery limit for inference from the
@@ -909,3 +923,336 @@ with bias reported separately.
 **Standing of this section.** The budget is a diagnostic, not a decision. It constrains which
 of §9.4's gates can be met and where effort is worth spending; it does not by itself move any
 parameter out of the inferred block, and the implemented detector continues to infer all six.
+
+### 9.6 Frozen acceptance rules for the direct estimators
+
+These rules were fixed on 2026-09-21, after the development runs of the direct estimators on EVAL
+tasks 0 and 1 had started and before any corrected evaluation ran. They govern how a direct estimator
+of a detector parameter is judged from here on. They validate **direct estimates of the detector
+parameters**; their later use in the biology workflow is a separate integration check and carries no
+threshold here. The numerical accuracy thresholds are the ones each estimator's companion note has
+carried since 0.1.12, restated with their units; what is new is the evidence, operational, subgroup,
+and uncertainty requirements around them, and the order in which they are evaluated.
+
+**Order of evaluation.** The four steps are evaluated in sequence and their verdicts are kept
+separate. A large run with many failed estimates receives an operational FAIL even when its accuracy
+step is also INSUFFICIENT EVIDENCE.
+
+1. **Evidence adequacy of the run** — the number of recordings attempted, overall and in the
+   operating subgroup.
+2. **Operational success** — the fraction of attempted recordings that returned a valid estimate.
+3. **Evidence adequacy for accuracy and coverage** — the number of successful estimates remaining,
+   overall, in the operating subgroup, and in each reported quartile.
+4. **Accuracy and uncertainty** — the thresholds below.
+
+**The operating subgroup** contains the synthetic recordings whose true `mu_pc` lies in the lower half
+of its log10 prior, `log10 mu_pc` in [2.00, 2.375), about 100 to 237 photons per dye. The experimental
+estimates of §6.11 (139 to 186 photons per dye from the two neural estimators) motivate the emphasis on
+this range; they do not establish the experimental truth. Quartile boundaries for every stratification
+are the prior's own quarters in log10 coordinates, fixed here, never recomputed from the successful
+recordings: `mu_pc` [2.00, 2.1875, 2.375, 2.5625, 2.75]; `mu_r` [0.00, 0.075, 0.15, 0.225, 0.30];
+`sigma_r` [−1.00, −0.8125, −0.625, −0.4375, −0.25]; `lambda_rate` [0.00, 0.25, 0.50, 0.75, 1.00];
+`prob_photo_bleach` [−2.00, −1.625, −1.25, −0.875, −0.50].
+
+**Step 1 — evidence adequacy of the run.**
+
+| requirement | value | verdict if unmet |
+|---|---|---|
+| recordings attempted | ≥ 1000 | INSUFFICIENT EVIDENCE (run) |
+| recordings attempted in the operating subgroup | ≥ 400 | INSUFFICIENT EVIDENCE (run) |
+
+**Step 2 — operational success.** A valid estimate is finite, and, where the estimator fits a model,
+comes from a fit whose optimizer reported success. Every recording that returns no valid estimate
+carries a reason code (`too_few_tracks`, `too_few_traces`, `fit_failed`, `no_apertures`, or another
+named reason); a dropped recording without a reason fails the run itself, not the estimator.
+
+| requirement | value | verdict if unmet |
+|---|---|---|
+| success fraction, overall | ≥ 95 % | FAIL (operational) |
+| success fraction, operating subgroup | ≥ 90 % | FAIL (operational) |
+
+**Step 3 — evidence adequacy for accuracy and coverage.**
+
+| requirement | value | verdict if unmet |
+|---|---|---|
+| successful estimates, overall | ≥ 900 | INSUFFICIENT EVIDENCE (accuracy) |
+| successful estimates, operating subgroup | ≥ 250 | INSUFFICIENT EVIDENCE (accuracy) |
+| successful estimates in a reported quartile | ≥ 100 | that quartile is reported without a verdict |
+
+**Step 4a — accuracy.** Required both overall and in the operating subgroup; reported, without a
+verdict, in every other quartile. Correlation is computed in log10 coordinates for `mu_r` and
+`lambda_rate` and in linear coordinates for `sigma_r`, matching the implementation.
+
+| parameter | criterion | threshold | units |
+|---|---|---|---|
+| `mu_r` | mean absolute log10 error | ≤ 0.02 | dex |
+| `mu_r` | absolute mean signed log10 error | ≤ 0.01 | dex |
+| `sigma_r` | Pearson correlation with truth | ≥ 0.80 | linear coordinates |
+| `sigma_r` | mean absolute error | ≤ 0.08 | **linear** units (17 % of the 0.10 to 0.56 linear range). This preserves the criterion the code has applied since 0.1.12 and corrects an inventory that had stated it in dex. |
+| `lambda_rate` | Pearson correlation with truth | ≥ 0.80 | log10 coordinates |
+| `lambda_rate` | mean absolute log10 error | ≤ 0.08 | dex |
+| `prob_photo_bleach` | mean absolute log10 error at 1000 frames | ≤ 0.10 | dex, among **usable** recordings (below) |
+
+**Step 4a, bleaching — three outcomes, not two.** Each attempted recording is classed as one of:
+a **failed measurement** (invalid output, optimizer failure, or insufficient data; reason code
+recorded); a **valid but uninformative measurement** (the fit converged but the observable
+eligibility diagnostic does not support a useful estimate); or a **usable measurement** (the
+recording meets the predefined observable criteria). The accuracy requirement applies to usable
+recordings only, with a frozen minimum of **100 usable overall and 50 usable in the operating
+subgroup**, else INSUFFICIENT EVIDENCE (accuracy). Usable and rejected fractions are reported
+against **all attempted** recordings, and the recovery of rejected recordings is reported beside
+that of usable ones, so that selection cannot hide a failure. The eligibility diagnostic is fixed
+before the validation run, may be calibrated only on self-test scenes, and **never uses the true
+bleaching value**; the information budget of §9.5 remains explanatory and takes no part in
+eligibility.
+
+**Step 4b — uncertainty.** Each estimator emits, per recording, a nominal 90 % range whose
+construction is specified in its companion note; `sigma_r` receives its own range, not the mean-width
+standard error. Reliability and informativeness are assessed separately.
+
+| requirement | value | verdict if unmet |
+|---|---|---|
+| empirical coverage of the nominal 90 % range, overall | ≥ 85 %, with its confidence interval reported | FAIL (uncertainty) |
+| empirical coverage, operating subgroup | ≥ 85 %, with its confidence interval reported | FAIL (uncertainty) |
+| median range width relative to the parameter's prior width, same coordinates | reported | none — descriptive |
+
+A broad range can have adequate coverage without providing a precise measurement. Coverage
+establishes uncertainty reliability; interval width describes informativeness. Returning nearly the
+whole prior is not described as successful, precise recovery, however well it covers.
+
+**Data tiers and provenance.** EVAL tasks 0 and 1 are development data from the moment the first
+direct-estimator run read them; the corrected reruns on them are regression checks, never the
+adoption verdict. EVAL tasks that no direct estimator has scored form the **reserved validation set**
+for that verdict, provided they stay excluded from further tuning; they are not described as globally
+untouched, because the neural calibration of §6.9 has already examined every EVAL task. Development
+outputs are preserved rather than overwritten, under the run folder suffixed `_DEV_<commit>`, together
+with the exact commands, settings, recording identifiers, script and kernel hashes, and any
+uncommitted change in the executing tree — the commit identifier alone does not capture the executed
+version.
+
+**Verdict vocabulary.** `PASS`, `FAIL (operational)`, `FAIL (protocol)`, `FAIL (accuracy)`,
+`FAIL (uncertainty)`, and `INSUFFICIENT EVIDENCE (run | accuracy)`. A report states all applicable
+verdicts; one does not absorb another. `FAIL (protocol)` names a drop recorded without a reason code:
+a reporting failure of the run, stated beside the measured success fraction and never in place of
+it, so an estimator's operational record is judged on what it measured.
+
+**Development outcome on EVAL tasks 0 and 1 (2026-09-21, code 2b9c32e, 2000 MET-FAB 2 s recordings
+each; outputs preserved under `_DEV_2b9c32e`).** The two-second estimators were run once under the
+mechanics that preceded these rules, and the rules were then applied to their arrays after the fact.
+
+*PSF width.* Every recording produced an estimate (2000 of 2000; usable tracks per recording 22 to 548,
+median 114). Overall: `mu_r` MAE 0.0155 dex and bias −0.003 dex, `sigma_r` MAE 0.027 with correlation
+0.96, all within threshold. In the operating subgroup (1026 recordings): `mu_r` MAE 0.017 dex meets the
+threshold, `mu_r` bias −0.0118 dex misses the 0.01 dex bound, about 2.7 % underestimation; `sigma_r` MAE
+0.031 and correlation 0.96 meet theirs. Verdict `FAIL (accuracy)` on that one criterion. The bias runs
+monotonically with true brightness, from −0.020 dex at the dim end of the prior to +0.009 dex at the
+bright end, and `sigma_r` is underestimated most where the true spread is broadest (−0.057 in the broad
+quarter of the operating subgroup). The brightness dependence alone does not establish the mechanism:
+detection selection, fitting bias, and track selection are all candidates. Decision: continue with the PSF
+estimator; rerun it under the corrected mechanics to obtain ranges and reason codes; keep the thresholds
+and the operating range unchanged, since the dim recordings are the ones the experiments contain; assess
+`mu_r` and `sigma_r` separately; investigate a correction on development data that uses only quantities
+available on experimental recordings, and validate it on the reserved EVAL tasks.
+
+*PSF width, regression run of record under the corrected mechanics (2026-09-21, 0.1.13 working tree,
+same 2000 recordings, 36 minutes on 28 workers; output `..._Direct_PSF_Width` with `PROVENANCE.md` and
+`COVERAGE_DIAGNOSIS.md`).* The point estimates are identical to the development run, so steps 1 to 3 pass
+with every drop now carrying a reason code (none occurred), and step 4a repeats `FAIL (accuracy)` on the
+operating-subgroup `mu_r` bias of −0.0118 dex. Step 4b, evaluated for the first time, is
+`FAIL (uncertainty)`: the nominal 90 % ranges cover 65.9 % (`mu_r`) and 63.3 % (`sigma_r`) overall and
+60.0 % and 55.7 % in the operating subgroup, against the 85 % rule; the ranges are informative, with
+median widths of 0.105 and 0.113 of the prior widths. The diagnosis is specific. The standard error is
+about 2.3 times too small at every track count, for both quantities, so the sampling-only construction
+misses a variance component beyond track-to-track sampling, and an inflation of 1.85 to 1.95 would be
+needed for 90 % coverage whether or not the mean offset is removed. On top of that the dim operating
+subgroup carries a negative offset (mean standardized error −1.06 for `mu_r`) and `sigma_r` shrinks toward
+the middle of its prior (+1.05 in the narrowest quarter, −1.42 in the broadest). The `mu_r` error
+correlates with the true brightness (+0.46) far more than with the observable spot count (+0.25), so the
+spot count is a weak experimental proxy; a per-recording measured spot brightness or signal-to-noise
+ratio, which the script does not yet emit, is the candidate proxy for any correction calibrated on
+development data and validated on the reserved EVAL tasks.
+
+*Flicker rate.* 1909 of 2000 recordings produced an estimate; the 91 drops all had fewer than 29 usable
+traces, and 73 % of them lie in the dimmest brightness quarter. The success fractions (95.5 % overall,
+91.6 % operating) meet the rules; the drops carried no reason code, which is the `FAIL (protocol)`
+above and not a measurement failure. Correlation 0.847 meets its threshold. MAE 0.144 dex and bias
++0.110 dex fail the 0.08 dex bound; in the operating subgroup the bias is +0.142 dex, about 39 %
+overestimation. The bias depends on the true rate, +0.26 dex for the slowest flicker near 1 per second
+falling to +0.04 dex above 5 per second, and on brightness, +0.16 dex dim against +0.06 dex bright. The
+within-quarter correlations are low but shrink with the truth range by construction; the signed errors
+are the evidence. The four single-dye 6 s self-test scenes at the prior center, which passed at 0.06 dex,
+probed none of these conditions. The exact-parabola correction accounts for about 0.005 dex of this and is
+not the explanation. The model arm already matches track spans and detrends; what it lacks is a faithful
+treatment of the observed traces: gaps, detection and linking selection, measurement noise, dye
+multiplicity, and bleaching. The result shows poor recovery under production conditions; it does not
+isolate which omission causes it. Decision: pause the unchanged two-second rerun; study the mismatch on a
+small representative development subset, adding the omitted effects to the model arm one at a time and
+recording which closes the bias; and compare against estimation over the full experimental recording,
+propagating one rate and its uncertainty to the windows, if the rate can be treated as constant over a
+recording and the assumption is validated at that duration. The direct estimators are also to be compared
+with the neural posterior estimator on the same multiple-dye recordings by bias, MAE, and uncertainty,
+not correlation alone. All three targets (`mu_r`, `sigma_r`, and `lambda_rate`) remain in the
+implemented neural block pending validated replacements; this retains the implementation and does not
+validate the current neural estimates or their uncertainty.
+
+**Why point estimates are the deliverable.** `mu_r` and `sigma_r` are themselves the parameters of the
+per-emitter PSF-width distribution, its median and spread, and the biology workflow consumes the imaging
+block as a frozen parameter vector drawn from this calibration. What the biology needs from the detector is
+therefore a defensible value for each imaging parameter. The detector enables the biology inference; it does
+not need perfect knowledge of the imaging model, nor a validated uncertainty model of it, for that inference
+to succeed. The per-recording ranges of step 4b are a secondary deliverable: they describe how well each value
+is pinned down and would let residual imaging uncertainty be propagated if that proves necessary, but their
+coverage failure does not bear on which method supplies the better value.
+
+**Head-to-head on point values, PSF parameters (2026-09-21; stored under
+`..._DETECTOR_FAB_2S_50FPS_PSF_Direct_vs_Neural` with arrays, statistics, and one two-panel figure per
+parameter, each method on its own evaluated sample).** The direct estimator on its 2000 EVAL recordings
+against the baseline multiple-dye neural posterior median on all 25,000 EVAL recordings (the 2000 are an
+exactly matched subset whose neural statistics equal the full set's):
+
+| parameter | method | n | slope | intercept | correlation | MAE (dex) | bias (dex) |
+|---|---|---|---|---|---|---|---|
+| `mu_r` | direct | 2000 | 0.97 | +0.002 | 0.967 | 0.0155 | −0.003 |
+| `mu_r` | neural posterior median | 25,000 | 0.93 | +0.032 | 0.958 | 0.0248 | +0.021 |
+| `sigma_r` | direct | 2000 | 0.89 | −0.077 | 0.963 | 0.046 | −0.010 |
+| `sigma_r` | neural posterior median | 25,000 | 0.04 | −0.617 | 0.165 | 0.186 | −0.016 |
+
+For `mu_r` both methods lie along the slope-1 line, the neural estimate displaced by the constant +0.02 dex
+offset of §6.10, the direct estimate unbiased overall and 2.7 % low in the dim operating subgroup. For
+`sigma_r` the neural estimator returns nearly the same value whatever the truth and does not measure the
+parameter; the direct estimator tracks it with slope 0.89, compressing mildly toward the prior center at
+both ends. On synthetic recordings the direct estimator is the better source of point values for both PSF
+parameters, by a wide margin for `sigma_r`.
+
+**Conclusion of record (2026-09-21).** For `mu_r` and `sigma_r`, the direct estimator supersedes the neural
+point estimates on synthetic recordings, pending the cross-check of its values on experimental recordings
+against the ThunderSTORM references (§6.11). Its uncertainty ranges under-cover (65.9 % and 63.3 % overall,
+about 60 % and 56 % in the dim operating subgroup) and have a bounded correction to test; this is a secondary
+deliverable and does not block the use of its point values. For `lambda_rate` the direct estimator is not a
+replacement: its bias of +0.11 dex overall and +0.14 dex in the dim subgroup, rate-dependent, calls for an
+investigation of the measurement model and of the recording duration before further tuning, and that
+diagnosis guarantees no outcome. The frozen rules produced this information as intended: both estimators had
+passed their own self-tests and earlier acceptance reports.
+
+**What this means for the biology.** The diagnostics identify imaging quantities and regimes that need
+particular care, but do not yet establish reliable nuisance distributions. Fixing these quantities to
+unsupported point values is to be avoided, and the ranges used to represent their uncertainty must be
+validated before they are propagated; passing biased estimates or under-covered neural posteriors
+downstream would not solve the problem. The detector capacity test (§9.7) can identify a promising
+estimator configuration; any transfer to biology still requires biological-parameter recovery and
+calibration tests. The central conclusion: keep developing the direct measurements, retain the current
+implementation provisionally, and do not confuse either choice with validated imaging inputs for biology.
+
+### 9.7 The capacity test on the multiple-dye baseline
+
+The multiple-dye estimator of §6.10 recovers the parameters but under-covers: 62 % of the true
+values fall inside its nominal 90 % joint region, and its marginal ranks are far from uniform. §6.10
+lists the candidate causes and states that the comparison with the one-dye law does not isolate an
+estimator-only failure. One of those causes is testable without touching the data, the targets, or the
+priors: the estimator may lack capacity for the multiple-dye videos, whose brightness distribution is a
+mixture over the dye count. A sibling repository has met this failure mode before, where a 64-dimensional
+embedding produced impossible estimates that a 128-dimensional one did not. The capacity test trains one
+larger estimator under otherwise identical conditions and compares it with the baseline. It is a
+diagnosis of the estimator, not a change to it: the baseline stays the working estimator of record until
+the comparison is read.
+
+**What changes and what does not.** The embedding is widened from 128 to 256 dimensions by doubling
+every convolutional block's channels (`start_channels` 8 → 16 with the same five blocks, so the deepest
+block carries 16 · 2⁴ = 256 features per temporal token, 64 per attention head), and the flow is
+enlarged to `hidden_features` 128, `num_transforms` 8, `num_blocks` 2, `dropout_probability` 0.1. The flow
+settings are now an explicit configuration (`InferenceFlow`, whose defaults are the library values the
+earlier estimators used, so a run without the preset reproduces them exactly) and are persisted in the
+saved estimator's rebuild specification together with the embedding arguments. Both changes are one named
+preset, `capacity256` (`NETWORK_PRESETS`), selected with `--network-preset`. Everything else is held fixed:
+the multiple-dye datasets and splits (TRAIN 200 tasks, TEST 50, EVAL 25), the six detector targets and
+their priors, the preprocessing and standardization, batch normalization, the optimizer, the learning-rate
+schedule, and the number of epochs. The test is not combined with any parameter removal (§9.4) or prior
+change.
+
+| | baseline | `capacity256` |
+|---|---|---|
+| Embedding parameters (conv stack + temporal transformer + head) | 0.691 M | 2.757 M |
+| Flow parameters | 0.064 M | 0.551 M |
+| Total | 0.755 M | 3.308 M |
+| Conv-stack activations kept for the backward pass, per 2 s video (fp32) | 0.85 GiB | 1.70 GiB |
+| First block's output tensor, per video | 8 × 100 × 256 × 256 (0.20 GiB) | 16 × 100 × 256 × 256 (0.39 GiB) |
+
+**Where the memory goes.** The additional weights are small in memory terms (3.3 M parameters with their
+gradients and optimizer moments occupy well under 100 MiB). The memory growth is in the embedding's
+activations, which the backward pass must keep: every convolutional block's output doubles with its
+channel count, and the first block, which works at full spatial resolution, dominates. The flow adds
+negligible activation memory, because it operates on the six-dimensional parameter vector conditioned on
+one 256-dimensional embedding per video. The activation estimate is a lower bound on device memory: the
+compiled graph's workspaces, the batch-normalization statistics, the gradient buffers, and the
+data-loader staging add to it, so the smoke test below measures the actual peak.
+
+**Batch geometry.** The baseline trained with 32 videos per rank on 8 nodes × 4 GPUs (32 ranks), a global
+batch of 1024. The activations per video double, so 32 videos per rank would bring the conv-stack
+activations alone from about 27 GiB to about 54 GiB per GPU before workspaces, too close to the device
+for comfort. Halving the per-rank batch restores the baseline's activation footprint exactly, so the
+capacity run uses 16 videos per rank on 16 nodes × 4 GPUs (64 ranks): the global batch stays 1024, the
+number of optimizer steps per epoch is unchanged, and because batch normalization is synchronized across
+ranks under data-parallel training, the batch statistics are still computed over the same 1024 videos
+per step. The per-rank batch is the one fixed setting this test relaxes, and it relaxes it for device
+memory alone, which is the documented condition for changing it. The training log now prints each
+rank-0 epoch's peak allocated and reserved device memory next to the epoch time, so both quantities are
+recorded for the two configurations.
+
+**Naming.** The capacity run's products carry the artifact tag `CAP256` right after the timing label
+(`Paths.product_label`, `--artifact-tag`, dispatcher knob `ARTIFACT_TAG`):
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_CAP256_Estimator.npz`, the matching checkpoint and
+resurrect state, `..._CAP256_MAP_Recovery`, `..._CAP256_Posterior_Calibration`, `..._CAP256_MAP_Experiment`,
+and the job names `..._2S_50FPS_CAP256_Inference` / `_Evaluation` / `_Experiment`. The shared inputs (video,
+theta, and record sets, the experimental recordings) are read under the plain timing label. The baseline
+products keep their names and are not overwritten. The tag is a SCREAMING_SNAKE token without underscores
+so the runtime grammar stays unambiguous; the estimator manifest records the tag and the preset.
+
+**Protocol.**
+
+1. *Smoke* (code and memory check, deleted afterwards): one node × 4 GPUs, 30 minutes, TRAIN 4 tasks /
+   TEST 1 task, one epoch, batch 8, for both presets in turn, under the tags `SMOKEBASE` and
+   `SMOKECAP256` (distinct, so the two jobs never share a checkpoint path). It records the peak device
+   memory and the epoch time of each configuration, from which the batch-16 footprint follows, and
+   confirms that the tagged products, the rebuild specification, and the downstream loaders work. Its
+   estimates carry no scientific meaning.
+2. *Training*: 16 nodes × 4 GPUs, batch 16 per rank, TRAIN 200 / TEST 50, 50 epochs within a 12 h wall,
+   then a second 50-epoch run continued with `--resurrect`, matching the baseline's 100 epochs.
+3. *Comparison* on the same EVAL tasks the baseline used: MAP recovery (bias, MAE, and correlation per
+   parameter), marginal and joint calibration (§6.9's tests: rank uniformity, expected coverage, TARP,
+   L-C2ST), posterior widths against the prior widths, and the failed-estimate rates, each overall and in
+   the operating subgroup of §9.6 (true `log10 mu_pc` in [2.00, 2.375), the dim quarter of the brightness
+   prior), where the baseline's difficulties concentrate. Training time and peak memory per configuration
+   are reported alongside.
+
+**Reading the result.** The larger embedding and flow are relevant primarily as candidates for the
+biology estimator; the Detector problem is a controlled benchmark with known imaging truth, cheaper to run
+and to read. A gain here motivates the same test on the biology workflow, with its own recovery and
+calibration against known biological truth, and does not by itself establish better biological inference
+(§2). If the larger estimator recovers the parameters with calibrated marginals and a
+joint coverage near nominal, the baseline's under-coverage was a capacity limit, and the choice between
+the two estimators is a cost question. If calibration does not improve while recovery does, or neither
+improves, capacity is not the binding constraint, and the remaining candidates of §6.10 (the mixture
+structure of the multiple-dye brightness law, the data budget, the identifiability of individual blocks)
+move forward. Either outcome is informative; neither replaces the validation on experimental recordings
+that §6.10 lists as open.
+
+**Smoke result (2026-09-21, JUPITER booster, one node × 4 GH200 with 96 GiB each, batch 8, TRAIN 4 /
+TEST 1, one epoch; products deleted afterwards, job logs kept).** Both presets ran to completion in about
+six minutes each, saved a tagged estimator whose rebuild specification carried the preset's embedding and
+flow arguments, and loaded back.
+
+| per GPU, batch 8 | baseline | `capacity256` | ratio |
+|---|---|---|---|
+| peak allocated | 11.9 GiB | 23.5 GiB | 1.97 |
+| peak reserved | 19.4 GiB | 38.6 GiB | 1.99 |
+| epoch over 4000 videos on 4 GPUs | 53.6 s | 53.6 s | 1.00 |
+
+The memory doubles exactly as the activation count predicts, and at this small scale the epoch time is
+set by input throughput, not by the network, so the production epoch time has to be read from the
+production run itself. Scaling the allocation linearly, `capacity256` at 16 videos per rank needs about
+47 GiB allocated and 77 GiB reserved per GPU, the same footprint the baseline had at 32 videos per rank
+on the same devices, which the baseline production run already sustained.
+
+**Status.** Configuration, naming, and dispatch are implemented and smoke-tested; the production request
+(16 nodes × 4 GPUs, batch 16, TRAIN 200 / TEST 50, 50 epochs, then 50 more with `--resurrect`) awaits
+approval.

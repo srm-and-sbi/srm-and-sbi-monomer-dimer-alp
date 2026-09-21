@@ -18,6 +18,9 @@
 #   (bounded|unrestricted), TOTAL_TIME, SRM_AND_SBI_GPUS (cap the GPUs used;
 #   default = all allocated). Sharding is at video granularity, so every allocated
 #   GPU gets work regardless of EVAL_TASKS (even EVAL_TASKS=1 spreads its videos).
+#   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
+#     PRODUCT of this stage and to the estimator it loads -- Paths.product_label -- so a named experiment lives beside the
+#     canonical run; the shared inputs are read under the plain timing label; unset = canonical),
 #   Non-deterministic (no seed).
 # Submit from the repo root and forward REPO: Slurm spools this script to
 # /var/spool, so the child must be told where the repo is (--export=ALL,REPO=$PWD).
@@ -99,10 +102,13 @@ EVAL_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Evaluati
 # re-images the trajectories per condition), so the token is required and forwarded.
 case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
 
+ARTIFACT_TAG="${ARTIFACT_TAG:-}"   # empty -> canonical product names; else e.g. CAP256 (Paths.product_label)
+TAG_ARG=()
+[ -n "$ARTIFACT_TAG" ] && TAG_ARG=(--artifact-tag "$ARTIFACT_TAG")
 EVAL_ARGS=( --condition "$CONDITION" --eval-tasks "$EVAL_TASKS" --summary "$SUMMARY" --pool-mode "$POOL_MODE"
-            --total-time-seconds "$TOTAL_TIME" )
+            --total-time-seconds "$TOTAL_TIME" "${TAG_ARG[@]}" )
 
-echo "=== Evaluation | eval_tasks=${EVAL_TASKS} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Evaluation | eval_tasks=${EVAL_TASKS} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain

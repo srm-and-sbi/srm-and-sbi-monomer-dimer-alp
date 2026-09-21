@@ -20,6 +20,11 @@
 #     the default peak, learning_rate_minimum*max_factor = 1.28e-03),
 #   RESURRECT (set 1 to load the existing checkpoint and continue training from it
 #     -- continue a run stopped by the wall, or add epochs; unset = fresh run),
+#   NETWORK_PRESET (baseline|capacity256; parameterization.NETWORK_PRESETS, forwarded as
+#     --network-preset; unset = baseline, the configured architecture),
+#   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
+#     PRODUCT of this stage -- Paths.product_label -- so a named experiment lives beside the
+#     canonical run; the shared inputs are read under the plain timing label; unset = canonical),
 #   SRM_AND_SBI_GPUS (cap the GPUs used; default = all allocated; set 1 to force
 #     the original single-GPU path even on a multi-GPU allocation),
 #   EXIT_BARRIER (seconds; raises torch-elastic's 300 s exit barrier so straggler
@@ -114,6 +119,12 @@ LR_ARG=()
 [ -n "$LR" ] && LR_ARG=(--learning-rate "$LR")   # forward the starting-LR override; unset -> default peak
 RESURRECT_ARG=()
 [ "$RESURRECT" = 1 ] && RESURRECT_ARG=(--resurrect)   # only the value 1 resumes; unset/0/other = fresh
+NETWORK_PRESET="${NETWORK_PRESET:-}"   # empty -> baseline; else a parameterization.NETWORK_PRESETS name (capacity256)
+PRESET_ARG=()
+[ -n "$NETWORK_PRESET" ] && PRESET_ARG=(--network-preset "$NETWORK_PRESET")
+ARTIFACT_TAG="${ARTIFACT_TAG:-}"   # empty -> canonical product names; else e.g. CAP256 (Paths.product_label)
+TAG_ARG=()
+[ -n "$ARTIFACT_TAG" ] && TAG_ARG=(--artifact-tag "$ARTIFACT_TAG")
 
 # GPUs PER NODE for data-parallel training: SRM_AND_SBI_GPUS override, else the
 # node's allocation, else 1. NODE COUNT comes from the Slurm allocation
@@ -126,9 +137,9 @@ INFER_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Inferen
 case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
 
 INFER_ARGS=( --condition "$CONDITION" --tasks "$TRAIN_TASKS" --test-tasks "$TEST_TASKS" --epochs "$EPOCHS"
-             --total-time-seconds "$TOTAL_TIME" "${BATCH_ARG[@]}" "${NUM_WORKERS_ARG[@]}" "${HEARTBEAT_ARG[@]}" "${RESURRECT_ARG[@]}" "${LR_ARG[@]}" )
+             --total-time-seconds "$TOTAL_TIME" "${BATCH_ARG[@]}" "${NUM_WORKERS_ARG[@]}" "${HEARTBEAT_ARG[@]}" "${RESURRECT_ARG[@]}" "${LR_ARG[@]}" "${PRESET_ARG[@]}" "${TAG_ARG[@]}" )
 
-echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} resurrect=${RESURRECT:-0} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} resurrect=${RESURRECT:-0} preset=${NETWORK_PRESET:-baseline} tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # Training keeps torchrun: DistributedDataParallel needs its rendezvous, and its ranks finish
 # together (every step is synchronized), so torchrun's fixed 300 s exit barrier -- which no

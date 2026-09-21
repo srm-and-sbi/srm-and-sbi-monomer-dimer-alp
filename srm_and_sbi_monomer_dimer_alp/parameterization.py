@@ -59,6 +59,7 @@ thresholds.
 """
 
 import os
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
@@ -241,7 +242,7 @@ class Paths:
     produced it.
 
     The runtime grammar is ``[program]_[sibling]_[iter][_qualifier]_[condition]_
-    [timing]_[stage]``: the optional workflow qualifier (``_DETECTOR``) and the
+    [timing][_tag]_[stage]`` (``product_label`` composes the optional product tag): the optional workflow qualifier (``_DETECTOR``) and the
     experimental-condition token (``FAB`` or ``INLB``) sit between the iteration
     and the timing label, so ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Video_Set_...``
     is a biology product and ``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_...``
@@ -410,6 +411,31 @@ class Paths:
             split=split,
         )
         return data_bank_root / self.video_subdir / filename
+
+    @staticmethod
+    def product_label(timing_label: str, artifact_tag: Optional[str] = None) -> str:
+        """Label under which a run's PRODUCTS are written: the timing label, optionally
+        followed by an artifact tag (``2S_50FPS`` -> ``2S_50FPS_CAP256``).
+
+        The tag namespaces one training run's outputs -- checkpoint, resurrect state,
+        estimator artifact, test-loss distribution and their backups, the debug run
+        directory, and every downstream product derived from that estimator (MAP
+        recovery, posterior calibration, experiment reports) -- so an experiment such
+        as the capacity test of DETECTOR_WORKFLOW.md sec. 9.7 lives beside the
+        baseline instead of overwriting it. It sits right after the timing label,
+        before the stage descriptor, and is a SCREAMING_SNAKE token (``[A-Z0-9]+``,
+        no underscore, so the grammar stays unambiguous). It never enters the shared
+        INPUTS (video, theta, and record sets, experimental recordings): those are
+        read under the plain timing label by every run. No tag (the default) returns
+        the timing label unchanged, so the canonical products keep their names.
+        """
+        if artifact_tag is None or artifact_tag == "":
+            return timing_label
+        if not re.fullmatch(r"[A-Z0-9]+", artifact_tag):
+            raise ValueError(
+                f"artifact_tag {artifact_tag!r} must be a SCREAMING_SNAKE token without "
+                f"underscores ([A-Z0-9]+), e.g. 'CAP256'.")
+        return f"{timing_label}_{artifact_tag}"
 
     def checkpoint_path(self, data_bank_root: Path, timing_label: str) -> Path:
         """Full path for the optimum-ANN checkpoint file."""
@@ -1243,10 +1269,57 @@ class InferenceEvaluation:
 
 
 @dataclass(frozen=True)
+class InferenceFlow:
+    """Masked-autoregressive-flow (MAF) density-estimator settings.
+
+    These are the `sbi.neural_nets.net_builders.build_maf` keyword arguments the Inference
+    stage passes explicitly, so the flow's capacity is a recorded configuration rather than a
+    library default, and they are persisted verbatim in the saved estimator's rebuild
+    specification (`artifacts.save_estimator`, ``rebuild_spec.maf_args``). The defaults below
+    are the library defaults the estimators trained before 0.1.13 used, so a run with no
+    preset reproduces them exactly.
+
+    - `hidden_features`: width of each autoregressive transform's hidden layers.
+    - `num_transforms`: number of stacked autoregressive transforms.
+    - `num_blocks`: residual blocks per transform.
+    - `dropout_probability` / `use_batch_norm`: regularization inside the transforms.
+    - `z_score_x` / `z_score_y`: standardization of parameters and of the embedding input
+      ("structured" standardizes each dimension independently from the training batch).
+    """
+    hidden_features: int = 50
+    num_transforms: int = 5
+    num_blocks: int = 2
+    dropout_probability: float = 0.1
+    use_batch_norm: bool = True
+    z_score_x: str = "structured"
+    z_score_y: str = "structured"
+
+
+# Named capacity presets for the Inference stage (`--network-preset`). A preset overrides fields
+# of `InferenceNetwork` and `InferenceFlow` together; everything else (data, targets, splits,
+# preprocessing, training protocol, standardization, batch normalization) is untouched. The
+# baseline preset is the empty override and reproduces the pre-0.1.13 architecture.
+#
+#   capacity256 -- the combined capacity test of DETECTOR_WORKFLOW.md sec. 9.7: the embedding is
+#   widened to 256 dimensions by doubling every convolutional block's channels
+#   (start_channels 8 -> 16 with the same five blocks: 16 * 2^4 = 256 features per temporal
+#   token, 64 per attention head), and the flow to hidden_features 128 / num_transforms 8 /
+#   num_blocks 2 / dropout 0.1. A combined test: an improvement supports the larger
+#   configuration but does not isolate the embedding from the flow.
+NETWORK_PRESETS: dict = {
+    "baseline": dict(network={}, flow={}),
+    "capacity256": dict(network=dict(start_channels=16),
+                        flow=dict(hidden_features=128, num_transforms=8, num_blocks=2,
+                                  dropout_probability=0.1)),
+}
+
+
+@dataclass(frozen=True)
 class Inference:
-    """Aggregator. Access via PARAMETERS.inference.{training, network, evaluation}."""
+    """Aggregator. Access via PARAMETERS.inference.{training, network, flow, evaluation}."""
     training: InferenceTraining = field(default_factory=InferenceTraining)
     network: InferenceNetwork = field(default_factory=InferenceNetwork)
+    flow: InferenceFlow = field(default_factory=InferenceFlow)
     evaluation: InferenceEvaluation = field(default_factory=InferenceEvaluation)
 
 

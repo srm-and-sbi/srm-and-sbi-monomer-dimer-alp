@@ -95,8 +95,9 @@ With all three folded in, the bound in dex at the MET-FAB emitter density is:
 
 Bold entries are inside the 0.10 dex acceptance threshold. The prior is 1.5 dex wide, so any
 bound above that is no constraint at all. Read plainly: under this reduced model the benchmark
-standard deviation exceeds the prior width everywhere at 2 s, and falls inside the threshold only
-in the upper half of the prior at 20 s. The benchmark is approximate — an unbiased decay-rate
+standard deviation exceeds the threshold by more than an order of magnitude everywhere at 2 s
+(1.26 dex at the top of the prior against a 1.5 dex prior width, thousands of dex at the bottom),
+and falls inside the threshold only in the upper half of the prior at 20 s. The benchmark is approximate — an unbiased decay-rate
 estimator using total fluorescence, with an effective-sample-size adjustment for the flicker
 correlation — and does not establish a fundamental recovery limit for inference from the full
 video; it is the reason this estimator is held to its threshold at 1000 frames and not at 100.
@@ -130,6 +131,13 @@ carries production filenames while holding only a couple of videos.
 
 ## Result and interpretation
 
+**Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
+the accuracy step of those rules; §9.6 adds the evidence-adequacy, operational-success, operating-subgroup,
+and uncertainty-coverage requirements and the order in which they are evaluated, and defines the verdicts
+`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. The implementation of those
+steps in this utility is the 0.1.13 work in progress; until it lands, a report from this script states only
+the accuracy step.
+
 The report gives the mean absolute log10 error against the prespecified threshold of **0.10
 dex at 1000 frames** (6.7% of the 1.5 dex prior width), together with the bias, the
 correlation, and — for context — the information-budget bound at the recording length actually
@@ -140,6 +148,58 @@ measurement well under the benchmark is a prompt to look for a defect — ground
 the estimate, or a mis-stated bound — before it is read as an unusually good estimator; the
 benchmark constrains an unbiased estimator, and a fit with bounded parameters that shrinks toward
 the middle of its range can legitimately beat it, so the check prompts rather than fails.
+
+## Acceptance mechanics (0.1.13)
+
+The utility evaluates the frozen rules of `DETECTOR_WORKFLOW.md` §9.6 through the shared kernel
+`srm_and_sbi_monomer_dimer_alp.direct_acceptance`, which every direct estimator uses so that a rule
+cannot drift between them. The report carries the five verdicts side by side (evidence adequacy of
+the run, operational success, evidence adequacy for accuracy, accuracy, uncertainty coverage), the
+prior-fixed quartile table, and the dropped recordings by reason code. The exit status is 0 when
+nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence. A
+`--selftest` reaches no verdict: its few scenes are reported as `SELFTEST (informational)`.
+
+**Reason codes.** Every attempted recording that returns no valid estimate carries one of the codes
+listed below; a dropped recording without a code fails the run itself. The saved arrays hold the
+full true parameter row (`theta`, physical units, six columns in the detector's order), the
+validity mask, the reason codes, and the per-recording range bounds, so any stratum can be
+recomputed from the arrays without rerunning the estimator.
+
+| reason code | meaning |
+|---|---|
+| `no_apertures` | aperture observable only: no spots found in the opening frames |
+| `fit_failed` | the least-squares optimizer did not report success (previously such fits entered the accuracy calculation if finite) |
+| `nonpositive_estimate` | the fit converged to a non-positive probability |
+
+**Three outcomes, and the observable eligibility diagnostic.** A recording that returns a valid
+estimate is classed **usable** or **valid but uninformative** by two observable quantities that never
+read the true value: the fitted total decay over the recording,
+`amplitude · (1 − exp(−rate · n_frames))`, must be at least 3 times the standard deviation of the fit
+residuals, and the fit's own standard error on log10 p must be at most 0.25 dex. The accuracy
+threshold applies to usable recordings, with the frozen minima of 100 usable overall and 50 in the
+operating subgroup; usable and rejected fractions are reported against all attempted recordings, and
+the recovery of the rejected recordings is reported beside that of the usable ones so that selection
+cannot hide a failure. The two eligibility values were frozen before the full-length validation run and calibrated
+only on the four self-test scenes: a 0.15 dex cap rejected the p = 0.1 scene that was recovered to
+0.025 dex (its flicker-inflated standard error is 0.195 dex); 0.25 dex accepts the two scenes
+recovered within 0.03 dex and rejects the two with errors of 0.3 and 0.6 dex, whose standard errors
+are 5 and 6 dex. The visibility floor alone would have accepted the p = 0.0316 scene
+(signal-to-noise 4.2, error −0.61 dex), so both criteria are needed. Whether "usable" recordings
+then meet the accuracy and coverage requirements is what the validation run establishes. The information budget is reported
+as context at the prior center and takes no part in eligibility; the truth-based "identifiable range"
+selection used before 0.1.13 is gone.
+
+**The flicker correction uses a supplied rate.** The effective-sample-size correction of the fit's
+standard error needs a flicker rate. Before 0.1.13 the utility passed each recording's true rate,
+which is unavailable on an experimental recording. It now uses the prior center by default and a
+measured value when `--lambda-rate` is given, for every recording alike; the self-test never sees the
+scene's true rate.
+
+**Range construction (validated by coverage, not assumed).** The nominal 90 % range is the estimate
+times `10^(± 1.645 · se_log10)`, with `se_log10 = prob_se / (p · ln 10)` and `prob_se` the
+flicker-corrected standard error propagated from the rate. Its coverage against the truth, overall
+and in the operating subgroup, is what validates it; its median width is reported against the
+1.5 dex prior width.
 
 ## Essential notes
 

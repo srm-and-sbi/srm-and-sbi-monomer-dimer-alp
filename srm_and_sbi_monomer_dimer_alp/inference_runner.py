@@ -30,6 +30,7 @@ import math
 import random
 import shutil
 import time
+import dataclasses
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,7 +55,7 @@ from srm_and_sbi_monomer_dimer_alp.inference_support import (
     setup_training,
     train_loop,
 )
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import NETWORK_PRESETS, PARAMETERS, RunTiming
 from srm_and_sbi_monomer_dimer_alp.test_loss_distribution import TestLossDistribution
 from srm_and_sbi_monomer_dimer_alp.utils import log_memory_state
 from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig, parameter_table
@@ -123,6 +124,15 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     geom = PARAMETERS.simulation.stem
     training_cfg = PARAMETERS.inference.training
     network_cfg = PARAMETERS.inference.network
+    flow_cfg = PARAMETERS.inference.flow
+    # A named preset overrides embedding and flow fields together (parameterization.NETWORK_PRESETS);
+    # the frozen dataclasses are replaced, never mutated, so PARAMETERS itself is untouched.
+    preset_name = getattr(args, "network_preset", None) or "baseline"
+    preset = NETWORK_PRESETS[preset_name]
+    if preset["network"]:
+        network_cfg = dataclasses.replace(network_cfg, **preset["network"])
+    if preset["flow"]:
+        flow_cfg = dataclasses.replace(flow_cfg, **preset["flow"])
     paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     div = "=" * 72
 
@@ -156,6 +166,12 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --num-workers        : {args.num_workers}        (DataLoader worker budget override; None = profile/auto)")
     print(f"  --seed               : {args.seed}")
     print(f"  --resurrect          : {args.resurrect}")
+    print(f"  --network-preset     : {preset_name}   -> embedding start_channels={network_cfg.start_channels} "
+          f"(feature dim {network_cfg.start_channels * 2 ** (network_cfg.n_conv_layers - 1)}), "
+          f"MAF hidden={flow_cfg.hidden_features} transforms={flow_cfg.num_transforms} "
+          f"blocks={flow_cfg.num_blocks} dropout={flow_cfg.dropout_probability}")
+    print(f"  --artifact-tag       : {args.artifact_tag}   -> product label "
+          f"{paths.product_label(timing.label, args.artifact_tag)}")
     print(f"  --replay-loss        : {args.replay_loss}        (per-epoch TRAIN loss in eval mode, comparable to TEST; off = cheaper)")
     print(f"  --verbose            : {args.verbose}")
     print(f"  --show               : {args.show}")
@@ -168,10 +184,12 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
           f"(grayscale)")
 
     timing_label = timing.label
-    checkpoint_path = paths.checkpoint_path(data_bank_root, timing_label)
-    resurrect_state_path = paths.resurrect_state_path(data_bank_root, timing_label)  # full-state hot-restart file
-    estimator_path = paths.estimator_path(data_bank_root, timing_label)
-    tld_path = paths.test_loss_distribution_path(data_bank_root, timing_label)
+    # Products carry the optional artifact tag (Paths.product_label); inputs never do.
+    product_label = paths.product_label(timing_label, args.artifact_tag)
+    checkpoint_path = paths.checkpoint_path(data_bank_root, product_label)
+    resurrect_state_path = paths.resurrect_state_path(data_bank_root, product_label)  # full-state hot-restart file
+    estimator_path = paths.estimator_path(data_bank_root, product_label)
+    tld_path = paths.test_loss_distribution_path(data_bank_root, product_label)
 
     print("\nOutput destinations:")
     print(f"  data_bank_root  : {data_bank_root}")
@@ -237,8 +255,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         stage="Inference",
         enabled=args.debug or args.debug_dump,
         dump=args.debug_dump,
-        dump_dir=paths.debug_run_dir(data_bank_root, timing_label, "Inference"),
-        run_label=f"{paths.project_alias}_{timing_label}",
+        dump_dir=paths.debug_run_dir(data_bank_root, product_label, "Inference"),
+        run_label=f"{paths.project_alias}_{product_label}",
         timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
 
@@ -251,7 +269,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
           f"start_ch={network_cfg.start_channels}, "
           f"temporal_target_frames={network_cfg.temporal_target_frames}) "
           f"+ TemporalTransformer(heads={network_cfg.attention_heads})")
-    print("  estimator : MAF (z_score=structured, dropout=0.1, batch_norm=True)")
+    print(f"  estimator : MAF(hidden_features={flow_cfg.hidden_features}, "
+          f"num_transforms={flow_cfg.num_transforms}, num_blocks={flow_cfg.num_blocks}, "
+          f"dropout={flow_cfg.dropout_probability}, batch_norm={flow_cfg.use_batch_norm}, "
+          f"z_score={flow_cfg.z_score_x}/{flow_cfg.z_score_y})   preset: {preset_name}")
     if args.resurrect:
         print(f"  RESURRECT : hot-restart from {resurrect_state_path} if present, "
               f"else cold-load {checkpoint_path}")
@@ -335,11 +356,15 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     embedding_net = torch.compile(Complex3DCNN(**embedding_args)).to(device)
 
     # ---- MAF posterior estimator -----------------------------------------
+    # Every flow setting is passed explicitly and persisted in the artifact's rebuild spec.
     maf_args = dict(
-        z_score_x="structured",
-        z_score_y="structured",
-        dropout_probability=0.1,
-        use_batch_norm=True,
+        z_score_x=flow_cfg.z_score_x,
+        z_score_y=flow_cfg.z_score_y,
+        hidden_features=flow_cfg.hidden_features,
+        num_transforms=flow_cfg.num_transforms,
+        num_blocks=flow_cfg.num_blocks,
+        dropout_probability=flow_cfg.dropout_probability,
+        use_batch_norm=flow_cfg.use_batch_norm,
     )
     posterior_estimator = build_maf(
         batch_x=theta_dummy,
@@ -411,6 +436,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "project_alias": paths.project_alias,
             "condition": paths.condition,
             "timing_label": timing_label,
+            "artifact_tag": args.artifact_tag,
+            "network_preset": preset_name,
             "test_set_id": f"TEST/{timing_label}",
             "theta_space": "log10",
             "theta_keys": list(spec.parameter_keys),  # learnable = the theta columns, in order
@@ -431,6 +458,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             task, sim, loss, theta = gathered
             best_metadata = {
                 "timing_label": timing_label, "workflow": cfg.tag,
+                "artifact_tag": args.artifact_tag, "network_preset": preset_name,
                 "best_test_loss": float(best_test_loss),
                 "train_videos": tld_manifest["train_videos"],
                 "test_videos": tld_manifest["test_videos"],
@@ -451,11 +479,11 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             if args.backup_every_best:
                 tv, ev = tld_manifest["train_videos"], tld_manifest["test_videos"]
                 shutil.copy2(checkpoint_path, paths.backup_checkpoint_path(
-                    data_bank_root, timing_label, tv, ev, best_epoch, best_test_loss))
+                    data_bank_root, product_label, tv, ev, best_epoch, best_test_loss))
                 shutil.copy2(estimator_path, paths.backup_estimator_path(
-                    data_bank_root, timing_label, tv, ev, best_epoch, best_test_loss))
+                    data_bank_root, product_label, tv, ev, best_epoch, best_test_loss))
                 shutil.copy2(tld_path, paths.backup_test_loss_distribution_path(
-                    data_bank_root, timing_label, tv, ev, best_epoch, best_test_loss))
+                    data_bank_root, product_label, tv, ev, best_epoch, best_test_loss))
                 print(f"  [new best] committed live artifacts + per-epoch backups at "
                       f"epoch {best_epoch} (test loss {best_test_loss:.5f})", flush=True)
             else:
@@ -465,7 +493,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     # Schema stamp for the resurrect-state guard: a hot restart refuses a file whose
     # parameter_keys / timing_label do not match this run (see load_resume_state).
-    resume_meta = {"timing_label": timing_label,
+    resume_meta = {"timing_label": product_label,
                    "parameter_keys": list(spec.parameter_keys)}
 
     losses_train, losses_test, losses_replay, optimum_loss_test = train_loop(
@@ -511,6 +539,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         finish_metadata = {
             "timing_label": timing_label,
             "workflow": cfg.tag,
+            "artifact_tag": args.artifact_tag,
+            "network_preset": preset_name,
             "best_test_loss": (float(optimum_loss_test)
                                if math.isfinite(optimum_loss_test) else None),
             "train_videos": len(training_setup["train_loader"].dataset),
@@ -538,10 +568,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             train_videos = len(training_setup["train_loader"].dataset)
             test_videos = len(training_setup["val_loader"].dataset)
             ckpt_backup = paths.backup_checkpoint_path(
-                data_bank_root, timing_label, train_videos, test_videos,
+                data_bank_root, product_label, train_videos, test_videos,
                 args.epochs, optimum_loss_test)
             estimator_backup = paths.backup_estimator_path(
-                data_bank_root, timing_label, train_videos, test_videos,
+                data_bank_root, product_label, train_videos, test_videos,
                 args.epochs, optimum_loss_test)
             shutil.copy2(checkpoint_path, ckpt_backup)
             shutil.copy2(estimator_path, estimator_backup)
@@ -549,7 +579,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             print(f"Backup estimator saved to {estimator_backup}")
             if use_tld and tld_path.exists():
                 tld_backup = paths.backup_test_loss_distribution_path(
-                    data_bank_root, timing_label, train_videos, test_videos,
+                    data_bank_root, product_label, train_videos, test_videos,
                     args.epochs, optimum_loss_test)
                 shutil.copy2(tld_path, tld_backup)
                 print(f"Backup test-loss distribution saved to {tld_backup}")
@@ -634,6 +664,22 @@ def build_inference_parser() -> argparse.ArgumentParser:
         help="Master RNG seed (PyTorch + numpy + Python random). Default None "
              "-> non-deterministic (consistent with generation); pass an int for a "
              "reproducible run.",
+    )
+    parser.add_argument(
+        "--network-preset", default="baseline", choices=sorted(NETWORK_PRESETS),
+        help="Named capacity preset overriding embedding and flow fields together "
+             "(parameterization.NETWORK_PRESETS). 'baseline' (default) reproduces the "
+             "configured architecture; 'capacity256' is the combined capacity test "
+             "(256-dimensional embedding via start_channels=16; MAF 128/8/2, dropout 0.1). "
+             "The resolved settings are printed and persisted in the estimator's rebuild spec.",
+    )
+    parser.add_argument(
+        "--artifact-tag", default=None,
+        help="Optional SCREAMING_SNAKE token ([A-Z0-9]+, e.g. CAP256) appended to the timing "
+             "label of every PRODUCT this stage writes (checkpoint, resurrect state, estimator, test-loss distribution, backups), so a named experiment lives "
+             "beside the canonical run instead of overwriting it (Paths.product_label). The "
+             "shared inputs (video/theta sets, recordings) are always read under the plain "
+             "timing label. Default: no tag (canonical names).",
     )
     parser.add_argument(
         "--resurrect", action="store_true",

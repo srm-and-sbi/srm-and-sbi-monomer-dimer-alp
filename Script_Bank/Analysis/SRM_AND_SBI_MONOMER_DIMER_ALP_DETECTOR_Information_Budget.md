@@ -101,8 +101,9 @@ of the `lambda_rate` prior the correlation time is about fifteen frames, so a hu
 recording carries roughly **three** effectively independent samples of the decay, not a
 hundred. It is easy to omit, and omitting it makes the recordings look far more informative
 than they are. Combined with the shallow-decay degeneracy above, it puts the benchmark standard
-deviation for `prob_photo_bleach` above the prior width anywhere in its prior for a 2 s recording,
-and inside the 0.10 dex threshold only in the upper half of the prior at 20 s — see
+deviation for `prob_photo_bleach` more than an order of magnitude above the 0.10 dex threshold
+anywhere in its prior for a 2 s recording (1.26 dex at the top against a 1.5 dex prior width),
+and inside that threshold only in the upper half of the prior at 20 s — see
 `DETECTOR_WORKFLOW.md` §9.5 for the table. The effective-sample-size adjustment is an approximation
 to the correlated decay likelihood, not an exact treatment of it, so the result is an approximate
 precision benchmark for an unbiased decay-rate estimator using total fluorescence and not a

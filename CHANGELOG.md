@@ -5,6 +5,147 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.13 - 2026-09-21
+
+Freezes the acceptance rules for the direct estimators before their corrected evaluation, and
+begins the acceptance-mechanics fixes an external review of 0.1.12 required. No canonical stage,
+parameter role, or preprocessing step changes.
+
+### Added
+
+- `DETECTOR_WORKFLOW.md` §9.6 — frozen acceptance rules for the direct estimators: four evaluation
+  steps in a fixed order (evidence adequacy of the run, operational success, evidence adequacy for
+  accuracy and coverage, accuracy and uncertainty) with separate verdicts; the operating subgroup
+  (`log10 mu_pc` in [2.00, 2.375)) in which accuracy and coverage must pass; prior-fixed quartile
+  boundaries; the accuracy thresholds of 0.1.12 restated with units (`sigma_r` MAE 0.08 in LINEAR
+  units, preserving the code's criterion and correcting an inventory that stated dex); three
+  bleaching outcomes (failed, valid-but-uninformative, usable) with an observable eligibility
+  diagnostic that never uses the true value; a nominal-90 % range per recording whose coverage must
+  reach 85 % overall and in the operating subgroup, with width reported separately as informativeness;
+  EVAL tasks 0 and 1 declared development data and unscored EVAL tasks the reserved validation set;
+  development outputs preserved under `_DEV_<commit>` with full provenance. The three companion notes
+  point to §9.6 from their result sections.
+
+- `srm_and_sbi_monomer_dimer_alp/direct_acceptance.py` — the frozen rules of §9.6 as one shared kernel:
+  prior-fixed subgroups (the operating subgroup and the quarters of each prior), the four evaluation
+  steps with separate verdicts, Wilson intervals on the success fraction and on the measured coverage,
+  named per-quantity ranges whose coverage and relative width are reported separately, the bleaching
+  usable/uninformative split, and a reporter rendering. Exit status 0 / 1 (any FAIL) / 2 (insufficient
+  evidence only). Tested on synthetic cases including the review's three-of-a-hundred case
+  (INSUFFICIENT EVIDENCE at every step) and a sixty-percent-success run (FAIL operational).
+- Per-recording nominal 90 % ranges from all three direct estimators, each constructed as its
+  companion note specifies and validated by coverage: `mu_r` from the standard error of the mean log
+  width, `sigma_r` from its own delta-method standard error (`psf_width_population` now returns
+  `sigma_r_se`), `lambda_rate` from a bootstrap over the recording's traces against the fixed model
+  shapes (`flicker_model_shapes`, `match_shapes`, `flicker_bootstrap_range`), `prob_photo_bleach` from
+  the flicker-corrected fit standard error in log10.
+- Reason codes on every dropped recording (`no_spots`, `too_few_tracks`, `too_few_traces`,
+  `too_few_pairs`, `no_apertures`, `fit_failed`, `nonpositive_estimate`), the full true parameter row,
+  the validity mask and the range bounds in every saved array set.
+- `DETECTOR_WORKFLOW.md` §9.7 — the capacity test on the multiple-dye baseline: one larger estimator
+  (256-dimensional embedding via `start_channels` 16; flow 128 hidden / 8 transforms / 2 blocks /
+  dropout 0.1) trained under otherwise identical data, targets, splits, preprocessing, and protocol,
+  compared with the baseline on recovery, marginal and joint calibration, widths, and failed-estimate
+  rates, overall and in the operating subgroup; parameter counts (0.755 M → 3.308 M) and the activation
+  budget (0.85 → 1.70 GiB per video) that motivate 16 videos per rank on 64 ranks (16 nodes × 4 GPUs;
+  global batch 1024 unchanged, synchronized batch statistics unchanged). Not yet run.
+- `parameterization.InferenceFlow` — the MAF settings (`hidden_features`, `num_transforms`,
+  `num_blocks`, `dropout_probability`, `use_batch_norm`, `z_score_x/y`) as an explicit configuration
+  whose defaults are the library values the earlier estimators used; the Inference stage passes them
+  explicitly and persists them in the estimator's rebuild specification (`maf_args`) for every run,
+  preset or not. `NETWORK_PRESETS` (`baseline`, `capacity256`) and `--network-preset` select the
+  embedding and flow fields together; the resolved settings are printed and stored in the manifest.
+- `Paths.product_label` and `--artifact-tag` (dispatcher knob `ARTIFACT_TAG`, wrapper knob of the
+  Inference, Evaluation, Experiment, and Posterior_Calibration stages of both workflows): an optional
+  SCREAMING_SNAKE token after the timing label of every PRODUCT (checkpoint, resurrect state,
+  estimator, test-loss distribution, backups, debug directory, MAP recovery, posterior calibration,
+  experiment report) and of the GPU stages' job names, so a named experiment lives beside the canonical
+  run instead of overwriting it; inputs are always read under the plain timing label. The estimator
+  manifest records the tag and the preset; the resurrect guard keys on the tagged label.
+- `NETWORK_PRESET` dispatcher and Inference-wrapper knob (forwarded as `--network-preset`).
+- `FAIL (protocol)` as its own §9.6 verdict for a drop without a reason code, separate from the
+  measured success fraction (the operational verdict), after the development flicker run showed the
+  two being conflated.
+- A progress line every five percent of the queued recordings in the three direct-estimator scripts;
+  the development runs were silent for 35 and 80 minutes.
+- Per-epoch peak device memory (allocated / reserved, rank 0) on the training log line next to the
+  epoch time.
+- An explicit statement of the priority between the two workflows (`DETECTOR_WORKFLOW.md` §2,
+  `PROJECT_CONTEXT.md` §3): the biology inference is the scientific task with no direct replacement;
+  the detector workflow and the direct estimators are supporting tools that constrain imaging well
+  enough and propagate what remains uncertain; estimator developments tested on the detector problem
+  (§9.7) are controlled benchmarks, not evidence of better biological inference.
+
+### Fixed after external review of 0.1.12
+
+- **Flicker refinement on an uneven grid.** The parabolic refinement in log-rate used the
+  equal-spacing formula on a grid that is not equally spaced in log-rate; it returned 4.3506 for an
+  exactly quadratic objective with its minimum at 4.3. The parabola is now fitted on the real
+  log-grid coordinates, applied only when it curves upward with its vertex inside the bracket, and
+  the report counts unrefined interior estimates and grid-edge minima. Estimates from the
+  2026-09-21 development run (`_DEV_2b9c32e`) carry the old bias, of order 0.005 dex near 4.
+- **A test could pass while failing on most recordings.** The scorers masked invalid estimates and
+  reported the count with no minimum success fraction; three exact estimates and 97 missing ones
+  passed every criterion. Replaced by the §9.6 evidence and operational steps.
+- **Discarded optimizer flag.** The fluorescence fit's `success` flag is now honored; a finite result
+  from an unsuccessful optimization is a `fit_failed` drop, not an accuracy sample.
+- **Truth-based bleaching eligibility.** The "identifiable range" was selected from the benchmark at
+  the true bleaching value, which no experimental recording has. Replaced by the observable diagnostic
+  of the companion note (fitted decay at least 3x the residual scatter; fit standard error on log10 p
+  at most 0.25 dex, calibrated on the four self-test scenes), with the rejected recordings' recovery
+  reported beside the usable ones.
+- **Decay fit collapsed on a fast decay.** Started from the opening level with a slow initial rate,
+  the least-squares fit of the p = 0.316 self-test scene converged to a flat line (amplitude 9.5 on an
+  offset of -900,000) and reported success; the new decay-visibility diagnostic caught it. The
+  amplitude is now initialized to the total drop over the recording and the fit is multi-started over
+  five initial rates, keeping the lowest cost; the scene now recovers to -0.03 dex with a
+  signal-to-noise of 16.
+- **True flicker rate leaked into the bleaching error.** The fluorescence utility passed each
+  recording's true `lambda_rate` to the standard-error correction. It now uses the prior center, or a
+  measured value via `--lambda-rate`, for every recording alike; the self-test never sees the scene's
+  true rate. The kernel also returns the fit's residual scale (`resid_sd`).
+- **`sigma_r` units.** The threshold is 0.08 in LINEAR units, as the code has always applied; the
+  companion note's comparison against the 0.75 dex log-prior width is withdrawn and the inventory that
+  stated dex is corrected. No threshold changed.
+- **Physical `Theta_Set` rows.** Stratification converts the stored physical values to log10 before
+  applying the prior-fixed boundaries; a first development check that read them as log10 found empty
+  strata.
+
+### Self-test findings under the corrected mechanics (development evidence)
+
+- Flicker: the four 6 s scenes now recover with MAE 0.0596 dex (0.0637 under the old refinement),
+  correlation 0.9997, every error still positive; the bootstrap 90 % ranges (about 0.11 dex wide)
+  cover 1 of 4 truths because the systematic offset is as large as the scatter they represent.
+- PSF: `mu_r` ranges cover 8 of 9 scenes, `sigma_r` ranges 4 of 9 — the delta-method sampling error
+  is of the size of the estimator's systematic error. Neither range is corrected here: widening
+  would be a tuning decision needing justification and validation on the reserved set.
+- Fluorescence loss: the observable eligibility classes the two scenes recovered within 0.03 dex
+  as usable and the two with errors of 0.3 and 0.6 dex as uninformative; both usable ranges cover.
+
+### Regression run of record (PSF, 0.1.13 mechanics)
+
+- `..._DETECTOR_FAB_2S_50FPS_Direct_PSF_Width` on EVAL tasks 0-1 (2000 recordings, rcl01, 36 min):
+  steps 1-3 PASS with reason codes; 4a `FAIL (accuracy)` (operating `mu_r` bias −0.0118 dex, unchanged);
+  4b `FAIL (uncertainty)` — nominal 90 % ranges cover 65.9 / 63.3 % overall and 60.0 / 55.7 % in the
+  operating subgroup; the sampling-only standard error is ~2.3x too small at every track count; details in
+  the folder's `COVERAGE_DIAGNOSIS.md` and `DETECTOR_WORKFLOW.md` §9.6.
+- The unchanged two-second flicker rerun is paused (its development run: 1909/2000, bias +0.11 dex,
+  `FAIL (accuracy)`); next steps recorded in the flicker note.
+- Head-to-head on point values, PSF parameters: `..._DETECTOR_FAB_2S_50FPS_PSF_Direct_vs_Neural` (arrays,
+  statistics, two-panel figures per parameter). Direct `mu_r` slope 0.97 / bias −0.003 dex vs neural
+  posterior median 0.93 / +0.021 dex; direct `sigma_r` slope 0.89 / corr 0.96 vs neural 0.04 / 0.17. §9.6
+  conclusion of record: the direct estimator supersedes the neural point estimates for `mu_r` and `sigma_r`
+  on synthetic recordings, pending the experimental cross-check; point estimates are the deliverable, the
+  ranges secondary; `lambda_rate` unchanged.
+
+### Development outputs preserved
+
+- `…_DETECTOR_FAB_2S_50FPS_Direct_PSF_Width_DEV_2b9c32e` and `…_Direct_Flicker_Rate_DEV_2b9c32e` on
+  rcl01 hold the 2000-video runs made before the mechanics fixes, each with `PROVENANCE.md` (commit,
+  file hashes, commands, settings, recording identifiers, environment) and `DEV_CHECK.md` (the
+  stratified development read). They are development evidence, not adoption verdicts; EVAL tasks 0
+  and 1 are development data from these runs onward.
+
 ## 0.1.12 - 2026-09-21
 
 Adds three direct (non-neural) imaging estimators -- PSF width, fluorescence loss and flicker rate --
@@ -138,8 +279,9 @@ reduces the fluctuation amplitude, not its correlation time.
 The budget's sharpest output concerns `prob_photo_bleach`. With the amplitude and offset of the
 decay curve profiled out -- they are fitted, not known, and where the decay is shallow the
 exponential is nearly a straight line, so only their product with the rate is determined -- the
-benchmark standard deviation of an unbiased estimate **exceeds the 1.5 dex prior width everywhere at
-2 s**, and falls inside the 0.10 dex threshold only in the upper half of the prior at 20 s. This is an
+benchmark standard deviation of an unbiased estimate **exceeds the 0.10 dex threshold by more than an
+order of magnitude everywhere at 2 s** (1.26 dex at the top of the prior, thousands of dex at the bottom,
+against a 1.5 dex prior width), and falls inside that threshold only in the upper half of the prior at 20 s. This is an
 approximate precision benchmark for an unbiased decay-rate estimator using total fluorescence, not a
 fundamental recovery limit for inference from the full video (the one-dye estimator tracks the
 parameter with correlation 0.80 at 2 s); it supports constraining bleaching preferentially from longer

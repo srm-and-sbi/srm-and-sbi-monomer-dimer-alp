@@ -50,6 +50,12 @@
 #   ARRAY     Simulation only: --array spec (default 0-0 = one node)
 #   NTPN CPT  Simulation only: --ntasks-per-node / --cpus-per-task (else baked)
 #   GRES      GPU stages: --gres override (else baked gpu:8); --gres is per node
+#   ARTIFACT_TAG  inference|evaluation|experiment: SCREAMING_SNAKE token ([A-Z0-9]+, e.g. CAP256)
+#             appended to the timing label of every PRODUCT (estimator, checkpoints, recovery and
+#             experiment reports) and of the job name -- <alias>_<CONDITION>_<timing>_<TAG>_<Stage> --
+#             so a named experiment lives beside the canonical run (Paths.product_label). Inputs
+#             (video/theta sets, recordings) keep the plain timing label. Unset = canonical names.
+#   NETWORK_PRESET  inference: baseline|capacity256 (parameterization.NETWORK_PRESETS); unset = baseline.
 #   NODES     GPU stages: --nodes override for multi-node (else the baked --nodes=1).
 #             --gres is per node, so NODES=2 GRES=gpu:4 spans 2*4=8 ranks (world_size):
 #             inference trains data-parallel across them, evaluation/experiment shard
@@ -113,6 +119,13 @@ case "$TOTAL_TIME" in
     ''|*[!0-9.]*|*.*.*|.) echo "FATAL: TOTAL_TIME='$TOTAL_TIME' is not a valid number (e.g. 2.0, 5.0)." >&2; exit 1 ;;
 esac
 timing_label="$(LC_ALL=C printf '%gS_50FPS' "$TOTAL_TIME")"
+# ARTIFACT_TAG: optional product-namespace token, validated like Paths.product_label; it enters the
+# GPU stages' job names right after the timing label (products and logs mirror each other).
+tag_slot=""
+if [ -n "${ARTIFACT_TAG:-}" ]; then
+    case "$ARTIFACT_TAG" in *[!A-Z0-9]*|'') echo "FATAL: ARTIFACT_TAG='$ARTIFACT_TAG' must be a SCREAMING_SNAKE token without underscores ([A-Z0-9]+, e.g. CAP256)." >&2; exit 1 ;; esac
+    export ARTIFACT_TAG; tag_slot="_${ARTIFACT_TAG}"
+fi
 export REPO   # also carried by ALL; listed explicitly in --export for clarity
 
 # Build the explicit --export list, appending only knobs that are actually set
@@ -155,8 +168,8 @@ case "$STAGE" in
     ;;
   inference)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Inference.sh"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}_Inference"
-    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add LR; _add HEARTBEAT; _add RESURRECT
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}${tag_slot}_Inference"
+    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add LR; _add HEARTBEAT; _add RESURRECT; _add NETWORK_PRESET; _add ARTIFACT_TAG
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node DDP; --gres is per node -> world_size = NODES * GPUs-per-node
@@ -164,8 +177,8 @@ case "$STAGE" in
     ;;
   evaluation)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}_Evaluation"
-    _add CONDITION; _add EVAL_TASKS; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}${tag_slot}_Evaluation"
+    _add CONDITION; _add EVAL_TASKS; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
@@ -173,8 +186,8 @@ case "$STAGE" in
     ;;
   experiment)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh"
-    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}_Experiment"
-    _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME
+    JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}${tag_slot}_Experiment"
+    _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
     # KINDS may be multi-value (FAB,INLB, a deliberate cross-condition application); Slurm splits --export on commas, so carry
     # it via the exported environment (ALL) rather than the explicit --export list.
     if [ -n "${KINDS:-}" ]; then export KINDS; KINDS_NOTE="KINDS=$KINDS (carried via ALL, comma-safe)"; fi

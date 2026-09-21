@@ -347,9 +347,12 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     torch._dynamo.config.suppress_errors = True
 
     timing_label = timing.label
-    estimator_path = paths.estimator_path(data_bank_root, timing_label)
+    # The estimator and every product derived from it carry the optional artifact tag
+    # (Paths.product_label); the experimental recordings never do.
+    product_label = paths.product_label(timing_label, args.artifact_tag)
+    estimator_path = paths.estimator_path(data_bank_root, product_label)
     experiment_dir = data_bank_root / paths.experiment_subdir
-    out_dir = paths.experiment_recovery_dir(data_bank_root, timing_label)
+    out_dir = paths.experiment_recovery_dir(data_bank_root, product_label)
     array_path = out_dir / (out_dir.name + ".npz")
     progress_path = out_dir / "progress.log"
 
@@ -476,7 +479,7 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # ---- Diagnostics reporter (the experiment report is the deliverable) -
     reporter = DiagnosticReporter(
         stage="Experiment", enabled=True, dump=True, dump_dir=out_dir,
-        run_label=f"{paths.project_alias}_{timing_label}",
+        run_label=f"{paths.project_alias}_{product_label}",
         timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
     # --merge: combine the per-shard arrays from a multi-GPU sharded run into the
@@ -729,6 +732,14 @@ def build_experiment_parser() -> argparse.ArgumentParser:
              "concatenate them, and write the final report + figures + combined "
              ".npz, then exit. Does no estimation and needs no GPU; the launcher "
              "runs it once after the sharded workers finish. Single-GPU runs never use it.")
+    parser.add_argument(
+        "--artifact-tag", default=None,
+        help="Optional SCREAMING_SNAKE token ([A-Z0-9]+, e.g. CAP256) appended to the timing "
+             "label of every PRODUCT this stage reads and writes (the estimator it loads, the experiment report directory and arrays), so a named experiment lives "
+             "beside the canonical run instead of overwriting it (Paths.product_label). The "
+             "shared inputs (video/theta sets, recordings) are always read under the plain "
+             "timing label. Default: no tag (canonical names).",
+    )
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate configuration and inputs, print what would be read/written, then exit "
                              "without running the stage (no GPU, no compute). Use before a queue submission or a long local run.")
