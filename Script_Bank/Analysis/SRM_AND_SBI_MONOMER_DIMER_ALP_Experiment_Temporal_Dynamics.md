@@ -279,7 +279,7 @@ InlB-activated MET):
 | R_B (rel. mobile-dimer diffusivity) | 0.066/0.109 = 0.61 and 0.056/0.093 = 0.60 (mean 0.60) | **MET-INLB only** | derived from the InlB-activated measurement; consistent with "dimer ≈ 1.6× slower" |
 
 **Detector** — ThunderSTORM localization fits on the same public accession `S-BSST712`, documented
-in `DETECTOR_WORKFLOW.md` §6.2/§6.3/§6.5:
+in `DETECTOR_WORKFLOW.md` §6.2/§6.5/§6.7:
 
 | parameter | reference | scope | caveat that fixes the scope |
 |---|---|---|---|

@@ -5,6 +5,165 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.12 - 2026-09-21
+
+Adds three direct (non-neural) imaging estimators -- PSF width, fluorescence loss and flicker rate --
+and the information budget that grades them against what the recordings can support. No canonical
+stage, parameter role, or preprocessing step changes; the detector continues to infer all six imaging
+parameters, and `DETECTOR_WORKFLOW.md` §9.4 remains a proposal that is not in force.
+
+### Added
+
+- `DETECTOR_WORKFLOW.md` §6 restructured into eleven subsections: the camera ranges (§6.3) and the provenance table
+  (§6.4) leave §6.2; the calibration outcome becomes run identity and metric definitions (§6.8), the multiple-dye
+  outcome (§6.9), the one-dye comparison with side-by-side tables (§6.10), and both estimators on the experimental
+  recordings (§6.11); the superseded predecessor-repository comparison is removed. §7 rewritten as five subsections
+  around the marginalized blocks and their media (§7.1, now holding the block table formerly in §9.3), the
+  `Nuisance_DLI` artifact with its build status and the analyst-owned choice of minting estimator (§7.2), the
+  construction step (§7.3), the persisted records (§7.4), and the implemented estimator artifact format (§7.5).
+  Cross-references renumbered in the workflow doc and ten companion/project documents.
+- One-dye comparison results recorded in `DETECTOR_WORKFLOW.md` §6.10: the three pre-specified
+  comparisons all resolve in the one-dye direction (`sigma_r` correlation 0.98 vs 0.17, `lambda_rate`
+  MAE 0.083 vs 0.201 dex, `mu_r` offset +0.005 vs +0.018 dex); joint coverage 0.89 at nominal 0.90
+  vs 0.62; `prob_photo_bleach` unchanged (MAE 0.205 vs 0.206), the parameter with by far the largest
+  information-budget benchmark relative to its prior at 2 s. On the MET-FAB recordings the estimators
+  disagree on `lambda_rate` (2.30 vs 5.23), left open; the direct flicker estimator is a cross-check
+  pending validation on multiple-dye synthetic recordings. §6.10 closes with a block stating what the
+  comparison establishes and what it does not: the labeling law strongly affects inference
+  performance and the multiple-dye estimator undercovers, but the comparison does not isolate an
+  estimator-only failure, does not show bleaching unrecoverable at 2 s, does not make the one-dye
+  estimator calibrated per parameter, and does not validate either model on the experimental
+  recordings. The multiple-dye model stays the working baseline.
+- `srm_and_sbi_monomer_dimer_alp/direct_imaging_estimates.py` — pure measurement kernels that read
+  imaging parameters off the renderer's own forward model: the 8-bit-to-ADU domain conversion, the
+  EMCCD mean and variance laws, matched-filter spot detection, the pixel-integrated Gaussian fit,
+  greedy cross-frame linking, and the errors-in-variables population summary. No file access, no
+  machine profile, no printing.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_PSF_Width.py` and its
+  companion note — a direct estimate of `mu_r` and `sigma_r`, with `--selftest` (nine in-memory
+  scenes rendered at known widths through the production renderer), `--dry-run`, `--workers`, and
+  acceptance thresholds fixed before the first run. Never wired into the stage dispatcher; outputs
+  go to the Data_Bank `Posit` tier. A tier-size check names the case of a stale development tier
+  carrying production filenames, which would otherwise score a handful of videos silently.
+- `srm_and_sbi_monomer_dimer_alp/information_budget.py` and
+  `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Information_Budget.py` with its
+  companion note — Cramer-Rao lower bounds on each imaging parameter from one recording, so that a
+  weak estimator can be told apart from uninformative data. Covers the per-spot width and amplitude
+  information, the log-normal population bounds, the decay-rate bound and its cubic dependence on
+  duration, and the Ornstein-Uhlenbeck correlation term that reduces the effective frame count.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Fluorescence_Loss.py` and its
+  companion note — a direct estimate of `prob_photo_bleach` from the decay of total fluorescence,
+  with the same `--selftest`/`--dry-run`/`--workers` structure. Its acceptance is stated at the full
+  recording length and applied only over the part of the prior where the budget's benchmark is itself
+  inside the threshold; outside it the estimate is recorded without a verdict.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Rate.py` and its
+  companion note, plus the flicker kernels in `direct_imaging_estimates.py` — `lambda_rate` from the
+  autocorrelation of per-spot ln-brightness, measured from VIDEO rather than from localization
+  tables. The method deliberately mirrors `Flicker_Rate_Derivation` (per-trace log, per-trace linear
+  detrend, gap-aware pooled autocorrelation, normalization at lag ONE, shape match against a
+  matched-length Ornstein-Uhlenbeck arm) so that a video-derived value and the recorded 5.1/4.7
+  table-derived values are directly comparable. That utility is left untouched so its result keeps
+  its provenance; the kernels are reimplemented rather than imported.
+
+  The model arm is SINGLE-DYE by choice. In that case the method is exactly free of `mu_pc` and
+  `sigma_pc` -- the first shifts ln-brightness additively, the second scales it linearly, and both
+  vanish under the detrend and the normalization. Summing several dyes before the logarithm breaks
+  the exactness, so modeling the multiplicity would remove a small bias at the price of making the
+  estimator depend on `sigma_pc`, a parameter that is itself under inference. In a campaign that
+  exists to decide which parameters can be pinned INDEPENDENTLY that is circular, so the bias is
+  left in and bounded instead: measured against the renderer it is 0.0077 in shape at
+  `sigma_pc = 0.42` (about 0.009 dex) and at most 0.04 at the top corner (about 0.05 dex), against
+  roughly 0.035 in shape for a ten percent change in `lambda_rate`. The report states that band
+  across the whole `sigma_pc` prior without needing a `sigma_pc` value.
+
+  Recording length is the binding constraint: the per-track detrend removes low-frequency power, so
+  the total shape travel from `lambda_rate` 1 to 10 falls from 0.584 on MET-length tracks to 0.337
+  on a 2 s tier, with the low-rate end hardest (the factor-of-two step from 1 to 2 separated by only
+  0.042 in shape). The model arm is vectorized by trace length, costing about 1.5 s per grid point.
+
+- `DETECTOR_WORKFLOW.md` §9.5 — the information budget as a diagnostic: the bound/direct/neural
+  comparison, the population-spread crossover that linking moves, the duration, correlation and
+  shallow-decay terms of the photobleaching budget with the duration table, and an explicit
+  statement that the bounds are optimistic because they omit emitter turnover, dye-multiplicity
+  changes, spot overlap and detection truncation.
+
+### Fixed after adversarial review
+
+An adversarial review of the new code (four independent lenses over the kernels, the scripts and
+their companion notes) raised 29 findings. Those that changed a number:
+
+- `psf_width_population` trimmed 2% of every sample and then used the trimmed variance as the
+  population variance. A symmetric trim removes variance from a roughly normal sample by the
+  truncated-normal factor -- 0.8735 at the 1%/99% default -- so `sigma_r` came back **6.5% short at
+  every value tested**, against a pure lognormal draw with no measurement error. The trim is kept,
+  because a few failed fits in a tail would otherwise dominate a variance, but it is now divided
+  out analytically; the corrected estimator recovers 0.999-1.000 of truth.
+- The photobleaching bound divided the per-spot brightness variance by the track length, copying
+  the treatment that is correct for the PSF width. It is not correct for brightness: the width is
+  drawn once per subunit and held, but brightness is a stationary Ornstein-Uhlenbeck process, so
+  every frame is a fresh draw from the very population whose spread `sigma_pc` describes. Verified
+  against the renderer, the within-track variance of ln brightness is 0.145 at `sigma_pc = 0.42`
+  against a population variance of 0.176 -- most of the spread lives within a track, not between
+  tracks. The bound now counts spot-frames discounted by the flicker correlation.
+- The budget utility and the fluorescence-loss estimator independently quoted 0.018 and 0.028 for
+  the same whole-field relative noise, which made the published duration table disagree with
+  the tool that produced it. The constant now lives once, in the kernel, with its derivation.
+- `Information_Budget` wrote to a path with no condition token, so a FAB run and an INLB run would
+  have overwritten one another; the emitter density and dyes per spot differ between them.
+
+Claims corrected against the code that produces them: the effective sample size at the prior center
+is 3.2 frames per hundred, not seven, and the resulting inflation of a decay-rate standard deviation
+is a constant 5.6x independent of recording length; the flicker is NOT the largest term in the
+bleaching budget once the amplitude and offset are profiled out -- the shallow-decay degeneracy costs
+2.7x at the top of the prior and 150x at the bottom, so it dominates everywhere but the top; the
+background is about thirty times the emitter signal over the field at MET-FAB density, not a hundred;
+the SCOPE camera boxes are +/-1.15% about their centers for three of the five, not "better than 1%";
+and `sigma_r`'s linear-unit threshold was being compared against a dex-unit prior width.
+
+Also fixed: a second check that could never fail (`check_shape` comparing two arrays built in the
+same loop); `make_figure` raising on an empty reduction and discarding the report that would have
+explained why every estimate was NaN; both estimators exiting 0 on a failed acceptance gate;
+`--condition` choices hardcoded rather than taken from `labeling.LABELING_CONDITIONS`;
+`Direct_Fluorescence_Loss` hard-requiring a camera record its default observable never reads;
+`SELFTEST` occupying the alias slot reserved for the condition; and `--workers` advertised for a
+selftest that renders serially.
+
+One finding was refuted rather than fixed: the flicker correction applied to the whole-field curve
+is correct, because a sum of independent Ornstein-Uhlenbeck processes keeps the same normalized
+autocorrelation (measured lag-1 of the summed field 0.922-0.935 against a per-dye 0.9387). Summing
+reduces the fluctuation amplitude, not its correlation time.
+
+### Result of record
+
+The budget's sharpest output concerns `prob_photo_bleach`. With the amplitude and offset of the
+decay curve profiled out -- they are fitted, not known, and where the decay is shallow the
+exponential is nearly a straight line, so only their product with the rate is determined -- the
+benchmark standard deviation of an unbiased estimate **exceeds the 1.5 dex prior width everywhere at
+2 s**, and falls inside the 0.10 dex threshold only in the upper half of the prior at 20 s. This is an
+approximate precision benchmark for an unbiased decay-rate estimator using total fluorescence, not a
+fundamental recovery limit for inference from the full video (the one-dye estimator tracks the
+parameter with correlation 0.80 at 2 s); it supports constraining bleaching preferentially from longer
+recordings, subject to validating that measurement. A benchmark computed with the amplitude and
+offset treated as known is optimistic by an order of magnitude and would have missed this entirely.
+
+### Notes on the measurements behind the estimator design
+
+Three choices were adopted because the alternative was measured against the renderer and found
+biased: the local background is supplied from the SCOPE block rather than fitted (a free background
+is near-degenerate with a broad faint Gaussian and pulled the fitted width down by 6% at the bottom
+of the `mu_r` box and 25% at the top); the fit is flat-weighted with the EMCCD variance law entering
+only the standard error through a sandwich covariance (model-variance weighting down-weights the
+bright core and biased `mu_r` high by 0.06 dex); and neighboring detections are masked out of each
+patch (their flux inflated `mu_r` by 0.018 dex at realistic emitter density). Linking before
+summarizing moves `sigma_r` out of the regime where the measurement variance dominates its bound.
+
+For the fluorescence-loss estimator the corresponding correction was the observable itself. Apertures
+pinned to the spots of the opening frames -- the natural first design -- measure diffusion rather than
+bleaching: emitters wander roughly thirteen pixels over a 20 s recording and leave a four-pixel
+aperture, and on rendered recordings that returned a bleaching probability near 0.5 for every true
+value from 0.01 to 0.316. The whole-field sum is immune to motion within the frame by construction and
+is now the default, with the aperture path retained behind a flag for diagnosis.
+
 ## 0.1.11 - 2026-09-18
 
 Documentation and release bookkeeping only: no parameter role, preprocessing step, or executable
@@ -23,7 +182,7 @@ model changes. Version 0.1.10 is the `one-dye-sensitivity` branch and is not par
   the experimental exposure duration is separate acquisition metadata. The flicker-rate derivation is
   described as a single-emitter log-brightness match that corrects finite-track detrending only and
   does not model multi-dye intensity sums, so its result is a single-dye-equivalent reference
-  (`DETECTOR_WORKFLOW.md` §6.3; the derivation's companion note). The within-recording fall of the
+  (`DETECTOR_WORKFLOW.md` §6.5; the derivation's companion note). The within-recording fall of the
   inferred bleaching probability is described as an observation that motivates investigation, not as
   evidence that a single-rate bleaching model is misspecified (`DETECTOR_WORKFLOW.md` §6.2).
 - Provenance of every externally supplied value is recorded as two separate properties, evidence
@@ -35,7 +194,7 @@ model changes. Version 0.1.10 is the `one-dye-sensitivity` branch and is not par
 
 ### Added
 
-- `DETECTOR_WORKFLOW.md` §6.6, the calibration outcome of the MET-FAB detector under the Poisson
+- `DETECTOR_WORKFLOW.md` §6.9, the calibration outcome of the MET-FAB detector under the Poisson
   labeling law: run identity, metric definitions, per-parameter and joint results from the Evaluation
   and Posterior_Calibration reports, the separate calculations on the saved draws (including the
   stratification by realized dye multiplicity), the limits of what the results support, and the

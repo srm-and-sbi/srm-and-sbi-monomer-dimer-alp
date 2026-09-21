@@ -36,7 +36,7 @@ per-emitter property, and its PSF width is **dimer-broadened**. The two populati
 **upper bounds** rather than targets — a calibration is expected to land below them. `lambda_rate` is
 photophysical and condition-independent, so it applies to both conditions. **`prob_photo_bleach` has
 no external anchor** and is read on its internal evidence alone: its drift, its recovery, and its
-posterior width. Provenance for every value: `DETECTOR_WORKFLOW.md` §6.2/§6.3/§6.5.
+posterior width. Provenance for every value: `DETECTOR_WORKFLOW.md` §6.2/§6.5/§6.7.
 
 ## Outputs and how to run
 

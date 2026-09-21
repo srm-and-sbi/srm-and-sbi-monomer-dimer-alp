@@ -2,7 +2,7 @@
 
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Flicker_Rate_Derivation.py`. The emitter-brightness
 flicker is a stationary Ornstein-Uhlenbeck (OU) process on ln-brightness whose correlation-decay
-rate is `lambda_rate` (`DETECTOR_WORKFLOW.md` §6.3). This utility fixes the prior on `lambda_rate` by measuring the
+rate is `lambda_rate` (`DETECTOR_WORKFLOW.md` §6.5). This utility fixes the prior on `lambda_rate` by measuring the
 flicker timescale directly from the public single-molecule localization tables, so the value is
 reproducible from data rather than assumed. This note explains what it computes, how to run it, and
 how to read the result, without reading the code.
@@ -78,10 +78,10 @@ number. The prior is locked to log-uniform `(0.0, 1.0)` = `[1, 10]`, bracketing 
   artifact.
 - **`mu_pc` and `sigma_pc` are immaterial for a single emitter** — the additive shift and the linear
   scale of ln-brightness both cancel in the normalized ln-autocorrelation of one dye
-  (`DETECTOR_WORKFLOW.md` §6.3).
+  (`DETECTOR_WORKFLOW.md` §6.5).
 - **Single-emitter assumption.** The model arm simulates one dye per trace and takes the logarithm per
   trace; it does not sum several dyes before the logarithm. A localized spot may carry more than one
-  dye under the FAB labeling law (`DETECTOR_WORKFLOW.md` §6.4), and the logarithm of a multi-dye
+  dye under the FAB labeling law (`DETECTOR_WORKFLOW.md` §6.6), and the logarithm of a multi-dye
   intensity sum is not a single-dye OU process: its normalized autocorrelation depends on `sigma_pc`
   as well as on `lambda_rate`. The derived value is therefore a single-dye-equivalent reference under
   that assumption, not a measurement that accounts for dye multiplicity; the matched model arm
@@ -96,7 +96,7 @@ packaging per-cell ThunderSTORM localization tables (`.../tracks/<cell>.csv`, tr
 `<cell>.tracked.csv`) and their processing protocols. The `intensity [photon]` column is the flicker
 observable used here. The accession is the data of the MET single-molecule-tracking study of Harwardt
 et al. 2017 (see References), and is the same source that supplies the imaging reference values in
-`DETECTOR_WORKFLOW.md` §6.5.
+`DETECTOR_WORKFLOW.md` §6.7.
 
 ## References
 
@@ -112,5 +112,5 @@ et al. 2017 (see References), and is the same source that supplies the imaging r
   Heilemann, M., Dietz, M.S. (2017). Membrane dynamics of resting and internalin B-bound MET receptor
   tyrosine kinase studied by single-molecule tracking. *FEBS Open Bio* 7(9):1422–1440 — the MET dataset
   source (public accession `S-BSST712`).
-- `DETECTOR_WORKFLOW.md` §6.3 (the flicker model and this derivation) and §6.5 (the imaging reference
+- `DETECTOR_WORKFLOW.md` §6.5 (the flicker model and this derivation) and §6.7 (the imaging reference
   values and their public provenance).

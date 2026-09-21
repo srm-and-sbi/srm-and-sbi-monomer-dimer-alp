@@ -1501,13 +1501,13 @@ both are shown.
 
 **Outcome for the MET-FAB detector (2 s, Poisson labeling).** The first production
 calibration of the detector under the DOL-explicit observation layer is recorded, as
-measurements with their definitions and limits, in `DETECTOR_WORKFLOW.md` §6.6: on
+measurements with their definitions and limits, in `DETECTOR_WORKFLOW.md` §6.9: on
 25,000 held-out synthetic videos the posterior median tracks the truth for the PSF
 median and the brightness pair (correlation 0.89–0.96) but not for the PSF spread
 (0.17), the joint 90 % credible region covers 62 % of truths, and the brightness
 error grows monotonically with the realized number of dyes per labeled subunit. A
 one-dye sensitivity run and the proposal that follows from these results are in
-`DETECTOR_WORKFLOW.md` §6.6 and §9.4.
+`DETECTOR_WORKFLOW.md` §6.9 and §9.4.
 
 ### Estimator generalization and test-loss interpretation
 
@@ -1710,7 +1710,7 @@ single-cell, per-video model extend to population posteriors?
 
 **S6. Which imaging parameters the detector should infer.** Under the Poisson labeling
 law two of the six inferred imaging parameters are not recovered from 2 s recordings
-and the joint posterior is too narrow (`DETECTOR_WORKFLOW.md` §6.6). Which of the six
+and the joint posterior is too narrow (`DETECTOR_WORKFLOW.md` §6.9). Which of the six
 are better supplied from acquisition metadata or from direct, non-neural estimators on
 the raw frames, with explicit uncertainty, and which must remain coupled inference
 targets? The proposal and its adoption gates are `DETECTOR_WORKFLOW.md` §9.4.

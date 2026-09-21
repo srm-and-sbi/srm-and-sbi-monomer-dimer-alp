@@ -1,3 +1,3 @@
 """SRM_AND_SBI DIMER model (alp iteration) — simulation-based inference of reaction-diffusion parameters."""
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
