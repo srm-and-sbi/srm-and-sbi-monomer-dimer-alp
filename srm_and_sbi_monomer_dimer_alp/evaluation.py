@@ -418,10 +418,9 @@ def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
     median, all in log10 units; and the share of observations whose MAP lies outside the
     posterior's central 90% interval ``[Q05, Q95]``. A MAP far from both medians and
     outside the 90% interval marks an optimizer that climbed into a density spike the
-    posterior samples do not visit (the flow's density is unconstrained outside its
-    training support, which the unrestricted pool exposes) -- the medians, not the MAP,
-    are then the point estimate to read. ``sgm_log10`` may be ``None`` (columns show
-    ``n/a``).
+    posterior samples do not visit, or an optimizer that stopped short, or another feature
+    of the posterior's shape; the table establishes the disagreement, and separate checks
+    decide between those readings. ``sgm_log10`` may be ``None`` (columns show ``n/a``).
     """
     map_log10 = np.asarray(map_log10, dtype=float)
     post_q = np.asarray(post_q, dtype=float)
@@ -429,8 +428,7 @@ def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
     n_obs = map_log10.shape[0]
     labels = np.asarray(["all"] * n_obs) if groups is None else np.asarray(groups)
     headers = ["parameter", "label"] + ([group_header] if groups is not None else []) + [
-        "n", "median |MAP - median|", "median |MAP - SGM|", "median |SGM - median|",
-        "MAP outside 90%"]
+        "n", "MAP vs median", "MAP vs SGM", "SGM vs median", "MAP outside 90%"]
     rows = []
     for i, para in enumerate(parameterization):
         for g in (dict.fromkeys(labels) if groups is not None else ["all"]):
@@ -452,6 +450,105 @@ def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
                 map_sgm = sgm_med = "n/a"
             rows.append(cells + [str(mp.size), f"{np.median(np.abs(mp - med)):.3f}",
                                  map_sgm, sgm_med, f"{outside * 100:.0f}%"])
+    return headers, rows
+
+
+def point_estimates_compared_table(parameterization, true_log10: np.ndarray,
+                                   estimates: dict) -> tuple:
+    """Build ``(headers, rows)`` placing the point estimates side by side per parameter.
+
+    ``estimates`` maps a short estimate name (``"MAP"``, ``"median"``, ``"SGM"``) to its
+    ``(N, D)`` log10 array; insertion order is the column order within each statistic. One
+    row per learnable parameter. The columns are grouped by statistic, with the estimates
+    consecutive inside each group: correlation with the truth for MAP, median, SGM; then
+    MAE; then signed bias (mean of inferred - true); then the share outside the prior box.
+    The single-estimate recovery tables carry each estimate's full statistics; this table is
+    the view in which the three are read against each other. A ``None`` entry renders as
+    ``n/a``.
+    """
+    true_log10 = np.asarray(true_log10, dtype=float)
+    names = [n for n in estimates]
+    stats = ("corr", "MAE", "bias", "outside prior")
+    headers = ["parameter", "label", "n"] + [f"{s} {n}" for s in stats for n in names]
+    present = {n: np.asarray(estimates[n], dtype=float) for n in names
+               if estimates[n] is not None and np.asarray(estimates[n]).size}
+    rows = []
+    for i, para in enumerate(parameterization):
+        cells = {s: [] for s in stats}
+        # One shared mask per row: the videos finite in the truth and in every present estimate,
+        # so the three columns of a statistic describe the same videos and 'n' counts them.
+        shared = np.isfinite(true_log10[:, i])
+        for arr in present.values():
+            shared &= np.isfinite(arr[:, i])
+        for name in names:
+            if name not in present:
+                for s in stats:
+                    cells[s].append("n/a")
+                continue
+            est, tru = present[name][shared, i], true_log10[shared, i]
+            if est.size < 3:
+                for s in stats:
+                    cells[s].append("n/a")
+                continue
+            corr = correlation_with_truth(tru, est)
+            cells["corr"].append("n/a" if corr is None else f"{corr:+.2f}")
+            cells["MAE"].append(f"{np.mean(np.abs(est - tru)):.3f}")
+            cells["bias"].append(f"{np.mean(est - tru):+.3f}")
+            cells["outside prior"].append(f"{fraction_outside_prior(para, est) * 100:.0f}%")
+        rows.append([para["KEY"], para.get("LABEL") or "-", str(int(shared.sum()))]
+                    + [c for s in stats for c in cells[s]])
+    return headers, rows
+
+
+def experiment_estimates_compared_table(parameterization, estimates_by_kind: dict,
+                                        kinds) -> tuple:
+    """Build ``(headers, rows)`` placing the point estimates side by side per condition.
+
+    ``estimates_by_kind`` maps a short estimate name to the ``{kind: (N, D) log10 array}``
+    dict that ``experiment_table`` consumes; insertion order is the column order within each
+    statistic. One row per (parameter, kind); columns grouped by statistic with the estimates
+    consecutive: the median over windows for MAP, median, SGM; then the IQR over windows; then
+    the share outside the prior box. No ground truth exists for experimental recordings, so
+    this is the distribution view, read across the three estimates on the same windows.
+    """
+    names = [n for n in estimates_by_kind]
+    stats = ("median", "IQR", "outside prior")
+    headers = ["parameter", "label", "kind", "n"] + [f"{s} {n}" for s in stats for n in names]
+    rows = []
+    for i, para in enumerate(parameterization):
+        for kind in kinds:
+            cells = {s: [] for s in stats}
+            cols = {}
+            for name in names:
+                arr = np.asarray(estimates_by_kind[name].get(kind, []), dtype=float)
+                cols[name] = arr[:, i] if arr.ndim == 2 and arr.size else None
+            # One shared mask per row: windows finite in every present estimate, so the columns
+            # of a statistic describe the same windows and 'n' counts them.
+            lengths = {c.size for c in cols.values() if c is not None}
+            shared = None
+            if len(lengths) == 1:
+                shared = np.ones(lengths.pop(), dtype=bool)
+                for c in cols.values():
+                    if c is not None:
+                        shared &= np.isfinite(c)
+            for name in names:
+                col = cols[name]
+                if col is None or shared is None:
+                    for s in stats:
+                        cells[s].append("n/a")
+                    continue
+                col = col[shared]
+                if not col.size:
+                    for s in stats:
+                        cells[s].append("n/a")
+                    continue
+                q1, med, q3 = np.quantile(col, [0.25, 0.5, 0.75])
+                cells["median"].append(f"{med:+.3f}")
+                cells["IQR"].append(f"{q3 - q1:.3f}")
+                cells["outside prior"].append(f"{fraction_outside_prior(para, col) * 100:.0f}%")
+            rows.append([para["KEY"], para.get("LABEL") or "-", kind,
+                         str(int(shared.sum())) if shared is not None else "0"]
+                        + [c for s in stats for c in cells[s]])
     return headers, rows
 
 

@@ -1513,10 +1513,13 @@ both are shown.
 **Outcome for the MET-FAB detector (2 s, Poisson labeling).** The first production
 calibration of the detector under the DOL-explicit observation layer is recorded, as
 measurements with their definitions and limits, in `DETECTOR_WORKFLOW.md` §6.9: on
-25,000 held-out synthetic videos the posterior median tracks the truth for the PSF
-median and the brightness pair (correlation 0.89–0.96) but not for the PSF spread
-(0.17), the joint 90 % credible region covers 62 % of truths, and the brightness
-error grows monotonically with the realized number of dyes per labeled subunit. A
+25,000 held-out synthetic videos the three point estimates, read together, track
+the truth for the brightness pair (correlation 0.79–0.87 for the MAP, 0.89–0.95 for
+the posterior median and the sample geometric median), disagree on the PSF median
+(0.67 for the MAP with 26 % of estimates outside the prior box, 0.96 for the two
+posterior summaries), and do not track the PSF spread (0.08 to 0.17); the joint 90 %
+credible region covers 62 % of truths, and the brightness error grows monotonically
+with the realized number of dyes per labeled subunit. A
 one-dye sensitivity run and the proposal that follows from these results are in
 `DETECTOR_WORKFLOW.md` §6.9 and §9.4.
 

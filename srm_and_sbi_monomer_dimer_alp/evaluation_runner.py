@@ -35,6 +35,7 @@ from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
+    point_estimates_compared_table,
     band_label,
     map_estimate,
     posterior_coverage_table,
@@ -48,7 +49,8 @@ from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow, to_physical
 from srm_and_sbi_monomer_dimer_alp.utils import console_log_context  # noqa: F401  (entry points import via this module's siblings)
-from srm_and_sbi_monomer_dimer_alp.visualization_inference import figure_recovery_combined
+from srm_and_sbi_monomer_dimer_alp.visualization_inference import (
+    figure_recovery_combined, figure_point_estimates_vs_truth)
 from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
 
 
@@ -83,7 +85,7 @@ def _shard_array_path(recovery_dir: Path, rank: int, world_size: int) -> Path:
 
 def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_path: Path,
                            scores, inferred_log10, true_log10, post_quantiles,
-                           run_start, post_sgm=None) -> None:
+                           run_start, post_sgm=None, persist_arrays: bool = True) -> None:
     """Save the recovery arrays and write the report + figures.
 
     Shared by the single-process recovery path and the ``--merge`` combine step,
@@ -117,8 +119,13 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
         save_arrays["posterior_quantiles"] = post_q   # [Q05,Q25,Q50,Q75,Q95]
     if sgm is not None:
         save_arrays["posterior_sgm"] = sgm            # (N, D) sample geometric median
-    np.savez_compressed(str(recovery_array_path), **save_arrays)
-    print(f"\nRecovery arrays saved to {recovery_array_path}")
+    if persist_arrays:
+        np.savez_compressed(str(recovery_array_path), **save_arrays)
+        print(f"\nRecovery arrays saved to {recovery_array_path}")
+    else:
+        # Report-only rendering from an existing product: the arrays on disk are the record and
+        # are left untouched (a re-save would also drop any field this writer does not know).
+        print(f"\nRecovery arrays left as stored at {recovery_array_path} (report-only rendering)")
 
     # ---- Recovery report -------------------------------------------------
     guide = eval_cfg.error_guide                   # 0.3 ~= log10(2): within a factor of 2
@@ -149,7 +156,9 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
                                    guide, guide_tight)
     reporter.table(
         "MAP recovery (per parameter, log10 units)", headers, rows,
-        note=f"error = inferred - true in log10 units. The two 'within' columns are "
+        note=f"error = inferred - true in log10 units, for the MAP (the optimizer's mode); the "
+             f"posterior-median and SGM tables below repeat every statistic for the other two "
+             f"point estimates, and the three are read together. The two 'within' columns are "
              f"the fractions of EVAL videos recovered inside each nested tolerance "
              f"band, stated as the multiplicative range the band permits: "
              f"{band_label(guide)} is +/-{guide:g} in log10 (a factor of two) and "
@@ -187,16 +196,34 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
                 note="same statistics for the sample geometric median (SGM): the posterior "
                      "sample closest, in prior-width-scaled log10 distance, to all other "
                      "samples -- a joint point estimate that is itself a probable point.")
+        # The three estimates in one row per parameter: the view in which they are read
+        # against each other (the tables above carry each one's full statistics).
+        cmp_headers, cmp_rows = point_estimates_compared_table(
+            draw_spec, true_log10,
+            {"MAP": inferred_log10, "median": post_q[:, :, 2], "SGM": sgm})
+        reporter.table(
+            "Point estimates compared (per parameter, log10 units)", cmp_headers, cmp_rows,
+            note="the three point estimates on the same videos, columns grouped by statistic "
+                 "with the estimates consecutive: correlation with the truth, MAE, signed bias "
+                 "(mean of inferred - true) and the share outside the prior box, each for MAP, "
+                 "median and SGM. 'median' is the 1-D posterior median (Q50 of each marginal); "
+                 "'SGM' the sample geometric median of the posterior cloud. A conclusion about "
+                 "a parameter is drawn from the row as a whole, never from one column; the "
+                 "full statistics of each estimate are in the three recovery tables above.")
         agr_headers, agr_rows = point_estimate_agreement_table(
             draw_spec, inferred_log10, post_q, sgm)
         reporter.table(
             "Point-estimate agreement (per parameter, log10 units)", agr_headers, agr_rows,
-            note="gaps between the MAP and the two posterior-derived summaries, and the "
-                 "share of videos whose MAP falls outside the posterior's central 90% "
-                 "interval. Large gaps with a high outside share mean the optimizer found "
-                 "density the posterior samples do not visit (a flow spike, typically "
-                 "outside the training support under --pool-mode unrestricted); read the "
-                 "medians as the point estimate in that case.")
+            note="each 'X vs Y' column is the median over videos of the absolute difference "
+                 "between the two point estimates (log10); 'median' is the 1-D posterior "
+                 "median, 'SGM' the sample geometric median. 'MAP outside 90%' is the share "
+                 "of videos whose MAP falls outside the posterior's central 90% interval. "
+                 "Large gaps with a high outside share establish that the optimized mode "
+                 "and the posterior summaries disagree; whether that is a density spike "
+                 "the samples do not visit, an optimizer that stopped short, or another "
+                 "feature of the posterior's shape is not decided by this table and needs "
+                 "separate checks. The three point estimates are read together, and no "
+                 "single one replaces the others.")
 
     if reporter.dump:
         for i, para in enumerate(draw_spec):
@@ -221,6 +248,31 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
                         f"credible width). A panel stamped 'not computed' marks a view "
                         f"the --summary option omitted.",
             )
+        if post_q is not None:
+            # The point-estimate view: the three estimates against the truth as summaries (binned
+            # medians) over one shared band, the posterior's own IQR -- the same construction as
+            # the window-drift figure of the Experiment stage.
+            for i, para in enumerate(draw_spec):
+                key = para["KEY"]
+                label = para.get("LABEL") or key
+                fig = figure_point_estimates_vs_truth(
+                    true_log10[:, i],
+                    {"MAP": inferred_log10[:, i], "median": post_q[:, i, 2],
+                     "SGM": (sgm[:, i] if sgm is not None else None)},
+                    post_q[:, i, :], para["PRIOR_RANGE"], label, n_bins=n_bins,
+                    min_count=min_count)
+                if fig is not None:
+                    reporter.save_figure(
+                        f"point_estimates_{key}",
+                        fig,
+                        caption=f"{key} ({label}). The three point estimates against the truth, one "
+                                f"panel each (MAP; median = 1-D posterior median; SGM): grey density of "
+                                f"all videos, the estimate's median over equal-count bins of the truth "
+                                f"as the line, and the posterior IQR (median over the bin of the per-video "
+                                f"Q25 and Q75) as the band, drawn once and identical on every panel "
+                                f"because the three come from the same posterior. The estimate axis is "
+                                f"clipped to the prior box widened by 40 %; MAP values beyond it are "
+                                f"counted in the tables, not drawn.")
 
     reporter.summary()
     reporter.write_report()

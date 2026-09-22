@@ -206,13 +206,19 @@ brightness (+0.46) more than with the observable spot count (+0.25); a measured 
 brightness or signal-to-noise ratio, not yet emitted, is the candidate experimental proxy. Full
 numbers in the run folder's `COVERAGE_DIAGNOSIS.md`.
 
-**Head-to-head with the neural estimator on point values** (`..._PSF_Direct_vs_Neural`, two-panel figures,
-each method on its own sample): `mu_r` direct slope 0.97 / bias −0.003 dex against neural posterior median
-slope 0.93 / bias +0.021 dex; `sigma_r` direct slope 0.89 / correlation 0.96 against neural slope 0.04 /
-correlation 0.17. The direct estimator supersedes the neural point estimates for both PSF parameters on
-synthetic recordings, pending the experimental cross-check (`DETECTOR_WORKFLOW.md` §9.6, conclusion of
-record). Point estimates are the deliverable: the biology workflow consumes the imaging block as a frozen
-vector; the ranges are secondary.
+**Head-to-head with the neural estimator on point values** (`..._PSF_Direct_vs_Neural`; matched subset of
+2,000 EVAL recordings with identical six-parameter truths; figures keep separate panels for each method's
+full evaluated sample; the three neural point estimates are read together). `mu_r`: direct correlation
+0.967 / MAE 0.0155 dex / bias −0.0031 dex against the neural MAP 0.687 / 0.0795 / +0.0294 (26 % outside the
+prior box), posterior median 0.955 / 0.0254 / +0.0218 and SGM 0.952 / 0.0259 / +0.0220; `sigma_r`: direct
+0.963 / 0.0460 / −0.0101 against neural MAP 0.065 / 0.1978 / −0.0499, median 0.152 / 0.1870 / −0.0162 and
+SGM 0.129 / 0.1882 / −0.0169 (errors in log10 for comparison; the frozen `sigma_r` criterion stays linear).
+The direct estimator substantially improves recovery of `sigma_r`, where all three neural estimates are
+nearly constant; for `mu_r` both methods recover the parameter well and the direct advantage is more modest
+(lower error and bias, with a residual −0.0118 dex in the dim subgroup). Point estimates and uncertainty
+answer different questions: this comparison establishes point accuracy, and the coverage failure above does
+not reverse it. It changes no parameter role by itself; experimental deployment and the fixed-versus-sampled
+imaging-input choice are separate decisions (`DETECTOR_WORKFLOW.md` §9.6 conclusion of record, §7.2).
 
 ## Essential notes
 

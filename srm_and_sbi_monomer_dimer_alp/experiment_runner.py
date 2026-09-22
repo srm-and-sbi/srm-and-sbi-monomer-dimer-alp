@@ -40,7 +40,7 @@ from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
     map_estimate,
-    experiment_table,
+    experiment_table, experiment_estimates_compared_table,
     posterior_summary,
     _theta_repr,
     point_estimate_agreement_table, prior_scale,
@@ -57,7 +57,9 @@ from srm_and_sbi_monomer_dimer_alp.experiment_support import (
 )
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
-from srm_and_sbi_monomer_dimer_alp.visualization_inference import figure_experiment_combined
+from srm_and_sbi_monomer_dimer_alp import temporal_dynamics as tdk
+from srm_and_sbi_monomer_dimer_alp.visualization_inference import (
+    figure_experiment_combined, figure_window_drift, figure_point_estimates_by_cell)
 from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
 
 
@@ -112,7 +114,7 @@ def _aggregate_by_kind(inferred_log10, kind_index, cell_arr, kinds, mode, n_para
 def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Path,
                              scores, inferred_log10, kind_index, cell_of, chunk_of,
                              post_quantiles, post_samples, kinds, run_start,
-                             post_sgm=None) -> None:
+                             post_sgm=None, persist_arrays: bool = True) -> None:
     """Save the inferred-theta arrays and write the report + figures.
 
     Shared by the single-process path and the ``--merge`` combine step, so both
@@ -152,8 +154,11 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
         save_arrays["posterior_samples_cloud"] = post_s
     if sgm is not None:
         save_arrays["posterior_sgm"] = sgm              # (N, D) sample geometric median
-    np.savez_compressed(str(array_path), **save_arrays)
-    print(f"\nExperiment MAP arrays saved to {array_path}")
+    if persist_arrays:
+        np.savez_compressed(str(array_path), **save_arrays)
+        print(f"\nExperiment MAP arrays saved to {array_path}")
+    else:
+        print(f"\nExperiment arrays left as stored at {array_path} (report-only rendering)")
 
     # ---- Report ----------------------------------------------------------
     inferred_by_kind = _aggregate_by_kind(
@@ -182,9 +187,11 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                            "diagnostic; not a calibration/quality metric).")
 
     headers, rows = experiment_table(draw_spec, inferred_shown, shown)
-    reporter.table("Inferred theta by condition (log10 units)", headers, rows,
+    reporter.table("MAP theta by condition (log10 units)", headers, rows,
                    note=f"no ground truth for real data; values are the distribution "
-                        f"of inferred MAP theta per condition ({agg_desc}). Compare "
+                        f"of the MAP (the optimizer's mode) per condition ({agg_desc}); the "
+                        f"posterior-median and SGM tables below repeat it for the other two "
+                        f"point estimates, and the three are read together. Compare "
                         f"conditions to read out parameter differences. 'outside prior' "
                         f"is the share of estimates beyond the row's prior box (possible "
                         f"only under --pool-mode unrestricted).")
@@ -213,18 +220,85 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                                 f"prior-width-scaled log10 distance, to all other samples, "
                                 f"so a joint point estimate that is itself a probable point "
                                 f"({agg_desc}).")
+        # The three estimates in one row per (parameter, condition): the view in which they
+        # are read against each other (the tables above carry each one's full distribution).
+        cmp_estimates = {"MAP": inferred_shown, "median": med_shown}
+        if sgm is not None:
+            cmp_estimates["SGM"] = sgm_shown
+        cmp_headers, cmp_rows = experiment_estimates_compared_table(
+            draw_spec, cmp_estimates, shown)
+        reporter.table("Point estimates compared (per parameter, log10 units)",
+                       cmp_headers, cmp_rows,
+                       note=f"the three point estimates on the same windows ({agg_desc}), columns "
+                            f"grouped by statistic with the estimates consecutive: the median over "
+                            f"windows, the IQR over windows and the share outside the prior box, each "
+                            f"for MAP, median and SGM. 'median' is the 1-D posterior median (Q50 of "
+                            f"each marginal); 'SGM' the sample geometric median of the posterior cloud. "
+                            f"A statement about a parameter is read from the row as a whole, never "
+                            f"from one column.")
         agr_headers, agr_rows = point_estimate_agreement_table(
             draw_spec, inferred_log10, post_q, sgm,
             groups=[condition_display(kinds[k]) for k in kind_index])
         reporter.table("Point-estimate agreement (per parameter, log10 units)",
                        agr_headers, agr_rows,
-                       note="gaps between the MAP and the two posterior-derived summaries per "
-                            "window, and the share of windows whose MAP falls outside the "
-                            "posterior's central 90% interval. Large gaps with a high outside "
-                            "share mean the optimizer found density the posterior samples do "
-                            "not visit (a flow spike, typically outside the training support "
-                            "under --pool-mode unrestricted); read the medians as the point "
-                            "estimate in that case.")
+                       note="each 'X vs Y' column is the median over windows of the absolute "
+                            "difference between the two point estimates (log10); 'median' is the "
+                            "1-D posterior median, 'SGM' the sample geometric median. 'MAP outside "
+                            "90%' is the share of windows whose MAP falls outside the posterior's "
+                            "central 90% interval. Large gaps with a high outside share establish "
+                            "that the optimized mode and the posterior summaries disagree; whether "
+                            "that is a density spike the samples do not visit, an optimizer that "
+                            "stopped short, or another feature of the posterior's shape is not "
+                            "decided by this table and needs separate checks. The three point "
+                            "estimates are read together, and no single one replaces the others.")
+
+    # ---- Within-recording drift: every stored point estimate against window position ----
+    # The windows of one recording share the same acquisition, so a trend across them is either
+    # dynamics or an acquisition confound; this table and figure measure it for the MAP, the
+    # posterior median and the SGM together, against the posterior's own per-window interval.
+    if n_estimates:
+        grids, _, n_chunks_g = tdk.point_estimate_grids(
+            inferred_log10, kind_index, cell_of, chunk_of, len(kinds), post_q, sgm)
+        if n_chunks_g >= 2:
+            keys = [para["KEY"] for para in draw_spec]
+            labels = [para.get("LABEL") or para["KEY"] for para in draw_spec]
+            log_rows = np.array([bool(para.get("LOG_FLAG")) for para in draw_spec], dtype=bool)
+            rows = tdk.window_drift_rows(grids, [condition_display(k) for k in kinds], keys,
+                                         lambda u: u, log_rows)
+            d_headers, d_rows = tdk.format_drift_rows(rows)
+            reporter.table(
+                "Within-recording drift across windows (per point estimate, stored coordinates)",
+                d_headers, d_rows,
+                note="per recording, a line is fitted to each estimate against the window index "
+                     "and the fitted first-to-last change is taken; the row aggregates those "
+                     "changes across recordings. Rows exist for every point estimate the run "
+                     "stored (MAP; posterior median and SGM under --summary posterior|both), "
+                     "and they are read together: the three come from the same posterior, so a "
+                     "difference between them describes the posterior's shape along the "
+                     "recording. 'cells over 0.3 dex' is the share whose change exceeds a "
+                     "factor of two. The signed-rank p states detectability, not magnitude, and "
+                     "no row attributes a cause: the biology block is marginalized here, so an "
+                     "imaging trend and a biological one are not separable in this stage alone.")
+            if reporter.dump:
+                bands_all = (tdk.shared_posterior_bands(post_q, kind_index, cell_of, chunk_of,
+                                                        len(kinds)) if post_q is not None else None)
+                for ki, kind in enumerate(kinds):
+                    med = {name: tdk.window_medians(g)[ki] for name, g in grids.items()}
+                    fig = figure_window_drift(
+                        keys, labels, med,
+                        bands=None if bands_all is None else bands_all[ki],
+                        prior_ranges=[para["PRIOR_RANGE"] for para in draw_spec],
+                        title=f"{condition_display(kind)}: point estimates against window "
+                              f"position (lines = median across recordings; bands = median "
+                              f"per-window posterior 50 % and 90 % intervals)")
+                    reporter.save_figure(
+                        f"window_drift_{kind}", fig,
+                        caption=f"Within-recording drift, condition {condition_display(kind)}: "
+                                f"the MAP, posterior median and SGM (where stored) as the median "
+                                f"across recordings at each window, over the posterior's own "
+                                f"per-window central 50 % and 90 % intervals (median across "
+                                f"recordings). Dotted red lines are the prior bounds. The three "
+                                f"lines share one posterior, so the band is drawn once.")
 
     if reporter.dump and n_estimates:
         for i, para in enumerate(draw_spec):
@@ -249,11 +323,45 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                     values, by_kind_post, prior_range, label, seed=args.seed,
                     show_map=do_map, show_posterior=(post_q is not None)),
                 caption=f"{key} ({label}). View A (MAP): per-condition distribution of "
-                        f"inferred MAP theta ({agg_desc}). View B (posterior): each "
+                        f"the MAP point estimate ({agg_desc}). View B (posterior): each "
                         f"chunk's posterior median +/- IQR per condition (within-chunk "
-                        f"uncertainty). A panel stamped 'not computed' marks a view the "
-                        f"--summary option omitted.",
+                        f"uncertainty)"
+                        + (f"; the SGM is tabulated above and its gap to the median is in the "
+                           f"agreement table" if sgm is not None else
+                           f"; this run stored no SGM")
+                        + f". A panel stamped 'not computed' marks a view the --summary option "
+                          f"omitted.",
             )
+
+    if reporter.dump and n_estimates and post_q is not None:
+        # The point-estimate view for experimental recordings: no truth exists, so the three
+        # estimates are laid out per recording over the posterior's own IQR (one shared band),
+        # recordings ordered by their posterior-median value. This is the figure a statement about
+        # the inference on real recordings is read from, beside the tables above.
+        for ki, kind in enumerate(kinds):
+            kmask = kind_index == ki
+            if not np.any(kmask):
+                continue
+            for i, para in enumerate(draw_spec):
+                key = para["KEY"]
+                label = para.get("LABEL") or key
+                fig = figure_point_estimates_by_cell(
+                    {"MAP": inferred_log10[kmask, i], "median": post_q[kmask, i, 2],
+                     "SGM": (sgm[kmask, i] if sgm is not None else None)},
+                    post_q[kmask, i, :], cell_of[kmask], para["PRIOR_RANGE"],
+                    f"{label} ({condition_display(kind)})")
+                if fig is not None:
+                    reporter.save_figure(
+                        f"point_estimates_{kind}_{key}",
+                        fig,
+                        caption=f"{key} ({label}), {condition_display(kind)}. The three point estimates "
+                                f"per window, one panel each (MAP; median = 1-D posterior median; SGM): "
+                                f"recordings along the x axis ordered by their posterior-median value, "
+                                f"one point per window, the recording's median of that estimate as the "
+                                f"line, and the posterior IQR (median over the recording's windows of the "
+                                f"per-window Q25 and Q75) as the band, drawn once and identical on every "
+                                f"panel. The estimate axis is clipped to the prior box widened by 40 %; "
+                                f"values beyond it are counted in the tables, not drawn.")
 
     reporter.summary()
     reporter.write_report()

@@ -48,6 +48,8 @@ jointly-central window's value, not that parameter's own median.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from .sample_geometric_median import sample_geometric_median
@@ -383,9 +385,16 @@ def drift_statistics(grid_flow, times, to_physical, log_rows, threshold=MATERIAL
     start = to_physical(fit_start)
     end = to_physical(fit_end)
     median_dex = np.nanmedian(change, axis=1)
+    # Sign consistency and the material share are fractions of the recordings that contributed a
+    # fitted change (the same cells the table counts), never of the grid's cell slots: a missing
+    # recording, a deselected cell or a failed estimate must not enter the denominator as a
+    # "no drift" vote. A comparison with NaN evaluates to False, so the mask is applied first.
+    finite = np.isfinite(change)
     with np.errstate(invalid="ignore", divide="ignore"):
-        sign = np.nanmean(np.sign(change) == np.sign(median_dex)[:, None, :], axis=1)
-        material = np.nanmean(np.abs(change) > threshold, axis=1)
+        agree = np.where(finite, np.sign(change) == np.sign(median_dex)[:, None, :], np.nan)
+        over = np.where(finite, np.abs(change) > threshold, np.nan)
+        sign = np.nanmean(agree, axis=1)
+        material = np.nanmean(over, axis=1)
         fold = np.nanmedian(end / start, axis=1)
     # Dex statistics are undefined for a linear row: flag with NaN rather than report a number that
     # only looks like a dex.
@@ -430,4 +439,113 @@ def within_window_interval(quant_grid_flow):
 
     Returns ``(n_kinds, n_chunks, D, Q)`` in estimator space (the caller converts).
     """
-    return np.nanmedian(np.asarray(quant_grid_flow, dtype=float), axis=1)
+    with warnings.catch_warnings():
+        # A level the run did not store (a direct estimator's single nominal range has no
+        # 25/75 % levels) is an all-NaN slice; NaN is the intended answer, not a warning.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmedian(np.asarray(quant_grid_flow, dtype=float), axis=1)
+
+
+# --------------------------------------------------------------------------------------------
+# Window drift for every stored point estimate, read together
+# --------------------------------------------------------------------------------------------
+POINT_ESTIMATE_ORDER = ("MAP", "posterior median", "SGM")
+
+
+def point_estimate_grids(inferred_log10, kind_index, cell, chunk, n_kinds,
+                         post_quantiles=None, post_sgm=None):
+    """Dense ``(kind, cell, chunk, D)`` grids for every point estimate a run stored.
+
+    The MAP is always present. The posterior median is the stored 50 % quantile
+    (``post_quantiles[:, :, 2]``) and the SGM is ``post_sgm``; each is included only when the
+    run stored it, so a report never invents a view. Returns ``(grids, n_cells, n_chunks)`` with
+    ``grids`` an ordered dict in the order MAP, posterior median, SGM.
+    """
+    grids = {}
+    g, n_cells, n_chunks = reshape_to_grid(inferred_log10, kind_index, cell, chunk, n_kinds)
+    grids["MAP"] = g
+    q = None if post_quantiles is None else np.asarray(post_quantiles, dtype=float)
+    if q is not None and q.size:
+        grids["posterior median"] = reshape_to_grid(q[:, :, 2], kind_index, cell, chunk, n_kinds)[0]
+    s = None if post_sgm is None else np.asarray(post_sgm, dtype=float)
+    if s is not None and s.size:
+        grids["SGM"] = reshape_to_grid(s, kind_index, cell, chunk, n_kinds)[0]
+    return grids, n_cells, n_chunks
+
+
+def window_medians(grid):
+    """Median across cells of one estimate, per (kind, chunk, D): the line a drift figure draws."""
+    return np.nanmedian(np.asarray(grid, dtype=float), axis=1)
+
+
+def shared_posterior_bands(post_quantiles, kind_index, cell, chunk, n_kinds):
+    """Median across cells, per (kind, chunk, D, Q), of the stored per-window posterior quantiles.
+
+    All point estimates come from the same posterior draws, so the interval that accompanies them
+    is the posterior's own and is drawn ONCE, not once per estimate (``within_window_interval``).
+    """
+    qgrid, _, _ = reshape_to_grid(post_quantiles, kind_index, cell, chunk, n_kinds)
+    return within_window_interval(qgrid)
+
+
+def window_drift_rows(grids, kinds, keys, to_physical, log_rows, threshold=MATERIAL_DRIFT_DEX):
+    """Drift statistics for every stored point estimate, one row per (kind, parameter, estimate).
+
+    Each row aggregates the per-cell first-to-last change of that estimate across the windows of
+    a recording (``drift_statistics`` fitted against the window index, so the change equals the
+    fitted difference between the last and the first window):
+
+        change_median     median across cells of the change (dex for a log row, absolute otherwise)
+        change_iqr        interquartile range of the per-cell changes across cells
+        sign_consistency  fraction of cells whose change shares the median's sign
+        material_fraction fraction of cells with |change| > ``threshold`` dex (log rows; NaN otherwise)
+        wilcoxon_p        two-sided signed-rank p that the per-cell changes are centered at zero
+
+    The three estimates come from the same posterior, so a difference between their rows is a
+    statement about the posterior's shape along the recording, not about three measurements.
+    """
+    rows = []
+    first = next(iter(grids.values()))
+    n_chunks = first.shape[2]
+    times = np.arange(n_chunks, dtype=float)
+    stats = {name: drift_statistics(g, times, to_physical, log_rows, threshold)
+             for name, g in grids.items()}
+    # Neural estimates in their fixed order, then any other estimate a caller supplies (a
+    # direct estimator's single point value is one such grid).
+    order = [n for n in POINT_ESTIMATE_ORDER if n in stats] + \
+            [n for n in stats if n not in POINT_ESTIMATE_ORDER]
+    for k, kind in enumerate(kinds):
+        for p, key in enumerate(keys):
+            for name in order:
+                d = stats[name]
+                change = d["change_dex_per_cell"][k, :, p]
+                ok = np.isfinite(change)
+                q75, q25 = (np.nanpercentile(change, [75, 25]) if ok.sum() > 1
+                            else (np.nan, np.nan))
+                rows.append({
+                    "kind": kind, "parameter": key, "estimate": name,
+                    "n_cells": int(ok.sum()),
+                    "change_median": float(np.nanmedian(change)) if ok.any() else np.nan,
+                    "change_iqr": float(q75 - q25),
+                    "sign_consistency": float(d["drift_sign_consistency"][k, p]),
+                    "material_fraction": float(d["drift_material_fraction"][k, p]),
+                    "wilcoxon_p": float(d["drift_wilcoxon_p"][k, p]),
+                    "is_log": bool(log_rows[p]),
+                })
+    return rows
+
+
+def format_drift_rows(rows):
+    """Render ``window_drift_rows`` output as report-table headers and string rows."""
+    headers = ["condition", "parameter", "estimate", "cells", "change first->last (median)",
+               "IQR across cells", "sign consistency", "cells over 0.3 dex", "signed-rank p"]
+    out = []
+    for r in rows:
+        unit = "dex" if r["is_log"] else "abs"
+        out.append([r["kind"], r["parameter"], r["estimate"], str(r["n_cells"]),
+                    f"{r['change_median']:+.3f} {unit}", f"{r['change_iqr']:.3f}",
+                    f"{100 * r['sign_consistency']:.0f}%",
+                    ("n/a" if not np.isfinite(r["material_fraction"])
+                     else f"{100 * r['material_fraction']:.0f}%"),
+                    ("n/a" if not np.isfinite(r["wilcoxon_p"]) else f"{r['wilcoxon_p']:.1e}")])
+    return headers, out

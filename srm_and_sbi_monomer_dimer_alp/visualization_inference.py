@@ -407,3 +407,215 @@ def figure_experiment_combined(values_by_kind, by_kind_post, prior_range=None,
     if label:
         fig.suptitle(label, fontsize=13)
     return fig
+
+
+# --------------------------------------------------------------------------------------------
+# Within-recording drift: every point estimate against window position, shared posterior bands
+# --------------------------------------------------------------------------------------------
+_DRIFT_STYLE = {
+    "MAP": dict(color="tab:orange", marker="o"),
+    "posterior median": dict(color="tab:blue", marker="s"),
+    "SGM": dict(color="tab:green", marker="^"),
+    "direct": dict(color="tab:purple", marker="D"),
+}
+
+
+def figure_point_estimates_vs_truth(true_log10, estimates, post_q=None, prior_range=None,
+                                    label="", n_bins=20, min_count=50, pad_fraction=0.4):
+    """One panel per point estimate: the estimate against the truth, read as a summary.
+
+    ``estimates`` maps a short name (``"MAP"``, ``"median"``, ``"SGM"``) to a length-N log10
+    array; a ``None`` value is skipped. Each panel shows the videos as a density (hexbin), the
+    binned median of that estimate over equal-count bins of the truth as a line, and one shared
+    band: the posterior's own interquartile range, taken as the median across the videos of a
+    bin of the per-video Q25 and Q75 (``post_q``, ``(N, 5)`` at Q05/Q25/Q50/Q75/Q95). The band
+    is the same on every panel because the three estimates come from the same posterior; it is
+    the posterior's width, not an error bar on the estimate. Axes are clipped to the prior box
+    widened by ``pad_fraction`` of its width on the estimate axis, so MAP values far outside
+    the box are off-panel (the tables count them). The panel text gives correlation, MAE and
+    signed bias over all videos.
+    """
+    from matplotlib.figure import Figure
+    x = np.asarray(true_log10, dtype=float)
+    names = [n for n, a in estimates.items() if a is not None and np.asarray(a).size]
+    if not names:
+        return None
+    style_of = {"MAP": _DRIFT_STYLE["MAP"], "median": _DRIFT_STYLE["posterior median"],
+                "posterior median": _DRIFT_STYLE["posterior median"], "SGM": _DRIFT_STYLE["SGM"]}
+    fig = Figure(figsize=(4.8 * len(names), 4.6))
+    axes = fig.subplots(1, len(names), sharex=True, sharey=True, squeeze=False)[0]
+    lo, hi = (float(prior_range[0]), float(prior_range[1])) if prior_range is not None else (
+        float(np.nanmin(x)), float(np.nanmax(x)))
+    pad = pad_fraction * (hi - lo)
+    edges = np.quantile(x, np.linspace(0, 1, n_bins + 1))
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bin_id = np.clip(np.digitize(x, edges, right=True) - 1, 0, n_bins - 1)
+
+    def binned(values, q=0.5):
+        out = np.full(n_bins, np.nan)
+        for k in range(n_bins):
+            vk = values[bin_id == k]
+            vk = vk[np.isfinite(vk)]
+            if vk.size >= min_count:
+                out[k] = np.quantile(vk, q)
+        return out
+
+    band = None
+    if post_q is not None and np.asarray(post_q).size:
+        pq = np.asarray(post_q, dtype=float)
+        band = (binned(pq[:, 1]), binned(pq[:, 3]))
+    for ax, name in zip(axes, names):
+        y = np.asarray(estimates[name], dtype=float)
+        ok = np.isfinite(x) & np.isfinite(y)
+        ax.hexbin(x[ok], y[ok], gridsize=60, bins="log", cmap="Greys", mincnt=1,
+                  extent=(lo, hi, lo - pad, hi + pad))
+        if band is not None and np.any(np.isfinite(band[0])):
+            ax.fill_between(centers, band[0], band[1], color="tab:blue", alpha=0.18, lw=0,
+                            label="posterior IQR (median over the bin)")
+        st = style_of.get(name, dict(color="k", marker="o"))
+        ax.plot(centers, binned(y), color=st["color"], marker=st["marker"], ms=4, lw=1.5,
+                label=f"{name}, median over the bin")
+        ax.plot([lo, hi], [lo, hi], color="k", ls="--", lw=1.8, zorder=6,
+                label="truth (estimate = true value)")
+        for v in (lo, hi):
+            ax.axhline(v, color="r", ls=":", lw=0.8)
+        err = y[ok] - x[ok]
+        corr = np.corrcoef(x[ok], y[ok])[0, 1] if ok.sum() > 2 and np.std(y[ok]) > 0 else np.nan
+        ax.text(0.03, 0.97, f"n={int(ok.sum())}\ncorr {corr:+.2f}\nMAE {np.mean(np.abs(err)):.3f}\n"
+                            f"bias {np.mean(err):+.3f}", transform=ax.transAxes, va="top",
+                fontsize=8.5, bbox=dict(fc="white", ec="none", alpha=0.8))
+        ax.set_title(name, color=st["color"], fontsize=11)
+        ax.set_xlabel(f"true log10 {label}".strip())
+        ax.set_xlim(lo, hi); ax.set_ylim(lo - pad, hi + pad)
+        ax.legend(loc="lower right", fontsize=7.5, frameon=False)
+    axes[0].set_ylabel(f"estimate log10 {label}".strip())
+    fig.suptitle(f"{label}: point estimates against the truth; band = posterior IQR; "
+                 f"dotted red = prior box", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def figure_point_estimates_by_cell(estimates, post_q, cell_ids, prior_range=None, label="",
+                                   pad_fraction=0.4):
+    """One panel per point estimate on experimental recordings, which carry no truth.
+
+    Recordings (cells) are placed along the x axis in the order of their posterior-median value
+    (the median over the recording's windows of the per-window 1-D posterior median), so the
+    median panel reads as a monotone staircase and the other two panels show how far the MAP
+    and the SGM fall from it recording by recording. In each panel every window is one point,
+    the recording's median of that estimate is the line, and the posterior's own interquartile
+    range (median over the recording's windows of the per-window Q25 and Q75) is one shared
+    band, identical on every panel because the three estimates come from the same posterior.
+    ``estimates`` maps a short name (``"MAP"``, ``"median"``, ``"SGM"``) to a length-N array over
+    windows; ``post_q`` is ``(N, 5)``; ``cell_ids`` labels each window's recording. The estimate
+    axis is clipped to the prior box widened by ``pad_fraction`` of its width.
+    """
+    from matplotlib.figure import Figure
+    names = [n for n, a in estimates.items() if a is not None and np.asarray(a).size]
+    if not names:
+        return None
+    cell_ids = np.asarray(cell_ids)
+    pq = np.asarray(post_q, dtype=float)
+    cells = np.unique(cell_ids)
+    med_ref = np.array([np.nanmedian(pq[cell_ids == c, 2]) for c in cells])
+    order = np.argsort(med_ref)
+    cells = cells[order]
+    rank = {c: i for i, c in enumerate(cells)}
+    xs = np.array([rank[c] for c in cell_ids], dtype=float)
+    band_lo = np.array([np.nanmedian(pq[cell_ids == c, 1]) for c in cells])
+    band_hi = np.array([np.nanmedian(pq[cell_ids == c, 3]) for c in cells])
+    style_of = {"MAP": _DRIFT_STYLE["MAP"], "median": _DRIFT_STYLE["posterior median"],
+                "posterior median": _DRIFT_STYLE["posterior median"], "SGM": _DRIFT_STYLE["SGM"]}
+    if prior_range is not None:
+        lo, hi = float(prior_range[0]), float(prior_range[1])
+    else:
+        allv = np.concatenate([np.asarray(estimates[n], dtype=float) for n in names])
+        lo, hi = float(np.nanmin(allv)), float(np.nanmax(allv))
+    pad = pad_fraction * (hi - lo)
+    fig = Figure(figsize=(4.8 * len(names), 4.6))
+    axes = fig.subplots(1, len(names), sharex=True, sharey=True, squeeze=False)[0]
+    xc = np.arange(len(cells))
+    for ax, name in zip(axes, names):
+        y = np.asarray(estimates[name], dtype=float)
+        st = style_of.get(name, dict(color="k", marker="o"))
+        ax.fill_between(xc, band_lo, band_hi, color="tab:blue", alpha=0.18, lw=0,
+                        label="posterior IQR (median over the recording's windows)")
+        jitter = (np.random.default_rng(0).uniform(-0.3, 0.3, size=y.size))
+        ax.scatter(xs + jitter, y, s=6, color=st["color"], alpha=0.35, lw=0,
+                   label=f"{name}, one point per window")
+        per_cell = np.array([np.nanmedian(y[cell_ids == c]) for c in cells])
+        ax.plot(xc, per_cell, color=st["color"], lw=1.4, zorder=5,
+                label=f"{name}, median over the recording")
+        for v in (lo, hi):
+            ax.axhline(v, color="r", ls=":", lw=0.8)
+        outside = float(np.mean((y < lo) | (y > hi))) if y.size else float("nan")
+        ax.text(0.03, 0.97, f"windows={int(np.isfinite(y).sum())}  recordings={len(cells)}\n"
+                            f"median over windows {np.nanmedian(y):+.3f}\n"
+                            f"IQR over windows {np.nanquantile(y, .75) - np.nanquantile(y, .25):.3f}\n"
+                            f"outside prior {100 * outside:.0f} %",
+                transform=ax.transAxes, va="top", fontsize=8.5,
+                bbox=dict(fc="white", ec="none", alpha=0.8))
+        ax.set_title(name, color=st["color"], fontsize=11)
+        ax.set_xlabel("recording, ordered by its posterior-median value")
+        ax.set_ylim(lo - pad, hi + pad)
+        ax.legend(loc="lower right", fontsize=7.5, frameon=False)
+    axes[0].set_ylabel(f"estimate log10 {label}".strip())
+    fig.suptitle(f"{label}: point estimates per window and recording; band = posterior IQR; "
+                 f"dotted red = prior box", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def figure_window_drift(keys, labels, medians_by_estimate, bands=None, prior_ranges=None,
+                        title="", x_label="window index within the recording",
+                        y_label="estimate (stored coordinates)", band_label="posterior"):
+    """Six-panel (or ``ceil(D/3) x 3``) figure of every point estimate against window position.
+
+    ``medians_by_estimate`` maps an estimate name to a ``(T, D)`` array: the median across cells
+    of that estimate at each window. All lines are drawn against ONE shared band per window,
+    ``bands`` of shape ``(T, D, 5)`` holding the median across cells of the per-window posterior
+    quantiles at levels 5/25/50/75/95 %: the central 50 % as the darker band and the central 90 %
+    as the lighter one. A missing inner or outer level (NaN) is skipped, which is how a direct
+    estimator's single nominal range is drawn. Prior bounds are dotted red lines.
+    """
+    import math
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    D = len(keys)
+    n_rows = max(1, math.ceil(D / 3))
+    fig, axes = plt.subplots(n_rows, 3, figsize=(13.5, 3.7 * n_rows), sharex=True, squeeze=False)
+    axes = axes.ravel()
+    for i in range(D):
+        ax = axes[i]
+        T = next(iter(medians_by_estimate.values())).shape[0]
+        x = np.arange(T)
+        if bands is not None:
+            b = np.asarray(bands, dtype=float)[:, i, :]
+            outer = np.isfinite(b[:, 0]) & np.isfinite(b[:, 4])
+            inner = np.isfinite(b[:, 1]) & np.isfinite(b[:, 3])
+            if outer.any():
+                ax.fill_between(x, b[:, 0], b[:, 4], where=outer, color="0.55", alpha=0.14,
+                                lw=0, label=f"{band_label} 90 %")
+            if inner.any():
+                ax.fill_between(x, b[:, 1], b[:, 3], where=inner, color="0.45", alpha=0.28,
+                                lw=0, label=f"{band_label} 50 %")
+        for name, arr in medians_by_estimate.items():
+            st = _DRIFT_STYLE.get(name, dict(color="0.2", marker="."))
+            ax.plot(x, np.asarray(arr)[:, i], lw=1.5, ms=4.5, label=name, **st)
+        if prior_ranges is not None and prior_ranges[i] is not None:
+            lo, hi = prior_ranges[i]
+            for v in (lo, hi):
+                ax.axhline(v, color="firebrick", ls=":", lw=1.0)
+        ax.set_title(f"{labels[i]}  {keys[i]}", fontsize=10.5)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        if i == 0:
+            ax.legend(fontsize=7.5, framealpha=0.9)
+    for j in range(D, len(axes)):
+        axes[j].axis("off")
+    if title:
+        fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+    return fig

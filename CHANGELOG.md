@@ -5,6 +5,104 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.14 - 2026-09-22
+
+Within-recording drift becomes a standard output, computed for every stored point estimate and
+read against the posterior's own per-window interval; the direct PSF-width estimator gains an
+experimental mode. No canonical stage, parameter role, or preprocessing step changes.
+
+### Added
+
+- **Window drift in the Experiment report.** The Experiment stage now writes a "Within-recording
+  drift across windows" table and one `window_drift_<condition>` figure per condition. For every
+  point estimate the run stored (MAP; posterior median and SGM under `--summary posterior|both`) the
+  table gives the per-recording first-to-last change fitted against the window index, aggregated
+  across recordings as median, interquartile range, sign consistency, share of recordings over
+  0.3 dex, and the signed-rank p. The figure draws the three estimates as the median across
+  recordings at each window over one shared band, the median across recordings of the per-window
+  posterior 50 % and 90 % intervals -- the estimates come from the same posterior draws, so the
+  band is the posterior's and is drawn once; there are no per-estimate error bars and no standard
+  errors. Kernel functions `point_estimate_grids`, `window_medians`, `shared_posterior_bands`,
+  `window_drift_rows`, `format_drift_rows` in `temporal_dynamics.py`; figure
+  `figure_window_drift` in `visualization_inference.py`.
+- **"Point estimates compared" table and `point_estimates_<parameter>` figures.** Both stage
+  reports write one table with the three point estimates side by side, columns grouped by
+  statistic with MAP, median and SGM consecutive (Evaluation: correlation, MAE, signed bias,
+  outside-prior share against the truth; Experiment: per condition, median over windows, IQR
+  over windows, outside-prior share). The agreement table's columns are now "MAP vs median",
+  "MAP vs SGM", "SGM vs median" with the note stating that each is the median over videos of the
+  absolute gap. The Evaluation report gains one figure per parameter with the three estimates
+  against the truth in three panels: the estimate's median over equal-count bins of the truth as
+  the line and the posterior IQR as one shared band, the construction of the window-drift
+  figure, with the truth drawn as a dashed diagonal on top of the density
+  (`figure_point_estimates_vs_truth` in `visualization_inference.py`). The Experiment report gains
+  the counterpart without truth, `point_estimates_<condition>_<parameter>`: recordings along the
+  x axis ordered by their posterior-median value, one point per window, the recording's median of
+  each estimate as the line, the posterior IQR as the shared band
+  (`figure_point_estimates_by_cell`). Helpers `point_estimates_compared_table`,
+  `experiment_estimates_compared_table` in `evaluation.py`.
+  The stored 2 s FAB Evaluation and Experiment reports (baseline and `CAP256`) on the Posit tier
+  were re-rendered from their arrays with this code; each keeps the report as produced by its
+  job as `report_as_produced.md`.
+- **Temporal-dynamics utility reads tagged products and all three estimates.** `--artifact-tag`
+  selects a tagged estimator's Experiment products (e.g. `CAP256`); the report gains the
+  three-estimate drift table and `window_drift_overview_<condition>.png` with the shared bands. The
+  per-cell figures and the original drift table remain MAP-based and say so.
+- **Direct PSF-width estimator on experimental recordings** (`--experiment`, with
+  `--experiment-span-seconds`, `--chunk-step-seconds`, `--cells`, `--max-cells`,
+  `--experiment-dir`). Windows every recording exactly as the Experiment stage does
+  (`read_cell_chunks`), supplies the section 6.3 acquisition camera values, and writes per-window
+  estimates with their nominal 90 % ranges, the pooled distribution table, the same drift table,
+  and `window_drift_direct_<condition>` with the estimator's own range as the band, drawn as
+  reported (it under-covers on synthetic recordings). No ground truth, so no acceptance verdict.
+  Validated end to end on two rendered 4 s recordings.
+
+### Fixed
+
+- **Drift fractions over contributing recordings only.** `temporal_dynamics.drift_statistics` took
+  the sign-consistency and material-drift fractions over every cell slot of the grid, so an unused
+  cell index, a deselected recording or a failed estimate entered the denominator as a "no drift"
+  vote (two rising recordings in slots 1 and 2 of a three-slot grid read 67 % instead of 100 %).
+  Both fractions are now taken over the finite fitted changes, the same recordings the table's
+  cell count reports. The stored neural products have complete cell indices, so their figures are
+  unchanged; the case matters for `--cells`, missing recordings and failed direct estimates.
+  Regression test `tests/test_temporal_dynamics_drift.py`, runnable with `python -m pytest` or by
+  invoking its functions directly; executed here by direct invocation (pytest is not installed in
+  the PC `SRM_AND_SBI_ENVY_V0` environment), both tests passed.
+
+### Changed
+
+- **Report-only rendering leaves the arrays alone.** `write_recovery_outputs` and
+  `write_experiment_outputs` take `persist_arrays` (default `True`, the stage behavior); a
+  re-render of an existing product passes `False`, so the stored npz is never re-saved (a re-save
+  would also drop any field the writer does not know). The re-rendered 2 s FAB reports record the
+  source npz md5 and the rendering date in their run note.
+- **Agreement notes describe, they do not diagnose.** The Evaluation and Experiment agreement
+  notes now state that a large MAP-to-summary gap establishes disagreement and that a density
+  spike, an optimizer that stopped short, or another feature of the posterior's shape are
+  separate checks. The Experiment figure caption mentions the SGM only when the run stored one.
+- **Compared tables count valid videos.** The side-by-side tables use one shared finite-row mask
+  per row across the estimates and report that count as `n`.
+
+### Documentation
+
+- `DETECTOR_WORKFLOW.md` §9.7 — results of the capacity test's comparison steps 3 and 4 on the
+  shared 25,000-recording EVAL set (JUPITER jobs 1951212, 1951221, 1951236; record
+  `..._CAP256_vs_Baseline_Evaluation` on the Posit tier): `capacity256` substantially improves joint
+  coverage and removes the baseline's two location biases (joint coverage 0.87 against 0.62 at nominal
+  0.90, L-C2ST rejection 0.000 against 0.998), with residual marginal and joint miscalibration
+  remaining (largest joint gap 0.065 against the 0.05 reference, marginal 90 % coverage 83 to 86 %,
+  SBC still flagging `mu_r`, `mu_pc` and `sigma_pc`, bleaching coverage 87 % to 85 %), recovers
+  `mu_r` and `mu_pc` with smaller error and no offset,
+  leaves `sigma_pc` and `lambda_rate` unchanged, moves `sigma_r` little, and does not recover
+  `prob_photo_bleach` (posterior close to the prior); its MAP separates further from the posterior on
+  every parameter. Three-way: the direct estimator remains the source of `sigma_r`; for `mu_r` the
+  capacity run's posterior summaries reach the direct estimator's accuracy. Neither estimator is
+  adopted; next measurements named (repeat training, 20 s tier). The operating subgroup is described
+  as the lower half of the brightness prior in step 3, matching §9.6.
+- `..._PSF_Direct_vs_Neural` record — the direct estimator's outside-prior share corrected from 0 %
+  to 4 % (`mu_r`) and 2 % (`sigma_r`): edge excursions of at most 0.07 and 0.12 dex.
+
 ## 0.1.13 - 2026-09-21
 
 Freezes the acceptance rules for the direct estimators before their corrected evaluation, and
@@ -78,6 +176,15 @@ parameter role, or preprocessing step changes.
 
 ### Fixed after external review of 0.1.12
 
+- **One point-estimate convention across the documentation and the reports.** `DETECTOR_WORKFLOW.md`
+  §6.8 had made the posterior median "the point estimate throughout" and §6.9 had quoted only its view,
+  while §6.11 tabulated only the MAP. All three point estimates (MAP, posterior median, sample geometric
+  median) are now tabulated side by side in §6.9, §6.10 and §6.11 and in `PROJECT_CONTEXT.md` §7, with
+  conclusions drawn from the set; the Experiment report's MAP table is titled as such, and the agreement
+  notes in `experiment_runner.py` and `evaluation_runner.py` no longer tell the reader to substitute one
+  estimate for another. The multiple-dye Experiment run predates the SGM output and stored no draw cloud,
+  so its SGM does not exist; its posterior median is computed from its stored quantiles.
+
 - **Flicker refinement on an uneven grid.** The parabolic refinement in log-rate used the
   equal-spacing formula on a grid that is not equally spaced in log-rate; it returned 4.3506 for an
   exactly quadratic objective with its minimum at 4.3. The parabola is now fitted on the real
@@ -131,12 +238,13 @@ parameter role, or preprocessing step changes.
   the folder's `COVERAGE_DIAGNOSIS.md` and `DETECTOR_WORKFLOW.md` §9.6.
 - The unchanged two-second flicker rerun is paused (its development run: 1909/2000, bias +0.11 dex,
   `FAIL (accuracy)`); next steps recorded in the flicker note.
-- Head-to-head on point values, PSF parameters: `..._DETECTOR_FAB_2S_50FPS_PSF_Direct_vs_Neural` (arrays,
-  statistics, two-panel figures per parameter). Direct `mu_r` slope 0.97 / bias −0.003 dex vs neural
-  posterior median 0.93 / +0.021 dex; direct `sigma_r` slope 0.89 / corr 0.96 vs neural 0.04 / 0.17. §9.6
-  conclusion of record: the direct estimator supersedes the neural point estimates for `mu_r` and `sigma_r`
-  on synthetic recordings, pending the experimental cross-check; point estimates are the deliverable, the
-  ranges secondary; `lambda_rate` unchanged.
+- Added a matched comparison on 2,000 multiple-dye synthetic recordings
+  (`..._DETECTOR_FAB_2S_50FPS_PSF_Direct_vs_Neural`: arrays, statistics, two-panel figures per parameter)
+  showing lower point-estimation error for the direct PSF estimator than for the current neural posterior
+  median — substantially for `sigma_r`, modestly for `mu_r`. Recorded the remaining dim-subgroup bias and
+  uncertainty undercoverage separately. Clarified that fixed photophysics is an optional biology-input
+  construction (§7.2), not the universal workflow contract. No parameter-role change follows from this
+  comparison alone.
 
 ### Development outputs preserved
 

@@ -52,6 +52,7 @@ from matplotlib.ticker import (AutoMinorLocator, FuncFormatter, LogLocator,
 
 from .labeling import LABELING_CONDITIONS
 from . import temporal_dynamics as tdk
+from .visualization_inference import figure_window_drift
 from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical
 from .workflow import parameter_keys, parameter_table
 
@@ -223,8 +224,10 @@ def _temporal_dynamics_spec(cfg, args) -> _TemporalSpec:
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
     paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
-    out_dir = paths.experiment_recovery_dir(data_bank_root, timing.label)
-    rec_dir = paths.map_recovery_dir(data_bank_root, timing.label)
+    # Products of a tagged estimator (e.g. CAP256) live under the tagged label; inputs never do.
+    product_label = paths.product_label(timing.label, getattr(args, "artifact_tag", None))
+    out_dir = paths.experiment_recovery_dir(data_bank_root, product_label)
+    rec_dir = paths.map_recovery_dir(data_bank_root, product_label)
     table = parameter_table(cfg)
     detector = cfg.tag == "detector"
     return _TemporalSpec(
@@ -238,7 +241,7 @@ def _temporal_dynamics_spec(cfg, args) -> _TemporalSpec:
         log_rows=np.array([is_log_row(e) for e in table], dtype=bool),
         display=(_DISPLAY_DETECTOR if detector else _DISPLAY_BIOLOGY),
         references=(_REFERENCE_DETECTOR if detector else _REFERENCE_BIOLOGY),
-        paths=paths, alias=paths.project_alias, timing_label=timing.label,
+        paths=paths, alias=paths.project_alias, timing_label=product_label,
         npz_path=out_dir / (out_dir.name + ".npz"),
         recovery_npz=rec_dir / (rec_dir.name + ".npz"),
         fig_dir=out_dir / "temporal_dynamics", tag=cfg.tag,
@@ -574,7 +577,7 @@ def _finish_axes(ax, x_edges, para, spec, lo, hi):
 # =============================================================================
 
 def _write_report(spec, meta, results, drift, kinds, family, line, picks_window, picks_traj,
-                  pooled=None, pooled_mark_name=""):
+                  pooled=None, pooled_mark_name="", drift_rows=None):
     """Write the self-contained interpretation report beside the figures.
 
     Every reported quantity is defined verbatim here, keyed by the same name the figures and the
@@ -883,6 +886,25 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
              "reporting the prior back. A parameter that drifts is not thereby discredited — the "
              "drift may be the acquisition's, which is what the other workflow's run measures.")
     L.append("")
+    if drift_rows:
+        names = sorted({r["estimate"] for r in drift_rows},
+                       key=lambda n: tdk.POINT_ESTIMATE_ORDER.index(n))
+        L.append("")
+        L.append("## Within-recording drift for every stored point estimate")
+        L.append("")
+        L.append(f"The per-cell figures and the drift table above use the MAP. This table repeats "
+                 f"the first-to-last change for every point estimate the Experiment run stored "
+                 f"({', '.join(names)}), read together: the estimates come from the same posterior "
+                 f"draws, so a difference between their rows describes the posterior's shape along "
+                 f"the recording. `window_drift_overview_<condition>.png` draws them as lines over "
+                 f"the posterior's own per-window central 50 % and 90 % intervals (median across "
+                 f"cells), one shared band, no per-estimate error bars.")
+        L.append("")
+        hdr, rows = tdk.format_drift_rows(drift_rows)
+        L.append("| " + " | ".join(hdr) + " |")
+        L.append("|" + "---|" * len(hdr))
+        for r in rows:
+            L.append("| " + " | ".join(r) + " |")
     (spec.fig_dir / "report.md").write_text("\n".join(L), encoding="utf-8")
 
 
@@ -927,6 +949,8 @@ def run_temporal_dynamics(cfg, args):
         kinds = [str(k) for k in d["kinds"]]
         quant = (np.asarray(d["posterior_quantiles"], dtype=float)
                  if "posterior_quantiles" in d.files else None)
+        sgm = (np.asarray(d["posterior_sgm"], dtype=float)
+               if "posterior_sgm" in d.files else None)
         # Raw per-window draws, present only when the Experiment stage ran with
         # --dump-posterior-samples. Their absence costs the pooled-density figure and nothing else.
         cloud = (np.asarray(d["posterior_samples_cloud"], dtype=float)
@@ -958,6 +982,13 @@ def run_temporal_dynamics(cfg, args):
         series, picks_window = tdk.mean_window(grid, spec.to_physical), None
         line, picks_traj = tdk.mean_trajectory(grid, spec.to_physical), None
     drift = tdk.drift_statistics(grid, centers, spec.to_physical, spec.log_rows)
+    # Every stored point estimate, read together: MAP always, posterior median and SGM when the
+    # Experiment run stored them. One table; one overview figure per condition with the
+    # posterior's own per-window bands drawn once for the three lines.
+    est_grids, _, _ = tdk.point_estimate_grids(inferred_log10, kind_index, cell, chunk,
+                                               len(kinds), quant, sgm)
+    drift_rows = tdk.window_drift_rows(est_grids, [CONDITION_DISPLAY.get(k, k) for k in kinds],
+                                       spec.keys, spec.to_physical, spec.log_rows)
 
     within = None
     if quant is not None and quant.size:
@@ -1043,13 +1074,29 @@ def run_temporal_dynamics(cfg, args):
         ref_tag = "  [reference]" if key in spec.references else ""
         print(f"  wrote {key}_temporal.png{note}{ref_tag}")
 
+    bands_all = (tdk.shared_posterior_bands(quant, kind_index, cell, chunk, len(kinds))
+                 if quant is not None and quant.size else None)
+    for e, kind in enumerate(kinds):
+        med = {name: tdk.window_medians(g)[e] for name, g in est_grids.items()}
+        figo = figure_window_drift(
+            spec.keys, [spec.table[i]["LABEL"] for i in range(len(spec.keys))], med,
+            bands=None if bands_all is None else bands_all[e],
+            prior_ranges=[(float(spec.prior_low[i]), float(spec.prior_high[i]))
+                          for i in range(len(spec.keys))],
+            title=f"{CONDITION_DISPLAY.get(kind, kind)}: {', '.join(est_grids)} against window "
+                  f"position (lines = median across cells; bands = posterior 50 % / 90 %)",
+            y_label="estimate (estimator space)")
+        figo.savefig(str(spec.fig_dir / f"window_drift_overview_{kind}.png"), dpi=180)
+        plt.close(figo)
+        print(f"  wrote window_drift_overview_{kind}.png ({', '.join(est_grids)})")
+
     meta = {"npz_name": spec.npz_path.name, "n_estimates": int(inferred_log10.shape[0]),
             "n_cells": n_cells, "n_chunks": n_chunks, "step": step,
             "n_samples_per_window": int(cloud.shape[1]) if cloud is not None else 0,
             "pooled_scale": args.pooled_scale,
             "edges": [float(t) for t in edges], "centers": [float(t) for t in centers]}
     _write_report(spec, meta, results, drift, kinds, family, line, picks_window, picks_traj,
-                  pooled, pooled_mark_name)
+                  pooled, pooled_mark_name, drift_rows=drift_rows)
     print(f"  wrote report.md\n\nDone: {len(results)} parameter(s) in {spec.fig_dir}")
     return 0
 
@@ -1065,6 +1112,10 @@ def build_parser(description):
     p.add_argument("--total-time-seconds", type=float, required=True,
                    help="run duration; selects the Experiment output via its timing label "
                         "(e.g. 2.0 -> 2S_50FPS). Must match a completed Experiment run.")
+    p.add_argument("--artifact-tag", default=None,
+                   help="tag of the estimator whose Experiment products to read (e.g. CAP256): "
+                        "selects <alias>_<timing>_<TAG>_MAP_Experiment and the matching "
+                        "recovery record. Default: the untagged products.")
     p.add_argument("--chunk-step-seconds", type=float, default=None,
                    help="spacing between consecutive windows on the time axis. Default: the run "
                         "duration (non-overlapping windows). Set this only if the Experiment run "

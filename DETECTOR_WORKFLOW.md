@@ -264,12 +264,18 @@ same trajectories under a Bernoulli law that puts exactly one dye on every visib
 | Experiment (`…_MAP_Experiment`) | 60 MET-FAB recordings, 600 windows, unrestricted pool; report 2026-09-17 12:02 UTC | the same recordings and windows; report 2026-09-18 16:18 UTC |
 | dye-multiplicity stratification | separate calculation on the saved draws and the EVAL `Labeling_Set`; folder `…_DETECTOR_FAB_2S_50FPS_Dye_Multiplicity_Stratification` | not applicable (one dye per visible subunit) |
 
-**Metric definitions.** The point estimate throughout is the per-video posterior median, the 50 %
-quantile of each marginal over the 1,000 draws; the MAP is reported separately. *corr* is the Pearson
-correlation across videos between the posterior-median `log10` value and the true `log10` value.
-*MAE* is the mean absolute error of the posterior median in `log10` units; *median error* is the median
-signed error (estimate minus truth, `log10`), so its sign is the direction of the offset; *within ±0.15*
-is the share of videos whose absolute error is at most 0.15 dex (a factor 1.41). *Marginal coverage at
+**Metric definitions.** Three point estimates are reported for every per-video posterior and read
+together, here and in every Evaluation and Experiment report: the MAP, the optimizer's mode; the
+posterior median, the 50 % quantile of each marginal over the 1,000 draws; and the sample geometric
+median (SGM), the draw closest in prior-scaled `log10` distance to all other draws. No single one of
+the three is the estimate; every recovery statistic below is given for all three, and a conclusion
+rests on the set. Where the three disagree, the disagreement is itself a measurement of the
+posterior's shape (a mode sitting on a density spike away from the mass) and is reported as such. *corr* is the Pearson correlation
+across videos between the estimate's `log10` value and the true `log10` value. *MAE* is the mean
+absolute error of the estimate in `log10` units; *median error* is the median signed error (estimate
+minus truth, `log10`), so its sign is the direction of the offset; *within ±0.15* is the share of
+videos whose absolute error is at most 0.15 dex (a factor 1.41); *outside prior* is the share of
+estimates beyond the prior box. *Marginal coverage at
 c* is the share of videos whose true value lies inside the central `c` interval of that marginal,
 read from quantiles. *Joint coverage at c* is the share of videos whose true parameter vector has a
 flow log-density above the `1 − c` quantile of the log-densities of that video's own draws. The
@@ -283,23 +289,51 @@ fraction* is the share of 1,000 observations at which a local classifier rejects
 
 ### 6.9 Multiple-dye calibration outcome (synthetic)
 
-**Per parameter (from the Evaluation report; posterior-median view).**
+**Per parameter (from the Evaluation report), MAP view.**
 
-| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | marginal coverage 50 % / 90 % |
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | outside prior | marginal coverage 50 % / 90 % |
+|---|---|---|---|---|---|---|
+| `mu_r` | 0.67 | 0.079 | +0.024 | 90 % | 26 % | 23 % / 59 % |
+| `sigma_r` | 0.08 | 0.195 | −0.051 | 41 % | 0 % | 34 % / 76 % |
+| `mu_pc` | 0.87 | 0.095 | +0.037 | 80 % | 8 % | 40 % / 80 % |
+| `sigma_pc` | 0.79 | 0.112 | −0.009 | 71 % | 6 % | 42 % / 85 % |
+| `prob_photo_bleach` | 0.77 | 0.214 | +0.033 | 47 % | 1 % | 48 % / 87 % |
+| `lambda_rate` | 0.46 | 0.214 | +0.020 | 41 % | 1 % | 42 % / 83 % |
+
+Marginal coverage is a property of the posterior, not of the point estimate, and is the same in the
+three views.
+
+**Posterior-median view**, the same statistics for the 50 % quantile of each marginal.
+
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | outside prior |
 |---|---|---|---|---|---|
-| `mu_r` | 0.96 | 0.025 | +0.018 | 100 % | 23 % / 59 % |
-| `sigma_r` | 0.17 | 0.186 | −0.020 | 41 % | 34 % / 76 % |
-| `mu_pc` | 0.95 | 0.054 | +0.021 | 94 % | 40 % / 80 % |
-| `sigma_pc` | 0.89 | 0.082 | +0.006 | 86 % | 42 % / 85 % |
-| `prob_photo_bleach` | 0.79 | 0.206 | −0.006 | 48 % | 48 % / 87 % |
-| `lambda_rate` | 0.54 | 0.201 | −0.002 | 43 % | 42 % / 83 % |
+| `mu_r` | 0.96 | 0.025 | +0.018 | 100 % | 0 % |
+| `sigma_r` | 0.17 | 0.186 | −0.020 | 41 % | 0 % |
+| `mu_pc` | 0.95 | 0.054 | +0.021 | 94 % | 0 % |
+| `sigma_pc` | 0.89 | 0.082 | +0.006 | 86 % | 0 % |
+| `prob_photo_bleach` | 0.79 | 0.206 | −0.006 | 48 % | 0 % |
+| `lambda_rate` | 0.54 | 0.201 | −0.002 | 43 % | 0 % |
 
-The MAP disagrees with the posterior-derived point estimates on three parameters: the MAP falls
-outside the central 90 % interval of its own posterior in 56 % of videos for `mu_r`, 44 % for `mu_pc`,
-and 22 % for `sigma_pc` (2 % or less for the other three), while the sample geometric median and the
-per-dimension median agree within 0.004–0.028 dex on every parameter. Under the bounded pool 26 % of
-the `mu_r` MAP estimates lie outside the prior box. The posterior median and the sample geometric
-median are therefore the point estimates read here.
+**Sample-geometric-median view**, the same statistics for the SGM of the same draws.
+
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | outside prior |
+|---|---|---|---|---|---|
+| `mu_r` | 0.96 | 0.025 | +0.018 | 100 % | 0 % |
+| `sigma_r` | 0.15 | 0.186 | −0.021 | 41 % | 0 % |
+| `mu_pc` | 0.95 | 0.056 | +0.021 | 94 % | 0 % |
+| `sigma_pc` | 0.89 | 0.083 | +0.008 | 86 % | 0 % |
+| `prob_photo_bleach` | 0.78 | 0.210 | −0.010 | 46 % | 0 % |
+| `lambda_rate` | 0.53 | 0.202 | +0.001 | 42 % | 0 % |
+
+**Point-estimate agreement.** The MAP falls outside the central 90 % interval of its own posterior in
+56 % of videos for `mu_r`, 44 % for `mu_pc`, and 22 % for `sigma_pc` (2 % or less for the other
+three), with median |MAP − median| gaps of 0.119, 0.092 and 0.071 dex on those three; the sample
+geometric median and the per-dimension median agree within 0.004–0.028 dex on every parameter. On
+those three parameters the MAP recovers the truth worse than the two posterior summaries on the same
+videos (`mu_r` correlation 0.67 against 0.96, 26 % of MAP estimates outside the prior box under the
+bounded pool against none). That gap is the optimizer landing in flow density spikes away from the
+posterior mass; it is a property of this estimator that the three views expose together and that no
+one of them shows alone.
 
 **Joint and standardized (from the Posterior_Calibration report).** Joint coverage 0.24 at nominal 0.50 and
 0.62 at nominal 0.90, largest gap 0.31 (at nominal 0.75); TARP ATC −0.05; L-C2ST reject fraction 0.998.
@@ -358,14 +392,42 @@ exception in both tables — unchanged — and it is the parameter for which the
 precision benchmark (§9.5), an estimated standard deviation in log10 units set against the prior width, is by far
 the largest at 2 s.
 
-| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | marginal coverage 50 % / 90 % |
-|---|---|---|---|---|---|
-| `mu_r` | 0.96 → **0.99** | 0.025 → **0.011** | +0.018 → +0.005 | 100 % → 100 % | 23/59 → 48/89 % |
-| `sigma_r` | 0.17 → **0.98** | 0.186 → **0.036** | −0.020 → −0.006 | 41 % → 99 % | 34/76 → 52/91 % |
-| `mu_pc` | 0.95 → 1.00 | 0.054 → 0.016 | +0.021 → −0.003 | 94 % → 100 % | 40/80 → 58/94 % |
-| `sigma_pc` | 0.89 → 0.99 | 0.082 → 0.032 | +0.006 → −0.018 | 86 % → 100 % | 42/85 → 43/85 % |
-| `prob_photo_bleach` | 0.79 → 0.80 | 0.206 → 0.205 | −0.006 → +0.052 | 48 % → 50 % | 48/87 → 45/85 % |
-| `lambda_rate` | 0.54 → 0.94 | 0.201 → **0.083** | −0.002 → +0.045 | 43 % → 84 % | 42/83 → 41/84 % |
+*MAP view.*
+
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 | outside prior | marginal coverage 50 % / 90 % |
+|---|---|---|---|---|---|---|
+| `mu_r` | 0.67 → **0.95** | 0.079 → **0.016** | +0.024 → +0.005 | 90 % → 100 % | 26 % → 2 % | 23/59 → 48/89 % |
+| `sigma_r` | 0.08 → **0.97** | 0.195 → **0.040** | −0.051 → −0.008 | 41 % → 98 % | 0 % → 1 % | 34/76 → 52/91 % |
+| `mu_pc` | 0.87 → 0.99 | 0.095 → 0.020 | +0.037 → −0.003 | 80 % → 100 % | 8 % → 1 % | 40/80 → 58/94 % |
+| `sigma_pc` | 0.79 → 0.98 | 0.112 → 0.036 | −0.009 → −0.020 | 71 % → 99 % | 6 % → 1 % | 42/85 → 43/85 % |
+| `prob_photo_bleach` | 0.77 → 0.79 | 0.214 → 0.209 | +0.033 → +0.064 | 47 % → 50 % | 1 % → 0 % | 48/87 → 45/85 % |
+| `lambda_rate` | 0.46 → 0.94 | 0.214 → **0.088** | +0.020 → +0.052 | 41 % → 82 % | 1 % → 2 % | 42/83 → 41/84 % |
+
+*Posterior-median view.* Marginal coverage is a property of the posterior and repeats the MAP table.
+
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 |
+|---|---|---|---|---|
+| `mu_r` | 0.96 → **0.99** | 0.025 → **0.011** | +0.018 → +0.005 | 100 % → 100 % |
+| `sigma_r` | 0.17 → **0.98** | 0.186 → **0.036** | −0.020 → −0.006 | 41 % → 99 % |
+| `mu_pc` | 0.95 → 1.00 | 0.054 → 0.016 | +0.021 → −0.003 | 94 % → 100 % |
+| `sigma_pc` | 0.89 → 0.99 | 0.082 → 0.032 | +0.006 → −0.018 | 86 % → 100 % |
+| `prob_photo_bleach` | 0.79 → 0.80 | 0.206 → 0.205 | −0.006 → +0.052 | 48 % → 50 % |
+| `lambda_rate` | 0.54 → 0.94 | 0.201 → **0.083** | −0.002 → +0.045 | 43 % → 84 % |
+
+*Sample-geometric-median view.*
+
+| parameter | corr | MAE (log10) | median error (log10) | within ±0.15 |
+|---|---|---|---|---|
+| `mu_r` | 0.96 → **0.98** | 0.025 → **0.012** | +0.018 → +0.005 | 100 % → 100 % |
+| `sigma_r` | 0.15 → **0.97** | 0.186 → **0.038** | −0.021 → −0.006 | 41 % → 99 % |
+| `mu_pc` | 0.95 → 0.99 | 0.056 → 0.017 | +0.021 → −0.003 | 94 % → 100 % |
+| `sigma_pc` | 0.89 → 0.99 | 0.083 → 0.033 | +0.008 → −0.018 | 86 % → 100 % |
+| `prob_photo_bleach` | 0.78 → 0.80 | 0.210 → 0.205 | −0.010 → +0.050 | 46 % → 50 % |
+| `lambda_rate` | 0.53 → 0.94 | 0.202 → 0.084 | +0.001 → +0.045 | 42 % → 84 % |
+
+*Point-estimate agreement, one-dye.* The MAP falls outside its own central 90 % interval in 5 % or fewer
+of videos on every parameter (multiple-dye: 56 %, 44 % and 22 % on `mu_r`, `mu_pc` and `sigma_pc`), and
+the three estimates agree within 0.031 dex; under the one-dye law the three views coincide.
 
 Each cell reads multiple-dye → one-dye; bold marks the three pre-specified comparisons. Joint coverage 0.51 at
 nominal 0.50 and 0.89 at nominal 0.90 with largest gap 0.0095 (multiple-dye 0.24, 0.62, 0.31); TARP ATC −0.02
@@ -439,9 +501,13 @@ choice between an improved neural estimator and a hybrid.
 
 ### 6.11 Both estimators on the experimental recordings
 
-From the two Experiment reports (60 MET-FAB recordings, 600 windows, `--pool-mode unrestricted`); per-window MAP
-estimates pooled over recordings and windows, medians and interquartile ranges in log10, the median in absolute
-units, and the share of estimates outside the prior box.
+From the two Experiment reports (60 MET-FAB recordings, 600 windows, `--pool-mode unrestricted`); the three
+per-window point estimates pooled over recordings and windows, medians and interquartile ranges in log10, the
+median in absolute units, and the share of estimates outside the prior box. The multiple-dye run predates the
+SGM output (0.1.8) and stored no draw cloud, so its SGM does not exist; its posterior median is computed from
+its stored quantiles.
+
+*MAP view.*
 
 | parameter | multiple-dye: median (IQR) | absolute | outside prior | one-dye: median (IQR) | absolute | outside prior |
 |---|---|---|---|---|---|---|
@@ -451,6 +517,34 @@ units, and the share of estimates outside the prior box.
 | `sigma_pc` | −0.194 (0.173) | 0.64 | 0 % | −0.139 (0.112) | 0.73 | 0 % |
 | `prob_photo_bleach` | −1.380 (0.547) | 0.042 | 1 % | −1.374 (0.599) | 0.042 | 1 % |
 | `lambda_rate` | +0.719 (0.175) | 5.23 | 2 % | +0.361 (0.219) | 2.30 | 0 % |
+
+*Posterior-median view.*
+
+| parameter | multiple-dye: median (IQR) | absolute | outside prior | one-dye: median (IQR) | absolute | outside prior |
+|---|---|---|---|---|---|---|
+| `mu_r` | +0.302 (0.030) | 2.01 | 52 % | +0.224 (0.035) | 1.68 | 3 % |
+| `sigma_r` | −0.782 (0.053) | 0.165 | 0 % | −0.833 (0.137) | 0.147 | 1 % |
+| `mu_pc` | +2.129 (0.093) | 135 photons | 0 % | +2.270 (0.157) | 186 photons | 1 % |
+| `sigma_pc` | −0.192 (0.040) | 0.64 | 0 % | −0.139 (0.113) | 0.73 | 0 % |
+| `prob_photo_bleach` | −1.471 (0.430) | 0.034 | 1 % | −1.420 (0.539) | 0.038 | 0 % |
+| `lambda_rate` | +0.705 (0.096) | 5.07 | 1 % | +0.357 (0.222) | 2.28 | 0 % |
+
+*Sample-geometric-median view (one-dye only).*
+
+| parameter | one-dye: median (IQR) | absolute | outside prior |
+|---|---|---|---|
+| `mu_r` | +0.224 (0.036) | 1.67 | 3 % |
+| `sigma_r` | −0.833 (0.140) | 0.147 | 1 % |
+| `mu_pc` | +2.271 (0.163) | 187 photons | 1 % |
+| `sigma_pc` | −0.140 (0.111) | 0.72 | 0 % |
+| `prob_photo_bleach` | −1.417 (0.540) | 0.038 | 0 % |
+| `lambda_rate` | +0.359 (0.226) | 2.29 | 0 % |
+
+*Point-estimate agreement on the recordings.* Multiple-dye: the MAP falls outside its own central 90 % interval
+in 55 % of windows for `mu_r`, 46 % for `mu_pc` and 28 % for `sigma_pc`, with median |MAP − median| gaps of
+0.12, 0.10 and 0.10 dex, and the `mu_r` MAP leaves the prior box in 64 % of windows against 52 % for the median.
+One-dye: 1 % or less on every parameter, and the three estimates agree within 0.029 dex. The two runs differ on
+every view, not only on the MAP.
 
 The two estimators agree on `sigma_r` and `prob_photo_bleach` and disagree where the labeling law enters the
 observation: `mu_r`, `mu_pc` (the same per-dye brightness, reached through two different dye-count models), `sigma_pc`, and
@@ -518,7 +612,9 @@ a few *whole* actual vectors at percentiles of a signed distance to the Sample G
 correlation-preserving median vector, an actual member of the cloud, never the vector of per-dimension medians,
 which can be an impossible combination — so `[50]` freezes the imaging to one actual vector and several
 percentiles give a small pool of actual acquisitions; it reuses the Experiment stage's MAP estimates and needs no
-GPU. The companion `…_Sample_Geometric_Median` analysis reports that median for inspection and mints nothing; the
+GPU. A single selected vector fixes the six photophysics parameters across generated recordings. It does not fix
+the separately sampled SCOPE camera parameters (§9.3). Selecting fixed photophysics is an explicit construction
+choice; it should not be described as the general biology-workflow behavior. The companion `…_Sample_Geometric_Median` analysis reports that median for inspection and mints nothing; the
 construction is the authoritative source, and both call one `sample_geometric_median` implementation. `pool_mode`
 (`bounded` default, `unrestricted`) follows the Evaluation and Experiment convention: bounded rejection-samples
 the pool within the imaging prior box, unrestricted keeps the flow's draws wherever they fall. The
@@ -1095,40 +1191,66 @@ not correlation alone. All three targets (`mu_r`, `sigma_r`, and `lambda_rate`) 
 implemented neural block pending validated replacements; this retains the implementation and does not
 validate the current neural estimates or their uncertainty.
 
-**Why point estimates are the deliverable.** `mu_r` and `sigma_r` are themselves the parameters of the
-per-emitter PSF-width distribution, its median and spread, and the biology workflow consumes the imaging
-block as a frozen parameter vector drawn from this calibration. What the biology needs from the detector is
-therefore a defensible value for each imaging parameter. The detector enables the biology inference; it does
-not need perfect knowledge of the imaging model, nor a validated uncertainty model of it, for that inference
-to succeed. The per-recording ranges of step 4b are a secondary deliverable: they describe how well each value
-is pinned down and would let residual imaging uncertainty be propagated if that proves necessary, but their
-coverage failure does not bear on which method supplies the better value.
+**Point estimates and uncertainty answer different questions.** `mu_r` and `sigma_r` describe the
+per-subunit PSF-width distribution: its median and log-space spread. Comparing point estimates establishes
+which method recovers these parameters more accurately. Comparing uncertainty ranges establishes how reliably
+each method quantifies its remaining error. Failure of the latter does not reverse a demonstrated advantage in
+point accuracy.
+
+The biology workflow samples imaging vectors from `Nuisance_DLI`; a fixed photophysics vector is an available
+special case (§7.2), not the universal implementation contract. If that option is selected, biological
+inference is conditional on the chosen photophysics values. Emitter-to-emitter PSF variation remains
+represented by `sigma_r`, but uncertainty about `mu_r` and `sigma_r` is not propagated by fixing them.
 
 **Head-to-head on point values, PSF parameters (2026-09-21; stored under
-`..._DETECTOR_FAB_2S_50FPS_PSF_Direct_vs_Neural` with arrays, statistics, and one two-panel figure per
+`..._DETECTOR_FAB_2S_50FPS_PSF_Direct_vs_Neural` with arrays, statistics, and one four-panel figure per
 parameter, each method on its own evaluated sample).** The direct estimator on its 2000 EVAL recordings
-against the baseline multiple-dye neural posterior median on all 25,000 EVAL recordings (the 2000 are an
-exactly matched subset whose neural statistics equal the full set's):
+against the three point estimates of the baseline multiple-dye neural posterior estimator, MAP, posterior
+median and sample geometric median, read together. The 2,000 direct recordings have unique matching
+neural rows with identical six-parameter ground truths. The matched-subset and full-set neural statistics are
+similar, but not identical. The numerical comparison below uses the matched subset; the figures retain
+separate panels showing each method's full evaluated sample (25,000 recordings for the neural estimator).
 
-| parameter | method | n | slope | intercept | correlation | MAE (dex) | bias (dex) |
-|---|---|---|---|---|---|---|---|
-| `mu_r` | direct | 2000 | 0.97 | +0.002 | 0.967 | 0.0155 | −0.003 |
-| `mu_r` | neural posterior median | 25,000 | 0.93 | +0.032 | 0.958 | 0.0248 | +0.021 |
-| `sigma_r` | direct | 2000 | 0.89 | −0.077 | 0.963 | 0.046 | −0.010 |
-| `sigma_r` | neural posterior median | 25,000 | 0.04 | −0.617 | 0.165 | 0.186 | −0.016 |
+| parameter | method | n | slope | correlation | MAE (dex) | signed bias (dex) | outside prior |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `mu_r` | direct | 2,000 | 0.97 | 0.967 | 0.0155 | −0.0031 | 4 % |
+| `mu_r` | neural MAP | 2,000 | 1.03 | 0.687 | 0.0795 | +0.0294 | 26 % |
+| `mu_r` | neural posterior median | 2,000 | 0.93 | 0.955 | 0.0254 | +0.0218 | 0 % |
+| `mu_r` | neural SGM | 2,000 | 0.93 | 0.952 | 0.0259 | +0.0220 | 0 % |
+| `sigma_r` | direct | 2,000 | 0.89 | 0.963 | 0.0460 | −0.0101 | 2 % |
+| `sigma_r` | neural MAP | 2,000 | 0.03 | 0.065 | 0.1978 | −0.0499 | 0 % |
+| `sigma_r` | neural posterior median | 2,000 | 0.04 | 0.152 | 0.1870 | −0.0162 | 0 % |
+| `sigma_r` | neural SGM | 2,000 | 0.03 | 0.129 | 0.1882 | −0.0169 | 0 % |
 
-For `mu_r` both methods lie along the slope-1 line, the neural estimate displaced by the constant +0.02 dex
-offset of §6.10, the direct estimate unbiased overall and 2.7 % low in the dim operating subgroup. For
-`sigma_r` the neural estimator returns nearly the same value whatever the truth and does not measure the
-parameter; the direct estimator tracks it with slope 0.89, compressing mildly toward the prior center at
-both ends. On synthetic recordings the direct estimator is the better source of point values for both PSF
-parameters, by a wide margin for `sigma_r`.
+Errors are expressed in log10 units here for comparison. The direct estimator is not bounded by the prior
+box; its excursions (85 and 42 recordings) sit at the prior edges and reach at most 0.07 and 0.12 dex. The
+frozen `sigma_r` acceptance criterion remains in linear units. Direct estimation uses the supplied simulated camera settings; neural inference marginalizes
+over the camera nuisance distribution.
 
-**Conclusion of record (2026-09-21).** For `mu_r` and `sigma_r`, the direct estimator supersedes the neural
-point estimates on synthetic recordings, pending the cross-check of its values on experimental recordings
-against the ThunderSTORM references (§6.11). Its uncertainty ranges under-cover (65.9 % and 63.3 % overall,
-about 60 % and 56 % in the dim operating subgroup) and have a bounded correction to test; this is a secondary
-deliverable and does not block the use of its point values. For `lambda_rate` the direct estimator is not a
+For `mu_r` the direct estimate and the two neural posterior summaries track the truth strongly (fitted
+slopes 0.97 direct, 0.93 median and SGM); the neural MAP tracks it far less well (correlation 0.69, MAE
+0.080 dex, 26 % of estimates outside the prior box), the signature of the density spikes recorded in §6.9.
+The neural summaries carry an average positive offset of approximately 0.02 dex (MAP 0.03 dex), the direct
+estimate a small overall bias (−0.0031 dex), with a brightness-dependent residual bias of −0.0118 dex in the
+dim subgroup. For `sigma_r` all three neural estimates return nearly the same value whatever the truth
+(fitted slopes 0.03 to 0.04, correlations 0.07 to 0.15) and do not recover the parameter; the direct
+estimator shows compressed recovery, with a fitted slope below one (0.89). The direct estimator substantially improves recovery of `sigma_r` compared with the
+current neural estimator. For `mu_r`, both methods recover the parameter well; direct estimation gives lower
+average error and bias on the matched evaluation subset, but the advantage is more modest. These results
+strongly support direct estimation of the PSF spread, while leaving both methods viable candidates for the
+typical PSF width.
+
+**Conclusion of record (2026-09-21).** On the matched multiple-dye synthetic recordings, the direct
+estimator provides better point estimates than any of the three neural point estimates for both PSF parameters,
+including in the dim operating subgroup. It is therefore the preferred candidate for supplying PSF point
+values in experimental imaging calibration. This comparative result does not change the frozen acceptance
+outcomes: the dim-subgroup `mu_r` bias exceeds its threshold, and both reported uncertainty ranges under-cover
+(65.9 % and 63.3 % overall, about 60 % and 56 % in the dim operating subgroup; a bounded correction is to be
+tested). Experimental deployment and the choice between fixed values and sampled nuisance inputs are separate
+decisions. The experimental cross-check compares direct experimental PSF estimates with the ThunderSTORM
+references (§6.11) after aligning width conventions, units, and population summaries; ThunderSTORM is a
+reference method, not ground truth, and agreement or disagreement must account for fitting uncertainty and
+detection selection, particularly for width spreads. The direct flicker estimator is not adopted as a
 replacement: its bias of +0.11 dex overall and +0.14 dex in the dim subgroup, rate-dependent, calls for an
 investigation of the measurement model and of the recording duration before further tuning, and that
 diagnosis guarantees no outcome. The frozen rules produced this information as intended: both estimators had
@@ -1220,9 +1342,19 @@ so the runtime grammar stays unambiguous; the estimator manifest records the tag
 3. *Comparison* on the same EVAL tasks the baseline used: MAP recovery (bias, MAE, and correlation per
    parameter), marginal and joint calibration (§6.9's tests: rank uniformity, expected coverage, TARP,
    L-C2ST), posterior widths against the prior widths, and the failed-estimate rates, each overall and in
-   the operating subgroup of §9.6 (true `log10 mu_pc` in [2.00, 2.375), the dim quarter of the brightness
+   the operating subgroup of §9.6 (true `log10 mu_pc` in [2.00, 2.375), the lower half of the brightness
    prior), where the baseline's difficulties concentrate. Training time and peak memory per configuration
    are reported alongside.
+4. *Three-way comparison with the direct estimators.* The comparison is not only against the baseline. For
+   `mu_r` and `sigma_r` the direct PSF-width estimator's point values on EVAL tasks 0 and 1 (§9.6, the
+   `..._PSF_Direct_vs_Neural` record) are the third column: slope, intercept, correlation, MAE, and signed
+   bias of the capacity estimator's three point estimates (MAP, posterior median, SGM) on the same 2000
+   recordings, beside the baseline's three and
+   the direct estimator's, each method plotted on its own evaluated sample. For `lambda_rate` the direct
+   flicker estimator's development result (bias +0.11 dex, correlation 0.85) is the reference the capacity
+   estimator's recovery is read against. A capacity estimator that recovers `sigma_r` no better than the
+   baseline leaves the direct estimator as the source of that value; one that matches or exceeds the direct
+   estimator changes which measurement supplies it.
 
 **Reading the result.** The larger embedding and flow are relevant primarily as candidates for the
 biology estimator; the Detector problem is a controlled benchmark with known imaging truth, cheaper to run
@@ -1253,6 +1385,87 @@ production run itself. Scaling the allocation linearly, `capacity256` at 16 vide
 47 GiB allocated and 77 GiB reserved per GPU, the same footprint the baseline had at 32 videos per rank
 on the same devices, which the baseline production run already sustained.
 
-**Status.** Configuration, naming, and dispatch are implemented and smoke-tested; the production request
-(16 nodes × 4 GPUs, batch 16, TRAIN 200 / TEST 50, 50 epochs, then 50 more with `--resurrect`) awaits
-approval.
+**Training (2026-09-21, JUPITER jobs 1929130 and 1929732).** Two legs of 50 epochs on 16 nodes × 4 GH200,
+16 videos per rank, TRAIN 200 / TEST 50 tasks, the second leg continued with `--resurrect` from the first
+leg's state (global epochs 51 to 100). Each leg took 1 h 46 min of wall time, 120 s per epoch after the
+first, at a steady 46.8 GiB allocated / 77.1 GiB reserved per GPU, against the baseline's two legs of 2 h 47
+min at 32 videos per rank on 8 nodes × 4 GPUs. Best TEST loss (mean negative log-probability of the TEST
+set): −7.50 after the first leg and −7.81 after the second, against the baseline's −5.35 and −5.69 at the
+same epochs. A lower TEST loss is the model-selection criterion, not a ranking of estimators; the comparison
+that decides this test is the recovery and calibration of the two estimators on the same EVAL recordings
+(protocol step 3), which follows. Products live under the `CAP256` tag; the baseline products are untouched.
+
+**Comparison (2026-09-22, JUPITER jobs 1951212 Evaluation, 1951221 Posterior_Calibration, 1951236
+Experiment; record `..._2S_50FPS_CAP256_vs_Baseline_Evaluation` on the PC Posit tier, with the Experiment
+comparison in `..._CAP256_vs_Baseline_Experiment`).** Same 25,000 EVAL recordings, same tests, same
+production code; rows aligned on the true parameters. The three neural point estimates are read together.
+
+| | baseline | `capacity256` |
+|---|---:|---:|
+| joint expected coverage, nominal 0.50 / 0.90 | 0.24 / 0.62 | 0.44 / 0.87 |
+| largest joint coverage gap | 0.308 | 0.065 |
+| TARP area-to-curve | −0.053 | −0.025 |
+| L-C2ST rejection fraction | 0.998 | 0.000 |
+| joint coverage at 0.90, operating subgroup | 0.49 | 0.85 |
+| SBC KS D: `mu_r` / `sigma_r` / `mu_pc` / `sigma_pc` / `prob_photo_bleach` / `lambda_rate` | 0.447 / 0.121 / 0.178 / 0.061 / 0.036 / 0.053 | 0.103 / 0.048 / 0.116 / 0.061 / 0.031 / 0.044 |
+| location errors (bias in units of posterior sd, over 0.5) | `mu_r` −1.22, `mu_pc` −0.53 | none |
+| MAP outside the prior box on at least one parameter | 34 % | 49 % |
+| GPU-hours for 100 epochs | about 178 | about 226 |
+
+Recovery on the full EVAL set, the three point estimates side by side (baseline → `capacity256`; correlation
+with the truth, MAE in dex, signed bias in dex):
+
+| parameter | MAP corr | MAP MAE | MAP bias | median corr | median MAE | median bias | SGM corr | SGM MAE | SGM bias |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `mu_r` | 0.67 → 0.56 | 0.079 → 0.109 | +0.026 → −0.006 | 0.96 → 0.96 | 0.025 → 0.018 | +0.021 → −0.001 | 0.96 → 0.96 | 0.025 → 0.019 | +0.021 → +0.001 |
+| `sigma_r` | 0.08 → 0.07 | 0.195 → 0.247 | −0.048 → −0.185 | 0.17 → 0.27 | 0.186 → 0.180 | −0.016 → +0.012 | 0.15 → 0.25 | 0.186 → 0.181 | −0.017 → +0.006 |
+| `mu_pc` | 0.87 → 0.84 | 0.095 → 0.114 | +0.035 → −0.014 | 0.95 → 0.97 | 0.054 → 0.044 | +0.031 → −0.009 | 0.95 → 0.96 | 0.056 → 0.046 | +0.031 → −0.011 |
+| `sigma_pc` | 0.79 → 0.75 | 0.112 → 0.129 | −0.013 → +0.007 | 0.89 → 0.89 | 0.082 → 0.082 | +0.002 → +0.008 | 0.89 → 0.89 | 0.083 → 0.083 | +0.004 → +0.011 |
+| `prob_photo_bleach` | 0.77 → 0.09 | 0.214 → 0.471 | +0.059 → +0.070 | 0.79 → 0.16 | 0.206 → 0.369 | +0.028 → +0.004 | 0.78 → 0.13 | 0.210 → 0.371 | +0.025 → +0.004 |
+| `lambda_rate` | 0.46 → 0.41 | 0.214 → 0.226 | +0.018 → −0.015 | 0.54 → 0.54 | 0.201 → 0.199 | −0.008 → −0.005 | 0.53 → 0.54 | 0.202 → 0.200 | −0.005 → +0.002 |
+
+The MAP's share of recordings outside the prior box rises on every parameter (`mu_r` 26 % → 35 %, `mu_pc`
+8 % → 12 %, `sigma_pc` 6 % → 9 %, `sigma_r` 0 % → 4 %); median and SGM stay inside it in both runs. The MAP
+is worse in the capacity run on every parameter; the median and the SGM, which agree within 0.005 to
+0.04 dex in both runs, improve on `mu_r` and `mu_pc`, hold on `sigma_pc` and `lambda_rate`, move `sigma_r`
+a little and collapse on `prob_photo_bleach`.
+
+The capacity run improves the joint coverage substantially and removes the baseline's two location errors, with
+residual miscalibration remaining (largest joint gap 0.065 against the 0.05 reference, marginal 90 % coverage
+83 to 86 %, SBC still flagging `mu_r`, `mu_pc` and `sigma_pc`, bleaching coverage 87 % → 85 %); its posterior summaries recover `mu_r` and `mu_pc` with smaller error and no
+offset (also in the operating subgroup, where the baseline's offsets were 0.03 to 0.06 dex), leave `sigma_pc`
+and `lambda_rate` unchanged, and move `sigma_r` little (slope 0.10 against 0.04; not recovered). It does not
+recover `prob_photo_bleach`: its posterior standard deviation on that parameter is 26.8 % of the prior range
+(median over recordings) against 28.9 % for the uniform prior itself (baseline 17.0 %), its median sits at the prior center whatever
+the truth, and it correlates −0.46 with the true `mu_pc` and +0.31 with the true `lambda_rate` against +0.16
+with the true bleaching probability; the same width appears in the stage's own report, and on the recordings
+the run's bleaching MAP drifts across windows while its median and SGM stay flat (§6.11 companion record). The
+MAP separates further from the posterior in the capacity run on every parameter (outside the posterior's own
+90 % interval on 85 % of recordings for `mu_r`, 74 % for `mu_pc`; `sigma_r` MAP offset −0.185 dex), so the MAP
+recovery columns are worse while the posterior is better calibrated.
+
+*Three-way (step 4).* On the matched 2,000 recordings the direct PSF-width estimator recovers `sigma_r` with
+slope 0.89 / MAE 0.046 dex against at most 0.09 / 0.182 for any neural point estimate of either run; the
+direct estimator stays the source of that value. For `mu_r` the capacity run's median and SGM reach the
+direct estimator's accuracy (MAE 0.018 against 0.016 dex, bias −0.001 against −0.003) and remove the
+baseline's +0.02 dex offset; in the operating subgroup the capacity median has the smaller bias (+0.001
+against −0.012) and the direct estimate the smaller MAE (0.017 against 0.020). Both are candidates for `mu_r`.
+For `lambda_rate` the neural medians of both runs give correlation 0.55, MAE 0.20 dex and no average bias on
+EVAL tasks 0–1 against the direct flicker estimator's 0.85 / 0.144 / +0.110 dex, a reference comparison rather
+than a matched one (the direct figures are over its 1,909 successful recordings, whose 91 failures concentrate in
+dim recordings; the neural figures over all 2,000); the capacity change left the rate where the baseline had it.
+
+*Reading.* By the protocol's own criterion, calibration improved with recovery for `mu_r` and `mu_pc`, so the
+baseline's under-coverage on those and on the joint was within reach of capacity, without being fully closed.
+This capacity increase did not resolve `sigma_r` recovery; one architecture change and one training run do not
+exclude other capacity or optimization explanations. The loss of `prob_photo_bleach` was not anticipated by the protocol and is measured
+from one training run of one configuration; the next measurements are a repeat training of `capacity256`
+under identical settings, to test whether the bleaching collapse repeats, and the 20 s tier, where the
+bleaching information budget is far larger (§9.5), to test whether either estimator's bleaching posterior
+narrows with duration. Neither estimator is adopted by this comparison: the baseline stays the estimator of
+record; `capacity256` is the preferred candidate on calibration and on `mu_r`/`mu_pc` recovery and is not
+adoptable while bleaching is unrecovered. The result concerns the detector benchmark; the biology estimator
+needs its own capacity test (§2).
+
+**Status.** Training, Evaluation, Posterior_Calibration and Experiment complete under the `CAP256` tag;
+comparison recorded above. Open: repeat training of `capacity256`; the 20 s tier (in generation on JUWELS).

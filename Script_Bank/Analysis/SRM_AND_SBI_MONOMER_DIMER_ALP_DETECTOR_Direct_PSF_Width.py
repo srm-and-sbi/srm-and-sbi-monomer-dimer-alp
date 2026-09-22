@@ -76,6 +76,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -92,6 +93,11 @@ from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp.experiment_support import (  # noqa: E402
+    discover_cells, read_cell_chunks,
+)
+from srm_and_sbi_monomer_dimer_alp import temporal_dynamics as tdk  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp.visualization_inference import figure_window_drift  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
     PARAMETERS, RunTiming,
 )
@@ -123,7 +129,12 @@ SELFTEST_SEED = 20260918
 
 
 def _scope_center() -> dict:
-    """SCOPE camera values at the center of their box (used by the selftest only)."""
+    """SCOPE camera values at the center of their box.
+
+    Used by the selftest and by ``--experiment``: the box centers are the MET acquisition values
+    of ``DETECTOR_WORKFLOW.md`` section 6.3 (gain-conversion ratio, optical offset, baseline,
+    read noise, quantum efficiency), the same values the neural estimator marginalizes around.
+    """
     return {e["KEY"]: 10 ** (0.5 * (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]))
             for e in det.DETECTOR_NUISANCE_SCOPE}
 
@@ -181,6 +192,162 @@ def _worker(job):
     out = estimate_one(video, scope, **opts)
     out["index"] = int(index)
     return out
+
+
+def _worker_array(job):
+    """Pool worker for an in-memory window (the ``--experiment`` path). Top-level to pickle."""
+    video, scope, opts = job
+    return estimate_one(np.asarray(video), scope, **opts)
+
+
+# ==========================================================================================
+# Experimental recordings: one estimate per (cell, window), no ground truth
+# ==========================================================================================
+
+def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, opts):
+    """Estimate ``(mu_r, sigma_r)`` in every model-length window of every experimental recording.
+
+    Mirrors the Experiment stage's windowing exactly (``read_cell_chunks``: 16-bit raw -> 8-bit,
+    non-overlapping windows unless ``--chunk-step-seconds`` says otherwise) and the direct
+    estimator's own range construction. The camera block is the section 6.3 acquisition value
+    set (``_scope_center``). The recordings have no ground truth, so no acceptance verdict is
+    reached; the report carries the per-window estimates, their nominal 90 % ranges, and the
+    within-recording drift table and figure for the direct estimate, with its own range as the
+    band. That range under-covers on synthetic recordings (about 66 % and 63 % at nominal 90 %,
+    ``DETECTOR_WORKFLOW.md`` section 9.6), so the band is drawn as reported, not as validated.
+    """
+    span = args.experiment_span_seconds
+    experiment_dir = (pathlib.Path(args.experiment_dir) if args.experiment_dir
+                      else data_bank_root / paths.experiment_subdir)
+    n_frames = timing.frame_count
+    step_seconds = args.chunk_step_seconds if args.chunk_step_seconds else timing.total_time_seconds
+    step_frames = int(round(step_seconds / timing.frame_time_seconds))
+    cells = ([int(c) for c in args.cells.split(",")] if args.cells
+             else discover_cells(experiment_dir, args.condition, span))
+    if args.max_cells > 0:
+        cells = cells[:args.max_cells]
+    scope = _scope_center()
+    reporter.checkpoint("experiment", condition=args.condition, cells=len(cells), span_s=span,
+                        window_s=timing.total_time_seconds, step_s=step_seconds)
+    reporter.check("experimental recordings found", len(cells) > 0,
+                   f"{len(cells)} recordings under {experiment_dir}")
+    for k, v in scope.items():
+        reporter.stat(f"camera {k}", float(v),
+                      note="section 6.3 acquisition value (box center), supplied, not fitted")
+
+    jobs, meta = [], []
+    for cell in cells:
+        tif = experiment_dir / f"Experiment_{args.condition}_Cell_{cell}_{span}S_RAW.tif"
+        if not tif.exists():
+            reporter.check(f"recording cell {cell}", False, f"missing: {tif.name}", fatal=False)
+            continue
+        windows = read_cell_chunks(tif, n_frames, step_frames)
+        for ci, w in enumerate(windows):
+            jobs.append((w, scope, opts))
+            meta.append((cell, ci))
+    reporter.stat("windows queued", len(jobs), note="(cell, window) pairs the estimator reads")
+    if not jobs:
+        reporter.summary()
+        reporter.write_report()
+        return 1
+    if args.workers and args.workers > 1:
+        out, every, t0 = [], max(1, len(jobs) // 20), time.time()
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            for i, o in enumerate(pool.map(_worker_array, jobs, chunksize=1), 1):
+                out.append(o)
+                if i % every == 0 or i == len(jobs):
+                    el = time.time() - t0
+                    print(f"  [progress] {i}/{len(jobs)} windows  elapsed {el/60:.1f} min  "
+                          f"ETA {el/i*(len(jobs)-i)/60:.1f} min", flush=True)
+    else:
+        out = [_worker_array(j) for j in jobs]
+
+    estimate = np.asarray([[o["mu_r"], o["sigma_r"]] for o in out], dtype=float)
+    se = np.asarray([[o["log_mean_se"], o["sigma_r_se"]] for o in out], dtype=float)
+    reasons = np.asarray([o["reason"] or "" for o in out])
+    n_tracks = np.asarray([o["n_tracks"] for o in out])
+    n_spots = np.asarray([o["n_spots"] for o in out])
+    cell_arr = np.asarray([m[0] for m in meta], dtype=int)
+    chunk_arr = np.asarray([m[1] for m in meta], dtype=int)
+    kind_index = np.zeros(len(meta), dtype=int)
+    valid = np.isfinite(estimate).all(axis=1)
+    z = 1.6448536269514722
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mu_c, mu_se10 = np.log10(estimate[:, 0]), se[:, 0] / np.log(10.0)
+        mu_lo, mu_hi = mu_c - z * mu_se10, mu_c + z * mu_se10
+        sg_lo = np.maximum(estimate[:, 1] - z * se[:, 1], 0.0)
+        sg_hi = estimate[:, 1] + z * se[:, 1]
+
+    # ---- report: distribution over windows, then drift across the windows of a recording ----
+    lo_r, hi_r = da.prior_range("mu_r")
+    lo_s, hi_s = da.prior_range("sigma_r")
+    reporter.stat("valid windows", int(valid.sum()), expected=f"of {len(valid)}",
+                  note="reason codes for the rest: " + (", ".join(
+                      f"{r}={int((reasons == r).sum())}" for r in sorted(set(reasons[reasons != ""])))
+                      or "none"))
+    rows = []
+    for name, vals, lo, hi, unit in (("mu_r", mu_c[valid], lo_r, hi_r, "log10"),
+                                    ("sigma_r", estimate[valid, 1], 10 ** lo_s, 10 ** hi_s, "linear")):
+        q25, q50, q75 = np.percentile(vals, [25, 50, 75]) if vals.size else (np.nan,) * 3
+        outside = float(np.mean((vals < lo) | (vals > hi))) if vals.size else np.nan
+        rows.append([name, unit, str(int(vals.size)), f"{q50:+.3f}" if unit == "log10" else f"{q50:.4f}",
+                     f"{q75 - q25:.3f}", f"{100 * outside:.1f}%"])
+    reporter.table("Direct PSF-width estimates over all (cell, window) pairs",
+                   ["parameter", "units", "n", "median", "IQR", "outside prior"], rows,
+                   note="no ground truth on experimental recordings: these are the estimator's "
+                        "point values pooled over recordings and windows. mu_r in log10, sigma_r "
+                        "in linear units, matching the frozen acceptance criteria.")
+    est_log = np.column_stack([mu_c, estimate[:, 1]])          # mu_r log10; sigma_r linear
+    grid, n_cells, n_chunks = tdk.reshape_to_grid(est_log, kind_index, cell_arr, chunk_arr, 1)
+    if n_chunks >= 2:
+        log_rows = np.array([True, False])
+        to_phys = lambda u: np.stack([10 ** np.asarray(u)[..., 0], np.asarray(u)[..., 1]], -1)
+        drows = tdk.window_drift_rows({"direct": grid}, [f"MET-{args.condition}"],
+                                      ["mu_r", "sigma_r"], to_phys, log_rows)
+        h, r = tdk.format_drift_rows(drows)
+        reporter.table("Within-recording drift across windows (direct estimate)", h, r,
+                       note="same construction as the Experiment stage's drift table: per "
+                            "recording, a line fitted to the estimate against the window index, "
+                            "first-to-last change aggregated across recordings. mu_r in dex, "
+                            "sigma_r absolute (linear units).")
+        # Band = the estimator's own nominal 90 % range (median across cells); no 50 % level.
+        rng = np.full((len(meta), 2, 5), np.nan)
+        rng[:, 0, 0], rng[:, 0, 4] = mu_lo, mu_hi
+        rng[:, 1, 0], rng[:, 1, 4] = sg_lo, sg_hi
+        bands = tdk.shared_posterior_bands(rng, kind_index, cell_arr, chunk_arr, 1)[0]
+        fig = figure_window_drift(
+            ["mu_r", "sigma_r"], [r"$\mu_{r}$", r"$\sigma_{r}$"],
+            {"direct": tdk.window_medians(grid)[0]}, bands=bands,
+            prior_ranges=[(lo_r, hi_r), (10 ** lo_s, 10 ** hi_s)],
+            title=f"MET-{args.condition}: direct PSF-width estimate against window position "
+                  f"(line = median across recordings; band = the estimator's own nominal 90 % "
+                  f"range, median across recordings, drawn as reported, not as validated)",
+            y_label="estimate (mu_r log10; sigma_r linear)", band_label="nominal range")
+        reporter.save_figure(
+            f"window_drift_direct_{args.condition}", fig,
+            caption="Direct estimate against window position with its own nominal 90 % range as "
+                    "the band. The range is a standard-error construction, not a posterior "
+                    "interval, and under-covers on synthetic recordings (section 9.6); it is "
+                    "drawn as reported.")
+
+    np.savez_compressed(os.path.join(out_dir, "direct_psf_width_experiment.npz"),
+                        estimate=estimate, se=se, valid=valid, reasons=reasons,
+                        range_mu_r_log10=np.column_stack([mu_lo, mu_hi]),
+                        range_sigma_r=np.column_stack([sg_lo, sg_hi]),
+                        n_tracks=n_tracks, n_spots=n_spots, cell=cell_arr, chunk=chunk_arr,
+                        kind_index=kind_index, kinds=np.asarray([args.condition]),
+                        camera=np.asarray([scope[k] for k in det.DETECTOR_SCOPE_KEYS]),
+                        camera_keys=np.asarray(list(det.DETECTOR_SCOPE_KEYS)))
+    with open(os.path.join(out_dir, "summary.json"), "w") as fh:
+        json.dump(dict(mode="experiment", condition=args.condition, span_seconds=span,
+                       window_seconds=timing.total_time_seconds, step_seconds=step_seconds,
+                       cells=[int(c) for c in cells], n_windows=int(len(meta)),
+                       n_valid=int(valid.sum()), camera=scope,
+                       note="no ground truth; no acceptance verdict"), fh, indent=2, default=float)
+    reporter.summary()
+    path = reporter.write_report()
+    print(f"\n[{STAGE}] experiment report -> {path}")
+    return 0
 
 
 # ==========================================================================================
@@ -324,6 +491,23 @@ def main(argv=None):
                     help="resolve profile, paths and settings; read and compute nothing.")
     ap.add_argument("--out-dir", default=None,
                     help="override the output directory (default: the Data_Bank Posit tier).")
+    ap.add_argument("--experiment", action="store_true",
+                    help="estimate on the EXPERIMENTAL recordings of --condition instead of a "
+                         "synthetic tier: every model-length window of every recording, windowed "
+                         "exactly as the Experiment stage windows them, camera from the section "
+                         "6.3 acquisition values. No ground truth, so no acceptance verdict.")
+    ap.add_argument("--experiment-span-seconds", type=int, default=20,
+                    help="length of the experimental recordings (selects the RAW .tif files).")
+    ap.add_argument("--chunk-step-seconds", type=float, default=None,
+                    help="window step for --experiment; default = the window length "
+                         "(non-overlapping), the Experiment stage's default.")
+    ap.add_argument("--cells", type=str, default=None,
+                    help="comma-separated recording indices for --experiment; default: all.")
+    ap.add_argument("--max-cells", type=int, default=0,
+                    help="cap on the number of recordings for --experiment (0 = all).")
+    ap.add_argument("--experiment-dir", default=None,
+                    help="override the recordings directory for --experiment (default: "
+                         "<data_bank_root>/<experiment_subdir>, where the Experiment stage reads).")
     args = ap.parse_args(argv)
 
     if not args.selftest and (args.condition is None or args.total_time_seconds is None):
@@ -339,6 +523,12 @@ def main(argv=None):
         # in the descriptor after the timing label, not in that slot.
         run_alias = f"{det.detector_paths(PARAMETERS.paths).project_alias}_{timing_label}"
         video_paths = []
+    elif args.experiment:
+        timing = RunTiming(total_time_seconds=args.total_time_seconds)
+        timing_label = timing.label
+        paths = det.detector_paths(PARAMETERS.paths).with_condition(args.condition)
+        run_alias = f"{paths.project_alias}_{timing_label}"
+        video_paths, theta_paths, scope_paths = [], [], []
     else:
         timing = RunTiming(total_time_seconds=args.total_time_seconds)
         timing_label = timing.label
@@ -352,7 +542,8 @@ def main(argv=None):
                                                  timing_label, True, args.split))
                        for t in args.tasks]
 
-    descriptor = f"{STAGE}_SELFTEST" if args.selftest else STAGE
+    descriptor = (f"{STAGE}_SELFTEST" if args.selftest
+                  else f"{STAGE}_Experiment" if args.experiment else STAGE)
     out_dir = args.out_dir or os.path.join(str(data_bank_root), "Posit",
                                            f"{run_alias}_{descriptor}")
 
@@ -361,7 +552,8 @@ def main(argv=None):
         print(f"[{STAGE}] DRY RUN -- nothing is read and nothing is written.")
         print(f"  machine profile   : {os.environ.get('MACHINE_PROFILE', '(unset)')}")
         print(f"  data_bank_root    : {data_bank_root}")
-        print(f"  mode              : {'selftest' if args.selftest else args.split}")
+        print(f"  mode              : "
+              f"{'selftest' if args.selftest else 'experiment' if args.experiment else args.split}")
         print(f"  run alias         : {run_alias}")
         print(f"  out dir           : {out_dir}")
         print(f"  frame stride      : {args.frame_stride}   min track {args.min_track_length}"
@@ -370,6 +562,19 @@ def main(argv=None):
         if args.selftest:
             print(f"  selftest scenes   : 9 (3 mu_r x 3 sigma_r), "
                   f"{args.selftest_subunits} subunits x {args.selftest_frames} frames")
+        elif args.experiment:
+            exp_dir = (pathlib.Path(args.experiment_dir) if args.experiment_dir
+                       else data_bank_root / paths.experiment_subdir)
+            span = args.experiment_span_seconds
+            cells = ([int(c) for c in args.cells.split(",")] if args.cells
+                     else discover_cells(exp_dir, args.condition, span))
+            step = args.chunk_step_seconds or args.total_time_seconds
+            n_win = int((span - args.total_time_seconds) // step) + 1
+            print(f"  recordings dir    : {exp_dir}   exists={exp_dir.exists()}")
+            print(f"  recordings        : {len(cells)} x {span} s -> {n_win} windows of "
+                  f"{args.total_time_seconds:g} s each (step {step:g} s)")
+            print("  camera (sec. 6.3) : " + ", ".join(f"{k}={v:.4g}" for k, v in _scope_center().items()))
+            print("  ground truth      : none -- no acceptance verdict; drift table + figure only")
         else:
             print(f"  max videos        : {args.max_videos}")
             for t, p in video_paths:
@@ -390,6 +595,8 @@ def main(argv=None):
 
     opts = dict(frame_stride=args.frame_stride, min_track_length=args.min_track_length,
                 n_sigma=args.n_sigma, half_px=args.half_px)
+    if args.experiment:
+        return run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, opts)
 
     # ---- measure -------------------------------------------------------------------------
     if args.selftest:
