@@ -185,6 +185,9 @@ case "$STAGE" in
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}${tag_slot}_Experiment"
     _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
+    # Diagnostics of the MAP optimization itself: VERBOSE=1 records the per-window trace (per-step
+    # learning rate and running optimum, plus the early/full-run stop line), SHOW_PROGRESS sets its cadence.
+    _add VERBOSE; _add SHOW_PROGRESS
     # KINDS may be multi-value (FAB,INLB, a deliberate cross-condition application); Slurm splits --export on commas, so carry
     # it via the exported environment (ALL) rather than the explicit --export list.
     if [ -n "${KINDS:-}" ]; then export KINDS; KINDS_NOTE="KINDS=$KINDS (carried via ALL, comma-safe)"; fi
