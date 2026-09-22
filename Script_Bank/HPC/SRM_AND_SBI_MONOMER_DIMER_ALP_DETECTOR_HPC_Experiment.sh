@@ -16,6 +16,7 @@
 # <data_bank>/Experiment/, writes inferred-parameter distributions per condition
 # (Posit/..._MAP_Experiment/).
 # Overridable via --export: CONDITION (FAB|INLB, required), KINDS (default = CONDITION), MAX_CELLS (0=all),
+#   VERBOSE (0|1, per-window optimizer trace incl. the current learning rate), SHOW_PROGRESS (that trace's step cadence),
 #   CHUNK_STEP (seconds; unset -> model-window default, non-overlapping), SUMMARY (map|posterior|both), POOL_MODE, TOTAL_TIME,
 #   SRM_AND_SBI_GPUS (cap the GPUs used; default = all allocated),
 #   EXIT_BARRIER (seconds; raises torch-elastic's 300 s exit barrier so straggler
@@ -123,7 +124,17 @@ EXP_ARGS=( --condition "$CONDITION" --kinds "$KINDS" --max-cells "$MAX_CELLS"
 # point default it to the model window (see the CHUNK_STEP note above).
 [ -n "$CHUNK_STEP" ] && EXP_ARGS+=( --chunk-step-seconds "$CHUNK_STEP" )
 
-echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+# VERBOSE=1 turns on the per-window optimizer trace (--verbose -> show=True): the pool/score/elite
+# shapes, the per-step progress line carrying the CURRENT learning rate and the running optimum, and
+# the stop line naming 'early' or 'full-run' and the step reached. SHOW_PROGRESS sets that line's
+# cadence in steps. Both are diagnostics of the MAP optimization itself, off by default because they
+# multiply the log volume by the window count.
+VERBOSE="${VERBOSE:-0}"
+SHOW_PROGRESS="${SHOW_PROGRESS:-}"
+[ "$VERBOSE" = "1" ] && EXP_ARGS+=( --verbose )
+[ -n "$SHOW_PROGRESS" ] && EXP_ARGS+=( --show-progress-steps "$SHOW_PROGRESS" )
+
+echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} verbose=${VERBOSE} progress_every=${SHOW_PROGRESS:-default} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain

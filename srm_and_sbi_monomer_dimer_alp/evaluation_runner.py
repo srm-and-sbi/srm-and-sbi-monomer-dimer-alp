@@ -165,8 +165,11 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
              f"{band_label(guide_tight)} is +/-{guide_tight:g} (a factor of the "
              f"square root of two). A value inside {band_label(guide_tight)} is "
              f"also inside {band_label(guide)}. 'outside prior' is the share of MAP "
-             f"estimates beyond the row's prior box (possible only under --pool-mode "
-             f"unrestricted); 'corr(inf, true)' is the correlation between inferred and "
+             f"estimates beyond the row's prior box; the gradient ascent is unconstrained, "
+             f"so this happens under either pool mode -- --pool-mode bounds the candidate "
+             f"pool, not the optimizer's steps, and such an estimate is a flow optimum rather "
+             f"than a MAP of the prior-supported posterior. 'corr(inf, true)' is the "
+             f"correlation between inferred and "
              f"true values -- near zero when the estimator's output does not depend on "
              f"its input, which the error columns alone do not show.")
 

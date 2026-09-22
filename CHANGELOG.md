@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.15 - 2026-09-22
+
+Corrects the MAP seed-then-optimize step, which returned a score and a parameter vector taken
+from two different points. No canonical stage, parameter role, preprocessing step, prior, or
+trained estimator changes, and no retraining is implied.
+
+### Fixed
+
+- **The MAP optimizer returned coordinates one step past the point it scored.** In
+  `evaluation.optimize_elite` the bookkeeping ran after `optimizer.step()`, which updates the
+  parameter tensor in place, so the recorded pair combined step t's score with step t+1's
+  coordinates. The returned vector therefore sat about one learning rate away from the scored
+  point in every coordinate whose gradient pushed consistently, while the reported score belonged
+  to the point before the move. The bookkeeping now runs before the update, which keeps two
+  invariants: the returned score is the density at the returned vector, and, because step 1 scores
+  the elite seeds themselves, it is never worse than the best seed's. An analytic single-peak
+  density reproduces the old behavior without any trained flow (returned 0.97739 or 1.02261 for a
+  mode at 1.0, depending on which side the seeds approached from, reporting the mode's score in
+  both cases); regression tests in `tests/test_map_optimizer_invariant.py`.
+
+  Measured effect on the stored 2 s FAB products: `|MAP - posterior median|` carries a sharp spike
+  at exactly 0.128 dex, the initial Adam learning rate (`learning_rate_minimum` 1e-3 x
+  `learning_rate_maximum_factor` 128, printed by the stage as `learning_rate: 1.280e-01`), standing
+  3.4x above the neighboring background in the baseline; `mu_r` lands within 10 % of exactly that
+  value for 51 % of baseline and 66 % of `CAP256` recordings, which is what the three `mu_r` MAP
+  bands at -0.13, 0 and +0.13 dex are. Every MAP column, figure and conclusion in the Evaluation
+  and Experiment reports, in the MAP drift rows, in the direct-versus-neural comparison and in
+  `DETECTOR_WORKFLOW.md` sections 6.9 to 6.11, 9.6 and 9.7 is therefore under re-measurement. The
+  posterior median, the SGM and every calibration result come from posterior draws and never from
+  this routine, so they are untouched; `capacity256`'s bleaching collapse is in the median and the
+  SGM and is not explained by this defect. The biology workflow shares the routine, so its
+  MAP-based products are in the same scope.
+
+- **The reports claimed an outside-prior estimate was possible only under the unrestricted pool.**
+  The gradient ascent is unconstrained under either mode: `--pool-mode` bounds the candidate pool,
+  not the optimizer's steps. The `CAP256` Evaluation ran `pool_mode: bounded` and still placed 35 %
+  of its `mu_r` MAP estimates outside the prior box. The note now says so and states that such an
+  estimate is a flow optimum rather than a MAP of the prior-supported posterior. Whether to
+  constrain the ascent is a separate decision, not taken here.
+
+### Added
+
+- `VERBOSE` and `SHOW_PROGRESS` knobs on the Detector Experiment stage script, forwarding
+  `--verbose` and `--show-progress-steps` so a run can record the per-window optimizer trace: the
+  per-step line carrying the current learning rate and the running optimum, and the stop line
+  naming `early` or `full-run` and the step reached. Off by default, because they multiply the log
+  volume by the window count.
+
 ## 0.1.14 - 2026-09-22
 
 Within-recording drift becomes a standard output, computed for every stored point estimate and

@@ -159,7 +159,13 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
     on plateau, and stops early after ``optimizer_patience`` steps without
     improvement (the early-stopping criterion) -- the loop can therefore halt
     before ``numb_steps``. Tracks the single best ``(score, theta)`` seen across
-    all seeds and steps.
+    all seeds and steps, recorded before each update so the returned score is the
+    density at the returned vector, and never worse than the best elite seed's.
+
+    The optimization itself is unconstrained: ``pool_mode`` bounds the candidate
+    pool, not the gradient steps, so a returned vector may lie outside the prior
+    box under either pool mode. It is then a flow optimum, not a MAP of the
+    prior-supported posterior, and the callers' 'outside prior' columns count it.
 
     ``log_fn``, if given, is called with each per-step progress line (at the
     ``show_progress_steps`` cadence) and the final stop line, so a caller can
@@ -199,9 +205,13 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
         cond_batch = cond.squeeze(0).expand(theta.size(0), *cond.shape[1:])
         score_batch = flow.log_prob(input=theta_batch, condition=cond_batch)
         score = score_batch.squeeze(0)                             # (K,)
-        loss = -score.mean()        # mean keeps the lr consistent across K seeds
-        loss.backward()
-        optimizer.step()
+        # Record the best (score, theta) BEFORE the parameters move. `optimizer.step()` updates
+        # `theta` in place, so reading `theta[idx]` after it would pair this step's score with the
+        # NEXT step's coordinates -- the returned vector would sit one Adam step away from the point
+        # whose density is reported, by about the current learning rate in every coordinate the
+        # gradient pushes consistently. The invariant this ordering keeps is that the returned score
+        # is the density AT the returned vector. Step 1 scores the elite seeds themselves, so the
+        # returned score is also never worse than the best seed's.
         with torch.no_grad():
             value, idx = score.max(dim=0)
             if value.item() > optimal_score + tolerance:
@@ -210,6 +220,9 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
                 steps_without_improve = 0
             else:
                 steps_without_improve += 1
+        loss = -score.mean()        # mean keeps the lr consistent across K seeds
+        loss.backward()
+        optimizer.step()
         scheduler.step(loss.detach())   # scheduler only reads the value; detach avoids the requires_grad->scalar warning
         del theta_batch, cond_batch, score_batch, score, loss
         _empty_cache(train_device)
@@ -611,7 +624,8 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
     learnable parameter and per condition (kind), the distribution of the
     inferred MAP theta: count, median and IQR in log10, the median in physical
     units, and the share of estimates outside the row's prior box
-    (``fraction_outside_prior``; non-zero only under the unrestricted pool).
+    (``fraction_outside_prior``; possible under either pool mode, because the pool mode
+    bounds the candidate pool and not the unconstrained gradient ascent).
     ``inferred_by_kind`` maps each kind to an ``(N, D)`` array of inferred log10
     theta (N = cells x chunks for that kind).
     """

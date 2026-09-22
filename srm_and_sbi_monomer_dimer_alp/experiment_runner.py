@@ -193,8 +193,11 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                         f"posterior-median and SGM tables below repeat it for the other two "
                         f"point estimates, and the three are read together. Compare "
                         f"conditions to read out parameter differences. 'outside prior' "
-                        f"is the share of estimates beyond the row's prior box (possible "
-                        f"only under --pool-mode unrestricted).")
+                        f"is the share of estimates beyond the row's prior box; the gradient "
+                        f"ascent is unconstrained, so this happens under either pool mode -- "
+                        f"--pool-mode bounds the candidate pool, not the optimizer's steps, and "
+                        f"such an estimate is a flow optimum rather than a MAP of the "
+                        f"prior-supported posterior.")
 
     if post_q is not None:
         reporter.stat("posterior_samples", posterior_samples,
