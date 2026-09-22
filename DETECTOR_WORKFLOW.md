@@ -269,8 +269,9 @@ together, here and in every Evaluation and Experiment report: the MAP, the optim
 posterior median, the 50 % quantile of each marginal over the 1,000 draws; and the sample geometric
 median (SGM), the draw closest in prior-scaled `log10` distance to all other draws. No single one of
 the three is the estimate; every recovery statistic below is given for all three, and a conclusion
-rests on the set. Where the three disagree, the disagreement is itself a measurement of the
-posterior's shape (a mode sitting on a density spike away from the mass) and is reported as such. *corr* is the Pearson correlation
+rests on the set. Where the three disagree, the disagreement is reported as a disagreement between
+the optimized mode and the posterior summaries; what produces it is a separate question, settled by
+its own checks rather than by the tables (§9.8). *corr* is the Pearson correlation
 across videos between the estimate's `log10` value and the true `log10` value. *MAE* is the mean
 absolute error of the estimate in `log10` units; *median error* is the median signed error (estimate
 minus truth, `log10`), so its sign is the direction of the offset; *within ±0.15* is the share of
@@ -288,6 +289,12 @@ fraction* is the share of 1,000 observations at which a local classifier rejects
 α = 0.05.
 
 ### 6.9 Multiple-dye calibration outcome (synthetic)
+
+> **MAP numbers here are under recomputation (§9.8).** The MAP routine returned coordinates one
+> optimizer step away from the point whose density it reported; the defect is fixed in 0.1.15 and the
+> affected stages are being re-run. The posterior-median and SGM columns, and every sampling-based
+> calibration result, are unaffected.
+
 
 **Per parameter (from the Evaluation report), MAP view.**
 
@@ -331,9 +338,9 @@ three), with median |MAP − median| gaps of 0.119, 0.092 and 0.071 dex on those
 geometric median and the per-dimension median agree within 0.004–0.028 dex on every parameter. On
 those three parameters the MAP recovers the truth worse than the two posterior summaries on the same
 videos (`mu_r` correlation 0.67 against 0.96, 26 % of MAP estimates outside the prior box under the
-bounded pool against none). That gap is the optimizer landing in flow density spikes away from the
-posterior mass; it is a property of this estimator that the three views expose together and that no
-one of them shows alone.
+bounded pool against none). That gap was read as the optimizer landing in flow density spikes away from
+the posterior mass. It is not: §9.8 traces it to a defect in the MAP routine itself, corrected in
+0.1.15, and the numbers in this paragraph are under recomputation.
 
 **Joint and standardized (from the Posterior_Calibration report).** Joint coverage 0.24 at nominal 0.50 and
 0.62 at nominal 0.90, largest gap 0.31 (at nominal 0.75); TARP ATC −0.05; L-C2ST reject fraction 0.998.
@@ -371,6 +378,12 @@ measured association within the sampled range; extrapolating it to one dye per s
 supported by these data.
 
 ### 6.10 One-dye comparison
+
+> **MAP numbers here are under recomputation (§9.8).** The MAP routine returned coordinates one
+> optimizer step away from the point whose density it reported; the defect is fixed in 0.1.15 and the
+> affected stages are being re-run. The posterior-median and SGM columns, and every sampling-based
+> calibration result, are unaffected.
+
 
 **Design.** A sensitivity branch (`one-dye-sensitivity`, version 0.1.10,
 product namespace `…_ALP_ONEDYE_…`) regenerates the DLI products with the labeling law
@@ -500,6 +513,12 @@ estimator is a cross-check to be run after its validation, and its result inform
 choice between an improved neural estimator and a hybrid.
 
 ### 6.11 Both estimators on the experimental recordings
+
+> **MAP numbers here are under recomputation (§9.8).** The MAP routine returned coordinates one
+> optimizer step away from the point whose density it reported; the defect is fixed in 0.1.15 and the
+> affected stages are being re-run. The posterior-median and SGM columns, and every sampling-based
+> calibration result, are unaffected.
+
 
 From the two Experiment reports (60 MET-FAB recordings, 600 windows, `--pool-mode unrestricted`); the three
 per-window point estimates pooled over recordings and windows, medians and interquartile ranges in log10, the
@@ -1022,6 +1041,12 @@ parameter out of the inferred block, and the implemented detector continues to i
 
 ### 9.6 Frozen acceptance rules for the direct estimators
 
+> **MAP numbers here are under recomputation (§9.8).** The MAP routine returned coordinates one
+> optimizer step away from the point whose density it reported; the defect is fixed in 0.1.15 and the
+> affected stages are being re-run. The posterior-median and SGM columns, and every sampling-based
+> calibration result, are unaffected.
+
+
 These rules were fixed on 2026-09-21, after the development runs of the direct estimators on EVAL
 tasks 0 and 1 had started and before any corrected evaluation ran. They govern how a direct estimator
 of a detector parameter is judged from here on. They validate **direct estimates of the detector
@@ -1229,7 +1254,8 @@ over the camera nuisance distribution.
 
 For `mu_r` the direct estimate and the two neural posterior summaries track the truth strongly (fitted
 slopes 0.97 direct, 0.93 median and SGM); the neural MAP tracks it far less well (correlation 0.69, MAE
-0.080 dex, 26 % of estimates outside the prior box), the signature of the density spikes recorded in §6.9.
+0.080 dex, 26 % of estimates outside the prior box). That was attributed to density spikes; §9.8 traces it
+instead to the MAP routine's own defect, so the MAP row here is under recomputation.
 The neural summaries carry an average positive offset of approximately 0.02 dex (MAP 0.03 dex), the direct
 estimate a small overall bias (−0.0031 dex), with a brightness-dependent residual bias of −0.0118 dex in the
 dim subgroup. For `sigma_r` all three neural estimates return nearly the same value whatever the truth
@@ -1469,3 +1495,66 @@ needs its own capacity test (§2).
 
 **Status.** Training, Evaluation, Posterior_Calibration and Experiment complete under the `CAP256` tag;
 comparison recorded above. Open: repeat training of `capacity256`; the 20 s tier (in generation on JUWELS).
+
+> **The MAP columns of this section are under recomputation (§9.8).** The MAP routine returned
+> coordinates one optimizer step away from the point whose density it reported, so every MAP number
+> above, and the reading that `capacity256`'s MAP "separates further from the posterior", is
+> provisional until the affected stages are re-run. The calibration comparison, the posterior-median
+> and SGM recovery, and the `prob_photo_bleach` collapse are unaffected: they come from posterior
+> draws and never from that routine.
+
+### 9.8 A defect in the MAP routine, and what it puts under recomputation
+
+The seed-then-optimize step of §6.8 draws a candidate pool, keeps the best `K` seeds, and gradient-ascends
+the flow's log-density from them, returning the best `(score, theta)` it saw. Until 0.1.15 it did not: the
+bookkeeping ran after `optimizer.step()`, which updates the parameter tensor in place, so the recorded pair
+combined one step's score with the next step's coordinates. The returned vector therefore sat about one
+learning rate away from the point whose density was reported, in every coordinate whose gradient pushed
+consistently, and the reported score belonged to the point before the move.
+
+**Confirmation.** An analytic density with one smooth peak and no secondary structure reproduces it without
+any trained flow: driving the unchanged routine at a mode of 1.0 returned 0.97739 when the seeds approached
+from below and 1.02261 when they approached from above, reporting the mode's score in both cases. On the
+stored products the fingerprint is explicit: `|MAP − posterior median|` carries a sharp spike at exactly
+0.128 dex, the initial Adam learning rate (`learning_rate_minimum` 1e-3 × `learning_rate_maximum_factor`
+128, which the stage prints as `learning_rate: 1.280e-01`), standing 3.4× above the neighboring background
+in the baseline; `mu_r` lands within 10 % of exactly that value for 51 % of baseline and 66 % of `CAP256`
+recordings. The three `mu_r` MAP bands at −0.13, 0 and +0.13 dex are that displacement, not posterior
+geometry.
+
+**The fix and its invariants.** The bookkeeping now runs before the update, which makes two statements true
+by construction: the returned score is the density at the returned vector, and, because the first step scores
+the elite seeds themselves, it is never worse than the best seed's. Both are covered by
+`tests/test_map_optimizer_invariant.py`. No estimator is retrained and no prior, role or preprocessing step
+changes.
+
+**A second statement was wrong.** The reports said an outside-prior estimate was possible only under
+`--pool-mode unrestricted`. The ascent is unconstrained under either mode: the pool mode bounds the candidate
+pool, not the steps. The `CAP256` Evaluation ran `pool_mode: bounded` and still placed 35 % of its `mu_r`
+estimates outside the prior box. Such an estimate is a flow optimum, not a MAP of the prior-supported
+posterior. Whether to constrain the ascent is a separate decision, open.
+
+**Scope.** Affected, and therefore under recomputation: every MAP array, statistic and figure of the
+Evaluation and Experiment stages for this model — the multiple-dye baseline, `CAP256`, and the one-dye run —
+together with what is derived from them, namely the MAP rows of the within-recording drift and
+point-estimate agreement tables, the MAP columns of §§6.9 to 6.11, §9.6 and §9.7, the two `CAP256`-versus-baseline
+comparison records, the neural MAP rows of the direct-versus-neural PSF record, the MAP-vector geometric-median
+utility, and any posterior-predictive render whose parameter vector came from a MAP. The synthetic validation
+arm of the population-composition analysis reads MAP estimates and is affected; its experimental readout reads
+posterior draws and is not.
+
+Not affected, because they never pass through this routine: the trained weights and their training and test
+losses, the posterior draws, the per-dimension posterior medians and the posterior-draw SGM, every sampling
+based calibration diagnostic (coverage, SBC, TARP, L-C2ST), and the direct estimators. The `capacity256`
+calibration gain and its `prob_photo_bleach` collapse both stand, the latter being measured in the median and
+the SGM.
+
+A caution the artifact format carries: the Nuisance_DLI pool cache records the checkpoint checksum and the
+sampling settings but not the optimizer implementation, so correcting the code does not invalidate an existing
+MAP-derived pool. Any such pool must be rebuilt explicitly, and a construction named "SGM" is not by itself
+safe: `sgm_percentiles` with `selection_source = "experiment"` (the default) summarizes stored MAP vectors,
+while `window-sgm` summarizes posterior draws.
+
+**Status.** Fixed in 0.1.15 and validated on the analytic case. The `CAP256` Experiment is the first stage
+re-run (JUPITER 1953816, with the per-window optimizer trace recorded); the previous product is preserved
+beside it as `..._CAP256_MAP_Experiment_RUN_1951236` so the two can be compared on the same 600 windows.
