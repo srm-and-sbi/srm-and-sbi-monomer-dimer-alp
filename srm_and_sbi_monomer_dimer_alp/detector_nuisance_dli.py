@@ -295,9 +295,8 @@ def build_map_estimate_pool(posterior, chunks, device, vista_device, eval_cfg, *
     ``{"kind_index", "cell", "chunk"}`` dict, row-aligned to the ``(n_chunks, D)`` pool."""
     from .evaluation import map_estimate
 
-    lr = (eval_cfg.learning_rate if eval_cfg.learning_rate
-          else eval_cfg.learning_rate_minimum * eval_cfg.learning_rate_maximum_factor)
-    tolerance = eval_cfg.learning_rate_minimum * eval_cfg.tolerance_factor
+    lr = eval_cfg.learning_rate
+    tolerance = eval_cfg.tolerance
     pieces = []
     for chunk in chunks:
         _score, theta_log = map_estimate(
@@ -369,9 +368,10 @@ _SGM_WEISZFELD_ITERS = 2000
 
 
 def sample_geometric_median(vecs_abs, range_abs):
-    """Index (and method) of the collection member closest to the geometric median, in prior-range-
-    normalized absolute space -- the correlation-preserving median VECTOR (an actual member, so its
-    joint correlations are intact). (Ramirez Sierra & Sokolowski 2025; see DETECTOR_WORKFLOW.md.)
+    """``(index, method)`` of the collection's SGM member, in prior-range-normalized absolute space:
+    the exact medoid up to the kernel's capacity, else the member nearest the Weiszfeld geometric
+    median (an approximation); ``method`` says which. An actual member, so its coordinates
+    co-occurred. (Ramirez Sierra & Sokolowski 2025; see DETECTOR_WORKFLOW.md.)
 
     Delegates to the workflow-agnostic kernel so the imaging nuisance construction, the detector
     analysis, and the biology Experiment analysis all share ONE implementation; a divergence between
@@ -382,8 +382,10 @@ def sample_geometric_median(vecs_abs, range_abs):
 
 
 def _per_window_sgm_labeled(flat_log, labels, range_abs):
-    """Per-window Sample Geometric Median (medoid of each window's draws) from a labeled pool,
-    grouping the window-major flat pool into windows by its (kind_index, cell, chunk) labels.
+    """Per-window Sample Geometric Median from a labeled pool: the exact medoid of each window's
+    posterior draws in PHYSICAL coordinates divided by the physical prior range -- not the stage
+    products' ``posterior_sgm``, which divides estimator coordinates by the log10 prior widths.
+    Groups the window-major flat pool into windows by its (kind_index, cell, chunk) labels.
     Returns (vectors_log (n_win, D), kind_index (n_win,), kinds list)."""
     keys = np.stack([np.asarray(labels["kind_index"]), np.asarray(labels["cell"]),
                      np.asarray(labels["chunk"])], axis=1)
@@ -405,8 +407,9 @@ def select_signed_percentile_vectors(vecs_log, percentiles, prior_low, prior_hig
     """Select whole vectors at the given percentiles along the SIGNED distance-to-SGM coordinate.
 
     Construction (documented in DETECTOR_WORKFLOW.md and the Nuisance_DLI note): in prior-range-
-    normalized absolute space, the magnitude is the distance to the Sample Geometric Median ``g``
-    (the correlation-preserving median vector), and the sign is the side of ``g`` along the cloud's
+    normalized absolute space, the magnitude is the distance to the Sample Geometric Median ``g`` of
+    the source vectors (a member: the exact medoid up to the kernel's capacity; the method is in the
+    provenance), and the sign is the side of ``g`` along the cloud's
     main axis of variation (PC1 of the ``g``-centered points, oriented toward increasing brightness
     ``mu_pc`` -- dim/narrow -> bright/wide). So ``p50`` is exactly ``g``; ``p < 50`` walks the negative
     (dim/narrow) side to the extreme at ``p=0``; ``p > 50`` walks the positive (bright/wide) side to
@@ -558,8 +561,8 @@ def live_map_pool_contract(eval_cfg, *, pool_mode, checkpoint_sha256) -> dict:
         "implementation_sha256": code_provenance()["implementation"]["sha256"],
         "optimizer": optimizer_contract(
             eval_cfg,
-            learning_rate=eval_cfg.learning_rate_minimum * eval_cfg.learning_rate_maximum_factor,
-            tolerance=eval_cfg.learning_rate_minimum * eval_cfg.tolerance_factor,
+            learning_rate=eval_cfg.learning_rate,
+            tolerance=eval_cfg.tolerance,
             theta_prex_size=eval_cfg.theta_prex_size, elite_prex_size=eval_cfg.elite_prex_size,
             numb_steps=eval_cfg.numb_steps, pool_mode=pool_mode),
         "checkpoint_sha256": checkpoint_sha256,

@@ -383,14 +383,17 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
 
 
 def _aggregate_cell(rows_log10, source, table):
-    """Reduce one cell's per-chunk MAP rows to a single vector, in estimator space.
+    """Reduce one cell's per-chunk MAP rows to a single vector, returned in estimator space.
 
-    ``cell-sgm`` takes the Sample Geometric Median -- an actual chunk's estimate, so the rendered
-    video corresponds to a configuration the posterior genuinely produced for this cell.
-    ``cell-median`` takes each dimension's median independently, which is faster to explain but
-    composes coordinates that need never have co-occurred; for a render that matters, because the
-    simulator is then asked to realize a combination no chunk supported. Both are offered, and the
-    report names which was used.
+    The population is the cell's window MAP vectors, so both choices summarize MAPs, not posterior
+    draws. ``cell-sgm`` takes their Sample Geometric Median: the exact medoid (a cell has far fewer
+    chunks than the kernel's capacity) in PHYSICAL coordinates, each divided by its range over this
+    cell's chunks -- neither the prior width nor the estimator coordinates of the stage products'
+    ``posterior_sgm``. The result is an actual chunk's MAP, so the rendered video corresponds to a
+    configuration the optimizer returned for this cell. ``cell-median`` takes each dimension's
+    median independently, in estimator coordinates, which composes coordinates that need never
+    have co-occurred; for a render that matters, because the simulator is then asked to realize a
+    combination no chunk supported. Both are offered, and the report names which was used.
     """
     if source == "cell-sgm":
         a = bio.to_physical(rows_log10, table)            # the medoid is defined in physical space
@@ -613,8 +616,9 @@ def biology_fixed_imaging(data_bank_root, map_label, condition):
 
     Biology holds imaging FIXED at the calibrated vector the training videos were generated
     with: the six emitter parameters come from the ``Nuisance_DLI`` artifact at run time (its
-    Sample Geometric Median when it pools multiple vectors, so the choice preserves parameter
-    correlations rather than composing per-dimension medians), and the five SCOPE camera
+    Sample Geometric Median when it pools multiple vectors -- a member of whichever pool its
+    construction recorded, so the chosen vector's coordinates co-occurred, rather than a composite
+    of per-dimension medians), and the five SCOPE camera
     parameters are pinned to their correct-source MET values. The values live only in the
     artifact -- they appear in no source file -- so hardcoding them anywhere would silently
     drift from whatever the videos were actually built with.

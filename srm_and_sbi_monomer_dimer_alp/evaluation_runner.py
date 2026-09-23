@@ -21,6 +21,7 @@ import argparse
 import random
 import shutil
 import time
+from collections import Counter
 from dataclasses import dataclass
 from itertools import groupby
 from datetime import datetime, timezone
@@ -42,8 +43,10 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
     draw_label,
     map_estimate,
     optimizer_contract,
+    optimizer_summary_lines,
     point_estimate_rows,
     posterior_coverage_table,
+    STOP_REASONS,
     posterior_summary,
     recovery_table,
     short_labels,
@@ -337,14 +340,18 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     recovery_array_path = paths.map_recovery_array_path(data_bank_root, product_label)
 
     # Resolve effective hyperparameters (None -> config default).
-    lr = (args.learning_rate if args.learning_rate is not None
-          else eval_cfg.learning_rate_minimum * eval_cfg.learning_rate_maximum_factor)
-    tolerance = eval_cfg.learning_rate_minimum * eval_cfg.tolerance_factor
+    lr = args.learning_rate if args.learning_rate is not None else eval_cfg.learning_rate
+    tolerance = eval_cfg.tolerance
     theta_prex_size = args.theta_prex_size or eval_cfg.theta_prex_size
     elite_prex_size = args.elite_prex_size or eval_cfg.elite_prex_size
     numb_steps = args.numb_steps or eval_cfg.numb_steps
     show_progress_steps = args.show_progress_steps or eval_cfg.show_progress_steps
     pool_mode = args.pool_mode or eval_cfg.pool_mode
+    # The settings the banner prints are the settings the manifest records: one object for both.
+    opt_contract = optimizer_contract(eval_cfg, learning_rate=lr, tolerance=tolerance,
+                                      theta_prex_size=theta_prex_size,
+                                      elite_prex_size=elite_prex_size, numb_steps=numb_steps,
+                                      pool_mode=pool_mode)
 
     # Verbosity tiers (the show / verbose flags).
     show = args.verbose or args.debug or args.debug_dump
@@ -374,10 +381,8 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print("\nMAP estimate hyperparameters (effective):")
     print(f"  pool_mode            : {pool_mode}   "
           f"({'rejection within prior' if pool_mode == 'bounded' else 'flow direct, no rejection'})")
-    print(f"  theta_prex_size      : {theta_prex_size}")
-    print(f"  elite_prex_size      : {elite_prex_size}")
-    print(f"  numb_steps           : {numb_steps}")
-    print(f"  learning_rate        : {lr:.3e}   tolerance: {tolerance:.3e}")
+    for line in optimizer_summary_lines(opt_contract):
+        print(f"  {line}")
     print(f"  point estimates      : map, median, sgm  (all three, always; "
           f"{draw_label(pool_mode)}s summarized)")
     print(f"  --bin-mode           : {bin_mode}")
@@ -512,8 +517,12 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     log_progress(progress_fh,
                  f"START MAP recovery: {len(my_tasks)} EVAL task(s){shard_note}, "
                  f"{total_sims} videos total (pool={theta_prex_size}, "
-                 f"elites={elite_prex_size}, steps={numb_steps}; "
+                 f"elites={elite_prex_size}, steps={numb_steps}, "
+                 f"patience={eval_cfg.optimizer_patience}/{eval_cfg.scheduler_patience}, "
+                 f"lr={lr:g}..{eval_cfg.learning_rate_minimum:g} in pool-IQR units, "
+                 f"tolerance={tolerance:g} nats; "
                  f"estimates=map,median,sgm over {posterior_samples} draws).")
+    map_stops = Counter()
     loop_start = time.time()
     done = 0
     try:
@@ -534,7 +543,7 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                           flush=True)
                 if debug_log:
                     log_file_only(progress_fh, f"-- task {task} sim {sim} --")
-                score, theta_log = map_estimate(
+                score, theta_log, map_info = map_estimate(
                     posterior, video_chunk, device, vista_device,
                     theta_prex_size, eval_cfg.theta_prex_batch_size,
                     eval_cfg.score_prex_batch_size, elite_prex_size,
@@ -542,8 +551,9 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     eval_cfg.scheduler_patience, show_progress_steps,
                     eval_cfg.learning_rate_minimum, eval_cfg.learning_rate_factor,
                     lr, tolerance, pool_mode=pool_mode, show=show, verbose=verbose_deep,
-                    log_fn=step_log,
+                    log_fn=step_log, return_info=True,
                 )
+                map_stops[map_info["stop"]] += 1
                 true_log = to_flow(np.asarray(theta_set[sim], dtype=float), spec.draw_spec)
                 scores.append(score)
                 map_est.append(theta_log)
@@ -571,9 +581,11 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 log_progress(
                     progress_fh,
                     f"task {task} sim {sim} | {done}/{total_sims} | "
-                    f"log_prob={score:+.3f} | elapsed={elapsed:.1f}s | "
-                    f"avg={avg:.1f}s/video | ETA={eta:.0f}s")
+                    f"log_prob={score:+.3f} | stop={map_info['stop']}@{map_info['steps']} | "
+                    f"elapsed={elapsed:.1f}s | avg={avg:.1f}s/video | ETA={eta:.0f}s")
                 if debug_log:
+                    log_file_only(progress_fh,
+                                  f"pool IQR [LOG] {_theta_repr(map_info['scale'], 4)}")
                     log_file_only(progress_fh,
                                   f"inferred [LOG] {_theta_repr(theta_log)}")
                     log_file_only(progress_fh,
@@ -584,6 +596,8 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         log_progress(progress_fh,
                      f"DONE: {done}/{total_sims} videos in "
                      f"{time.time() - loop_start:.1f}s.")
+        log_progress(progress_fh, "MAP stops: " + (", ".join(
+            f"{k} {map_stops[k]}" for k in STOP_REASONS if map_stops[k]) or "none"))
     finally:
         if progress_fh is not None:
             progress_fh.close()
@@ -598,10 +612,7 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         coordinate_transform="parameterization.to_flow (log10 for log rows, linear rows as-is)",
         pool_mode=pool_mode, draw_label=draw_label(pool_mode), n_summary_draws=posterior_samples,
         quantile_levels=QUANTILE_LEVELS, sgm_scale=sgm_scale, sgm_coordinates="estimator",
-        optimizer=optimizer_contract(eval_cfg, learning_rate=lr, tolerance=tolerance,
-                                     theta_prex_size=theta_prex_size,
-                                     elite_prex_size=elite_prex_size, numb_steps=numb_steps,
-                                     pool_mode=pool_mode),
+        optimizer=opt_contract,
         code=finalize_code_provenance(code_at_start), checkpoint_sha256=checkpoint_sha256,
         run_identity=run_ident, execution=exec_ident, seed_policy=schema.seed_policy(args.seed),
         window_geometry=None, condition_labels=None, stored_optional_fields=[],
@@ -743,8 +754,8 @@ def build_evaluation_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--learning-rate", type=float, default=None,
-        help="Adam learning rate for the MAP optimization. Default: "
-             "learning_rate_minimum * learning_rate_maximum_factor.",
+        help="Initial Adam learning rate of the MAP ascent, in pool-IQR units (a fraction of "
+             f"each parameter's candidate-pool spread per step; default {eval_cfg.learning_rate}).",
     )
     parser.add_argument(
         "--verbose", action="store_true",

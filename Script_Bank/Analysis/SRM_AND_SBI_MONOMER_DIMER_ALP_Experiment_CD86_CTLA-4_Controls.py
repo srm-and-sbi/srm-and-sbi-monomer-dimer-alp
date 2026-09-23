@@ -42,6 +42,7 @@ import re
 import shutil
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,6 +58,8 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
     draw_label,
     map_estimate,
     optimizer_contract,
+    optimizer_summary_lines,
+    STOP_REASONS,
     experiment_table, experiment_estimates_compared_table,
     point_estimate_agreement_table, point_estimate_rows,
     posterior_summary, prior_scale, short_labels,
@@ -324,14 +327,18 @@ def main(args: argparse.Namespace) -> None:
     progress_path = out_dir / "progress.log"
 
     # Effective hyperparameters (None -> config default).
-    lr = (args.learning_rate if args.learning_rate is not None
-          else eval_cfg.learning_rate_minimum * eval_cfg.learning_rate_maximum_factor)
-    tolerance = eval_cfg.learning_rate_minimum * eval_cfg.tolerance_factor
+    lr = args.learning_rate if args.learning_rate is not None else eval_cfg.learning_rate
+    tolerance = eval_cfg.tolerance
     theta_prex_size = args.theta_prex_size or eval_cfg.theta_prex_size
     elite_prex_size = args.elite_prex_size or eval_cfg.elite_prex_size
     numb_steps = args.numb_steps or eval_cfg.numb_steps
     show_progress_steps = args.show_progress_steps or eval_cfg.show_progress_steps
     pool_mode = args.pool_mode or eval_cfg.pool_mode
+    # The settings the banner prints are the settings the manifest records: one object for both.
+    opt_contract = optimizer_contract(eval_cfg, learning_rate=lr, tolerance=tolerance,
+                                      theta_prex_size=theta_prex_size,
+                                      elite_prex_size=elite_prex_size, numb_steps=numb_steps,
+                                      pool_mode=pool_mode)
 
     show = args.verbose or args.debug or args.debug_dump
     verbose_deep = args.debug or args.debug_dump
@@ -396,8 +403,8 @@ def main(args: argparse.Namespace) -> None:
     print(f"  total MAP estimates       : {total_estimates}")
     print("\nMAP estimate hyperparameters (effective):")
     print(f"  pool_mode            : {pool_mode}")
-    print(f"  theta_prex_size      : {theta_prex_size}    elite_prex_size: {elite_prex_size}")
-    print(f"  numb_steps           : {numb_steps}    learning_rate: {lr:.3e}")
+    for line in optimizer_summary_lines(opt_contract):
+        print(f"  {line}")
     print(f"  verbosity            : "
           f"{'debug-dump' if args.debug_dump else ('debug' if args.debug else ('verbose' if args.verbose else 'normal'))}")
     print("\nOutput destinations:")
@@ -532,8 +539,12 @@ def main(args: argparse.Namespace) -> None:
     log_progress(progress_fh,
                  f"START Experiment MAP: {my_estimates} estimates{shard_note} "
                  f"({len(kinds)} kinds, {n_chunks} chunks/video; pool={theta_prex_size}, "
-                 f"elites={elite_prex_size}, steps={numb_steps}; "
+                 f"elites={elite_prex_size}, steps={numb_steps}, "
+                 f"patience={eval_cfg.optimizer_patience}/{eval_cfg.scheduler_patience}, "
+                 f"lr={lr:g}..{eval_cfg.learning_rate_minimum:g} in pool-IQR units, "
+                 f"tolerance={tolerance:g} nats; "
                  f"estimates=map,median,sgm over {posterior_samples} draws).")
+    map_stops = Counter()
     loop_start = time.time()
     done = 0
     try:
@@ -556,7 +567,7 @@ def main(args: argparse.Namespace) -> None:
                               flush=True)
                     if debug_log:
                         log_file_only(progress_fh, f"-- {kind} cell {cell} chunk {c} --")
-                    score, theta_log = map_estimate(
+                    score, theta_log, map_info = map_estimate(
                         posterior, chunk, device, vista_device,
                         theta_prex_size, eval_cfg.theta_prex_batch_size,
                         eval_cfg.score_prex_batch_size, elite_prex_size,
@@ -564,8 +575,9 @@ def main(args: argparse.Namespace) -> None:
                         eval_cfg.scheduler_patience, show_progress_steps,
                         eval_cfg.learning_rate_minimum, eval_cfg.learning_rate_factor,
                         lr, tolerance, pool_mode=pool_mode, show=show,
-                        verbose=verbose_deep, log_fn=step_log,
+                        verbose=verbose_deep, log_fn=step_log, return_info=True,
                     )
+                    map_stops[map_info["stop"]] += 1
                     scores.append(score)
                     map_est.append(theta_log)
                     # The two draw-derived estimates, from ONE draw set per window.
@@ -585,15 +597,20 @@ def main(args: argparse.Namespace) -> None:
                     eta = avg * (my_estimates - done)
                     log_progress(progress_fh,
                                  f"{kind} cell {cell} chunk {c} | {done}/{my_estimates} | "
-                                 f"log_prob={score:+.3f} | elapsed={elapsed:.1f}s | "
-                                 f"avg={avg:.1f}s | ETA={eta:.0f}s")
+                                 f"log_prob={score:+.3f} | "
+                                 f"stop={map_info['stop']}@{map_info['steps']} | "
+                                 f"elapsed={elapsed:.1f}s | avg={avg:.1f}s | ETA={eta:.0f}s")
                     if debug_log:
+                        log_file_only(progress_fh,
+                                      f"pool IQR [LOG] {_theta_repr(map_info['scale'], 4)}")
                         log_file_only(progress_fh, f"inferred [LOG] {_theta_repr(theta_log)}")
                 log_progress(progress_fh, f"{kind} cell {cell} complete "
                                           f"({n_cell_chunks} chunks in "
                                           f"{time.time() - cell_start:.1f}s).")
         log_progress(progress_fh, f"DONE: {done}/{my_estimates} estimates in "
                                   f"{time.time() - loop_start:.1f}s.")
+        log_progress(progress_fh, "MAP stops: " + (", ".join(
+            f"{k} {map_stops[k]}" for k in STOP_REASONS if map_stops[k]) or "none"))
     finally:
         if progress_fh is not None:
             progress_fh.close()
@@ -604,10 +621,7 @@ def main(args: argparse.Namespace) -> None:
         coordinate_transform="parameterization.to_flow (log10 for log rows, linear rows as-is)",
         pool_mode=pool_mode, draw_label=draw_label(pool_mode), n_summary_draws=posterior_samples,
         quantile_levels=QUANTILE_LEVELS, sgm_scale=sgm_scale, sgm_coordinates="estimator",
-        optimizer=optimizer_contract(eval_cfg, learning_rate=lr, tolerance=tolerance,
-                                     theta_prex_size=theta_prex_size,
-                                     elite_prex_size=elite_prex_size, numb_steps=numb_steps,
-                                     pool_mode=pool_mode),
+        optimizer=opt_contract,
         code=finalize_code_provenance(code_at_start), checkpoint_sha256=checkpoint_sha256,
         run_identity=run_ident, execution=exec_ident, seed_policy=schema.seed_policy(args.seed),
         window_geometry=schema.window_geometry(n_frames=n_frames, step_frames=step_frames,
@@ -719,7 +733,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--show-progress-steps", type=int, default=None,
                         help=f"Per-step progress cadence (default: {eval_cfg.show_progress_steps}).")
     parser.add_argument("--learning-rate", type=float, default=None,
-                        help="Adam learning rate for the MAP optimization.")
+                        help="Initial Adam learning rate of the MAP ascent, in pool-IQR units "
+                             f"(default {eval_cfg.learning_rate}).")
     parser.add_argument("--verbose", action="store_true",
                         help="Rich per-chunk console diagnostics (see Evaluation.py).")
     parser.add_argument("--debug", action="store_true",

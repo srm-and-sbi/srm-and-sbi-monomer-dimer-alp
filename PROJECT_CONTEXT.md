@@ -1488,8 +1488,9 @@ by data the network optimized against.
 maximum-a-posteriori parameter vector is estimated (seed-then-optimize: draw a
 candidate pool, score it by the flow's log-probability, keep the top-K elite
 seeds, then gradient-ascend the log-probability with Adam, a plateau
-learning-rate schedule, and early stopping) and compared to the known ground
-truth, giving two complementary read-outs:
+learning-rate schedule, and early stopping, stepping each parameter in units of
+its interquartile range over the candidate pool) and compared to the known
+ground truth, giving two complementary read-outs:
 - *Recovery accuracy* — how close the inferred parameter is to truth
   (per-parameter error; fraction within a tolerance band).
 - *Posterior calibration* — whether the per-video credible intervals contain the
@@ -1515,13 +1516,17 @@ side; nothing selects among them. They answer different questions: a sharp
 posterior at the wrong location and a broad posterior at the right one are
 distinguishable only when both are shown, and the three point estimates read
 together are the cross-check that localizes an optimizer fault to the MAP path
-rather than to the estimator (`VALIDATION.md`; `DETECTOR_WORKFLOW.md` §9.8).
+rather than to the estimator (`VALIDATION.md`; `DETECTOR_WORKFLOW.md` §9.8). The
+calculations behind the three are validated before any analysis is regenerated,
+by the protocol in `VALIDATION.md` §3.4; agreement among them does not establish
+that a parameter is recoverable.
 
 **Outcome for the MET-FAB detector (2 s, Poisson labeling).** The first production
 calibration of the detector under the DOL-explicit observation layer is recorded, as
 measurements with their definitions and limits, in `DETECTOR_WORKFLOW.md` §6.9: on
 25,000 held-out synthetic videos the three point estimates, read together, track
-the truth for the brightness pair (correlation 0.79–0.87 for the MAP, 0.89–0.95 for
+the truth for the brightness pair (correlation 0.79–0.87 for the MAP, whose figures
+are under recomputation per `DETECTOR_WORKFLOW.md` §9.8, and 0.89–0.95 for
 the posterior median and the sample geometric median), disagree on the PSF median
 (0.67 for the MAP with 26 % of estimates outside the prior box, 0.96 for the two
 posterior summaries), and do not track the PSF spread (0.08 to 0.17); the joint 90 %

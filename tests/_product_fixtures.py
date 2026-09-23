@@ -27,9 +27,10 @@ def code_block(changed=False):
 
 def optimizer_block(pool_mode="bounded"):
     return {"pool_mode": pool_mode, "theta_prex_size": 1000, "elite_prex_size": 2,
-            "numb_steps": 1000, "optimizer_patience": 100, "scheduler_patience": 10,
-            "learning_rate": 0.128, "learning_rate_minimum": 1e-3, "learning_rate_factor": 0.5,
-            "tolerance": 1e-3, "bookkeeping": "best (score, vector) recorded before optimizer.step"}
+            "numb_steps": 2000, "optimizer_patience": 200, "scheduler_patience": 20,
+            "learning_rate": 0.05, "learning_rate_minimum": 5e-4, "learning_rate_factor": 0.5,
+            "tolerance": 1e-3, "step_coordinates": "pool-IQR units",
+            "bookkeeping": "every strictly better finite (score, vector) pair retained"}
 
 
 def valid_manifest(stage, n, *, pool_mode="bounded", invocation="inv-1", job_id="1", seed=None,

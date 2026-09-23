@@ -35,14 +35,18 @@ function below is named for what it aggregates:
 
 "Mean" aggregates each parameter independently, so its coordinates need not have co-occurred in any
 recording. "Realized" selects an actual member of the set -- the exact medoid, the member minimizing
-the summed distance to every other member -- so every coordinate co-occurred in one real window and
-the joint structure is intact (Ramirez Sierra & Sokolowski, Mach. Learn.: Sci. Technol. 6, 015004,
-2025). The two `*-window` functions produce a timeseries; the two `*-trajectory` functions produce a
-single vector, and they pair with their window counterpart so a figure never mixes estimators.
+the summed distance to every other member -- so every coordinate co-occurred in one real window;
+selecting one member does not by itself preserve the set's correlations (Ramirez Sierra &
+Sokolowski, Mach. Learn.: Sci. Technol. 6, 015004, 2025). The set is the stored window MAP vectors,
+so the realized estimates are SGMs of window MAPs, not the posterior-draw SGM each window also
+stores. The two `*-window` functions produce a timeseries; the two `*-trajectory` functions produce
+a single vector, and they pair with their window counterpart so a figure never mixes estimators.
 
 DISTANCES. Both realized estimates use the same metric: physical values ``to_physical(G)``, each
 parameter divided by its physical prior width ``to_physical(high) - to_physical(low)`` so no
-parameter dominates, Euclidean, exact medoid. Selection is on ALL parameters jointly, so a selected
+parameter dominates, Euclidean, exact medoid (the shared kernel switches to a snapped Weiszfeld
+approximation only above its ``EXACT_MEDOID_CAPACITY``, far beyond a condition's window count).
+Selection is on ALL parameters jointly, so a selected
 vector is internally coherent -- and consequently the value it reports for one parameter is that
 jointly-central window's value, not that parameter's own median.
 """
@@ -299,10 +303,18 @@ def pooled_summary(pooled, to_physical, statistic="median"):
     vector.
 
     ``statistic``:
-        ``"median"``  the marginal median. Equivariant under monotone transformation, so the median
-                      in physical units and ``to_physical(median(estimator))`` are the SAME number
-                      and the answer does not depend on the space it was computed in. This is the
-                      default for that reason.
+        ``"median"``  the marginal median, taken here AFTER the transform (the median of the
+                      physical draws). For an odd count it is the same draw as
+                      ``to_physical(median(estimator))``. For an even count numpy interpolates
+                      between the two middle values, and interpolating physical values (their
+                      arithmetic mean) differs from transforming the interpolated estimator value
+                      (their geometric mean, for a log row), so the two conventions need not agree
+                      in a finite sample. The per-observation median stored in the stage products
+                      is taken the other way (in estimator coordinates, then transformed); it
+                      summarizes a different population and is not compared with this one number
+                      for number. The median stays the default because it depends on the basis
+                      only through that interpolation, whereas the mean differs by a factor that
+                      grows with the spread.
         ``"mean"``    the arithmetic mean in physical units. NOT equivariant for a log row: it
                       differs from the geometric mean ``10 ** mean(log10)`` by a factor that grows
                       with the spread, and for a log-uniform prior that factor is large. Provided

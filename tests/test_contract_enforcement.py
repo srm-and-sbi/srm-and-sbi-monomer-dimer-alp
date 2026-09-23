@@ -55,6 +55,10 @@ def test_manifest_required_keys_versions_types_and_cross_field_rules():
             "must list distinct optional fields"),
         "unknown definitions version": (lambda m: m.update(estimate_definitions_version=99),
                                         "not supported"),
+        "pre-0.1.17 definitions (unscaled MAP)": (
+            lambda m: m.update(estimate_definitions_version=1), "recomputed, not converted"),
+        "optimizer step units missing": (lambda m: m["optimizer"].pop("step_coordinates"),
+                                         "optimizer block lacks"),
         "sgm_scale zero": (lambda m: m.update(sgm_scale=[1.0, 0.0, 1.0]), "finite and positive"),
         "sgm_scale negative": (lambda m: m.update(sgm_scale=[1.0, -1.0, 1.0]), "finite and positive"),
         "sgm_scale wrong length": (lambda m: m.update(sgm_scale=[1.0, 1.0]), "one per parameter"),
@@ -90,7 +94,8 @@ def test_manifest_required_keys_versions_types_and_cross_field_rules():
         "id fields wrong": (lambda m: m.update(observation_id_fields=["sim_index", "task_index"]),
                             "observation_id_fields"),
         "n_observations wrong": (lambda m: m.update(n_observations=5), "n_observations"),
-        "schema version wrong": (lambda m: m.update(artifact_schema_version=2), "artifact_schema_version"),
+        "schema version 1 (before 0.1.17)": (lambda m: m.update(artifact_schema_version=1),
+                                             "artifact_schema_version"),
     }
     for name, (mutate, needle) in cases.items():
         bad = with_manifest(good, mutate)

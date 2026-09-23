@@ -794,7 +794,7 @@ print('frame_count =', t.frame_count)
 `(100, 256, 256)` and `(500, 256, 256)`; the encoder accepts the matching frame
 count at each duration.
 
-### 3.4 Validating a trained posterior (MAP recovery)
+### 3.4 Validating a trained posterior and its three point estimates
 
 Beyond confirming the code runs, a trained posterior is validated on data it has
 never seen, using the two MAP-recovery stages.
@@ -845,18 +845,24 @@ match. The three estimates:
 
 - **MAP** (`map_estimate`): the numerical MAP candidate — the highest-scoring
   point retained by the gradient-ascent optimizer of the flow's log-density,
-  initialized from the observation's candidate draws. The optimization is
-  unconstrained, so prior support and convergence to a mode are not guaranteed;
-  a value outside the prior box is a flow optimum, not a MAP of the
-  prior-supported posterior.
+  initialized from the observation's candidate draws and stepping each
+  coordinate in units of its interquartile range over those draws. The
+  optimization is unconstrained, so prior support and convergence to a mode are
+  not guaranteed; a value outside the prior box is a flow optimum, not a MAP of
+  the prior-supported posterior.
 - **median** (`posterior_quantiles` at the 0.50 level, located from the
   manifest): the marginal median of the observation's draws, each coordinate
-  independently — a composite that need not be a sampled vector.
+  independently, with linear interpolation between order statistics, in
+  estimator coordinates; a physical value is the transform of that quantile. A
+  composite that need not be a sampled vector.
 - **SGM** (`posterior_sgm`): the sample geometric median of the same draws —
   the complete draw minimizing the summed Euclidean distance to all others after
-  dividing each coordinate by its prior width; a realized draw. This is the
-  *posterior-draw SGM*; an SGM of window MAP vectors, or one taken in physical
-  coordinates, is a different quantity and is named as such where it appears.
+  dividing each coordinate by its prior width, found exactly (an exact sample
+  medoid); a realized draw. This is the *posterior-draw SGM*; an SGM of window
+  MAP vectors, one taken in physical coordinates, or the collection-level
+  approximation that snaps a Weiszfeld geometric median to its nearest member
+  above 20,000 members, is a different quantity and is named as such where it
+  appears.
 
 Under the `bounded` pool the draws are posterior draws; under `unrestricted`
 they are flow draws that may fall outside the prior's support — the manifest
@@ -878,6 +884,136 @@ lies inside the box. Experiment stays `unrestricted` even with a well-trained
 posterior: the pool mode follows the *data*, not the training quality, and the
 experimental recordings are not prior draws (see the pool-mode rule in
 section 2.7). Run any stage with `--help` for the full flag list.
+
+#### Validating the point-estimate calculations
+
+The calculations behind the three point estimates are validated before the
+analyses are regenerated. The checks are small and focused; the regenerated
+analyses are the production-scale test. The order is:
+
+**median correctness → SGM correctness and sampling stability → MAP
+optimization → regenerate analyses → scientific interpretation.**
+
+These checks do not establish parameter recoverability or posterior calibration.
+
+**1. Marginal median.** The coordinate-wise 50th percentile of an observation's
+draws, calculated in estimator coordinates with linear interpolation, then
+transformed into physical units.
+
+- Implementation tests cover the interpolation, the parameter order and the
+  order of the transform (`tests/test_median_reference.py`).
+- The sampler-to-output path is checked on 5–10 existing recordings.
+- No dedicated large-scale median validation is required.
+
+*Completion:* an independent recomputation agrees with the production output.
+
+*Status: complete.* On the ten pilot recordings of the point-estimate
+validation utility (five dim, five bright; its companion note records the run),
+every stored median equals the recomputation from the stored draws exactly.
+
+**2. Posterior-draw SGM.** The complete draw minimizing the summed Euclidean
+distance to the other draws, in estimator coordinates scaled by the prior
+widths. It is an exact sample medoid; selecting a complete draw does not
+preserve a distribution's correlations.
+
+- Verify summed distances, sample membership, scaling, duplicates and
+  deterministic tie handling.
+- On 5–10 recordings, including previously unstable cases, compare **N, 2N and
+  4N draws**, where N is the production count.
+- Use a small, explicitly recorded number of independent repeats at each count.
+- Report the per-coordinate standard deviation across repeats, normalized by an
+  IQR estimated from a common reference cloud, and the median's variability on
+  the same draws.
+- Evaluate the selected candidates' average distances against that common
+  reference cloud, to distinguish unstable locations from meaningfully worse
+  objective values.
+
+*Interpretation:* decreasing variability indicates a sample-count limitation.
+Different vectors with nearly equal scores indicate a weakly determined
+representative location. Persistent variability alone does not establish an
+implementation defect.
+
+*Completion:* characterize the stability and decide whether the production draw
+count is adequate. Do not increase it automatically. The large-cloud
+approximation of the collection-level SGM kernel (a Weiszfeld geometric median
+snapped to its nearest member, used above 20,000 members) requires a separate
+check wherever it is used.
+
+*Status: correctness complete; stability characterized; draw count raised.* The
+reference tests pass (`tests/test_sgm_reference.py`), and the production SGM
+equals a brute-force medoid on 50 real clouds. Stability was measured on the ten
+pilot recordings, on which the repeat-to-repeat variability was first seen:
+five repeats at 1,000, 2,000 and 4,000 draws against a common 10,000-draw
+reference cloud. The SGM's variability falls slowly (median 0.13, 0.11 and 0.09
+of the reference IQR), the median's as sample size predicts (0.025, 0.020 and
+0.015), and every selected SGM is nearly as central as the most central
+reference draw: a weakly determined location with a partial sample-count
+effect, not a defect. From 0.1.17 the summaries use 10,000 draws per
+observation, drawn in one outer sampler call (about 0.2 s on the measured GPU);
+the exact SGM takes about 1 s and 1.5 GiB of RAM per concurrent worker, its
+memory growing quadratically with the draw count. More draws raise the numerical
+resolution; they do not correct posterior miscalibration. The large-cloud
+approximation has not been checked.
+
+**3. Numerical MAP candidate.** MAP extraction optimizes the flow density in
+estimator coordinates. The unconstrained procedure does not guarantee prior
+support or convergence to a mode.
+
+- Verify score–vector consistency and a returned score no worse than the best
+  initial candidate.
+- Benchmark on the real trained flow, using identical observations and initial
+  candidates across configurations.
+- Compare the current settings with scale-aware learning rates and increased
+  step and patience budgets.
+- Record density gains, stopping reasons, initialization sensitivity and
+  runtime.
+- Keep the benchmark's own scaling formula and numerical settings labeled
+  **benchmark proposal — not adopted**.
+
+*Completion:* resolve the optimizer's behavior and freeze the selected
+configuration **before regenerating the analyses**. Agreement with the median
+or the SGM is not a convergence criterion.
+
+*Status: configuration adopted in the code and verified on the trained flow; the
+freeze follows its review.*
+
+- *Benchmark* (the MAP benchmark companion note; 2,000 EVAL recordings, two
+  independent candidate pools each, identical seeds across configurations). The
+  0.1.16 optimizer, whose initial step of 0.128 dex is several times the
+  posterior IQR of the well-identified parameters, came within 1e-3 nats of the
+  best optimum found in 21 % of pools, and its two pools' MAP vectors differed
+  by a median 0.25 IQR. Scale-aware steps converged in essentially every pool.
+  The benchmark's configurations — per-seed chains, a floor and cap on the step
+  scale, a no-stop window after a learning-rate reduction, a 1e-4-nat threshold
+  and their budgets — are a **benchmark proposal — not adopted**.
+- *Adopted configuration* (`evaluation.optimize_elite`, `InferenceEvaluation`).
+  Adam moves `u = (θ − m) / IQR` per coordinate, `m` and `IQR` being the median
+  and interquartile range of the observation's candidate pool. Initial learning
+  rate 0.05 and floor 0.0005, both in `u`; factor 0.5 after 20 steps without a
+  meaningful improvement; stop after 200 such steps; at most 2,000 steps. A
+  meaningful improvement is a rise of the best score by more than 1e-3 nats
+  since the last one. Every strictly better finite (score, vector) pair is
+  retained whatever its size; the tolerance gates only the patience and the
+  scheduler, and a learning-rate reduction does not reset the patience. A zero
+  or non-finite IQR skips the ascent, returns the best candidate and is
+  reported. The patience settings, the floor, the factor and the tolerance come
+  from configuration, not the command line; each stage prints the effective
+  values, records them in its manifest's `optimizer` block, and logs each
+  observation's stop reason.
+- *Verification on the trained flow* (the production entry point on the ten pilot
+  recordings, two independently seeded pools each, 2026-09-23). The returned
+  score equals the re-evaluated density at the returned vector in all 20 pools
+  and exceeds the best initial candidate by 0.02 to 0.59 nats. Every pool
+  stopped on patience, after 219 to 312 steps. Evaluated on the same machine,
+  the JUPITER benchmark's reference optimum lies within 4.5e-4 nats of the
+  returned score, and an L-BFGS polish from the returned vector gains at most
+  5.6e-4 nats. The two pools agree to a median 0.0009 IQR (maximum 0.03). The
+  effective settings equal the requested ones.
+
+**Reporting rule.** For each method, distinguish **implementation
+correctness**, **sampling or optimization stability**, and **accuracy against
+synthetic truth**. Close agreement among the point estimates does not establish
+that a parameter is recoverable.
 
 ---
 

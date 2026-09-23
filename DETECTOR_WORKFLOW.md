@@ -1549,11 +1549,11 @@ based calibration diagnostic (coverage, SBC, TARP, L-C2ST), and the direct estim
 calibration gain and its `prob_photo_bleach` collapse both stand, the latter being measured in the median and
 the SGM.
 
-A caution the artifact format carries: the Nuisance_DLI pool cache records the checkpoint checksum and the
-sampling settings but not the optimizer implementation, so correcting the code does not invalidate an existing
-MAP-derived pool. Any such pool must be rebuilt explicitly, and a construction named "SGM" is not by itself
-safe: `sgm_percentiles` with `selection_source = "experiment"` (the default) summarizes stored MAP vectors,
-while `window-sgm` summarizes posterior draws.
+The Nuisance_DLI MapEstimate pool cache keys on the MAP computation contract (implementation, optimizer
+settings, estimate-definitions version, checkpoint), so a corrected optimizer cannot reuse an old MAP-derived
+pool. A construction named "SGM" is still not by itself safe: `sgm_percentiles` with
+`selection_source = "experiment"` (the default) summarizes stored MAP vectors, while `window-sgm` summarizes
+posterior draws.
 
 **Status.** Fixed in 0.1.15 and validated on the analytic case. The `CAP256` Experiment is the first stage
 re-run (JUPITER 1953816, with the per-window optimizer trace recorded); the previous product is preserved
@@ -1572,3 +1572,16 @@ estimate-selection option is retired, the stored MAP field is renamed from `infe
 `map_estimate` with no fallback, and the definitions live in one place (`evaluation.POINT_ESTIMATES`).
 Renaming a field certifies no numerical correction: the products listed above are recomputed, not
 converted.
+
+**Point-estimate validation (2026-09-23).** The protocol is in `VALIDATION.md` §3.4. The median and SGM
+calculations are verified, and the SGM's Monte Carlo stability is characterized: a weakly determined location,
+not a defect; the summaries now use 10,000 draws per observation. The MAP benchmark on the trained flow found a second defect
+behind the MAP rows listed above. The absolute initial step of 0.128 dex is several times the posterior IQR of
+the well-identified parameters, so the first steps overshoot and, with a patience of 100, the ascent usually
+returned its best starting candidate: over 2,000 EVAL recordings it came within 1e-3 nats of the best optimum
+found in 21 % of candidate pools, and two independent pools of one recording gave MAP vectors a median
+0.25 IQR apart. From 0.1.17 the ascent steps in units of each observation's candidate-pool IQR, with a larger
+budget, and retains every strictly better pair; on ten recordings it reaches the benchmark's reference optimum
+and its two pools agree to within 0.03 IQR. Products made earlier are refused on read (artifact schema
+version 2, estimate-definitions version 2), and the recomputation listed under Scope follows the freeze of this
+configuration.

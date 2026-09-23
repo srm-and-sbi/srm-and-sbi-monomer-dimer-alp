@@ -5,6 +5,146 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.17 - 2026-09-23
+
+Resolves the MAP optimizer before the analyses downstream of training and testing are regenerated,
+and records the validation protocol for the three point estimates (`VALIDATION.md` §3.4). The
+median and SGM calculations are unchanged; they now summarize 10,000 draws per observation.
+**Products made before this version are refused on
+read** (estimate-definitions version 2): their MAP estimates come from the unscaled optimizer and are
+recomputed, not converted. **Artifact schema version 2**: the optimizer block requires
+`step_coordinates`, so schema-1 products are refused as well.
+
+### Fixed
+
+- **The MAP ascent overshot and usually returned its best starting candidate.** The initial Adam
+  step of 0.128 dex (`learning_rate_minimum` 1e-3 x `learning_rate_maximum_factor` 128) is several
+  times the posterior IQR of the well-identified parameters (`mu_r` about 0.02 dex), so the first
+  steps carried a seed about eight IQRs away and dropped the density by a median 55 nats; with a
+  patience of 100 most ascents stopped before recovering. On 2,000 EVAL recordings with two
+  independent candidate pools each (the MAP benchmark, JUPITER job 1970791), the optimizer came
+  within 1e-3 nats of the best optimum found in 21 % of pools, and the two pools of one recording
+  gave MAP vectors a median 0.25 IQR apart (maximum 0.94).
+- **Best-point retention was gated by the tolerance.** A point that beat the retained pair by less
+  than the tolerance was not kept, so the returned pair could sit up to one tolerance (1e-3 nats)
+  below the best point visited. Every strictly better finite (score, vector) pair is now retained;
+  the tolerance gates only the stopping patience and the plateau scheduler.
+- **Unrestricted sampling kept every call's autograd graph.** `collect_theta_prex` sampled the flow
+  with gradients enabled, so each call's draws held the embedding's forward graph (about 1.5 GiB for
+  a 2 s video) for as long as they lived; memory grew with the number of calls, and 300 draws in
+  batches of 100 ran out of memory on a 4 GB GPU. Sampling now runs under `torch.no_grad()`, whose
+  scope ends before the MAP ascent; peak GPU memory was then approximately constant, about
+  0.43 GiB, over the tested range up to 50,000 draws, on this checkpoint and a 4 GB T2000.
+- `detector_nuisance_dli.build_map_estimate_pool` read `eval_cfg.learning_rate`, a field the
+  evaluation config did not have, so the MapEstimate pool path raised on first use; it now reads the
+  configured learning rate and tolerance.
+- `collect_theta_prex` looped forever on a zero batch size; a size or batch below one is now refused
+  before sampling.
+
+### Changed
+
+- **The ascent steps in units of each observation's candidate-pool IQR.** Adam moves
+  `u = (theta - m) / IQR` per coordinate (`evaluation.pool_scale`: the pool's median and
+  interquartile range), so one learning rate is the same fraction of every parameter's posterior
+  spread; the density is still evaluated and maximized in theta. A zero or non-finite IQR skips the
+  ascent, returns the best candidate (its score is the density at it) and is reported, never
+  divided through. The loop structure is unchanged: all seeds in one Adam tensor, the scheduler on
+  their mean score.
+- **Settings** (`InferenceEvaluation`): `learning_rate` 0.05 and `learning_rate_minimum` 5e-4, both
+  in pool-IQR units; `numb_steps` 2000, `optimizer_patience` 200, `scheduler_patience` 20,
+  `learning_rate_factor` 0.5; `tolerance` 1e-3 nats as its own field. `learning_rate_maximum_factor`
+  and `tolerance_factor` are removed from the evaluation config, since a learning rate in IQR units
+  and a tolerance in nats are no longer tied to one floor; the training config keeps its own.
+  `--learning-rate` is read in pool-IQR units. A learning-rate reduction does not reset the patience.
+- **One outer sampler call per draw set, and 10,000 summary draws.** `theta_prex_batch_size`
+  (configuration only; no command-line flag) goes from 100 to 10,000, so the MAP candidate pool
+  (`theta_prex_size`, still 1,000) and the summary draws are each drawn in one outer call. Batches
+  of 100 re-ran the embedding network for every 100 draws: 10,000 draws took 16.9 s in batches of
+  100 and 0.20 s in one outer call on a Quadro T2000, with about the same peak GPU memory; the
+  embedding still runs a few times per outer call (twice in the measured bounded case). Draws from
+  one call and from batches are consistent with the same distribution (ten recordings, both pool
+  modes, per-coordinate two-sample KS, none rejected after correcting for 60 tests). That supports
+  consistency; it does not prove equality, and a fixed seed no longer reproduces the same draws, or
+  the same returned MAP vectors, once the batching changes.
+- **`posterior_samples` goes from 1,000 to 10,000** (`--posterior-samples` overrides it). This raises
+  the numerical resolution of the quantiles, the median and the SGM; it does not correct posterior
+  miscalibration. The exact SGM's CPU memory is quadratic, about 1.5 GiB per concurrent worker at
+  10,000 draws, within the stage scripts' `--mem=480G` per node. Posterior calibration, the horizon
+  audit and the Nuisance_DLI posterior-sample pools inherit the new count unless overridden on their
+  command lines; their scoring, storage and pooling costs do not necessarily share the sampler's
+  speedup.
+- **Stop reasons are reported.** `optimize_elite` returns `(score, theta, info)` with the stop
+  reason (`early`, `budget`, `non-finite`), the steps taken, the best seed's score and the final
+  learning rate; a non-finite score ends the ascent with the best finite pair kept.
+  `map_estimate(..., return_info=True)` adds the pool median and IQR and a per-coordinate validity
+  flag (`invalid-scale` when the ascent was skipped). The Evaluation, Experiment and CD86/CTLA-4
+  controls runners log each observation's stop reason and steps and a closing count of stop
+  reasons; `--debug` adds each observation's pool IQR.
+- **Effective settings are printed and recorded from one object.** The runners build
+  `evaluation.optimizer_contract` once, print it (`evaluation.optimizer_summary_lines`) and store
+  the same dict in the manifest; the block gains `step_coordinates`, which
+  `artifact_schema.OPTIMIZER_KEYS` now requires (artifact schema version 2), and names the
+  retention rule.
+- **Estimate-definitions version 2.** The MAP definition names the IQR-unit steps;
+  `SUPPORTED_ESTIMATE_DEFINITIONS_VERSIONS` is `(2,)`, and the refusal message says why a version-1
+  product is recomputed. The Nuisance_DLI MapEstimate pool contract carries the version and the new
+  settings, so an old MAP pool is not reused.
+- **Definitions text aligned with the protocol**: the median names its linear interpolation and
+  transform order, the SGM is named an exact sample medoid.
+- The MAP benchmark's configuration `B` runs the production optimizer as configured and records its
+  stop reasons; configurations `C` to `H` and their scaling formula are labeled a benchmark proposal,
+  not adopted.
+
+### Added
+
+- **Point-estimate validation protocol**, `VALIDATION.md` §3.4: median correctness, SGM
+  correctness and sampling stability, MAP optimization, then regeneration and interpretation, each
+  with its completion criterion and status, and the reporting rule separating implementation
+  correctness, stability and accuracy against synthetic truth. Status summary in
+  `DETECTOR_WORKFLOW.md` §9.8; pointers in `PROJECT_CONTEXT.md` and the README.
+- **Validation utilities** (Analysis family, outside the dispatcher): the point-estimate validation
+  utility (`..._DETECTOR_Point_Estimate_Validation`, kernel `point_estimate_validation`), which ran the
+  median check and supplied the SGM checks' draws, and the MAP benchmark
+  (`..._DETECTOR_MAP_Benchmark`, kernel `map_benchmark`, with the JUPITER script
+  `..._DETECTOR_HPC_MAP_Benchmark.sh`), each with a companion note recording its results.
+- **Tests**: `test_median_reference.py` (interpolation, parameter order, transform order),
+  `test_sgm_reference.py` (summed distances, prior-width scaling, membership, duplicates, ties),
+  `test_point_estimate_validation.py`, `test_map_benchmark.py` (the batched engine against a serial
+  `torch.optim` reference), and `test_map_optimizer_invariant.py` rewritten for the adopted optimizer
+  (the two invariants, strict retention below the tolerance, patience counted from the last
+  meaningful improvement, IQR units, non-finite stop, the zero-IQR path, the configured settings,
+  the embedding and condition shape restored after a failure inside `map_estimate`, learning-rate
+  reductions that reach the floor without resetting the patience while the best visited point is
+  returned, and the sampler's boundaries in both pool modes: one draw, an exact batch multiple, a
+  partial final batch, no autograd graph, invalid sizes refused); a row-order test for the SGM; and
+  refusal cases for a version-1 product and a missing `step_coordinates`. Each of the new failure
+  tests was checked to fail when its fault is injected.
+
+### Verification
+
+On the ten pilot recordings, two independently seeded candidate pools each, the production entry
+point returned a score equal to the re-evaluated density at the returned vector in all 20 pools and
+above the best initial candidate by 0.02 to 0.59 nats; every ascent stopped on patience, after 219 to
+312 steps. Evaluated on the same machine, the benchmark's reference optimum lies within 4.5e-4 nats
+of the returned score, an L-BFGS polish from the returned vector gains at most 5.6e-4 nats, and the
+two pools agree to a median 0.0009 IQR (maximum 0.03). That run drew its candidate pools in
+batches of 100; the optimizer and the candidate count are unchanged, so it remains relevant, though
+the same seeds no longer reproduce those exact vectors.
+
+### Documentation
+
+- Docstrings distinguish the exact medoid from a Weiszfeld geometric median snapped to its nearest
+  member (the collection-level kernel above 20,000 members) and name each summary's population and
+  coordinate scaling: the per-observation posterior-draw SGM (estimator coordinates over prior
+  widths), the SGMs of window MAPs in temporal dynamics and the SGM analysis (physical coordinates
+  over the physical prior range), the posterior-predictive `cell-sgm` (a cell's chunk MAPs, physical
+  coordinates over their range) and the Nuisance_DLI per-window SGM (posterior draws, physical
+  coordinates over the physical prior range); none claims that selecting one member preserves
+  correlations. `temporal_dynamics.pooled_summary` and `sample_geometric_median.summary_vectors`
+  state their interpolation convention.
+- `DETECTOR_WORKFLOW.md` §9.8 no longer says the Nuisance_DLI pool cache ignores the optimizer
+  implementation; it has keyed on the MAP computation contract since 0.1.16.
+
 ## 0.1.16 - 2026-09-23
 
 Makes the three point estimates a contract of every Evaluation and Experiment product, renames the

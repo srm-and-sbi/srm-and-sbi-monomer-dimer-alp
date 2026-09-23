@@ -13,9 +13,12 @@ The MAP candidate is a **seed-then-optimize** procedure (one per observation):
                               conditioned on the video (respects prior bounds).
     2. collect_score_prex  -- score every candidate by the flow's log-probability.
     3. extract_elite_prex  -- keep the top-K candidates as optimization seeds.
-    4. optimize_elite      -- gradient-ascent the log-probability from those seeds
-                              (Adam + ReduceLROnPlateau + early stopping);
-                              return the single best (score, theta).
+    4. pool_scale          -- the pool's per-coordinate median and interquartile
+                              range: the units the ascent steps in.
+    5. optimize_elite      -- gradient-ascent the log-probability from those seeds
+                              (Adam + ReduceLROnPlateau + early stopping, in
+                              pool-IQR units); return the best (score, theta) seen
+                              and the reason the ascent stopped.
 
 All theta live in log10 space (the flow's space and the prior's space); the
 ground-truth theta sets are stored linear, so the report compares
@@ -25,8 +28,8 @@ gradient steps use ``posterior.posterior_estimator`` (the flow, which exposes
 ``log_prob`` and tracks gradients but does not enforce bounds).
 
 Module contents:
-    POINT_ESTIMATES, QUANTILE_LEVELS, draw_label(...), point_estimate_rows(...), optimizer_contract(...)
-                              -- the three estimates' definitions and the recorded contract.
+    POINT_ESTIMATES, QUANTILE_LEVELS, draw_label(...), point_estimate_rows(...), optimizer_contract(...),
+    optimizer_summary_lines(...) -- the three estimates' definitions and the recorded contract.
     map_estimate(...)         -- full seed-then-optimize MAP candidate for one observation.
     posterior_summary(...)    -- the quantiles (median at 0.50) and the SGM of one observation's draws.
     sample_geometric_median(...) -- the medoid under a per-coordinate scaling.
@@ -61,8 +64,10 @@ from .temporal_dynamics import band_label
 QUANTILE_LEVELS = (0.05, 0.25, 0.50, 0.75, 0.95)
 
 #: Bumped when a definition below changes meaning (not wording). Distinct from the package
-#: version and from the artifact schema version.
-ESTIMATE_DEFINITIONS_VERSION = 1
+#: version and from the artifact schema version. 2 (0.1.17): the MAP ascent steps in units of the
+#: candidate pool's interquartile range and retains every strictly better finite pair; products
+#: made under 1 carry MAP estimates from the unscaled optimizer and are refused on read.
+ESTIMATE_DEFINITIONS_VERSION = 2
 
 #: The three point estimates, keyed by the stable machine name used in code, table notes,
 #: captions and documentation. Each definition states the operator, the source population, the
@@ -77,7 +82,8 @@ POINT_ESTIMATES = {
         "stored_field": "map_estimate",
         "operator": "the highest-scoring point retained by the configured gradient-ascent "
                     "optimizer of the flow's log-density, initialized from the top-scoring "
-                    "candidate draws",
+                    "candidate draws and stepping each coordinate in units of its interquartile "
+                    "range over all the candidate draws",
         "population": "the flow's conditional density for one observation; the candidate draws "
                       "that seed the ascent are that observation's own draws",
         "grouping": "one vector per observation",
@@ -92,21 +98,23 @@ POINT_ESTIMATES = {
         "short": "median",
         "stored_field": "posterior_quantiles",
         "stored_slice": "the quantile at level 0.50",
-        "operator": "the 0.50 quantile of each coordinate, taken independently per coordinate",
+        "operator": "the 0.50 quantile of each coordinate (linear interpolation between order "
+                    "statistics), taken independently per coordinate",
         "population": "one observation's summary draws (posterior draws under the bounded pool, "
                       "flow draws under the unrestricted one)",
         "grouping": "one vector per observation",
         "coordinates": "estimator (log10) coordinates",
         "scaling": None,
         "caveats": "a coordinate-wise composite: the resulting vector is not necessarily a "
-                   "sampled vector and need not be a probable point of the joint",
+                   "sampled vector and need not be a probable point of the joint. A physical "
+                   "value is the transform of this quantile",
     },
     "sgm": {
         "label": "SGM of draws",
         "short": "SGM",
         "stored_field": "posterior_sgm",
         "operator": "the sample geometric median: the complete draw minimizing the summed "
-                    "Euclidean distance to all other draws (a medoid)",
+                    "Euclidean distance to all other draws (an exact sample medoid)",
         "population": "the same summary draws as the marginal median, for the same observation",
         "grouping": "one vector per observation",
         "coordinates": "estimator (log10) coordinates",
@@ -172,11 +180,22 @@ def point_estimate_rows(pool_mode: str, median_index: int) -> list:
     ]
 
 
+#: How the MAP ascent measures a step, as every product manifest records it.
+STEP_COORDINATES = ("pool-IQR units: Adam moves u = (theta - m) / IQR per coordinate, m and IQR "
+                    "the median and interquartile range of the observation's candidate pool; the "
+                    "learning rates are in u; a zero or non-finite IQR skips the ascent and returns "
+                    "the best candidate, reported")
+
+#: Why an ascent ended: patience exhausted, step budget spent, a non-finite score, or a pool whose
+#: IQR could not set the step (no ascent; the best candidate is returned).
+STOP_REASONS = ("early", "budget", "non-finite", "invalid-scale")
+
+
 def optimizer_contract(eval_cfg, *, learning_rate, tolerance, theta_prex_size, elite_prex_size,
                        numb_steps, pool_mode) -> dict:
     """The MAP optimizer settings a product manifest (and the MapEstimate pool cache) records: the
-    values actually used, plus the marker of the bookkeeping correction -- kept distinct from the
-    artifact schema version, since either may change without the other."""
+    values actually used, the units the ascent steps in, and the bookkeeping rule -- kept distinct
+    from the artifact schema version, since either may change without the other."""
     return {
         "pool_mode": str(pool_mode), "theta_prex_size": int(theta_prex_size),
         "elite_prex_size": int(elite_prex_size), "numb_steps": int(numb_steps),
@@ -186,9 +205,28 @@ def optimizer_contract(eval_cfg, *, learning_rate, tolerance, theta_prex_size, e
         "learning_rate_minimum": float(eval_cfg.learning_rate_minimum),
         "learning_rate_factor": float(eval_cfg.learning_rate_factor),
         "tolerance": float(tolerance),
-        # The returned score is the density AT the returned vector (optimize_elite, 0.1.15).
-        "bookkeeping": "best (score, vector) recorded before optimizer.step",
+        "step_coordinates": STEP_COORDINATES,
+        # The returned score is the density AT the returned vector: the pair is recorded before
+        # the update (0.1.15), and every strictly better finite pair is kept (0.1.17).
+        "bookkeeping": ("every strictly better finite (score, vector) pair retained before "
+                        "optimizer.step; tolerance gates only the stopping patience and the "
+                        "plateau scheduler"),
     }
+
+
+def optimizer_summary_lines(contract: dict) -> list:
+    """The effective MAP-optimizer settings of ``contract`` (:func:`optimizer_contract`), one
+    banner line each, so a stage prints exactly the values its manifest records."""
+    c = contract
+    return [
+        f"theta_prex_size      : {c['theta_prex_size']}   (elite seeds {c['elite_prex_size']})",
+        f"numb_steps           : {c['numb_steps']}   (optimizer_patience {c['optimizer_patience']}, "
+        f"scheduler_patience {c['scheduler_patience']})",
+        f"learning_rate        : {c['learning_rate']:.3e}   (minimum "
+        f"{c['learning_rate_minimum']:.3e}, factor {c['learning_rate_factor']}; pool-IQR units)",
+        f"tolerance            : {c['tolerance']:.3e} nats   (a meaningful improvement: stopping "
+        f"patience and scheduler only)",
+    ]
 
 
 # =============================================================================
@@ -224,8 +262,15 @@ def collect_theta_prex(posterior, flow, vista_device: torch.device,
                               undertrained posterior (candidates may fall outside
                               the prior box; the gradient ascent explores freely).
 
-    Sampling is batched and offloaded to ``vista_device`` (typically CPU) to
-    spare GPU memory until ``theta_prex_size`` candidates are collected.
+    Each outer sampler call draws up to ``theta_prex_batch_size`` candidates, offloaded to
+    ``vista_device`` (typically CPU) until ``theta_prex_size`` are collected. The embedding network
+    runs on the one video a few times per outer call, not once per draw: twice in the measured
+    bounded case, more when rejection sampling needs further internal batches. On the detector
+    checkpoint of record and a 4 GB Quadro T2000, peak GPU memory was approximately constant over
+    the tested range, up to 50,000 draws. Sampling runs under ``torch.no_grad()``, whose scope ends
+    with this function, so the MAP ascent keeps its gradients: the draws are data, and without it
+    each unrestricted call kept its autograd graph (about 1.5 GiB for a 2 s video) alive for as
+    long as the draws lived.
 
     Returns:
         Tensor of shape ``(theta_prex_size, D)`` on ``vista_device``.
@@ -233,20 +278,25 @@ def collect_theta_prex(posterior, flow, vista_device: torch.device,
     if pool_mode not in ("bounded", "unrestricted"):
         raise ValueError(
             f"pool_mode={pool_mode!r}; must be 'bounded' or 'unrestricted'.")
+    if theta_prex_size < 1 or theta_prex_batch_size < 1:
+        raise ValueError(
+            f"theta_prex_size={theta_prex_size} and theta_prex_batch_size={theta_prex_batch_size} "
+            f"must both be at least 1 (a zero batch would never finish).")
     theta_set = []
     quota = 0
     t0 = time.time()
-    while quota < theta_prex_size:
-        batch_size = min(theta_prex_batch_size, theta_prex_size - quota)
-        if pool_mode == "unrestricted":
-            # flow.sample -> (batch_size, 1, D); drop the singleton condition dim.
-            theta = flow.sample((batch_size,), condition=cond).squeeze(1)
-        else:
-            theta = posterior.sample(sample_shape=(batch_size,), x=cond,
-                                     show_progress_bars=verbose)
-        theta_set.append(theta.to(vista_device))
-        quota += batch_size
-        _empty_cache(cond.device)
+    with torch.no_grad():
+        while quota < theta_prex_size:
+            batch_size = min(theta_prex_batch_size, theta_prex_size - quota)
+            if pool_mode == "unrestricted":
+                # flow.sample -> (batch_size, 1, D); drop the singleton condition dim.
+                theta = flow.sample((batch_size,), condition=cond).squeeze(1)
+            else:
+                theta = posterior.sample(sample_shape=(batch_size,), x=cond,
+                                         show_progress_bars=verbose)
+            theta_set.append(theta.to(vista_device))
+            quota += batch_size
+            _empty_cache(cond.device)
     theta_prex = torch.cat(theta_set, dim=0)
     if show:
         print(f"  [pool ] ({pool_mode}) candidate theta predictive samples: "
@@ -296,21 +346,56 @@ def extract_elite_prex(theta_prex: torch.Tensor, score_prex: torch.Tensor,
     return elite_prex
 
 
+def pool_scale(theta_prex) -> tuple:
+    """``(center, iqr)`` of one observation's candidate pool ``(n, D)``, per coordinate, in float64:
+    the median and the interquartile range (numpy's default linear interpolation). The MAP ascent
+    moves ``u = (theta - center) / iqr``, so one learning rate is the same fraction of every
+    parameter's spread in that pool. Returned as computed: a zero or non-finite IQR is the caller's
+    to report, never to divide through (:func:`map_estimate`)."""
+    pool = theta_prex.detach().cpu().numpy() if torch.is_tensor(theta_prex) else theta_prex
+    q25, q50, q75 = np.quantile(np.asarray(pool, dtype=np.float64), (0.25, 0.50, 0.75), axis=0)
+    return q50, q75 - q25
+
+
+def _best_candidate(theta_prex: torch.Tensor, score_prex: torch.Tensor) -> tuple:
+    """The highest-scoring finite candidate as ``(score, theta, info)``, returned unoptimized for a
+    pool whose IQR cannot set the ascent's units. Its score is the density at it."""
+    finite = torch.isfinite(score_prex)
+    if not bool(finite.any()):
+        raise RuntimeError("no candidate of the pool has a finite score; the candidate pool or the "
+                           "flow is broken for this observation.")
+    best = int(torch.where(finite, score_prex, torch.full_like(score_prex, float("-inf"))).argmax())
+    score = float(score_prex[best])
+    info = {"stop": "invalid-scale", "steps": 0, "seed_score": score,
+            "learning_rate_final": float("nan")}
+    return score, theta_prex[best].detach().cpu().numpy(), info
+
+
 def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
                    cond: torch.Tensor, elite_prex: torch.Tensor,
                    numb_steps: int, optimizer_patience: int,
                    scheduler_patience: int, show_progress_steps: int,
                    learning_rate_minimum: float, learning_rate_factor: float,
                    learning_rate: float, tolerance: float,
-                   show: bool = False, verbose: bool = False, log_fn=None) -> tuple:
-    """Gradient-ascent the flow log-probability from the elite seeds.
+                   show: bool = False, verbose: bool = False, log_fn=None, *,
+                   center, scale) -> tuple:
+    """Gradient-ascent the flow log-probability from the elite seeds, in pool-IQR units.
 
-    Optimizes all ``K`` seeds in parallel with Adam, reduces the learning rate
-    on plateau, and stops early after ``optimizer_patience`` steps without
-    improvement (the early-stopping criterion) -- the loop can therefore halt
-    before ``numb_steps``. Tracks the single best ``(score, theta)`` seen across
-    all seeds and steps, recorded before each update so the returned score is the
-    density at the returned vector, and never worse than the best elite seed's.
+    Adam moves ``u = (theta - center) / scale`` for all ``K`` seeds at once, ``center`` and
+    ``scale`` being the candidate pool's per-coordinate median and interquartile range
+    (:func:`pool_scale`; ``scale`` must be finite and positive). ``learning_rate`` and
+    ``learning_rate_minimum`` are therefore fractions of each parameter's spread, while the
+    density is still evaluated, and maximized, in theta. Adam is elementwise and the loss is the
+    seeds' mean, so each seed follows its own gradient; the learning rate is reduced when the mean
+    score plateaus. The ascent stops early after ``optimizer_patience`` steps without a meaningful
+    improvement -- the best score rising more than ``tolerance`` (nats) above its value at the last
+    such improvement -- and so can halt before ``numb_steps``.
+
+    Bookkeeping runs each step BEFORE the parameters move. Every strictly better finite
+    ``(score, theta)`` is retained, however small the gain; ``tolerance`` gates only the patience
+    count and the scheduler. So the returned score is the density at the returned vector and,
+    because step 1 scores the seeds themselves, never worse than the best seed's. A non-finite
+    score at any seed ends the ascent, keeping the best finite pair.
 
     The optimization itself is unconstrained: ``pool_mode`` bounds the candidate
     pool, not the gradient steps, so a returned vector may lie outside the prior
@@ -323,13 +408,19 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
     independent and gated by ``show``.
 
     Returns:
-        ``(optimal_score, optimal_theta)`` where ``optimal_score`` is a float
-        log-probability and ``optimal_theta`` is a 1D numpy array (log10 space)
-        on ``vista_device``.
+        ``(optimal_score, optimal_theta, info)``: the float log-probability, the 1D numpy vector
+        (estimator coordinates) on ``vista_device``, and a dict with ``stop`` (``"early"``,
+        ``"budget"`` or ``"non-finite"``), ``steps`` (density evaluations made), ``seed_score``
+        (the best seed's score) and ``learning_rate_final``.
     """
-    theta = elite_prex.to(train_device).clone().detach()
-    theta.requires_grad_(True)
-    optimizer = torch.optim.Adam(params=[theta], lr=learning_rate)
+    dtype = elite_prex.dtype
+    c = torch.as_tensor(np.asarray(center), dtype=dtype, device=train_device)
+    s = torch.as_tensor(np.asarray(scale), dtype=dtype, device=train_device)
+    if not bool(torch.all(torch.isfinite(s)) and torch.all(s > 0)):
+        raise ValueError(f"scale must be finite and positive; got {np.asarray(scale).tolist()}.")
+    u = ((elite_prex.to(train_device) - c) / s).clone().detach()
+    u.requires_grad_(True)
+    optimizer = torch.optim.Adam(params=[u], lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer, mode="min", factor=learning_rate_factor,
         patience=scheduler_patience, threshold=tolerance,
@@ -338,8 +429,10 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
 
     optimal_score = float("-inf")
     optimal_theta = None
+    seed_score = float("nan")
+    reference = float("-inf")      # the best score at the last meaningful improvement
     steps_without_improve = 0
-    stop = "full-run"   # "full-run" (ran all steps) | "early" (patience-stopped)
+    stop = "budget"                # "budget" (ran every step) | "early" (patience) | "non-finite"
 
     if show:
         print(f"  [optim] gradient-ascent: up to {numb_steps} steps, "
@@ -347,34 +440,49 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
     if verbose:
         print(f"  [optim] scheduler-patience={scheduler_patience}, "
               f"lr={learning_rate:.3e} (min {learning_rate_minimum:.3e}, "
-              f"factor {learning_rate_factor}), tolerance={tolerance:.3e}", flush=True)
+              f"factor {learning_rate_factor}; pool-IQR units), tolerance={tolerance:.3e} nats",
+              flush=True)
+        print(f"          pool IQR [estimator space] {_theta_repr(np.asarray(scale), 4)}", flush=True)
     t0 = time.time()
+    step = 0
     for step in range(1, numb_steps + 1):
         optimizer.zero_grad()
+        theta = c + s * u                                          # (K, D), in the graph
         theta_batch = theta.unsqueeze(0)                           # (1, K, D)
         cond_batch = cond.squeeze(0).expand(theta.size(0), *cond.shape[1:])
         score_batch = flow.log_prob(input=theta_batch, condition=cond_batch)
         score = score_batch.squeeze(0)                             # (K,)
-        # Record the best (score, theta) BEFORE the parameters move. `optimizer.step()` updates
-        # `theta` in place, so reading `theta[idx]` after it would pair this step's score with the
-        # NEXT step's coordinates -- the returned vector would sit one Adam step away from the point
-        # whose density is reported, by about the current learning rate in every coordinate the
-        # gradient pushes consistently. The invariant this ordering keeps is that the returned score
-        # is the density AT the returned vector. Step 1 scores the elite seeds themselves, so the
-        # returned score is also never worse than the best seed's.
+        # Bookkeeping BEFORE the parameters move: `optimizer.step()` updates `u` in place, and a
+        # theta read after it would pair this step's score with the next step's coordinates. The
+        # retention is strict (any finite gain counts); the patience count and the scheduler use
+        # `tolerance`, so a long run of tiny gains is kept without resetting the patience.
         with torch.no_grad():
-            value, idx = score.max(dim=0)
-            if value.item() > optimal_score + tolerance:
-                optimal_score = value.item()
-                optimal_theta = theta[idx].detach().clone()
-                steps_without_improve = 0
-            else:
-                steps_without_improve += 1
+            finite = torch.isfinite(score)
+            if bool(finite.any()):
+                masked = torch.where(finite, score, torch.full_like(score, float("-inf")))
+                value, idx = masked.max(dim=0)
+                value = value.item()
+                if step == 1:
+                    seed_score = value
+                if value > optimal_score:
+                    optimal_score = value
+                    optimal_theta = theta[idx].detach().clone()
+                if value > reference + tolerance:
+                    reference = value
+                    steps_without_improve = 0
+                else:
+                    steps_without_improve += 1
+        if not bool(finite.all()):
+            stop = "non-finite"
+            break
+        if steps_without_improve >= optimizer_patience:
+            stop = "early"
+            break
         loss = -score.mean()        # mean keeps the lr consistent across K seeds
         loss.backward()
         optimizer.step()
         scheduler.step(loss.detach())   # scheduler only reads the value; detach avoids the requires_grad->scalar warning
-        del theta_batch, cond_batch, score_batch, score, loss
+        del theta, theta_batch, cond_batch, score_batch, score, loss
         _empty_cache(train_device)
         if (show or log_fn is not None) and (step % show_progress_steps == 0 or step == 1):
             dynamic_threshold = scheduler.best - scheduler.threshold
@@ -386,13 +494,16 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
                 print(f"    {progress_msg}", flush=True)
             if log_fn is not None:
                 log_fn(progress_msg)
-        if steps_without_improve >= optimizer_patience:
-            stop = "early"
-            break
 
+    if optimal_theta is None:
+        raise RuntimeError("the MAP ascent found no finite score at its seeds; the candidate pool "
+                           "or the flow is broken for this observation.")
     optimal_np = optimal_theta.to(vista_device).numpy()
+    info = {"stop": stop, "steps": step, "seed_score": seed_score,
+            "learning_rate_final": float(optimizer.param_groups[0]["lr"])}
     stop_msg = (f"{stop} stop at step {step} ({time.time() - t0:.3f}s)  "
-                f"optimal_log_prob={optimal_score:.3f}")
+                f"optimal_log_prob={optimal_score:.3f}  "
+                f"gain over the best seed={optimal_score - seed_score:.4f}")
     if show:
         print(f"  [optim] {stop_msg}", flush=True)
         # Estimator-space coordinates only: this function has no parameter table, and the
@@ -401,7 +512,7 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
         print(f"          optimal theta [estimator space] {_theta_repr(optimal_np)}", flush=True)
     if log_fn is not None:
         log_fn(stop_msg)
-    return optimal_score, optimal_np
+    return optimal_score, optimal_np, info
 
 
 def map_estimate(posterior, video_chunk: np.ndarray,
@@ -413,7 +524,7 @@ def map_estimate(posterior, video_chunk: np.ndarray,
                  learning_rate_minimum: float, learning_rate_factor: float,
                  learning_rate: float, tolerance: float,
                  pool_mode: str = "bounded", show: bool = False,
-                 verbose: bool = False, log_fn=None) -> tuple:
+                 verbose: bool = False, log_fn=None, return_info: bool = False) -> tuple:
     """Estimate the MAP theta for one video via seed-then-optimize.
 
     Args:
@@ -432,12 +543,21 @@ def map_estimate(posterior, video_chunk: np.ndarray,
             progress bars (bounded pool) and the optimizer-configuration line.
         log_fn: optional sink called with each per-step optimization-progress line
             and the stop line, for live streaming to a file (e.g. the debug log).
+        return_info: also return the ascent's diagnostics (see Returns).
         (remaining args): seed-then-optimize hyperparameters; see
             ``InferenceEvaluation`` for meanings and defaults.
 
+    The ascent steps in units of the candidate pool's per-coordinate interquartile range
+    (:func:`pool_scale`). A zero or non-finite IQR cannot set a step: the ascent is then skipped,
+    the best candidate is returned (its score is the density at it), and a WARNING line is printed
+    and passed to ``log_fn``, with ``stop = "invalid-scale"``.
+
     Returns:
         ``(optimal_score, optimal_theta)`` -- the log-probability and the inferred
-        MAP theta (1D numpy array, log10 space).
+        MAP theta (1D numpy array, log10 space). With ``return_info``, a third item: a dict with
+        ``stop`` (one of :data:`STOP_REASONS`), ``steps``, ``seed_score`` (the best seed's score),
+        ``learning_rate_final``, ``center`` and ``scale`` (the pool's median and IQR per
+        coordinate) and ``scale_valid`` (per coordinate).
     """
     omega = torch.tensor(normalize_video(video_chunk), dtype=torch.float32,
                          device=train_device)
@@ -469,18 +589,33 @@ def map_estimate(posterior, video_chunk: np.ndarray,
         score_prex = collect_score_prex(flow, train_device, vista_device, emb_x,
                                         theta_prex, score_prex_batch_size, show)
         elite_prex = extract_elite_prex(theta_prex, score_prex, elite_prex_size, show)
-        optimal_score, optimal_theta = optimize_elite(
-            flow, train_device, vista_device, emb_x, elite_prex,
-            numb_steps, optimizer_patience, scheduler_patience, show_progress_steps,
-            learning_rate_minimum, learning_rate_factor, learning_rate, tolerance,
-            show, verbose, log_fn,
-        )
+        center, iqr = pool_scale(theta_prex)
+        scale_valid = np.isfinite(iqr) & (iqr > 0)
+        if scale_valid.all():
+            optimal_score, optimal_theta, info = optimize_elite(
+                flow, train_device, vista_device, emb_x, elite_prex,
+                numb_steps, optimizer_patience, scheduler_patience, show_progress_steps,
+                learning_rate_minimum, learning_rate_factor, learning_rate, tolerance,
+                show, verbose, log_fn, center=center, scale=iqr,
+            )
+        else:
+            # A zero or non-finite IQR cannot set a step size: report it and return the best
+            # candidate unoptimized, rather than divide through.
+            optimal_score, optimal_theta, info = _best_candidate(theta_prex, score_prex)
+            bad = np.flatnonzero(~scale_valid)
+            msg = (f"WARNING: the candidate pool's IQR is zero or non-finite at coordinate(s) "
+                   f"{bad.tolist()} (IQR {iqr[bad].tolist()}); the MAP ascent is skipped and the "
+                   f"best candidate returned.")
+            print(f"  [optim] {msg}", flush=True)
+            if log_fn is not None:
+                log_fn(msg)
     finally:
         embed_holder._embedding_net = original_embedding_net
         flow._condition_shape = original_condition_shape
+    info.update(center=center, scale=iqr, scale_valid=scale_valid)
     if show:
         print(f"  [MAP  ] process time {time.time() - t0:.3f}s", flush=True)
-    return optimal_score, optimal_theta
+    return (optimal_score, optimal_theta, info) if return_info else (optimal_score, optimal_theta)
 
 
 def posterior_summary(posterior, video_chunk: np.ndarray,
@@ -498,8 +633,10 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
     ``unrestricted``: direct flow sampling, so flow draws that may fall outside the prior's
     support -- see :func:`draw_label`) and returns the quantiles of each parameter at the
     ``quantiles`` levels (default :data:`QUANTILE_LEVELS`; the 0.50 level is the marginal
-    median). This captures the *within-observation* spread that a single point estimate
-    discards.
+    median), each coordinate independently, in estimator coordinates, with numpy's default
+    linear interpolation between order statistics. A physical value is the transform of the
+    quantile; the quantile of transformed draws can differ in a finite sample and is not used.
+    This captures the *within-observation* spread that a single point estimate discards.
 
     ``return_samples`` additionally hands back the draws the quantiles were computed
     from. Quantiles describe a marginal per parameter and so discard the joint
@@ -508,13 +645,13 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
     same ones the summary used, not a second independent set, so the returned cloud and
     quantiles are guaranteed consistent with each other.
 
-    ``return_sgm`` additionally returns the sample geometric median of the same draws
-    (:func:`sample_geometric_median`, distances measured after dividing each dimension
-    by ``sgm_scale`` -- pass :func:`prior_scale` of the learnable table so no parameter
-    dominates the norm). The SGM is a joint point estimate that is itself a posterior
-    sample: it summarizes the cloud without leaving it, which the per-marginal medians
-    (a vector of 1-D medians need not be a probable point) and the MAP (an optimizer
-    climbing the flow's density, possibly into a spike outside the training support)
+    ``return_sgm`` additionally returns the sample geometric median of the same draws: the
+    exact sample medoid (:func:`sample_geometric_median`), distances measured in estimator
+    coordinates after dividing each dimension by ``sgm_scale`` -- pass :func:`prior_scale` of
+    the learnable table so no parameter dominates the norm. The SGM is a joint point estimate
+    that is itself one of the draws: it summarizes the cloud without leaving it, which the
+    per-marginal medians (a vector of 1-D medians need not be a probable point) and the MAP (an
+    optimizer climbing the flow's density, possibly into a spike outside the training support)
     do not guarantee.
 
     Returns:
@@ -550,16 +687,22 @@ def prior_scale(parameterization) -> np.ndarray:
 
 
 def sample_geometric_median(samples: np.ndarray, scale=None):
-    """The sample geometric median (SGM) of a posterior cloud: the sample minimizing the
-    summed Euclidean distance to all other samples, i.e. the multivariate median snapped
-    to a REAL sample (unlike a vector of per-dimension medians, which destroys the joint
-    structure and can land in a gap between modes; see the SGM discussion in Mach.
-    Learn.: Sci. Technol. 2025, doi 10.1088/2632-2153/ada0a3).
+    """The sample geometric median (SGM) of one cloud: the EXACT sample medoid, the sample
+    minimizing the summed Euclidean distance to all samples, found by evaluating that sum for
+    every sample. It holds the N x N distance matrix: about 1.5 GiB and 1 s at 10,000 draws.
+    It is not the continuous geometric median snapped to its nearest sample, the approximation the
+    collection-level kernel (:mod:`.sample_geometric_median`) switches to above its capacity; the
+    two can select different members. Ties resolve to the lowest row index, so the selection is
+    deterministic. (SGM discussion: Mach. Learn.: Sci. Technol. 2025,
+    doi 10.1088/2632-2153/ada0a3.)
 
-    ``samples`` is ``(N, D)``; ``scale`` (optional, ``(D,)``) divides each dimension
-    before the distance is taken (pass the prior widths). Returns ``(vector, index)``:
-    the SGM in the ORIGINAL coordinates ``(D,)`` and its row index. Exact O(N^2 D) --
-    fine for the ~10^3-sample clouds the stages draw per observation.
+    ``samples`` is ``(N, D)`` in the caller's coordinates; ``scale`` (optional, ``(D,)``) divides
+    each dimension before the distance is taken. The stages pass one observation's summary draws
+    in estimator coordinates with the prior widths (:func:`prior_scale`): the posterior-draw SGM of
+    :data:`POINT_ESTIMATES`. The result is a realized draw, so its coordinates co-occurred, unlike
+    a vector of per-dimension medians, which can land in a gap between modes; selecting one draw
+    does not by itself preserve the cloud's correlations. Returns ``(vector, index)``: the SGM in
+    the ORIGINAL coordinates ``(D,)`` and its row index.
     """
     arr = np.asarray(samples, dtype=float)
     if arr.ndim != 2 or arr.shape[0] == 0:

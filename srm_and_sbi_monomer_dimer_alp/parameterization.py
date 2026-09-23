@@ -1213,18 +1213,27 @@ class InferenceNetwork:
 
 @dataclass(frozen=True)
 class InferenceEvaluation:
-    """MAP-recovery (Evaluation stage) defaults.
+    """MAP-recovery defaults, shared by every stage that computes the MAP.
 
     The recovery procedure is a seed-then-optimize MAP estimate: draw a pool of
     candidate theta from the posterior, score each by the flow's log-probability,
     keep the top-`elite_prex_size` as optimization seeds, and gradient-ascent the
     log-probability with Adam + ReduceLROnPlateau and early stopping. Defaults are
-    scaled for a high-memory GPU (the Evaluation stage runs on the GPU server);
-    every value is overridable at the entry-point CLI.
+    scaled for a high-memory GPU (the Evaluation stage runs on the GPU server).
+    The entry points override the pool size, the seed count, the step budget, the
+    initial learning rate and the summary draw count from the CLI; the patience
+    settings, the learning-rate floor and factor, the tolerance and the sampler batch
+    size come from here only. A stage prints the optimizer values it used and records
+    them in its product (`evaluation.optimizer_contract`).
 
-    The `learning_rate` field is `learning_rate_minimum * learning_rate_maximum_factor`
-    and the optimization `tolerance` is `learning_rate_minimum * tolerance_factor`,
-    mirroring the training-stage convention.
+    The ascent moves each coordinate in units of its spread over the observation's own
+    candidate pool, `u = (theta - m) / IQR` with `m` and `IQR` the pool's per-coordinate
+    median and interquartile range (`evaluation.pool_scale`). `learning_rate` and
+    `learning_rate_minimum` are therefore dimensionless: 0.05 is a step of about 5 % of
+    each parameter's posterior spread. `tolerance` is in nats of log-density and decides
+    only what counts as a meaningful improvement, for the stopping patience and the
+    plateau scheduler; every strictly better finite (score, vector) pair is retained
+    whatever its size.
 
     The `error_*` / `quantile_*` fields control the recovery-report figures:
     a per-parameter scatter of inferred-vs-true (log10) and a residual-error view,
@@ -1239,17 +1248,17 @@ class InferenceEvaluation:
     #                     exploration on an undertrained posterior whose mass
     #                     lies outside the prior box.
     theta_prex_size: int = 1000                    # candidate pool size per video
-    theta_prex_batch_size: int = 100               # sampling batch size
+    theta_prex_batch_size: int = 10000             # max draws per outer sampler call (configuration only)
     score_prex_batch_size: int = 20                # log-prob scoring batch size
     elite_prex_size: int = 2                       # number of optimization seeds (top-K)
-    numb_steps: int = 1000                         # max gradient-ascent steps
-    optimizer_patience: int = 100                  # steps without improvement -> stop
-    scheduler_patience: int = 10                   # steps without improvement -> reduce lr
+    numb_steps: int = 2000                         # max gradient-ascent steps
+    optimizer_patience: int = 200                  # steps without a meaningful improvement -> stop
+    scheduler_patience: int = 20                   # steps without a meaningful improvement -> reduce lr
     show_progress_steps: int = 100                 # progress-print cadence
-    learning_rate_minimum: float = 1.0e-3
+    learning_rate: float = 0.05                    # initial Adam step, in pool-IQR units
+    learning_rate_minimum: float = 5.0e-4          # plateau-schedule floor, in pool-IQR units
     learning_rate_factor: float = 0.5              # ReduceLROnPlateau gamma
-    learning_rate_maximum_factor: int = 128        # 2^7; lr = lr_min * factor
-    tolerance_factor: float = 1.0                  # tolerance = lr_min * factor
+    tolerance: float = 1.0e-3                      # nats: a meaningful improvement of the best score
     # Recovery-report rendering:
     # Recovery tolerance bands, given as log10 half-widths -- each is the log10 of
     # a linear accuracy factor, so a point inside the band is recovered to within
@@ -1265,7 +1274,9 @@ class InferenceEvaluation:
     error_ylim_quantile: float = 0.95              # |error| quantile setting the error y-axis
     quantile_bins: int = 20                        # conditional-quantile bins over true value
     quantile_min_count: int = 50                   # min points per bin to draw a band
-    posterior_samples: int = 1000                  # draws/observation summarized by the quantiles, the median and the SGM
+    posterior_samples: int = 10000                 # draws/observation summarized by the quantiles, the median and the SGM;
+    #                                                the exact SGM's CPU memory is quadratic: about 1.5 GiB per concurrent
+    #                                                worker at 10,000 (the stage scripts request --mem=480G per node)
 
 
 @dataclass(frozen=True)

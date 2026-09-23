@@ -30,7 +30,8 @@ says which axis was aggregated and how:
 uses that family's ``*-window`` estimate and the horizontal summary line its ``*-trajectory``
 counterpart, so one figure never mixes a mean with a medoid. A "mean" estimate aggregates each
 parameter independently, so its coordinates need not have co-occurred in any recording; a "realized"
-estimate is an actual (cell, chunk) window selected as the exact medoid, so its coordinates did.
+estimate is an actual (cell, chunk) window selected as the exact medoid of the window MAP vectors, so
+its coordinates did.
 
 The per-workflow differences -- parameter table and keys, prior box, alias-qualified paths, display
 names, unit labels, and the external reference values -- are resolved once in
@@ -983,8 +984,8 @@ def run_temporal_dynamics(cfg, args):
         series, picks_window = tdk.mean_window(grid, spec.to_physical), None
         line, picks_traj = tdk.mean_trajectory(grid, spec.to_physical), None
     drift = tdk.drift_statistics(grid, centers, spec.to_physical, spec.log_rows)
-    # Every stored point estimate, read together: MAP always, posterior median and SGM when the
-    # Experiment run stored them. One table; one overview figure per condition with the
+    # Every stored point estimate, read together: the MAP, the posterior median and the
+    # posterior-draw SGM, all present by contract. One table; one overview figure per condition with the
     # posterior's own per-window bands drawn once for the three lines.
     est_grids, _, _ = tdk.point_estimate_grids(map_estimate, kind_index, cell, chunk,
                                                len(kinds), quant, sgm, median_index=qi)

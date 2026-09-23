@@ -51,10 +51,13 @@ import numpy as np
 #: product of it existed on disk. Any later incompatible change -- a new required key or array, or
 #: a rule that refuses a product schema 1 accepts -- takes a new version number; a product of the
 #: older version is then refused explicitly, or migrated by an explicit action that records its
-#: source, and is never reinterpreted in place.
-ARTIFACT_SCHEMA_VERSION = 1
+#: source, and is never reinterpreted in place. 2 (0.1.17): the optimizer block requires
+#: ``step_coordinates``; schema-1 products are refused and recomputed.
+ARTIFACT_SCHEMA_VERSION = 2
 #: Estimate-definition versions (``evaluation.ESTIMATE_DEFINITIONS_VERSION``) this schema reads.
-SUPPORTED_ESTIMATE_DEFINITIONS_VERSIONS = (1,)
+#: Version 1 products carry MAP estimates from the unscaled optimizer (before 0.1.17) and are
+#: refused: they are recomputed, not converted.
+SUPPORTED_ESTIMATE_DEFINITIONS_VERSIONS = (2,)
 MANIFEST_KEY = "manifest_json"          # stored as a 0-d unicode array inside the .npz
 #: The quantile levels every product stores along the last axis of ``posterior_quantiles``, in this
 #: order. They are recorded in the manifest AND validated against this tuple, so a reader that
@@ -125,7 +128,8 @@ SHARD_RECORD_KEYS = ("rank", "world_size", "n_observations", "written_at", "exec
 # Keys the optimizer block (``evaluation.optimizer_contract``) must carry.
 OPTIMIZER_KEYS = ("pool_mode", "theta_prex_size", "elite_prex_size", "numb_steps",
                   "optimizer_patience", "scheduler_patience", "learning_rate",
-                  "learning_rate_minimum", "learning_rate_factor", "tolerance", "bookkeeping")
+                  "learning_rate_minimum", "learning_rate_factor", "tolerance",
+                  "step_coordinates", "bookkeeping")
 _SHA256_LEN = 64
 
 
@@ -318,7 +322,9 @@ def validate_manifest(manifest: dict, *, stage: str, source="product") -> dict:
              f"{ARTIFACT_SCHEMA_VERSION}.")
     _require(manifest["estimate_definitions_version"] in SUPPORTED_ESTIMATE_DEFINITIONS_VERSIONS,
              source, f"estimate_definitions_version {manifest['estimate_definitions_version']!r} "
-                     f"is not supported {list(SUPPORTED_ESTIMATE_DEFINITIONS_VERSIONS)}.")
+                     f"is not supported {list(SUPPORTED_ESTIMATE_DEFINITIONS_VERSIONS)}; a product "
+                     f"made before 0.1.17 carries MAP estimates from the unscaled optimizer and is "
+                     f"recomputed, not converted.")
     _require(manifest["stage"] == stage, source, f"manifest stage {manifest['stage']!r} != {stage!r}.")
     keys = manifest["parameter_keys"]
     _require(isinstance(keys, list) and keys and all(isinstance(k, str) for k in keys)
@@ -367,6 +373,8 @@ def validate_manifest(manifest: dict, *, stage: str, source="product") -> dict:
                  f"optimizer.{k} {opt[k]!r} must be finite and positive.")
     _require(isinstance(opt["bookkeeping"], str) and opt["bookkeeping"], source,
              "optimizer.bookkeeping must name the bookkeeping rule.")
+    _require(isinstance(opt["step_coordinates"], str) and opt["step_coordinates"], source,
+             "optimizer.step_coordinates must name the units the ascent steps in.")
     code = manifest["code"]
     _require(isinstance(code, dict), source, "code must be an object.")
     for k in ("git_head", "git_dirty", "implementation", "implementation_at_write",

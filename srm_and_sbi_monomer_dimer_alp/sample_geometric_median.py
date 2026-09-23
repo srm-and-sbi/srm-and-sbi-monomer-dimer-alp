@@ -14,9 +14,13 @@ possible representative.
 
 The Sample Geometric Median (SGM) avoids this by construction: it is the actual collection member
 minimizing the summed normalized Euclidean distance to every other member. Being a real member, its
-joint correlations are intact and it is guaranteed realizable -- some acquisition (or some draw)
-actually had that configuration. Reference: Ramirez Sierra & Sokolowski, Mach. Learn.: Sci. Technol.
-6, 015004 (2025).
+coordinates co-occurred and it is guaranteed realizable -- some acquisition (or some draw) actually
+had that configuration; selecting one member does not by itself preserve the collection's
+correlations. The kernel finds that member EXACTLY (the exact medoid) up to
+``EXACT_MEDOID_CAPACITY`` members; above it, it returns the member nearest the continuous geometric
+median found by Weiszfeld's iteration (``"weiszfeld_snap"``), an approximation that need not be the
+minimizing member, and it returns the method beside the index. Reference: Ramirez Sierra &
+Sokolowski, Mach. Learn.: Sci. Technol. 6, 015004 (2025).
 
 SPACE. All computation is in ABSOLUTE (physical) values normalized by the absolute prior range. The
 geometric median is not invariant under the estimator-to-physical transform, so centrality must be
@@ -25,7 +29,10 @@ Normalizing by the prior range makes the dimensions commensurable, so no paramet
 distance merely because its units are larger. The kernel does not know the per-row conversion rule
 (log10 for log rows, identity for a linear row if a table declares one): callers pass the
 ``to_physical`` / ``to_flow`` callables bound to their parameter table (``parameterization``), so the
-one conversion rule stays in one place and nothing here exponentiates by hand.
+one conversion rule stays in one place and nothing here exponentiates by hand. A collection-level SGM
+is therefore a different quantity from the per-observation posterior-draw SGM the stage products
+store (``evaluation.sample_geometric_median``: estimator coordinates divided by the prior widths,
+always exact); each caller names the population it summarizes.
 """
 from __future__ import annotations
 
@@ -33,7 +40,8 @@ import numpy as np
 
 # Above this many members the exact medoid (an O(N^2) pairwise-distance matrix) stops being
 # tractable and Weiszfeld's iteration is used instead, snapped back to the nearest real member so
-# the result is still an actual collection member rather than a synthetic point.
+# the result is still an actual collection member rather than a synthetic point. That is an
+# approximation: the snapped member need not be the medoid.
 EXACT_MEDOID_CAPACITY = 20000
 WEISZFELD_ITERS = 2000
 
@@ -43,10 +51,14 @@ FIGURE_SUBSAMPLE = 5000          # cap on scatter points drawn per figure
 
 
 def sample_geometric_median(vecs_abs, range_abs):
-    """Index (and method) of the collection member closest to the geometric median, in prior-range-
-    normalized absolute space -- the correlation-preserving median VECTOR (an actual member, so its
-    joint correlations are intact). Exact medoid when tractable, else Weiszfeld's iteration snapped
-    to the nearest member. (Ramirez Sierra & Sokolowski 2025.)"""
+    """``(index, method)`` of the collection's SGM member, in prior-range-normalized absolute space.
+
+    Up to ``EXACT_MEDOID_CAPACITY`` members: the exact medoid, the member minimizing the summed
+    Euclidean distance to all members (``"exact_medoid"``; ties resolve to the lowest index). Above
+    it: the member nearest the continuous geometric median found by Weiszfeld's iteration
+    (``"weiszfeld_snap"``), an approximation that need not minimize the summed distance. Either way
+    the result is an actual member, so its coordinates co-occurred. (Ramirez Sierra & Sokolowski
+    2025.)"""
     from scipy.spatial.distance import pdist, squareform     # lazy: keep the sampling path numpy-only
     m = np.asarray(vecs_abs, dtype=float) / range_abs
     if m.shape[0] <= EXACT_MEDOID_CAPACITY:
@@ -98,7 +110,11 @@ def summary_vectors(pool_flow, low, high, rng, to_physical, to_flow):
     ``pool_flow`` is ``(N, D)`` in estimator space, ``low`` / ``high`` the prior box in the same
     space; ``to_physical`` / ``to_flow`` are the table-bound conversions (``parameterization``).
     The ``*_log`` keys of every variant hold ESTIMATOR-SPACE coordinates (log10 for log rows, the
-    value itself for a linear row); the name is kept for the report tables that read them.
+    value itself for a linear row); the name is kept for the report tables that read them. The
+    vector of medians is taken in PHYSICAL coordinates and then mapped to estimator coordinates
+    (``vom_log = to_flow(vom_abs)``); for an even member count numpy interpolates between the two
+    middle values, so it can differ slightly from a median taken directly in estimator coordinates,
+    which is the convention of the per-observation median stored in the stage products.
 
     Both variants are reported because they answer different questions. ``unrestricted`` summarizes
     everything the collection contains, including estimates that fell outside the prior box -- the
