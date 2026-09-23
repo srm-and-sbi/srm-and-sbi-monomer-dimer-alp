@@ -100,7 +100,7 @@ INPUTS / OUTPUTS
 =============================================================================
 Reads  <data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Experiment_CD86_CTLA-4_CONTROLS/
          <same>.npz
-       arrays used: inferred_log10 (N,12) estimator-space MAP, kind_index (N,), cell (N,),
+       arrays used: map_estimate (N,12) estimator-space MAP candidate, kind_index (N,), cell (N,),
        chunk (N,), kinds (2,) = ['CD86','CTLA-4']. Optionally the sibling MAP_Recovery
        .npz (same timing) annotates each parameter with its ground-truth recovery
        quality on simulated EVAL data (a property of the posterior, so it applies
@@ -130,6 +130,8 @@ import argparse
 import sys
 
 import numpy as np
+
+from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 import matplotlib
 matplotlib.use("Agg")   # headless: construct + save figures without a display
 import matplotlib.pyplot as plt
@@ -244,7 +246,7 @@ def _reference_band(ref):
     return mean, lo, hi, vals
 
 
-def _reshape_to_grid(inferred_log10, kind_index, cell, chunk, n_kinds):
+def _reshape_to_grid(map_estimate, kind_index, cell, chunk, n_kinds):
     """Scatter the flat (N, n_param) MAP rows into a dense (kind, cell, chunk, param) grid.
 
     The Experiment .npz stores one flat row per (cell, chunk) window. Each row is
@@ -254,16 +256,16 @@ def _reshape_to_grid(inferred_log10, kind_index, cell, chunk, n_kinds):
     """
     n_cells = int(cell.max()) + 1
     n_chunks = int(chunk.max()) + 1
-    n_param = inferred_log10.shape[1]
+    n_param = map_estimate.shape[1]
     grid = np.full((n_kinds, n_cells, n_chunks, n_param), np.nan, dtype=float)
-    grid[kind_index, cell, chunk] = inferred_log10
+    grid[kind_index, cell, chunk] = map_estimate
     return grid, n_cells, n_chunks
 
 
 def _recovery_within_band(recovery_npz_path, band=0.3):
     """Per-parameter fraction of EVAL videos recovered within +/- `band` dex (log rows only).
 
-    Reads the sibling MAP_Recovery .npz (true_log10 + inferred_log10) if present, so
+    Reads the sibling MAP_Recovery product (true_log10 + map_estimate) if present, so
     each temporal figure can be annotated with how well that parameter is even
     recoverable on ground-truth data. A dex band is a multiplicative tolerance and does
     not apply to the linear initial dimer fraction, whose entry is NaN (flagged, not
@@ -272,12 +274,13 @@ def _recovery_within_band(recovery_npz_path, band=0.3):
     try:
         if not recovery_npz_path.exists():
             return None
-        with np.load(str(recovery_npz_path), allow_pickle=False) as d:
-            if "true_log10" not in d.files or "inferred_log10" not in d.files:
-                return None
-            err = np.abs(d["inferred_log10"] - d["true_log10"])
-            log_rows = np.array([is_log_row(p) for p in PARAMETERIZATION], dtype=bool)
-            return np.where(log_rows, np.mean(err <= band, axis=0), np.nan)   # (n_param,)
+        arrays, manifest = schema.load_product(recovery_npz_path, stage="evaluation")
+        schema.assert_parameter_keys(manifest, PARAMETER_KEYS, source=str(recovery_npz_path))
+        err = np.abs(np.asarray(arrays["map_estimate"], float) - np.asarray(arrays["true_log10"], float))
+        log_rows = np.array([is_log_row(p) for p in PARAMETERIZATION], dtype=bool)
+        return np.where(log_rows, np.mean(err <= band, axis=0), np.nan)   # (n_param,)
+    except schema.SchemaError:
+        raise      # an obsolete or malformed Recovery product is an error, not a missing annotation
     except Exception:
         return None
 
@@ -369,7 +372,7 @@ def _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac=None):
 
 
 def _key_index(key):
-    """Column index of a parameter KEY within PARAMETERIZATION (= inferred_log10 columns)."""
+    """Column index of a parameter KEY within PARAMETERIZATION (= map_estimate columns)."""
     for i, p in enumerate(PARAMETERIZATION):
         if p["KEY"] == key:
             return i
@@ -699,20 +702,21 @@ def main(args):
             f"Experiment array not found: {npz_path}. Run the Experiment stage for "
             f"--total-time-seconds {args.total_time_seconds} first.")
 
-    with np.load(str(npz_path), allow_pickle=False) as d:
-        inferred_log10 = d["inferred_log10"]
-        kind_index = d["kind_index"].astype(int)
-        cell = d["cell"].astype(int)
-        chunk = d["chunk"].astype(int)
-        kinds = [str(k) for k in d["kinds"]]
+    arrays, manifest = schema.load_product(npz_path, stage="experiment")
+    schema.assert_parameter_keys(manifest, PARAMETER_KEYS, source=str(npz_path))
+    map_estimate = np.asarray(arrays["map_estimate"], dtype=float)
+    kind_index = arrays["kind_index"].astype(int)
+    cell = arrays["cell"].astype(int)
+    chunk = arrays["chunk"].astype(int)
+    kinds = [str(k) for k in arrays["kinds"]]
 
     grid, n_cells, n_chunks = _reshape_to_grid(
-        inferred_log10, kind_index, cell, chunk, len(kinds))
+        map_estimate, kind_index, cell, chunk, len(kinds))
     abs_grid = _abs(grid)
     x = step_seconds * np.arange(n_chunks)
     recovery_frac = _recovery_within_band(recovery_npz)
 
-    print(f"\nLoaded {inferred_log10.shape[0]} MAP estimates: "
+    print(f"\nLoaded {map_estimate.shape[0]} MAP estimates: "
           f"{len(kinds)} conditions x {n_cells} cells x {n_chunks} chunks. "
           f"Recovery annotation: {'on' if recovery_frac is not None else 'off (no MAP_Recovery .npz)'}.")
     print(f"Time points: {[float(t) for t in x]} s\n")
@@ -760,7 +764,7 @@ def main(args):
 
     meta = {
         "timing_label": timing_label, "npz_name": npz_path.name,
-        "n_estimates": int(inferred_log10.shape[0]), "n_kinds": len(kinds),
+        "n_estimates": int(map_estimate.shape[0]), "n_kinds": len(kinds),
         "n_cells": n_cells, "n_chunks": n_chunks, "step": step_seconds,
         "x": [float(t) for t in x], "kinds": kinds,
         "displays": [CONDITION_DISPLAY.get(k, k) for k in kinds],

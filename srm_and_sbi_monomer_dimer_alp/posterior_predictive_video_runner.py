@@ -29,6 +29,8 @@ from __future__ import annotations
 import argparse
 
 import numpy as np
+
+from . import artifact_schema as schema
 from matplotlib.figure import Figure
 
 from . import detector_parameterization as det
@@ -87,15 +89,13 @@ def _load_map_theta(map_npz, keys, table, kind, cell, chunk, source, prior_low, 
     estimator space and are mapped to physical values through the ONE conversion rule
     (``parameterization.to_physical``), never by a blanket ``10 ** theta``. Fails with guidance
     listing the available cells/chunks."""
-    with np.load(str(map_npz), allow_pickle=False) as d:
-        inferred_log10 = np.asarray(d["inferred_log10"], dtype=float)
-        kind_index = np.asarray(d["kind_index"])
-        cells = np.asarray(d["cell"])
-        chunks = np.asarray(d["chunk"])
-        kinds = [str(k) for k in d["kinds"]]
-    if inferred_log10.ndim != 2 or inferred_log10.shape[1] != len(keys):
-        raise ValueError(f"MAP database inferred_log10 has shape {inferred_log10.shape}; "
-                         f"expected (N, {len(keys)}).")
+    arrays, manifest = schema.load_product(map_npz, stage="experiment")
+    schema.assert_parameter_keys(manifest, keys, source=str(map_npz))       # keys AND order
+    map_estimate = np.asarray(arrays["map_estimate"], dtype=float)
+    kind_index = np.asarray(arrays["kind_index"])
+    cells = np.asarray(arrays["cell"])
+    chunks = np.asarray(arrays["chunk"])
+    kinds = [str(k) for k in arrays["kinds"]]
     if kind not in kinds:
         raise ValueError(f"kind={kind!r} not in the MAP database; available: {kinds}.")
     ki = kinds.index(kind)
@@ -105,7 +105,7 @@ def _load_map_theta(map_npz, keys, table, kind, cell, chunk, source, prior_low, 
         raise ValueError(f"no MAP entries for kind={kind} cell={cell} in\n    {map_npz}\n"
                          f"available cells for {kind}: {avail_cells}")
     if source.startswith("cell-"):
-        theta_log10 = _aggregate_cell(inferred_log10[cell_rows], source, table)
+        theta_log10 = _aggregate_cell(map_estimate[cell_rows], source, table)
         how = ("Sample Geometric Median (a real chunk's estimate)" if source == "cell-sgm"
                else "per-dimension median (a composite, correlations discarded)")
         print(f"MAP source: {how} over {cell_rows.size} chunk(s) of {kind} cell {cell}.")
@@ -115,7 +115,7 @@ def _load_map_theta(map_npz, keys, table, kind, cell, chunk, source, prior_low, 
             avail_chunks = sorted({int(c) for c in chunks[cell_rows]})
             raise ValueError(f"no MAP entry for kind={kind} cell={cell} chunk={chunk} in\n"
                              f"    {map_npz}\navailable chunks for {kind} cell {cell}: {avail_chunks}")
-        theta_log10 = inferred_log10[int(row[0])]
+        theta_log10 = map_estimate[int(row[0])]
         print(f"MAP source: chunk {chunk} of {kind} cell {cell}.")
     plo = np.asarray(prior_low, dtype=float)
     phi = np.asarray(prior_high, dtype=float)
@@ -572,9 +572,10 @@ def build_parser(description):
                    help="chunk index, for --map-source chunk.")
     p.add_argument("--map-source", choices=("chunk", "cell-sgm", "cell-median"), default="cell-sgm",
                    help="which MAP vector to render: 'chunk' one specific window; 'cell-sgm' "
-                        "(default) the Sample Geometric Median over that cell's chunks -- a real "
-                        "chunk's estimate, correlations intact; 'cell-median' the per-dimension "
-                        "median, which can compose a combination no chunk produced.")
+                        "(default) an SGM of that cell's window MAPs -- a real window's map_estimate "
+                        "whose coordinates co-occurred (not the product's per-window posterior-draw "
+                        "SGM); 'cell-median' the per-dimension median, which can compose a "
+                        "combination no window produced.")
     p.add_argument("--experiment-span-seconds", type=int, default=20,
                    help="duration (s) of the experimental recording to read (default 20).")
     p.add_argument("--labeling-law", type=str, default=None,

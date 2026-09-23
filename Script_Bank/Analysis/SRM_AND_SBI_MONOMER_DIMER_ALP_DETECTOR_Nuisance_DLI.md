@@ -33,11 +33,11 @@ One user choice, `posterior_sample_pool_choice`, decides how that pool becomes t
 | choice | what it is | cross-parameter correlations |
 |---|---|---|
 | **`raw`** (default) | resample the pool per whole vector | **preserved exactly** |
-| **`map_estimate_pool`** | resample the pooled per-window MAP (best-fit) estimates per whole vector | preserved (point estimates only) |
+| **`map_estimate_pool`** | resample the pooled per-window MAP candidates (`map_estimate`) per whole vector | the pool's realized joint structure (point estimates only; MAP-derived) |
 | **`gaussian`** | a full-covariance multivariate Gaussian fit to the pool | linear only (via the covariance) |
 | **`box`** | a per-parameter uniform over quantiles of the pool | none (independent per dimension) |
 | **`box_user`** | a per-parameter uniform over user-set ranges | none |
-| **`sgm_percentiles`** | whole real vectors at signed distance-to-SGM percentiles (a frozen SGM, or a small pool) | **preserved exactly** (whole vectors) |
+| **`sgm_percentiles`** | whole real vectors at signed distance-to-SGM percentiles — an SGM of window MAPs (`"experiment"`) or of window posterior SGMs (`"window-sgm"`); one frozen vector or a small pool | whole vectors: a multi-member pool keeps its members' co-occurring coordinates; a single frozen vector carries none |
 
 **Why `raw` is the faithful default.** Each entry in the pool is a complete parameter vector whose
 components were drawn jointly, so resampling *whole vectors* preserves the joint structure exactly —
@@ -75,12 +75,16 @@ derives its ranges from pool quantiles (the 5th/95th percentiles by default) cla
 range either — instead `percentiles`, `condition`, and `selection_source` (below). So the spec asks for
 `[imaging.<KEY>]` ranges if and only if the choice is `box_user`.
 
-**`sgm_percentiles` — freeze the imaging, or build a small correlation-preserving pool.** Unlike the
+**`sgm_percentiles` — freeze the imaging, or build a small pool of whole real vectors.** Unlike the
 choices built from the on-the-fly GPU pool, `sgm_percentiles` does not build that pool; it selects a
-few *whole* real MAP vectors and REUSES already-computed data — the Detector Experiment MAP output
-(`selection_source = "experiment"`, the default), or the labeled posterior pool via its per-window SGM
-(`"window-sgm"`) — so it runs on the **CPU**. Running it therefore presupposes the Detector Experiment
-stage has run. Three fields govern it: `percentiles` (a list; default `[50]`), `condition`
+few *whole* real vectors and REUSES already-computed data, and the operator's name alone does not say
+which: under `selection_source = "experiment"` (the default) the collection is the Detector Experiment
+product's per-window MAP candidates (`map_estimate`, read through the artifact schema), so the
+construction is an **SGM of window MAPs** and every selected vector is MAP-derived — it inherits
+whatever the MAP path had, and an artifact built from a pre-0.1.15 Experiment product is a
+recomputation item (`DETECTOR_WORKFLOW.md` §9.8); under `"window-sgm"` the collection is the labeled
+posterior pool's per-window SGMs, an **SGM of window posterior SGMs**. Either way it runs on the
+**CPU**. Running it therefore presupposes the Detector Experiment stage has run. Three fields govern it: `percentiles` (a list; default `[50]`), `condition`
 (`FAB` = MET-FAB or `INLB` = MET-INLB; default the artifact's own condition), and `selection_source`. The construction is a **signed
 distance-to-SGM** coordinate, computed in prior-range-normalized absolute space (where the renderer
 consumes the values):
@@ -95,8 +99,9 @@ consumes the values):
 So **`p50` is `g` exactly**; `p < 50` walks the dim/narrow side to the extreme at `p = 0`, and `p > 50`
 the bright/wide side to the extreme at `p = 100`. Hence `percentiles = [50]` **freezes** the imaging to
 the SGM (one fixed vector — the Nuisance_DLI then renders every video with it), while a list such as
-`[5, 25, 50, 75, 95]` yields a small marginalization pool whose members are all real acquisitions with
-their correlations intact. A percentile is snapped to the actual member nearest that signed rank;
+`[5, 25, 50, 75, 95]` yields a small marginalization pool whose members are all real acquisitions whose
+coordinates co-occurred (a multi-member pool keeps the collection's realized joint structure; a single
+frozen vector carries none). A percentile is snapped to the actual member nearest that signed rank;
 duplicates (or a percentile on an empty side) collapse, and the empty-side fallback to `g` is logged.
 
 ## How to run it
@@ -147,7 +152,8 @@ Arguments:
 - `--max-cells` — cap the cells per kind (0 = all).
 - `--migrate-pool-labels` — CPU-only maintenance (a mode of its own, independent of `--emit-template`/
   `--build`, needing no estimator or GPU): add the per-row condition/window labels (see Caching) to an
-  existing *legacy* posterior-sample pool by borrowing them from the Detector Experiment MAP output, after
+  existing *legacy* posterior-sample pool by borrowing them from the Detector Experiment product
+  (`map_estimate`, read through the artifact schema), after
   verifying the two share a window ordering. It backs up the original and preserves the pool's cache key
   (so `--build` still reuses it without a GPU). A pool that already carries labels is left unchanged.
 - `--dry-run` — resolve the paths and report what would be read and written; load nothing, compute
@@ -160,7 +166,12 @@ choices is cheap. `--emit-template` computes the pool once and caches it as
 `<alias>_<timing_label>_Nuisance_DLI_<Kind>Pool.npz`; `--build` then reuses that cache (no GPU) to apply
 the chosen representation. The cache is keyed on the build inputs (kinds, span, step, draws per chunk,
 `pool_mode`, cell cap) and the estimator's weight checksum, so it is reused only when those are unchanged
-and recomputed automatically when a different estimator is swapped in.
+and recomputed automatically when a different estimator is swapped in. The **MapEstimate** pool is
+additionally keyed on the MAP computation contract — artifact-schema and estimate-definition versions,
+the implementation hash of the code that runs the optimizer, its settings and the checkpoint
+(`detector_nuisance_dli.live_map_pool_contract`) — so an implementation change cannot silently reuse
+an old MAP pool; the draw-only PosteriorSample pool carries no such entry and is unaffected by an
+optimizer-only change.
 
 The cached pool is **self-describing**: beside the sample matrix it stores, per row, the condition
 (`kind_index` into `kinds`) and the time-window position (`cell`, sliding-window `chunk`), stamped with a
@@ -213,9 +224,10 @@ does not rebuild: the build is this step's job.
   central mass (the quantiles). Conservative and simple.
 - **`box_user`** — the manual escape hatch: a uniform over ranges you set (for example, to reproduce a
   fixed-imaging production by setting each range to a single value). Clamped to the prior box.
-- **`map_estimate_pool`** — the point-estimate sibling of `raw`: it pools the per-window MAP (best-fit)
-  vectors instead of full posterior draws, so it captures the across-recording spread of the point
-  estimates but discards the within-window posterior width.
+- **`map_estimate_pool`** — the point-estimate sibling of `raw`: it pools the per-window MAP candidates
+  (`map_estimate`) instead of full posterior draws, so it captures the across-recording spread of the
+  point estimates but discards the within-window posterior width. MAP-derived: its cache is keyed on
+  the MAP computation contract (see Caching).
 
 ## Caveats
 

@@ -50,6 +50,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import artifact_schema as schema
+
 try:
     import tomllib                       # stdlib on Python 3.11+ (this env is 3.13)
 except ModuleNotFoundError:              # pragma: no cover
@@ -75,7 +77,8 @@ SGM_CONDITIONS = ("FAB", "INLB")
 
 # Which cached pool each choice draws on. raw/gaussian/box share the posterior-sample pool;
 # map_estimate_pool uses the MAP pool; box_user and sgm_percentiles need none (sgm_percentiles REUSES
-# already-computed data -- the Experiment MAP output, or the labeled posterior pool -- with no GPU).
+# already-computed data -- the Experiment product's map_estimate (window MAPs), or the labeled
+# posterior pool's per-window SGMs -- with no GPU).
 POOL_KINDS = {"raw": "PosteriorSample", "gaussian": "PosteriorSample", "box": "PosteriorSample",
               "map_estimate_pool": "MapEstimate", "box_user": None, "sgm_percentiles": None}
 
@@ -407,7 +410,9 @@ def select_signed_percentile_vectors(vecs_log, percentiles, prior_low, prior_hig
     main axis of variation (PC1 of the ``g``-centered points, oriented toward increasing brightness
     ``mu_pc`` -- dim/narrow -> bright/wide). So ``p50`` is exactly ``g``; ``p < 50`` walks the negative
     (dim/narrow) side to the extreme at ``p=0``; ``p > 50`` walks the positive (bright/wide) side to
-    the extreme at ``p=100``. Every returned vector is a real, whole member (correlations intact);
+    the extreme at ``p=100``. Every returned vector is a real, whole member whose coordinates
+    co-occurred (a multi-member pool keeps the collection's realized joint structure; a single frozen
+    vector carries none);
     repeated percentiles (or a percentile on an empty side, which falls back to ``g``) collapse.
     Returns ``(members_log (M, D), provenance)``."""
     vecs_log = np.asarray(vecs_log, dtype=float)
@@ -458,10 +463,12 @@ def select_signed_percentile_vectors(vecs_log, percentiles, prior_low, prior_hig
 
 
 def load_map_vectors(experiment_map_path, posterior_pool_path, *, source, condition,
-                     prior_low, prior_high):
+                     prior_low, prior_high, parameter_keys):
     """Load condition-labeled per-window MAP vectors for the selection, REUSING already-computed
-    data (no GPU). ``source='experiment'`` reuses the Detector Experiment MAP output
-    (``inferred_log10`` + ``kind_index``/``kinds``); ``source='window-sgm'`` computes the per-window
+    data (no GPU). ``source='experiment'`` reuses the Detector Experiment product
+    (``map_estimate`` + ``kind_index``/``kinds``; a selection built on it is an SGM of window MAPs),
+    whose parameter keys must equal ``parameter_keys`` exactly (key and order);
+    ``source='window-sgm'`` computes the per-window
     Sample Geometric Median from the labeled posterior-sample pool. Then restricts to ``condition``
     (``FAB`` or ``INLB``; None keeps every row) via the labels. Returns ``(vectors_log (n_win, D),
     source_label)``."""
@@ -472,11 +479,12 @@ def load_map_vectors(experiment_map_path, posterior_pool_path, *, source, condit
             raise FileNotFoundError(
                 f"sgm_percentiles selection_source='experiment' needs the Detector Experiment MAP "
                 f"output:\n    {p}\nRun the Detector Experiment stage first (it is the reused source).")
-        with np.load(str(p), allow_pickle=False) as d:
-            vecs = np.asarray(d["inferred_log10"], dtype=float)
-            kind_index = np.asarray(d["kind_index"])
-            kinds = list(np.asarray(d["kinds"]))
-        label = f"Experiment MAP ({p.name})"
+        arrays, manifest = schema.load_product(p, stage="experiment")
+        schema.assert_parameter_keys(manifest, parameter_keys, source=str(p))
+        vecs = np.asarray(arrays["map_estimate"], dtype=float)
+        kind_index = np.asarray(arrays["kind_index"])
+        kinds = list(np.asarray(arrays["kinds"]))
+        label = f"window MAPs (Experiment map_estimate, {p.name})"
     elif source == "window-sgm":
         p = Path(posterior_pool_path)
         labels = load_pool_labels(p)
@@ -514,11 +522,17 @@ def pool_cache_path(posit_dir, project_alias, timing_label, pool_kind):
 
 
 def pool_provenance(*, pool_mode, n_per_chunk, span_seconds, chunk_step_seconds, kinds,
-                    max_cells, estimator_sha256):
+                    max_cells, estimator_sha256, map_contract=None):
     """The cache key: every input that determines the pool's contents. A cached pool is
     reused only when this matches exactly, so any change (including a different estimator,
-    identified by its weights checksum) forces a recompute."""
-    return {
+    identified by its weights checksum) forces a recompute.
+
+    ``map_contract`` is given for the **MapEstimate** pool only (:func:`live_map_pool_contract`):
+    the MAP computation contract -- schema and estimate-definition versions, the implementation
+    hash of the code that runs the optimizer, its settings and the checkpoint. A MAP pool cached
+    under a different contract is stale and is recomputed; the draw-only PosteriorSample pools,
+    whose provenance carries no such entry, are untouched by an optimizer-only change."""
+    prov = {
         "pool_mode": pool_mode,
         "n_per_chunk": int(n_per_chunk),
         "span_seconds": int(span_seconds),
@@ -526,6 +540,42 @@ def pool_provenance(*, pool_mode, n_per_chunk, span_seconds, chunk_step_seconds,
         "kinds": list(kinds),
         "max_cells": int(max_cells),
         "estimator_sha256": estimator_sha256,
+    }
+    if map_contract is not None:
+        prov["map_contract"] = dict(map_contract)
+    return prov
+
+
+def live_map_pool_contract(eval_cfg, *, pool_mode, checkpoint_sha256) -> dict:
+    """The MAP computation contract of a MapEstimate pool built NOW by this code: the pool runs the
+    optimizer itself (it is not read from an Experiment product), so its identity is the live
+    implementation hash plus the config-default optimizer settings the build uses."""
+    from .evaluation import ESTIMATE_DEFINITIONS_VERSION, optimizer_contract
+    from .provenance import code_provenance
+    return {
+        "artifact_schema_version": schema.ARTIFACT_SCHEMA_VERSION,
+        "estimate_definitions_version": ESTIMATE_DEFINITIONS_VERSION,
+        "implementation_sha256": code_provenance()["implementation"]["sha256"],
+        "optimizer": optimizer_contract(
+            eval_cfg,
+            learning_rate=eval_cfg.learning_rate_minimum * eval_cfg.learning_rate_maximum_factor,
+            tolerance=eval_cfg.learning_rate_minimum * eval_cfg.tolerance_factor,
+            theta_prex_size=eval_cfg.theta_prex_size, elite_prex_size=eval_cfg.elite_prex_size,
+            numb_steps=eval_cfg.numb_steps, pool_mode=pool_mode),
+        "checkpoint_sha256": checkpoint_sha256,
+    }
+
+
+def map_pool_contract(experiment_manifest: dict) -> dict:
+    """The same contract read from an Experiment product's manifest -- for comparing a cached
+    MAP pool against the product whose MAP vectors it should agree with."""
+    m = experiment_manifest
+    return {
+        "artifact_schema_version": m["artifact_schema_version"],
+        "estimate_definitions_version": m["estimate_definitions_version"],
+        "implementation_sha256": m["code"]["implementation"]["sha256"],
+        "optimizer": dict(m["optimizer"]),
+        "checkpoint_sha256": m["checkpoint_sha256"],
     }
 
 
@@ -610,7 +660,7 @@ def emit_spec_template(path, imaging_keys, suggestions, *, pool_mode="bounded", 
         "# the posterior_sample_pool. `posterior_sample_pool_choice` decides how that pool",
         "# becomes the samplable Nuisance_DLI. All values are in LOG10 (the sampling space).",
         "#",
-        "#   raw               -> resample the pool per whole vector (preserves correlations; DEFAULT).",
+        "#   raw               -> resample the pool per whole vector (keeps the pool's realized joint structure; DEFAULT).",
         "#   map_estimate_pool -> resample the pooled per-chunk MAP estimates (point estimates).",
         "#   gaussian          -> full-covariance Gaussian fit to the pool (linear correlations).",
         "#   box               -> per-parameter uniform over `box_quantiles` of the pool, clamped.",

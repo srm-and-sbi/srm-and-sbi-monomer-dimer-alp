@@ -55,11 +55,14 @@ diffusion coefficient and dwell time co-determine observed intensities).
 Uncertainty quantification is part of the scientific result. Downstream
 applications (drug-sensitivity analysis, population heterogeneity) require the
 full posterior, not a single best-fit value. The inference target is therefore
-a full conditional density `p(θ | x)` over the parameter vector, and the MAP
-point estimate and the posterior credible interval are always reported together
-because they answer different questions — a sharp posterior at the wrong
-location and a broad posterior at the right one are distinguishable only when
-both are shown.
+a full conditional density `p(θ | x)` over the parameter vector, and every
+Evaluation and Experiment product reports three point estimates of it together —
+the numerical MAP candidate, the marginal median of the draws and the SGM of the
+same draws — beside the draws' credible summary, because they answer different
+questions: a sharp posterior at the wrong location and a broad posterior at the
+right one are distinguishable only when both are shown, and a disagreement among
+the three point estimates is a lead about the machinery before it is a statement
+about the biology.
 
 **Why simulation-based inference (SBI)?**
 The forward model is complex: a ReaDDy reaction-diffusion simulation feeds an
@@ -1504,11 +1507,15 @@ pool (rejection sampling within the prior; correct for a well-trained posterior)
 and an `unrestricted` pool (sampling the flow directly, for smoke tests and
 undertrained posteriors whose mass can lie outside the prior box).
 
-Both stages report the **MAP point estimate** (the posterior mode) and the
-**posterior credible summary** (median plus interquartile range) side by side,
-because the two answer different questions: a sharp posterior at the wrong
-location and a broad posterior at the right one are distinguishable only when
-both are shown.
+Both stages compute and store **three point estimates** for every observation —
+the numerical MAP candidate (`map_estimate`), the marginal median of the draws
+(the 0.50 level of `posterior_quantiles`) and the SGM of the same draws
+(`posterior_sgm`) — beside the draws' credible summary, and report them side by
+side; nothing selects among them. They answer different questions: a sharp
+posterior at the wrong location and a broad posterior at the right one are
+distinguishable only when both are shown, and the three point estimates read
+together are the cross-check that localizes an optimizer fault to the MAP path
+rather than to the estimator (`VALIDATION.md`; `DETECTOR_WORKFLOW.md` §9.8).
 
 **Outcome for the MET-FAB detector (2 s, Poisson labeling).** The first production
 calibration of the detector under the DOL-explicit observation layer is recorded, as

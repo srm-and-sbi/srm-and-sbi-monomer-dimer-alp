@@ -1265,7 +1265,7 @@ class InferenceEvaluation:
     error_ylim_quantile: float = 0.95              # |error| quantile setting the error y-axis
     quantile_bins: int = 20                        # conditional-quantile bins over true value
     quantile_min_count: int = 50                   # min points per bin to draw a band
-    posterior_samples: int = 1000                  # samples/observation for the posterior-summary view (View B)
+    posterior_samples: int = 1000                  # draws/observation summarized by the quantiles, the median and the SGM
 
 
 @dataclass(frozen=True)

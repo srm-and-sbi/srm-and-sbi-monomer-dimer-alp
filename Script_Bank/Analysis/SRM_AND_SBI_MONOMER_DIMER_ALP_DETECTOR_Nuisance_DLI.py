@@ -29,7 +29,8 @@ condition and time-window position of every row — plus a ``pool_format_version
 ``detector_nuisance_dli.save_pool``). A consumer can therefore filter the pool by condition or
 acquisition from the file alone, without re-deriving the positional build order. A legacy pool built
 before this scheme carries no labels; ``--migrate-pool-labels`` (CPU) adds them to an existing pool by
-borrowing the aligned labels from the Detector Experiment MAP output, after verifying the ordering.
+borrowing the aligned labels from the Detector Experiment product (``map_estimate``, read through the
+artifact schema), after verifying the ordering.
 
 The five choices and their meaning are documented in the spec template and in the companion note
 SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md; the artifact machinery is in detector_nuisance_dli.py.
@@ -56,6 +57,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 import torch
 from matplotlib.figure import Figure
 
@@ -179,13 +182,21 @@ def _kinds(args):
     return [k.strip() for k in args.kinds.split(",") if k.strip()]
 
 
-def _pool_provenance(R, args, pool_mode, n_per):
-    """The cache key for a pool built from these inputs (see detector_nuisance_dli)."""
+def _pool_provenance(R, args, pool_mode, n_per, pool_kind=None):
+    """The cache key for a pool built from these inputs (see detector_nuisance_dli). For the
+    MapEstimate pool the key also carries the MAP computation contract (schema and definition
+    versions, live implementation hash, optimizer settings, checkpoint), so an implementation change
+    cannot silently reuse an old MAP pool; the draw-only PosteriorSample pool is unaffected."""
     kinds = _kinds(args)
+    map_contract = None
+    if pool_kind == "MapEstimate":
+        map_contract = ndli.live_map_pool_contract(
+            PARAMETERS.inference.evaluation, pool_mode=pool_mode,
+            checkpoint_sha256=_estimator_sha256(R))
     return ndli.pool_provenance(
         pool_mode=pool_mode, n_per_chunk=n_per, span_seconds=args.experiment_span_seconds,
         chunk_step_seconds=args.chunk_step_seconds, kinds=kinds, max_cells=args.max_cells,
-        estimator_sha256=_estimator_sha256(R))
+        estimator_sha256=_estimator_sha256(R), map_contract=map_contract)
 
 
 def _get_pool(R, args, pool_kind, pool_mode, n_frames, step_frames, n_per):
@@ -197,7 +208,7 @@ def _get_pool(R, args, pool_kind, pool_mode, n_frames, step_frames, n_per):
     """
     cache = ndli.pool_cache_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"],
                                  pool_kind)
-    prov = _pool_provenance(R, args, pool_mode, n_per)
+    prov = _pool_provenance(R, args, pool_mode, n_per, pool_kind=pool_kind)
     if not args.repool:
         cached = ndli.load_pool_if_fresh(cache, prov)
         if cached is not None:
@@ -410,7 +421,7 @@ def _build_sgm_percentiles(args, R, block, spec_dict, art):
 
     vecs, src_label = ndli.load_map_vectors(
         exp_map, pool_cache, source=source, condition=condition,
-        prior_low=R["plo"], prior_high=R["phi"])
+        prior_low=R["plo"], prior_high=R["phi"], parameter_keys=det.DETECTOR_PARAMETER_KEYS)
     b_idx = R["imaging_keys"].index("mu_pc") if "mu_pc" in R["imaging_keys"] else 2
     members, prov = ndli.select_signed_percentile_vectors(
         vecs, percentiles, R["plo"], R["phi"], brightness_index=b_idx)
@@ -457,7 +468,8 @@ def _build(args, R):
             cache = ndli.pool_cache_path(R["posit_dir"], R["paths"].project_alias,
                                          R["timing_label"], pool_kind)
             fresh = (cache.exists() and R["estimator_path"].exists()
-                     and ndli.load_pool_if_fresh(cache, _pool_provenance(R, args, pool_mode, n_per)) is not None)
+                     and ndli.load_pool_if_fresh(cache, _pool_provenance(R, args, pool_mode, n_per,
+                                                                          pool_kind=pool_kind)) is not None)
             print(f"    {pool_kind} pool cache: "
                   f"{'FRESH -> reuse, no GPU' if fresh else 'missing/stale -> compute on GPU'} ({cache.name})")
             print(f"    would write:\n    {art}  (+ report + marginals plot)")
@@ -556,7 +568,7 @@ def _write_nuisance_report(nu, R, art, n_draws=10000):
 
 def _migrate_pool_labels(args, R):
     """CPU-only maintenance: add per-row kind_index/cell/chunk labels to an EXISTING (legacy)
-    PosteriorSample pool by borrowing the aligned labels from the Detector Experiment MAP output,
+    PosteriorSample pool by borrowing the aligned labels from the Detector Experiment product (map_estimate),
     after verifying the two share a window ordering. Backs up the original first; a pool that is
     already labeled is left unchanged. Preserves the pool's provenance verbatim, so its cache
     freshness (and therefore the no-GPU reuse by --build) is unaffected."""
@@ -586,18 +598,19 @@ def _migrate_pool_labels(args, R):
         return
     if not map_path.exists():
         raise FileNotFoundError(
-            f"Detector Experiment MAP output not found (the label source):\n    {map_path}\n"
+            f"Detector Experiment product not found (the label source, read as map_estimate):\n    {map_path}\n"
             f"Run the Detector Experiment stage first, or regenerate the pool with the labeled build.")
 
     with np.load(str(pool_path), allow_pickle=False) as d:
         pool = np.asarray(d["pool"], dtype=float)
         prov = json.loads(str(d["provenance"]))          # preserved verbatim (freshness-critical)
-    with np.load(str(map_path), allow_pickle=False) as d:
-        inferred = np.asarray(d["inferred_log10"], dtype=float)
-        kind_index_w = np.asarray(d["kind_index"], dtype=np.int64)
-        cell_w = np.asarray(d["cell"], dtype=np.int64)
-        chunk_w = np.asarray(d["chunk"], dtype=np.int64)
-        kinds = np.asarray(d["kinds"])
+    map_arrays, map_manifest = schema.load_product(map_path, stage="experiment")
+    schema.assert_parameter_keys(map_manifest, det.DETECTOR_PARAMETER_KEYS, source=str(map_path))
+    inferred = np.asarray(map_arrays["map_estimate"], dtype=float)
+    kind_index_w = np.asarray(map_arrays["kind_index"], dtype=np.int64)
+    cell_w = np.asarray(map_arrays["cell"], dtype=np.int64)
+    chunk_w = np.asarray(map_arrays["chunk"], dtype=np.int64)
+    kinds = np.asarray(map_arrays["kinds"])
 
     n_per = int(prov["n_per_chunk"]); n_win = inferred.shape[0]; dim = pool.shape[1]
     if pool.shape[0] != n_win * n_per:

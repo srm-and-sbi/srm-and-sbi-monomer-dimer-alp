@@ -16,14 +16,14 @@
 # <data_bank>/Experiment/, writes inferred-parameter distributions per condition
 # (Posit/..._MAP_Experiment/).
 # Overridable via --export: CONDITION (FAB|INLB, required), KINDS (default = CONDITION), MAX_CELLS (0=all),
-#   CHUNK_STEP (seconds; unset -> model-window default, non-overlapping), SUMMARY (map|posterior|both), POOL_MODE, TOTAL_TIME,
+#   CHUNK_STEP (seconds; unset -> model-window default, non-overlapping), POOL_MODE, TOTAL_TIME,
 #   SRM_AND_SBI_GPUS (cap the GPUs used; default = all allocated),
 #   EXIT_BARRIER (seconds; raises torch-elastic's 300 s exit barrier so straggler
 #     ranks are not killed; default 3600 -- the job wall time is the real bound).
 #   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
 #     PRODUCT of this stage and to the estimator it loads -- Paths.product_label -- so a named experiment lives beside the
 #     canonical run; the shared inputs are read under the plain timing label; unset = canonical),
-#   A worker that draws no cells writes no shard.
+#   A worker that draws no cells writes a valid empty shard (every rank accounts for itself).
 #   Non-deterministic (no seed).
 # Submit from the repo root and forward REPO: Slurm spools this script to
 # /var/spool, so the child must be told where the repo is (--export=ALL,REPO=$PWD).
@@ -37,13 +37,13 @@
 # or pre-export it in the submitting shell and let --export=ALL carry it:
 # Example (default KINDS):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 # Example (multi-value KINDS via the environment, NOT inside --export):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
 #   export KINDS=FAB,INLB   # a deliberate cross-condition application, not the default
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 # Example (two nodes, (kind, cell) work sharded across both -- add --nodes=N; --gres is per node):
-#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
+#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment --export=ALL,REPO=$PWD,CONDITION=FAB Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=gpu
@@ -100,7 +100,9 @@ MAX_CELLS="${MAX_CELLS:-0}"
 # windows (e.g. 2 divides a 2 s window but not a 5 s one). Set CHUNK_STEP to force
 # overlapping chunks (e.g. 1 = 1 s stride).
 CHUNK_STEP="${CHUNK_STEP:-}"
-SUMMARY="${SUMMARY:-both}"
+# SUMMARY was retired in 0.1.16: every run computes and stores all three point estimates
+# (map, median, sgm). SUPPLYING the variable at all (even empty) is an error, not a silent no-op.
+[ -n "${SUMMARY+x}" ] && { echo "FATAL: SUMMARY='${SUMMARY}' was retired in 0.1.16 -- the stage always produces map, median and sgm; remove SUMMARY." >&2; exit 1; }
 POOL_MODE="${POOL_MODE:-bounded}"
 TOTAL_TIME="${TOTAL_TIME:-2.0}"
 
@@ -118,12 +120,12 @@ ARTIFACT_TAG="${ARTIFACT_TAG:-}"   # empty -> canonical product names; else e.g.
 TAG_ARG=()
 [ -n "$ARTIFACT_TAG" ] && TAG_ARG=(--artifact-tag "$ARTIFACT_TAG")
 EXP_ARGS=( --condition "$CONDITION" --kinds "$KINDS" --max-cells "$MAX_CELLS"
-           --summary "$SUMMARY" --pool-mode "$POOL_MODE" --total-time-seconds "$TOTAL_TIME" "${TAG_ARG[@]}" )
+           --pool-mode "$POOL_MODE" --total-time-seconds "$TOTAL_TIME" "${TAG_ARG[@]}" )
 # Forward --chunk-step-seconds only when explicitly set; otherwise let the entry
 # point default it to the model window (see the CHUNK_STEP note above).
 [ -n "$CHUNK_STEP" ] && EXP_ARGS+=( --chunk-step-seconds "$CHUNK_STEP" )
 
-echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain
@@ -134,7 +136,14 @@ echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_
 # connection error and kill any rank still working, and that rank's shard is lost.
 # resolve_topology() reads SLURM_NTASKS / SLURM_PROCID / SLURM_LOCALID, so every task knows
 # its rank and binds its own GPU; there is no rendezvous, no barrier, and nothing to time out.
-# --merge refuses to combine an incomplete shard set (see --allow-partial in the stage's --help).
+# --merge refuses an incomplete shard set and names the missing ranks; there is no partial merge
+# for this stage (recompute the missing rank with the same arguments and invocation id).
+# One invocation identifier for EVERY rank of this launch, created here BEFORE the ranks start
+# and forwarded through the environment: the ranks' shards record it and --merge refuses shards
+# whose identifiers differ (a stale shard from an earlier attempt, even inside the same job).
+# The Slurm job id is recorded separately; a repeated attempt within one job gets a new id.
+export SRM_AND_SBI_INVOCATION_ID="${SRM_AND_SBI_INVOCATION_ID:-$(python -c 'import uuid; print(uuid.uuid4())')}"
+echo "    invocation id: ${SRM_AND_SBI_INVOCATION_ID}"
 WORLD=$((NNODES * GPUS))
 if [ "$WORLD" -gt 1 ]; then
     CPT_PER_TASK=$(( ${SLURM_CPUS_ON_NODE:-$((GPUS * 4))} / GPUS ))

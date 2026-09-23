@@ -120,8 +120,10 @@ representative".
 
 ## Drift — measured per cell, independent of the display
 
-For every (condition, cell, parameter) an ordinary least-squares line is fit to the stored **log10**
-MAP estimate against time — log10 because drift is multiplicative — giving a slope and hence fitted
+For every (condition, cell, parameter) an ordinary least-squares line is fit to each stored **log10**
+point estimate — the MAP candidate (`map_estimate`), the posterior median and the posterior-draw SGM,
+which every Experiment product carries — against time — log10 because drift is multiplicative —
+giving a slope and hence fitted
 endpoints `change_dex = slope * (t_last - t_first)`, `start`, and `end` in absolute units. Because
 the fit is per cell, **none of these statistics depends on the central estimate the figures draw.**
 
@@ -317,8 +319,8 @@ Written to `<data_bank>/<posit>/<alias>_<timing_label>_MAP_Experiment/temporal_d
 `<alias>` carries the `_DETECTOR` qualifier for that workflow so the two never collide:
 
 - `<key>_temporal.png` — the central-trajectory figure per parameter;
-- `<key>_temporal_posterior.png` — the within-window interval figure (written only when the
-  Experiment output carries `posterior_quantiles`);
+- `<key>_temporal_posterior.png` — the within-window interval figure (every Experiment product
+  carries `posterior_quantiles`, so it is always written);
 - `<key>_temporal_posterior_pooled.png` — the pooled posterior density with the prior drawn on the
   same axes (written only when the Experiment output carries `posterior_samples_cloud`, i.e. the
   stage ran with `--dump-posterior-samples`);

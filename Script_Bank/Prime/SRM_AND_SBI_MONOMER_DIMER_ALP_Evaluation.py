@@ -18,7 +18,8 @@ and the ``--merge`` combine step -- is shared.
 Outputs (under ``<data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Recovery/``):
     report.md                    -- recovery report (per-parameter error table + figures).
     figures/recovery_<KEY>.png   -- inferred-vs-true + residual-error views (log10), per parameter.
-    <...>_MAP_Recovery.npz       -- saved arrays: true_log10, inferred_log10, scores.
+    <...>_MAP_Recovery.npz       -- saved arrays: true_log10, map_estimate, posterior_quantiles,
+                                    posterior_sgm, scores, task_index, sim_index, manifest_json.
 
 Usage:
     MACHINE_PROFILE=<profile> python SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py \\

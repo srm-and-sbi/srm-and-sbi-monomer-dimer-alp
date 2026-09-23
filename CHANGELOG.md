@@ -5,6 +5,188 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.16 - 2026-09-23
+
+Makes the three point estimates a contract of every Evaluation and Experiment product, renames the
+stored MAP field, and records the computation provenance each product was made under. No optimizer
+setting, density objective, prior-bound handling or SGM distance convention changes, and no
+downstream analysis expands its scientific output. This is a **breaking artifact-schema change**.
+
+### Changed
+
+- **Every product carries all three point estimates for every observation.** `map_estimate` (the
+  numerical MAP candidate), `posterior_quantiles` (five levels; the marginal median is the 0.50
+  level) and `posterior_sgm` (the SGM of the same draws) are computed unconditionally and validated
+  before anything is written; a missing, malformed or non-finite estimate stops publication and
+  names the observation, estimate and stage. The definitions live in one place,
+  `evaluation.POINT_ESTIMATES`, each stating operator, source population, grouping, coordinate
+  space, distance scaling and stored field; draws are labeled `posterior-draw` under the bounded
+  pool and `flow-draw` under the unrestricted one. Every report opens with a definitions table
+  and shows the three side by side.
+- **Breaking rename: `inferred_log10` -> `map_estimate`**, through every active producer and
+  consumer (Evaluation, Experiment, the CD86/CTLA-4 controls runner and its temporal companion,
+  temporal dynamics, population composition, the standalone SGM stage, Nuisance-DLI construction
+  and its SGM analysis, posterior-predictive video generation). No fallback: an old product is
+  refused by `artifact_schema.reject_obsolete` with the message that schema conversion does not
+  repair affected MAP estimates. Existing products on disk are untouched.
+- **Persisted computation contract.** Each shard and merged product stores a `manifest_json`
+  (`artifact_schema.build_manifest`): schema and estimate-definition versions, parameter keys and
+  coordinate transform, pool mode and draw label, draw count, quantile levels, SGM scaling and
+  coordinates, optimizer settings (`evaluation.optimizer_contract`, including the 0.1.15
+  bookkeeping marker), code provenance (`provenance.code_provenance`: HEAD, dirty flag and a
+  deterministic hash over the implementation files by path and content, missing files marked),
+  checkpoint identity (the estimator's `weights_sha256`), run identity, seed policy and observation ids.
+  Evaluation shards now store `task_index` / `sim_index`.
+- **Merging requires one computation.** `experiment_support.merge_validated_shards` validates
+  every shard, requires the shard manifests to agree on every contract key, and requires the
+  merged observation set to EQUAL the expected inventory (Evaluation: every `(task, sim)` of the
+  EVAL tasks; Experiment: every `(kind, cell, chunk)` a recording on disk yields), not merely to
+  have the right count. Rank coverage stays a separate check.
+- **Nuisance-DLI MapEstimate pool cache** keys on the MAP computation contract
+  (`detector_nuisance_dli.live_map_pool_contract`), so an implementation change cannot reuse an
+  old MAP pool; the draw-only PosteriorSample pools carry no such entry and are unaffected.
+  `POOL_FORMAT_VERSION` is unchanged for that reason.
+- **Rendering separated from computation.** The "View A / View B" framing is gone; both combined
+  figures always draw every panel; the marginal median is located by level from the manifest
+  (`artifact_schema.median_level_index`), never by an assumed index, and the five canonical levels
+  are validated on load. Report-only rendering (`persist_arrays=False`) leaves arrays untouched
+  and reads the recorded definitions.
+
+### Removed
+
+- `--summary {map,posterior,both}` (all three runners) and `SUMMARY=` (four stage scripts, both
+  dispatchers): supplying either is an explicit error, not a silent no-op.
+- `--allow-partial` on Evaluation and Experiment `--merge`: a merge that skips ranks can never
+  satisfy the exact-inventory check. (It remains on the posterior
+  calibration stage and the Nuisance-DLI pool merge, which are not products of this contract.)
+
+### Unchanged, deliberately
+
+- All optimizer settings and the learning-rate ladder; the SGM distance conventions of every
+  existing construction (posterior-draw SGM in estimator coordinates scaled by prior width;
+  window-SGM and the standalone stage in physical coordinates); the experimental population
+  composition (posterior draws) and its synthetic validation arm (MAP-based); the standalone
+  Experiment SGM (an SGM of window MAPs, now named as such).
+- Production cost: unchanged relative to the runs since 0.1.8 that already drew the posterior and
+  computed quantiles and SGM at the same draw count (`SUMMARY=both`); the baseline 2 s FAB
+  Experiment product predates the SGM output and is among the products to be regenerated. A
+  local `--summary map` shortcut that skipped the draws no longer exists, by design.
+
+### Enforcement completed after review (same release, 2026-09-23)
+
+Two rounds of independent review reproduced seven, then three further, gaps between the contract
+as stated and what the code enforced. Each is closed here with a regression test; none changes an estimate's definition, an
+optimizer setting or any product on disk.
+
+- **The manifest is validated, not only recorded** (`artifact_schema.validate_manifest`, called
+  by `validate_product`): every contract key present and typed; the estimate-definitions version
+  among the supported ones; `pool_mode` known and `draw_label` equal to its entry in
+  `artifact_schema.DRAW_LABELS` (which `evaluation.draw_label` now reads); `sgm_scale` finite,
+  positive, one entry per parameter; the optimizer, code, checkpoint, run-identity and
+  seed-policy blocks complete; `window_geometry` and `condition_labels` required for the
+  experiment stage (the labels must equal the stored `kinds`, and `kind_index` must index them)
+  and null for evaluation. Arrays: `scores` and `true_log10` finite; identifier arrays
+  integer-valued; `posterior_quantiles` nondecreasing along the level axis (equal neighbors
+  valid); the optional `posterior_samples_cloud` of shape `(N, n_summary_draws, D)` and finite.
+- **Writers validate on entry.** The Evaluation, Experiment and controls writers call
+  `validate_product` first and decode the manifest from the arrays; the separate `manifest`
+  argument is gone, so no caller can persist or render an invalid product. Report-only rendering
+  (`persist_arrays=False`) exists on all three.
+- **Every consumer reads through the schema with exact parameter keys.** The population
+  composition's experimental loader now uses `load_product` (a manifest-less legacy file is
+  refused); every consumer calls `artifact_schema.assert_parameter_keys`, which requires the
+  product's keys to equal the workflow's key for key and in order, instead of comparing counts.
+- **Shards of one computation are identified fully.** The contract gains `seed_policy` (base
+  seed and the explicit per-rank rule: same seed on every rank, no offset), `window_geometry`
+  (frames, stride, span) and `condition_labels`. `run_identity` is the logical invocation: the
+  product label and an `invocation_id` created by the launcher (the stage scripts export
+  `SRM_AND_SBI_INVOCATION_ID` before `srun`; a distributed rank without it stops, a
+  single-process run generates its own); it must agree across shards. The execution attempt is
+  recorded separately in each product's `execution` block (its Slurm job id, null outside
+  Slurm) and is never compared, so a missing rank recomputed in a new job, or locally, merges
+  with the original shards; the merged manifest keeps each shard's rank, world size,
+  observation count, write time and execution under `shards` (validated: the counts must sum
+  to the product's) and records the merge step's own execution. A replacement rank must run
+  from the same HEAD, dirty state and implementation files, because the whole code block is part
+  of the contract. Per-run fields (`kinds`) must be equal on every shard, not taken from the
+  first.
+- **Optional storage is a run-level setting.** Each manifest declares the optional arrays its
+  run stores in `stored_optional_fields`, a contract key (today only the Experiment stage's
+  `posterior_samples_cloud`, under `--dump-posterior-samples`). A product must carry exactly the
+  declared arrays; the merge refuses shards whose presence differs, naming every shard on each
+  side, and refuses any stored array it would not carry. Before this, a merge in which one shard
+  lacked the raw draws succeeded and silently dropped them.
+- **Empty ranks write valid empty shards.** A rank with no work writes correctly shaped
+  `(0, D)` / `(0, D, Q)` / `(0,)` arrays (`artifact_schema.empty_product_arrays`) and a full
+  manifest; the merge admits them and refuses a final product with no observations. The
+  incomplete-shard-set message no longer recommends the removed `--allow-partial`.
+- **One TIFF layout rule.** `experiment_support.inspect_recording` reads the series metadata
+  (one 3-D series, axes `TYX` / `IYX` / `QYX`, frames first) and is used by the window inventory,
+  by `read_cell_chunks` (which now also checks the loaded array against it) and by a preflight
+  over every selected recording before estimation; a single page holding a 3-D image, an extra
+  axis or several series is refused with every offending file named. The controls runner reads
+  through the same function instead of its own `imread` loop. The MET recordings on disk are
+  1000-page `TYX` series, so the earlier page-count inventory happened to agree on them; the
+  rule now makes that agreement a check rather than a coincidence.
+- **Provenance captured at startup.** Code provenance is taken once the estimator is loaded and
+  finalized at write time (`provenance.finalize_code_provenance`: startup hash, at-write hash,
+  `changed_during_run`); the validator compares the startup and at-write records itself
+  (aggregate hash and per-file entries) and requires the flag to agree, so neither a changed
+  implementation nor a code block that contradicts itself passes. The refusal is fail-closed at
+  publication, not fail-fast: the computation has already finished, and the product is not
+  written. The checkpoint identity is the checksum of the weights actually loaded
+  (`load_estimator` attaches `weights_sha256`), never a re-read of the path. The hashed file list
+  gains the controls runner, the Nuisance-DLI module and `provenance.py` itself.
+- Smaller: the stage scripts and dispatchers refuse `SUMMARY` when it is supplied at all, even
+  empty (`${SUMMARY+x}`); four stale comments naming `--allow-partial` are corrected; the retired
+  `--summary` option is hidden from `--help` and still an explicit error.
+- **Schema 1 is frozen at this release.** It was refined in place during the release while no
+  product of it existed on disk (checked before release: no retained `.npz` in the Posit or Labor
+  tiers carries `manifest_json`); any later incompatible change takes a new
+  `ARTIFACT_SCHEMA_VERSION`.
+
+### Tests
+
+New: `tests/test_point_estimates_contract.py` (definitions and stored-field mapping; canonical
+levels; draw labels; median and SGM from one draw set, SGM membership and expected medoid under the
+declared scaling; retired options rejected by both parsers), `tests/test_artifact_schema.py`
+(valid products; rejection of obsolete fields, missing companions, non-finite values, bad shapes,
+duplicate ids, missing manifest; membership-not-count; merge contract, exact inventory and order;
+MAP-pool cache contract invalidating only MAP pools; deterministic implementation hash with
+missing-file marking; report-only rendering leaving arrays byte-identical while producing every
+table and figure) and `tests/test_contract_enforcement.py` (one negative test per review finding:
+manifest keys, versions, types and cross-field rules; experiment geometry and labels; scores,
+truth, identifiers, quantile order and the optional cloud; the three writers refusing an invalid
+product before persisting or rendering, and report-only rendering for Experiment and controls; the
+composition loader refusing a legacy product and a wrong key order; exact parameter keys; merges
+refusing a different seed, invocation, geometry, label set or `kinds` array and retaining shard
+provenance; empty shards valid and mergeable, an empty final product refused, the coverage message
+without the removed option; the TIFF rule shared by inventory, reader and preflight and rejecting a
+planar single page and a 4-D stack; startup-versus-write provenance and the hashed file list; the
+launcher-created invocation id and the stage scripts exporting it before `srun`;
+`posterior_summary` obtaining ONE collection and deriving quantiles and SGM from it; the retired
+option hidden from help; a replacement shard recomputed in another Slurm job, or locally, merging
+with every execution retained while the logical identity is still compared; optional draw storage
+as a run-level setting, with all-present, all-absent and mixed shards, empty ones included; the
+validator comparing the startup and at-write implementation records itself and refusing a
+contradictory flag). Shared fixtures in `tests/_product_fixtures.py`. Executed by direct
+invocation (pytest is not installed in the PC `SRM_AND_SBI_ENVY_V0` environment): 7 + 4 + 18 = 29
+tests pass; the pre-existing `test_map_optimizer_invariant.py` (3) and
+`test_temporal_dynamics_drift.py` (2) still pass. The HPC scripts pass `bash -n`; the detector
+dispatcher exits 1 with `FATAL` on `SUMMARY=` (empty) and proceeds to its dry-run preview without
+it; Evaluation, Experiment and the controls runner `--dry-run` cleanly on the PC for both workflows.
+These tests establish the artifact contract; they do not establish MAP convergence or scientific
+calibration.
+
+### Deferred
+
+Expanding the population-composition validation arm and the standalone SGM stage to report all
+three estimates; conversion of the one corrected old-schema product (`..._CAP256_MAP_Experiment_RUN_1953816`,
+schema-only, with original and conversion provenance kept distinct); production re-runs; the
+optimizer benchmark; attempt-specific progress-log names, so that a recomputed rank 0 no longer
+truncates the original run's log (until then the recovery recipe in `Script_Bank/HPC/README.md`
+saves the log and `figures/` first). None is implied by this release.
+
 ## 0.1.15 - 2026-09-22
 
 Corrects the MAP seed-then-optimize step, which returned a score and a parameter vector taken

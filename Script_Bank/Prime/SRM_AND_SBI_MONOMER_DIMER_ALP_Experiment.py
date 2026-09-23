@@ -23,7 +23,8 @@ Inputs (real microscopy, copied into the data bank by the user):
 Outputs (under <data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Experiment/):
     report.md                         -- per-parameter inferred-theta summary by kind
     figures/experiment_<KEY>.png      -- inferred-theta distribution per condition
-    <...>_MAP_Experiment.npz          -- inferred_log10, scores, kind/cell/chunk indices
+    <...>_MAP_Experiment.npz          -- map_estimate, posterior_quantiles, posterior_sgm, scores,
+                                         kind/cell/chunk indices, manifest_json
     progress.log                      -- live, tail-able trail
 
 Usage:

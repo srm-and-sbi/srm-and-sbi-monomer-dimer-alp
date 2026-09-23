@@ -169,7 +169,7 @@ cd /path/to/srm-and-sbi-monomer-dimer-alp
 sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Evaluation \
        --partition=gpu \
        --output="$MON_OUT/%x_%j.out" \
-       --export=ALL,REPO=$PWD,EVAL_TASKS=1,SUMMARY=both,POOL_MODE=bounded,TOTAL_TIME=2.0 \
+       --export=ALL,REPO=$PWD,EVAL_TASKS=1,POOL_MODE=bounded,TOTAL_TIME=2.0 \
        Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Evaluation.sh
 ```
 
@@ -184,7 +184,7 @@ cd /path/to/srm-and-sbi-monomer-dimer-alp
 sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Experiment \
        --partition=gpu \
        --output="$MON_OUT/%x_%j.out" \
-       --export=ALL,REPO=$PWD,SUMMARY=both,TOTAL_TIME=2.0 \
+       --export=ALL,REPO=$PWD,TOTAL_TIME=2.0 \
        Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh
 ```
 
@@ -363,9 +363,33 @@ node's agent tore the rendezvous down after five minutes and the other nodes' ag
 killed their still-working ranks, losing their shards. With Slurm tasks nothing waits
 on anything. Should a rank still die (node failure, wall time), `--merge` refuses the
 incomplete shard set and names the missing ranks; recompute just that rank with
-`RANK=<r> WORLD_SIZE=<n> LOCAL_RANK=0 python <stage>.py <same args>` on one GPU (the
-video-level sharding is deterministic) and merge again, or pass `--allow-partial` to
-merge what exists (the report then records `shards_merged`).
+`RANK=<r> WORLD_SIZE=<n> LOCAL_RANK=0 SRM_AND_SBI_INVOCATION_ID=<the launch's id> python
+<stage>.py <same args>` on one GPU (the video-level sharding is deterministic; the id is printed
+by the stage script at launch and stored in every shard's manifest) and merge again. The
+replacement may run in a new Slurm job or locally: each shard records the execution attempt that
+wrote it (its own job id, or none), the merged manifest keeps every shard's, and the merge never
+compares them. "The same args" includes `--dump-posterior-samples` exactly when the original run
+used it: raw-draw storage is a run-level setting, and shards that differ in it are refused. The
+replacement must also run from the same repository state: the same HEAD commit, the same
+dirty-state flag and byte-identical implementation files, because the manifest's whole code block
+is part of the contract. A commit made between the original run and the replacement makes the
+merge refuse even when no implementation file changed. Before recomputing rank 0, copy
+`progress.log` and `figures/` out of the stage's output directory: when rank 0 starts it
+truncates the shared progress log, which holds the original run's per-window progress and, under
+`--debug`, its optimizer trace, and it clears `figures/`. The other ranks overwrite neither. For
+Evaluation and Experiment there is no partial merge: every shard is validated against the
+artifact schema, the shard manifests must describe one computation (same settings, stored optional
+arrays, seed policy, window geometry, condition labels, checkpoint, implementation hash, product
+label AND invocation id, so a stale shard from an earlier launch is refused even inside the same
+job), and the merged observation
+set must equal the expected inventory exactly (every `(task, sim)` of the EVAL tasks; every
+`(kind, cell, chunk)` a recording on disk yields), so a missing rank is always a hard stop. A rank
+that drew no work (more GPUs than cells, or only absent recordings) writes a valid empty shard,
+so it never reads as a dead rank. The Evaluation and Experiment stage scripts create the
+invocation id (`SRM_AND_SBI_INVOCATION_ID`) before `srun` starts the ranks; a rank launched
+without it stops rather than inventing its own. `--allow-partial` survives only on the
+`Posterior_Calibration` and `Nuisance_DLI` wrappers, whose shards are not products of that
+contract (their reports then record `shards_merged`).
 
 **Smoke / check evaluation uses `--pool-mode unrestricted`.** An undertrained
 posterior's probability mass can fall outside the prior box, and the default
@@ -375,7 +399,7 @@ trained posterior. (See the MAP-recovery validation in `VALIDATION.md`.)
 
 ```bash
 sbatch --partition=gpu_test --gres=gpu:1 --time=01:00:00 \
-       --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=1,SUMMARY=both,POOL_MODE=unrestricted,TOTAL_TIME=1.0 ...Evaluation.sh
+       --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=1,POOL_MODE=unrestricted,TOTAL_TIME=1.0 ...Evaluation.sh
 ```
 
 ---

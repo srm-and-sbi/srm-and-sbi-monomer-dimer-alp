@@ -14,7 +14,7 @@
 # count comes from the allocation (Submit.sh NODES -> sbatch --nodes; SLURM_NNODES),
 # not an --export knob. Reads the trained posterior + EVAL data, writes the
 # recovery report (Posit/..._MAP_Recovery/).
-# Overridable via --export: EVAL_TASKS, SUMMARY (map|posterior|both), POOL_MODE
+# Overridable via --export: EVAL_TASKS, POOL_MODE
 #   (bounded|unrestricted), TOTAL_TIME, SRM_AND_SBI_GPUS (cap the GPUs used;
 #   default = all allocated). Sharding is at video granularity, so every allocated
 #   GPU gets work regardless of EVAL_TASKS (even EVAL_TASKS=1 spreads its videos).
@@ -31,9 +31,9 @@
 # trained posterior); use POOL_MODE=unrestricted for an undertrained/smoke posterior.
 # Example (single node):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
-#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=1,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh
+#   sbatch --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=1 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh
 # Example (two nodes, EVAL set sharded across both -- add --nodes=N; --gres is per node):
-#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=10,SUMMARY=both Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh
+#   sbatch --nodes=2 --gres=gpu:4 --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Evaluation --export=ALL,REPO=$PWD,CONDITION=FAB,EVAL_TASKS=10 Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Evaluation   # fallback; per-run --job-name (with timing_label) overrides this
 #SBATCH --partition=gpu
@@ -83,7 +83,9 @@ conda activate SRM_AND_SBI_ENVY_V0
 export MACHINE_PROFILE="${MACHINE_PROFILE:?set MACHINE_PROFILE (via hpc_local.env or --export) to a profile in your machine_profiles.toml}"
 
 EVAL_TASKS="${EVAL_TASKS:-1}"
-SUMMARY="${SUMMARY:-both}"
+# SUMMARY was retired in 0.1.16: every run computes and stores all three point estimates
+# (map, median, sgm). SUPPLYING the variable at all (even empty) is an error, not a silent no-op.
+[ -n "${SUMMARY+x}" ] && { echo "FATAL: SUMMARY='${SUMMARY}' was retired in 0.1.16 -- the stage always produces map, median and sgm; remove SUMMARY." >&2; exit 1; }
 POOL_MODE="${POOL_MODE:-bounded}"
 TOTAL_TIME="${TOTAL_TIME:-2.0}"
 
@@ -95,8 +97,8 @@ NNODES="${SLURM_NNODES:-1}"
 # No worker cap by task count: sharding is at VIDEO granularity, so even EVAL_TASKS=1
 # spreads its thousands of (task, sim) videos across every allocated GPU. Capping GPUS
 # at EVAL_TASKS here (a task-sharding-era rule) would wrongly run a 1-task, 10^4-video
-# set on a single GPU. An over-provisioned rank with no videos writes no shard and
-# --merge tolerates the missing file.
+# set on a single GPU. An over-provisioned rank with no videos writes a valid empty shard,
+# which --merge accepts (every rank must account for itself).
 EVAL_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Evaluation.py"
 # CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
 # re-images the trajectories per condition), so the token is required and forwarded.
@@ -105,10 +107,10 @@ case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}'
 ARTIFACT_TAG="${ARTIFACT_TAG:-}"   # empty -> canonical product names; else e.g. CAP256 (Paths.product_label)
 TAG_ARG=()
 [ -n "$ARTIFACT_TAG" ] && TAG_ARG=(--artifact-tag "$ARTIFACT_TAG")
-EVAL_ARGS=( --condition "$CONDITION" --eval-tasks "$EVAL_TASKS" --summary "$SUMMARY" --pool-mode "$POOL_MODE"
+EVAL_ARGS=( --condition "$CONDITION" --eval-tasks "$EVAL_TASKS" --pool-mode "$POOL_MODE"
             --total-time-seconds "$TOTAL_TIME" "${TAG_ARG[@]}" )
 
-echo "=== Evaluation | eval_tasks=${EVAL_TASKS} summary=${SUMMARY} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Evaluation | eval_tasks=${EVAL_TASKS} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain
@@ -119,7 +121,14 @@ echo "=== Evaluation | eval_tasks=${EVAL_TASKS} summary=${SUMMARY} pool=${POOL_M
 # connection error and kill any rank still working, and that rank's shard is lost.
 # resolve_topology() reads SLURM_NTASKS / SLURM_PROCID / SLURM_LOCALID, so every task knows
 # its rank and binds its own GPU; there is no rendezvous, no barrier, and nothing to time out.
-# --merge refuses to combine an incomplete shard set (see --allow-partial in the stage's --help).
+# --merge refuses an incomplete shard set and names the missing ranks; there is no partial merge
+# for this stage (recompute the missing rank with the same arguments and invocation id).
+# One invocation identifier for EVERY rank of this launch, created here BEFORE the ranks start
+# and forwarded through the environment: the ranks' shards record it and --merge refuses shards
+# whose identifiers differ (a stale shard from an earlier attempt, even inside the same job).
+# The Slurm job id is recorded separately; a repeated attempt within one job gets a new id.
+export SRM_AND_SBI_INVOCATION_ID="${SRM_AND_SBI_INVOCATION_ID:-$(python -c 'import uuid; print(uuid.uuid4())')}"
+echo "    invocation id: ${SRM_AND_SBI_INVOCATION_ID}"
 WORLD=$((NNODES * GPUS))
 if [ "$WORLD" -gt 1 ]; then
     CPT_PER_TASK=$(( ${SLURM_CPUS_ON_NODE:-$((GPUS * 4))} / GPUS ))

@@ -32,8 +32,8 @@
 #                   (RESURRECT=1 continues training from the existing checkpoint;
 #                   LR = per-run starting/peak learning rate, unset = the stage
 #                   script's default peak)
-#     evaluation  : CONDITION EVAL_TASKS SUMMARY POOL_MODE TOTAL_TIME
-#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP SUMMARY POOL_MODE TOTAL_TIME
+#     evaluation  : CONDITION EVAL_TASKS POOL_MODE TOTAL_TIME
+#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME
 #
 # sbatch-level overrides (env, optional -- unset = the stage script's baked #SBATCH):
 #   PART      CPU partition for Simulation (its baked --partition is a placeholder,
@@ -70,7 +70,7 @@
 #   DRYRUN=0 GPU_PART=gpu_test bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=100 EPOCHS=10 RESURRECT=1  # continue a wall-stopped run
 #   PART=test bash .../Submit.sh simulation CONDITION=FAB SPLIT=train TASK_COUNT=16 TASK_SIMS=10 TOTAL_TIME=2.0  # DLI over the existing FAB tier; smoke on the check partition (see VALIDATION.md section 2.5)
 #   bash .../Submit.sh evaluation CONDITION=FAB TOTAL_TIME=5.0 EVAL_TASKS=20 POOL_MODE=bounded
-#   bash .../Submit.sh experiment CONDITION=INLB TOTAL_TIME=2.0 SUMMARY=both
+#   bash .../Submit.sh experiment CONDITION=INLB TOTAL_TIME=2.0
 # =============================================================================
 set -uo pipefail
 
@@ -109,6 +109,10 @@ for kv in "$@"; do
         *) echo "FATAL: bad argument '$kv' (expected KEY=VALUE)." >&2; exit 1 ;;
     esac
 done
+
+# SUMMARY was retired in 0.1.16: every run computes and stores all three point estimates
+# (map, median, sgm). SUPPLYING the variable at all (even empty) is an error, not a silent no-op.
+[ -n "${SUMMARY+x}" ] && { echo "FATAL: SUMMARY='${SUMMARY}' was retired in 0.1.16 -- the stage always produces map, median and sgm; remove SUMMARY." >&2; exit 1; }
 
 TOTAL_TIME="${TOTAL_TIME:-2.0}"; export TOTAL_TIME
 case "$TOTAL_TIME" in
@@ -175,7 +179,7 @@ case "$STAGE" in
   evaluation)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Evaluation.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}${tag_slot}_Evaluation"
-    _add CONDITION; _add EVAL_TASKS; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
+    _add CONDITION; _add EVAL_TASKS; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node
@@ -184,7 +188,7 @@ case "$STAGE" in
   experiment)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}${tag_slot}_Experiment"
-    _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add SUMMARY; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
+    _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
     # Diagnostics of the MAP optimization itself: VERBOSE=1 records the per-window trace (per-step
     # learning rate and running optimum, plus the early/full-run stop line), SHOW_PROGRESS sets its cadence.
     _add VERBOSE; _add SHOW_PROGRESS

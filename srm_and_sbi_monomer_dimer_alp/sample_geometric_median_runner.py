@@ -7,10 +7,15 @@ differences are carried by :class:`SGMSpec` and resolved once in :func:`_sgm_spe
 
 * the **parameterization module** supplying the parameter keys, the estimator-space prior box and
   the table-bound estimator-to-physical conversion;
-* the **alias-qualified paths** locating the Experiment MAP output and naming the report;
-* the **collection sources** available -- both workflows expose the real optimized MAPs from the
-  Experiment stage; the detector additionally exposes the Nuisance_DLI pool and its caches, which
-  have no biology counterpart because biology builds no imaging nuisance;
+* the **alias-qualified paths** locating the Experiment product (its ``map_estimate``) and naming the
+  report;
+* the **collection sources** available -- both workflows expose the per-window MAP candidates
+  (``map_estimate``) of the Experiment product, so the default summary is an **SGM of window MAPs**:
+  a different quantity from the posterior-draw SGM that product stores per window (``posterior_sgm``,
+  estimator coordinates scaled by prior width), and taken here in physical coordinates normalized by
+  the physical prior range. The report names the population it summarized. The detector additionally
+  exposes the Nuisance_DLI pool and its caches, which have no biology counterpart because biology
+  builds no imaging nuisance;
 * the **plane figure's** two parameters, chosen per workflow for what they reveal.
 
 Everything downstream of the loader -- the geometric median, the typicality read, the correlation
@@ -27,6 +32,7 @@ from matplotlib.figure import Figure
 
 from .labeling import LABELING_CONDITIONS
 from . import sample_geometric_median as sgm
+from . import artifact_schema as schema
 from .diagnostics import DiagnosticReporter
 
 # Conditions are named scientifically -- MET-FAB (the monomer control) and MET-INLB (the dimer
@@ -72,14 +78,15 @@ def load_experiment_maps(path, parameter_keys):
         raise FileNotFoundError(
             f"the Sample Geometric Median needs the real optimized MAPs, and the Experiment output "
             f"is absent:\n    {path}\nRun the Experiment stage for this workflow and timing first.")
-    with np.load(str(path), allow_pickle=False) as d:
-        vecs = np.asarray(d["inferred_log10"], dtype=float)
-        labels = {"kind_index": np.asarray(d["kind_index"]), "cell": np.asarray(d["cell"]),
-                  "chunk": np.asarray(d["chunk"]), "kinds": np.asarray(d["kinds"])}
-    if vecs.shape[1] != len(parameter_keys):
-        raise ValueError(f"Experiment MAP output has {vecs.shape[1]} dimensions but this workflow "
-                         f"has {len(parameter_keys)} parameters {parameter_keys}.")
-    return vecs, labels, f"map-estimates (Experiment MAP: {path.name}, {vecs.shape[0]} windows)"
+    arrays, manifest = schema.load_product(path, stage="experiment")
+    schema.assert_parameter_keys(manifest, parameter_keys, source=str(path))   # keys AND order
+    vecs = np.asarray(arrays["map_estimate"], dtype=float)
+    labels = {"kind_index": np.asarray(arrays["kind_index"]), "cell": np.asarray(arrays["cell"]),
+              "chunk": np.asarray(arrays["chunk"]), "kinds": np.asarray(arrays["kinds"])}
+    # Population named explicitly: this stage summarizes the per-window MAP vectors (one per
+    # analyzed window), NOT posterior draws -- its SGM is an SGM of window MAPs.
+    return vecs, labels, (f"SGM of window MAPs (Experiment map_estimate: {path.name}, "
+                          f"{vecs.shape[0]} windows)")
 
 
 def apply_condition(condition, vecs, labels):
@@ -116,7 +123,7 @@ def _figure_plane(pool_log, results, keys, xi, yi, rng, to_physical, log_rows):
                edgecolors="none", label="collection members")
     ur = next(r for r in results if r["variant"] == "unrestricted")
     ax.scatter(ur["sgm_abs"][xi], ur["sgm_abs"][yi], marker="*", s=420, c="gold",
-               edgecolors="k", linewidths=1.2, zorder=6, label="SGM (real sample)")
+               edgecolors="k", linewidths=1.2, zorder=6, label="SGM (a realized member)")
     ax.scatter(ur["vom_abs"][xi], ur["vom_abs"][yi], marker="X", s=210, c="magenta",
                edgecolors="k", linewidths=1.2, zorder=6, label="vector of medians")
     # A log axis only for a log row; a linear row, if the table declared one, is drawn on a linear
@@ -198,8 +205,9 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
     reporter.check("collection_nonempty", n > 0, f"{n} parameter vectors in the collection")
     reporter.check("no_nan_inf(collection)", finite, "clean" if finite else "NaN/Inf present")
     reporter.check("sgm_is_real_sample", True,
-                   "the Sample Geometric Median is an actual collection member, so its joint "
-                   "correlations are intact")
+                   "the Sample Geometric Median is an actual collection member -- a realizable "
+                   "vector whose coordinates co-occurred; it avoids the coordinate-wise composite, "
+                   "and does not by itself preserve the collection's correlations")
 
     frac_below = (pool_log < low).mean(0)
     frac_above = (pool_log > high).mean(0)
@@ -208,11 +216,13 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
         ["parameter", "box low (estimator space)", "box high (estimator space)", "below %", "above %"],
         [[keys[i], f"{low[i]:.3f}", f"{high[i]:.3f}", f"{100 * frac_below[i]:.2f}",
           f"{100 * frac_above[i]:.2f}"] for i in range(len(keys))],
-        note="Fraction of members outside the prior box per dimension. On real recordings this is a "
-             "genuine finding rather than a defect: the estimates are unconstrained by the box, so "
-             "mass outside it says the recordings pull that parameter beyond the range the prior "
-             "anticipated -- either the prior is too narrow for this data, or the model is being "
-             "asked to explain the recordings with a configuration it cannot represent.")
+        note="Fraction of members outside the prior box per dimension -- a measurement, not yet an "
+             "interpretation. The gradient ascent that produces a MAP candidate is unconstrained, so "
+             "mass outside the box can come from the recordings pulling a parameter beyond the range "
+             "the prior anticipated, from an unconstrained flow optimum, or from an optimizer fault "
+             "(the 0.1.15 bookkeeping defect displaced MAPs by about one learning rate). Which "
+             "reading applies is decided against the posterior-draw estimates of the same windows "
+             "and separate checks, not by this table.")
 
     for res in results:
         if res["n"] == 0:
@@ -226,7 +236,9 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
             f"(n={res['n']}, method={res['method']})",
             ["parameter", "SGM (abs)", "vector-of-medians (abs)", "SGM (estimator space)",
              "VoM (estimator space)"], rows,
-            note="SGM = the median VECTOR (a real collection member, correlations intact); "
+            note="SGM = the median VECTOR (a real collection member, so a realizable configuration "
+                 "whose coordinates co-occurred; it avoids the composite, it does not by itself "
+                 "preserve the collection's correlations); "
                  "vector-of-medians = the per-dimension composite, which need not correspond to any "
                  "member. Read the two columns against each other per parameter: where they agree the "
                  "choice does not matter, and where they diverge the composite is asserting a "
@@ -254,9 +266,10 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
         "Joint correlation matrix (Pearson, estimator space)",
         ["parameter"] + keys,
         [[keys[a]] + [f"{corr[a, b]:+.3f}" for b in range(len(keys))] for a in range(len(keys))],
-        note="The cross-parameter correlations the SGM preserves and the vector of medians discards. "
-             "The larger these are in magnitude, the more the per-dimension composite misrepresents "
-             "the collection."
+        note="The collection's cross-parameter correlations -- the structure that makes a "
+             "coordinate-wise composite unrepresentative. No single summary vector carries them; the "
+             "SGM's merit is being a realized member. The larger these are in magnitude, the more the "
+             "per-dimension composite misrepresents the collection."
              + f" Computed within a single condition ({args.condition}), so a between-condition "
                f"shift cannot inflate them (Simpson's paradox does not apply).")
 
@@ -280,7 +293,7 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
                          caption=spec.corner_caption or
                          f"Pairwise structure across all parameters with the SGM (gold star) and the "
                          f"vector of medians (magenta X) overplotted. Off-diagonal tilt is joint "
-                         f"correlation the SGM keeps and the per-dimension composite ignores. "
+                         f"correlation the collection carries and the per-dimension composite ignores. "
                          f"Drawn from {n_plot} of {n} collection members"
                          + ("" if n_plot == n else f" (subsampled for rendering)")
                          + f"; diagonal histograms use {n_bins} bins, scaled as sqrt(n) so the "
@@ -342,7 +355,9 @@ def build_parser(description):
                    help="model window / recording duration; sets the timing label locating the "
                         "inputs and naming the outputs.")
     p.add_argument("--collection", default="experiment-map",
-                   help="which collection the geometric median summarizes (workflow-dependent; "
+                   help="which collection the geometric median summarizes; the default experiment-map "
+                        "is the Experiment product's per-window MAP candidates (map_estimate), so the "
+                        "result is an SGM of window MAPs, not a posterior-draw SGM (workflow-dependent; "
                         "--dry-run lists what this workflow offers).")
     p.add_argument("--condition", required=True, choices=LABELING_CONDITIONS,
                    help="experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects "
@@ -389,7 +404,7 @@ def _sgm_spec(cfg, args):
     collections = {
         "experiment-map": _Source(
             load=lambda a: load_experiment_maps(exp_path, keys),
-            describe=lambda a: f"Experiment MAP {exp_path}  "
+            describe=lambda a: f"Experiment product map_estimate (window MAPs) {exp_path}  "
                                f"[{'OK' if exp_path.exists() else 'MISSING'}]"),
     }
     # The plane figure's two parameters are a genuine per-workflow difference: each workflow has a
@@ -399,16 +414,18 @@ def _sgm_spec(cfg, args):
     if cfg.tag == "detector":
         xi, yi = keys.index("mu_r"), keys.index("mu_pc")
         plane_caption = (
-            "PSF width versus brightness. The collection members (grey) with the SGM (gold star, a "
-            "real sample) and the per-dimension vector of medians (magenta X). These two imaging "
+            "PSF width versus brightness. The collection members -- per-window MAP candidates -- (grey) "
+            "with the SGM (gold star, a realized member) and the per-dimension vector of medians "
+            "(magenta X). These two imaging "
             "parameters are physically coupled -- a brighter spot is also a wider one -- so a "
             "composite built from each dimension independently can sit off the ridge the real "
             "configurations occupy.")
     else:
         xi, yi = keys.index("ratio_dimer_monomer_initial"), keys.index("rate_dissociation")
         plane_caption = (
-            "Initial dimer-to-monomer ratio versus dissociation rate. The collection members (grey) with "
-            "the SGM (gold star, a real sample) and the per-dimension vector of medians (magenta "
+            "Initial dimer-to-monomer ratio versus dissociation rate. The collection members -- per-window "
+            "MAP candidates -- (grey) with the SGM (gold star, a realized member) and the per-dimension "
+            "vector of medians (magenta "
             "X). These two are the coupled pair at the center of the biological question -- how "
             "much of the receptor population is dimeric at the window start and how fast those "
             "dimers dissociate (association is a per-condition constant, not inferred) -- and they "
@@ -428,5 +445,9 @@ def _sgm_spec(cfg, args):
         report_stem="Experiment_Sample_Geometric_Median",
         stage="Experiment_Sample_Geometric_Median",
         collections=collections, plane=plane,
-        extra_stats=(("Experiment MAP source", str(exp_path)),),
+        extra_stats=(("population", "SGM of window MAPs: the per-window MAP candidates (map_estimate) "
+                                    "of the Experiment product, one vector per analyzed window -- not "
+                                    "posterior draws; distance in physical coordinates normalized by the "
+                                    "physical prior range"),
+                     ("Experiment product source (map_estimate)", str(exp_path))),
     )

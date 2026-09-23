@@ -86,11 +86,9 @@ Arguments:
 - `--cells` — comma-separated explicit cell indices (default: discover every matching
   recording on disk).
 - `--max-cells` — cap on cells per kind (`0` = all; useful for quick checks).
-- `--summary` — which views to render: `map` (View A: the per-condition distribution of
-  MAP-point estimates; default), `posterior` (View B: each chunk's posterior median ±
-  IQR per condition), or `both`. View B draws `--posterior-samples` per chunk.
-- `--posterior-samples` — samples per chunk used to summarize the posterior in View B
-  (default: the evaluation-config value).
+- `--posterior-samples` — draws per chunk summarized by the quantiles, the marginal median
+  and the SGM (default: the evaluation-config value). Every run computes and stores all
+  three point estimates; the former `--summary` option is retired and rejected.
 - `--aggregation` — the report's distribution view: `pooled` (every (cell, chunk)
   estimate is one sample; mixes temporal and biological variation; default) or
   `cell-median` (one sample per cell, the median over its chunks; biological spread
@@ -123,8 +121,11 @@ Inputs:
 - Real recordings under
   `<data_bank>/Experiment/SPT_Data_CD86_CTLA-4_CONTROLS_S-BIAD1369/`, named
   `Experiment_{CD86|CTLA-4}_Cell_{n}_{span}S_RAW.tif` (16-bit raw video). Each recording
-  is read, converted from 16-bit to the 8-bit range the estimator was trained on, and
-  chunked into model-length windows.
+  is read through the shared reader (`experiment_support.read_cell_chunks`), converted
+  from 16-bit to the 8-bit range the estimator was trained on, and chunked into
+  model-length windows. Supported layout: one 3-D TIFF series with the frame axis first
+  (axes `TYX`, `IYX` or `QYX`); every selected recording is inspected before estimation
+  and any other layout stops the run with the offending files named.
 
 ## Outputs
 
@@ -133,20 +134,21 @@ Written to
 (for example `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_MAP_Experiment_CD86_CTLA-4_CONTROLS/`),
 distinct from the canonical MET Experiment output directory:
 
-- `<dir-name>.npz` — the per-(cell, chunk) arrays: `inferred_log10` (the MAP theta in
-  log10 units), `scores` (MAP log-density at the optimized mode), `kind_index`, `cell`,
-  `chunk`, `kinds`, and, when View B was requested, `posterior_quantiles`
-  (five quantiles [Q05, Q25, Q50, Q75, Q95] per parameter per chunk). This raw array is
-  the reusable record; downstream analyses (including the temporal-dynamics companion)
-  read it.
+- `<dir-name>.npz` — the per-(cell, chunk) arrays: `map_estimate` (the numerical MAP
+  candidate, log10 units), `posterior_quantiles` (five levels per parameter per chunk; the
+  marginal median is the 0.50 level, located from the manifest), `posterior_sgm` (the SGM of
+  the same draws), `scores` (log-density at the returned MAP candidate), `kind_index`,
+  `cell`, `chunk`, `kinds`, and `manifest_json` (the computation contract). This is the
+  reusable record; downstream analyses (including the temporal-dynamics companion) read it
+  through the artifact schema, which refuses the obsolete `inferred_log10` layout.
 - `report.md` — the deliverable: run statistics (conditions, total estimates,
   aggregation view, per-condition estimate counts, mean MAP log-density), and a table of
   inferred theta by condition in log10 units, noting explicitly that real data have no
   ground truth.
 - `figures/` — one `experiment_<key>.png` per learnable parameter (built by
-  `figure_experiment_combined`). View A shows the per-condition distribution of inferred
-  MAP theta; View B, when requested, shows each chunk's posterior median ± IQR per
-  condition. A panel stamped "not computed" marks a view the `--summary` option omitted.
+  `figure_experiment_combined`): the per-condition distribution of the MAP candidate, and
+  each chunk's marginal median ± IQR of its draws per condition with the MAP overlaid. Both
+  panels are always drawn.
 - `progress.log` — a live, timestamped per-chunk progress trace (`tail -f` to monitor);
   under sharding only rank 0 writes it.
 
@@ -166,9 +168,8 @@ The `--aggregation` choice sets what one row of the distribution means: `pooled`
 every (cell, chunk) window as a sample and mixes within-recording temporal variation
 with between-cell biological variation; `cell-median` collapses each cell to its median
 first, so the distribution reflects biological spread across cells with within-cell
-temporal noise averaged out. When View B is enabled, the posterior median ± IQR panels
-show within-chunk posterior uncertainty, complementary to the between-sample spread of
-View A.
+temporal noise averaged out. The median ± IQR panel shows within-chunk spread of the
+draws, complementary to the between-sample spread of the MAP distribution.
 
 For the quantitative diffusion-scale read-out — the count-weighted mobile mixture
 diffusivity D_mix_mobile, its comparison against the measured mobile-fraction

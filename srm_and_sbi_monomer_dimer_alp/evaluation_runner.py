@@ -34,17 +34,25 @@ import torch._dynamo
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
+from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
+    ESTIMATE_DEFINITIONS_VERSION, QUANTILE_LEVELS,
     point_estimates_compared_table,
     band_label,
+    draw_label,
     map_estimate,
+    optimizer_contract,
+    point_estimate_rows,
     posterior_coverage_table,
     posterior_summary,
     recovery_table,
+    short_labels,
     _theta_repr,
     point_estimate_agreement_table, prior_scale,
 )
-from srm_and_sbi_monomer_dimer_alp.experiment_support import assert_complete_shard_set, shard_by_rank
+from srm_and_sbi_monomer_dimer_alp.experiment_support import (
+    RetiredOption, assert_complete_shard_set, merge_validated_shards, save_shard, shard_by_rank)
+from srm_and_sbi_monomer_dimer_alp.provenance import code_provenance, finalize_code_provenance
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow, to_physical
@@ -78,49 +86,40 @@ def _evaluation_spec(cfg: WorkflowConfig) -> _EvaluationSpec:
     )
 
 
-def _shard_array_path(recovery_dir: Path, rank: int, world_size: int) -> Path:
-    """Path of one worker's partial recovery arrays in a multi-GPU sharded run."""
-    return recovery_dir / f"_shard_{rank:02d}_of_{world_size:02d}.npz"
-
-
 def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_path: Path,
-                           scores, inferred_log10, true_log10, post_quantiles,
-                           run_start, post_sgm=None, persist_arrays: bool = True) -> None:
-    """Save the recovery arrays and write the report + figures.
+                           arrays: dict, run_start, persist_arrays: bool = True) -> dict:
+    """Validate a recovery product, persist it and write its report + figures.
 
-    Shared by the single-process recovery path and the ``--merge`` combine step,
-    so both emit an identical report. ``post_quantiles`` may be a list (built by
-    the recovery loop) or an array (concatenated by a merge); both are handled.
-    ``post_sgm`` (optional, ``(N, D)``) is the per-video sample geometric median of the
-    same posterior draws; when present the recovery table is repeated for it and for the
-    1-D posterior median, and the point-estimate agreement table is written.
-    ``draw_spec`` is the workflow's learnable table (the recovery/coverage tables +
-    per-parameter figures iterate it).
+    Shared by the single-process path and the ``--merge`` step so both emit an identical
+    report. ``arrays`` is the complete product (every field of
+    ``artifact_schema.STAGE_FIELDS["evaluation"]`` plus the encoded manifest). It is validated
+    HERE, on entry, through :func:`artifact_schema.validate_product` -- the writer is the
+    boundary, so no caller (and no independent report-generation code) can persist or render an
+    invalid product -- and the manifest the report reads is decoded from the arrays themselves,
+    never supplied separately. The three point estimates are read by their stored fields --
+    ``map_estimate``, the 0.50 level of ``posterior_quantiles`` located through the manifest, and
+    ``posterior_sgm`` -- so the report never re-derives or reinterprets a product with defaults
+    of its own. With ``persist_arrays=False`` (report-only rendering) the arrays on disk are left
+    untouched. Returns the validated manifest.
     """
-    do_map = args.summary in ("map", "both")
-    do_posterior = args.summary in ("posterior", "both")
+    manifest = schema.validate_product(arrays, stage="evaluation",
+                                       source=f"evaluation product {recovery_array_path.name}")
     bin_mode = args.bin_mode
-    posterior_samples = args.posterior_samples or eval_cfg.posterior_samples
     n_bins = args.n_bins or eval_cfg.quantile_bins
     min_count = args.min_count or eval_cfg.quantile_min_count
+    tok = short_labels()                       # {"map": "MAP", "median": "median", "sgm": "SGM"}
+    qi = schema.median_level_index(manifest)
+    scores = np.asarray(arrays["scores"], dtype=float)
+    map_est = np.asarray(arrays["map_estimate"], dtype=float)
+    true_log10 = np.asarray(arrays["true_log10"], dtype=float)
+    post_q = np.asarray(arrays["posterior_quantiles"], dtype=float)
+    median = post_q[:, :, qi]
+    sgm = np.asarray(arrays["posterior_sgm"], dtype=float)
+    n_samples = map_est.shape[0]
+    estimates = {tok["map"]: map_est, tok["median"]: median, tok["sgm"]: sgm}
 
-    scores = np.asarray(scores)
-    inferred_log10 = np.asarray(inferred_log10)
-    true_log10 = np.asarray(true_log10)
-    n_samples = inferred_log10.shape[0]
-    post_arr = np.asarray(post_quantiles)
-    post_q = post_arr if (do_posterior and post_arr.size > 0) else None
-    sgm_arr = np.asarray(post_sgm if post_sgm is not None else [])
-    sgm = sgm_arr if (post_q is not None and sgm_arr.size > 0) else None
-
-    # ---- Save the recovery arrays ----------------------------------------
-    save_arrays = dict(true_log10=true_log10, inferred_log10=inferred_log10, scores=scores)
-    if post_q is not None:
-        save_arrays["posterior_quantiles"] = post_q   # [Q05,Q25,Q50,Q75,Q95]
-    if sgm is not None:
-        save_arrays["posterior_sgm"] = sgm            # (N, D) sample geometric median
     if persist_arrays:
-        np.savez_compressed(str(recovery_array_path), **save_arrays)
+        np.savez_compressed(str(recovery_array_path), **arrays)
         print(f"\nRecovery arrays saved to {recovery_array_path}")
     else:
         # Report-only rendering from an existing product: the arrays on disk are the record and
@@ -132,19 +131,29 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
     guide_tight = eval_cfg.error_guide_tight        # 0.15 ~= log10(sqrt(2)): within a factor of ~1.41
     reporter.check("eval_set_nonempty", n_samples > 0,
                    f"{n_samples} EVAL samples recovered",
-                   note="the held-out EVAL namespace yielded at least one "
-                        "MAP-recovery sample.")
+                   note="the held-out EVAL namespace yielded at least one recovered video.")
+    reporter.check("three_point_estimates_present", True,
+                   "map_estimate, posterior_quantiles (median at level 0.50) and posterior_sgm "
+                   "stored for every observation",
+                   note="the product contract: no estimate is reported without the other two.")
     reporter.check_no_nan_inf("true_log10", true_log10)
     reporter.stat("eval_tasks", args.eval_tasks)
     reporter.stat("eval_samples", n_samples,
                   note="number of held-out videos whose parameters were recovered.")
+    reporter.stat("artifact_schema", f"v{manifest['artifact_schema_version']} / estimate "
+                  f"definitions v{manifest['estimate_definitions_version']}",
+                  note="the stored computation contract; the manifest inside the .npz records the "
+                       "optimizer settings, draw count, quantile levels, SGM scaling, code and "
+                       "checkpoint identity this product was made under.")
+    reporter.stat("summary_draws", manifest["n_summary_draws"],
+                  note=f"{manifest['draw_label']}s per video that the median and the SGM summarize "
+                       f"(pool mode {manifest['pool_mode']}).")
     reporter.stat("mean_log_prob", float(np.mean(scores)),
-                  note="mean MAP log-density at the optimized mode -- the objective "
-                       "the seed-then-optimize step maximizes (larger = sharper "
-                       "peak). Computed in the estimator's z-scored space, so its "
-                       "absolute scale is a relative optimization diagnostic, not a "
-                       "calibration/quality metric; the per-parameter recovery error "
-                       "table below is the quality measure.")
+                  note="mean log-density at the returned MAP candidate -- the objective the "
+                       "seed-then-optimize step maximizes (larger = sharper peak). Computed in "
+                       "the estimator's z-scored space, so its absolute scale is a relative "
+                       "optimization diagnostic, not a calibration/quality metric; the "
+                       "per-parameter recovery tables below are the quality measure.")
     if n_samples < eval_cfg.quantile_min_count:
         reporter.stat(
             "quantile_bands", "sparse",
@@ -152,81 +161,52 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
                  "report shows the scatter and the error table; conditional "
                  "quantile bands populate only with a larger EVAL set.")
 
-    headers, rows = recovery_table(draw_spec, true_log10, inferred_log10,
-                                   guide, guide_tight)
     reporter.table(
-        "MAP recovery (per parameter, log10 units)", headers, rows,
-        note=f"error = inferred - true in log10 units, for the MAP (the optimizer's mode); the "
-             f"posterior-median and SGM tables below repeat every statistic for the other two "
-             f"point estimates, and the three are read together. The two 'within' columns are "
-             f"the fractions of EVAL videos recovered inside each nested tolerance "
-             f"band, stated as the multiplicative range the band permits: "
-             f"{band_label(guide)} is +/-{guide:g} in log10 (a factor of two) and "
-             f"{band_label(guide_tight)} is +/-{guide_tight:g} (a factor of the "
-             f"square root of two). A value inside {band_label(guide_tight)} is "
-             f"also inside {band_label(guide)}. 'outside prior' is the share of MAP "
-             f"estimates beyond the row's prior box; the gradient ascent is unconstrained, "
-             f"so this happens under either pool mode -- --pool-mode bounds the candidate "
-             f"pool, not the optimizer's steps, and such an estimate is a flow optimum rather "
-             f"than a MAP of the prior-supported posterior. 'corr(inf, true)' is the "
-             f"correlation between inferred and "
-             f"true values -- near zero when the estimator's output does not depend on "
-             f"its input, which the error columns alone do not show.")
+        "Point estimates: definitions", ["key", "stored field", "definition"],
+        point_estimate_rows(manifest["pool_mode"], qi),
+        note="one row per point estimate (evaluation.POINT_ESTIMATES); every table and figure "
+             "below uses these three tokens. The three are read together; no one replaces the "
+             "others.")
 
-    # View B: posterior calibration (coverage of truth by credible intervals).
-    if post_q is not None:
-        reporter.stat("posterior_samples", posterior_samples,
-                      note="samples per video used to summarize the posterior (View B).")
-        cov_headers, cov_rows = posterior_coverage_table(draw_spec, true_log10, post_q)
+    band_note = (f"The two 'within' columns are the fractions of EVAL videos recovered inside each "
+                 f"nested tolerance band, stated as the multiplicative range the band permits: "
+                 f"{band_label(guide)} is +/-{guide:g} in log10 (a factor of two) and "
+                 f"{band_label(guide_tight)} is +/-{guide_tight:g} (a factor of the square root of "
+                 f"two). 'outside prior' is the share beyond the row's prior box. 'corr(inf, true)' "
+                 f"is the correlation between inferred and true values -- near zero when the "
+                 f"estimator's output does not depend on its input.")
+    for key, arr in estimates.items():
+        headers, rows = recovery_table(draw_spec, true_log10, arr, guide, guide_tight)
+        extra = ("" if key != tok["map"] else
+                 " The gradient ascent is unconstrained, so an outside-prior value happens under "
+                 "either pool mode -- --pool-mode bounds the candidate pool, not the optimizer's "
+                 "steps -- and is a flow optimum rather than a MAP of the prior-supported posterior.")
         reporter.table(
-            "Posterior calibration (per parameter)", cov_headers, cov_rows,
-            note="View B: fraction of truths inside the per-video posterior credible "
-                 "intervals; a calibrated posterior covers ~50% (IQR) and ~90%.")
-        # The same recovery statistics for the two posterior-derived point estimates, so
-        # the three summaries (MAP, 1-D median, SGM) are judged against truth on the same
-        # videos: a MAP that recovers worse than the medians is climbing density spikes.
-        med_headers, med_rows = recovery_table(draw_spec, true_log10, post_q[:, :, 2],
-                                               guide, guide_tight)
-        reporter.table(
-            "Posterior-median recovery (per parameter, log10 units)", med_headers, med_rows,
-            note="same statistics as the MAP recovery table, for the 1-D posterior median "
-                 "(Q50 of each marginal) as the point estimate.")
-        if sgm is not None:
-            sgm_headers, sgm_rows = recovery_table(draw_spec, true_log10, sgm,
-                                                   guide, guide_tight)
-            reporter.table(
-                "SGM recovery (per parameter, log10 units)", sgm_headers, sgm_rows,
-                note="same statistics for the sample geometric median (SGM): the posterior "
-                     "sample closest, in prior-width-scaled log10 distance, to all other "
-                     "samples -- a joint point estimate that is itself a probable point.")
-        # The three estimates in one row per parameter: the view in which they are read
-        # against each other (the tables above carry each one's full statistics).
-        cmp_headers, cmp_rows = point_estimates_compared_table(
-            draw_spec, true_log10,
-            {"MAP": inferred_log10, "median": post_q[:, :, 2], "SGM": sgm})
-        reporter.table(
-            "Point estimates compared (per parameter, log10 units)", cmp_headers, cmp_rows,
-            note="the three point estimates on the same videos, columns grouped by statistic "
-                 "with the estimates consecutive: correlation with the truth, MAE, signed bias "
-                 "(mean of inferred - true) and the share outside the prior box, each for MAP, "
-                 "median and SGM. 'median' is the 1-D posterior median (Q50 of each marginal); "
-                 "'SGM' the sample geometric median of the posterior cloud. A conclusion about "
-                 "a parameter is drawn from the row as a whole, never from one column; the "
-                 "full statistics of each estimate are in the three recovery tables above.")
-        agr_headers, agr_rows = point_estimate_agreement_table(
-            draw_spec, inferred_log10, post_q, sgm)
-        reporter.table(
-            "Point-estimate agreement (per parameter, log10 units)", agr_headers, agr_rows,
-            note="each 'X vs Y' column is the median over videos of the absolute difference "
-                 "between the two point estimates (log10); 'median' is the 1-D posterior "
-                 "median, 'SGM' the sample geometric median. 'MAP outside 90%' is the share "
-                 "of videos whose MAP falls outside the posterior's central 90% interval. "
-                 "Large gaps with a high outside share establish that the optimized mode "
-                 "and the posterior summaries disagree; whether that is a density spike "
-                 "the samples do not visit, an optimizer that stopped short, or another "
-                 "feature of the posterior's shape is not decided by this table and needs "
-                 "separate checks. The three point estimates are read together, and no "
-                 "single one replaces the others.")
+            f"{key} recovery (per parameter, log10 units)", headers, rows,
+            note=f"error = inferred - true in log10 units for the {key} estimate. {band_note}{extra} "
+                 f"The three recovery tables are read together.")
+
+    cov_headers, cov_rows = posterior_coverage_table(draw_spec, true_log10, post_q)
+    reporter.table(
+        "Posterior calibration (per parameter)", cov_headers, cov_rows,
+        note="fraction of truths inside the per-video credible intervals of the draws; a "
+             "calibrated posterior covers ~50% (IQR) and ~90%.")
+    cmp_headers, cmp_rows = point_estimates_compared_table(draw_spec, true_log10, estimates)
+    reporter.table(
+        "Point estimates compared (per parameter, log10 units)", cmp_headers, cmp_rows,
+        note=f"the three point estimates on the same videos, columns grouped by statistic with the "
+             f"estimates consecutive: correlation with the truth, MAE, signed bias (mean of "
+             f"inferred - true) and the share outside the prior box, each for {tok['map']}, "
+             f"{tok['median']} and {tok['sgm']} (definitions above). A conclusion about a parameter "
+             f"is drawn from the row as a whole, never from one column.")
+    agr_headers, agr_rows = point_estimate_agreement_table(draw_spec, map_est, post_q, sgm)
+    reporter.table(
+        "Point-estimate agreement (per parameter, log10 units)", agr_headers, agr_rows,
+        note="each 'X vs Y' column is the median over videos of the absolute difference between "
+             "the two point estimates (log10). 'MAP outside 90%' is the share of videos whose MAP "
+             "falls outside the central 90% interval of the draws. Large gaps with a high outside "
+             "share establish that the optimized candidate and the draw summaries disagree; the "
+             "cause is not decided by this table and needs separate checks.")
 
     if reporter.dump:
         for i, para in enumerate(draw_spec):
@@ -236,140 +216,96 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
             reporter.save_figure(
                 f"recovery_{key}",
                 figure_recovery_combined(
-                    true_log10[:, i], inferred_log10[:, i],
-                    (post_q[:, i, :] if post_q is not None else None),
+                    true_log10[:, i], map_est[:, i], post_q[:, i, :], qi,
                     prior_range, label, n_bins=n_bins, min_count=min_count,
                     error_guide=guide, error_guide_tight=guide_tight,
                     error_ylim_floor=eval_cfg.error_ylim_floor,
-                    error_ylim_quantile=eval_cfg.error_ylim_quantile, bin_mode=bin_mode,
-                    show_map=do_map, show_posterior=(post_q is not None)),
-                caption=f"{key} ({label}). View A (MAP): panels 1-2 show inferred-vs-true "
-                        f"and residual error of the MAP point estimate, with "
-                        f"{bin_mode}-binned conditional-quantile bands (drawn where a "
-                        f"bin has >= {min_count} points). View B (posterior, panel 3): "
-                        f"true vs. posterior median with IQR error bars (per-video "
-                        f"credible width). A panel stamped 'not computed' marks a view "
-                        f"the --summary option omitted.",
+                    error_ylim_quantile=eval_cfg.error_ylim_quantile, bin_mode=bin_mode),
+                caption=f"{key} ({label}). Panels 1-2: the {tok['map']} against the truth and its "
+                        f"residual error, with {bin_mode}-binned conditional-quantile bands (drawn "
+                        f"where a bin has >= {min_count} points). Panel 3: the truth against the "
+                        f"{tok['median']} with IQR bars (per-video spread of the draws), the "
+                        f"{tok['map']} overlaid.",
             )
-        if post_q is not None:
-            # The point-estimate view: the three estimates against the truth as summaries (binned
-            # medians) over one shared band, the posterior's own IQR -- the same construction as
-            # the window-drift figure of the Experiment stage.
-            for i, para in enumerate(draw_spec):
-                key = para["KEY"]
-                label = para.get("LABEL") or key
-                fig = figure_point_estimates_vs_truth(
-                    true_log10[:, i],
-                    {"MAP": inferred_log10[:, i], "median": post_q[:, i, 2],
-                     "SGM": (sgm[:, i] if sgm is not None else None)},
-                    post_q[:, i, :], para["PRIOR_RANGE"], label, n_bins=n_bins,
-                    min_count=min_count)
-                if fig is not None:
-                    reporter.save_figure(
-                        f"point_estimates_{key}",
-                        fig,
-                        caption=f"{key} ({label}). The three point estimates against the truth, one "
-                                f"panel each (MAP; median = 1-D posterior median; SGM): grey density of "
-                                f"all videos, the estimate's median over equal-count bins of the truth "
-                                f"as the line, and the posterior IQR (median over the bin of the per-video "
-                                f"Q25 and Q75) as the band, drawn once and identical on every panel "
-                                f"because the three come from the same posterior. The estimate axis is "
-                                f"clipped to the prior box widened by 40 %; MAP values beyond it are "
-                                f"counted in the tables, not drawn.")
+            fig = figure_point_estimates_vs_truth(
+                true_log10[:, i], {k: v[:, i] for k, v in estimates.items()},
+                post_q[:, i, :], prior_range, label, n_bins=n_bins, min_count=min_count)
+            if fig is not None:
+                reporter.save_figure(
+                    f"point_estimates_{key}", fig,
+                    caption=f"{key} ({label}). The three point estimates against the truth, one "
+                            f"panel each ({tok['map']}, {tok['median']}, {tok['sgm']}): grey density "
+                            f"of all videos, the estimate's median over equal-count bins of the truth "
+                            f"as the line, and the IQR of the draws (median over the bin of the "
+                            f"per-video Q25 and Q75) as the band, drawn once and identical on every "
+                            f"panel because the three come from the same draws. The estimate axis is "
+                            f"clipped to the prior box widened by 40 %; values beyond it are counted "
+                            f"in the tables, not drawn.")
 
     reporter.summary()
     reporter.write_report()
-
     print(f"\nTotal elapsed: {time.time() - run_start:.1f}s")
+    return manifest
 
 
-def _save_shard(reporter, topo, recovery_dir: Path,
-                scores, inferred_log10, true_log10, post_quantiles, run_start,
-                post_sgm=None) -> None:
-    """Write this worker's partial recovery arrays (multi-GPU sharded run).
-
-    The report is produced later by the ``--merge`` step, once every shard
-    exists; this function does no report generation.
-    """
-    recovery_dir.mkdir(parents=True, exist_ok=True)
-    if len(scores) == 0:
-        # This worker drew no tasks (launched workers > eval_tasks): write no shard
-        # at all, so --merge simply sees fewer files.
-        print(f"\n[rank {topo.rank}/{topo.world_size}] no tasks assigned -- "
-              f"no shard written.", flush=True)
-        return
-    arrays = dict(
-        scores=np.asarray(scores),
-        inferred_log10=np.asarray(inferred_log10),
-        true_log10=np.asarray(true_log10),
-    )
-    if post_quantiles:
-        arrays["posterior_quantiles"] = np.asarray(post_quantiles)
-    if post_sgm:
-        arrays["posterior_sgm"] = np.asarray(post_sgm)
-    path = _shard_array_path(recovery_dir, topo.rank, topo.world_size)
-    np.savez_compressed(str(path), **arrays)
+def _save_shard(topo, recovery_dir: Path, arrays: dict, run_start) -> None:
+    """Write this worker's validated partial product (multi-GPU sharded run). The report is
+    produced by the ``--merge`` step once every shard exists. A worker that drew no videos
+    still writes a valid zero-observation shard, so the merge's rank-coverage check sees every
+    rank account for itself."""
+    n = int(np.asarray(arrays["scores"]).shape[0])
+    path = save_shard(recovery_dir, topo, arrays, count=n, write_empty=True)
     print(f"\n[rank {topo.rank}/{topo.world_size}] shard saved: {path} "
-          f"({arrays['scores'].shape[0]} videos) in {time.time() - run_start:.1f}s. "
-          f"Run the --merge step once all shards finish.", flush=True)
+          f"({n} videos{'; no videos were assigned to this rank' if n == 0 else ''}) in "
+          f"{time.time() - run_start:.1f}s. Run the --merge step once all shards finish.",
+          flush=True)
 
 
 def _merge_shards(reporter, args, eval_cfg, draw_spec, recovery_dir: Path,
-                  recovery_array_path: Path, run_start) -> None:
-    """Combine all per-shard recovery arrays into the final report (no recovery).
+                  recovery_array_path: Path, run_start, expected_ids) -> None:
+    """Combine every per-shard product into the final report (no recovery).
 
-    Reads every ``_shard_*_of_*.npz`` in the recovery directory, concatenates the
-    arrays (order-independent -- the recovery metrics are aggregates over videos),
-    writes the final report + figures + combined ``.npz`` via
-    :func:`write_recovery_outputs`, then removes the shard files.
+    Every shard is validated, the shard manifests must describe one computation, the merged
+    ``(task_index, sim_index)`` set must equal ``expected_ids`` exactly (no duplicates, no
+    missing, no extra), and rank coverage must be complete. Then the merged product is written
+    through :func:`write_recovery_outputs` and the shard files are removed.
     """
     shard_paths = sorted(recovery_dir.glob("_shard_*_of_*.npz"))
     if not shard_paths:
         raise SystemExit(
             f"--merge: no shard files (_shard_*_of_*.npz) found in {recovery_dir}")
     try:
-        world_size = assert_complete_shard_set(shard_paths, allow_partial=args.allow_partial)
-    except ValueError as exc:
+        world_size = assert_complete_shard_set(shard_paths, partial_option=None)
+        merged, _manifest, n_used = merge_validated_shards(
+            shard_paths, stage="evaluation",
+            concat_keys=["scores", "map_estimate", "true_log10", "posterior_quantiles",
+                         "posterior_sgm", "task_index", "sim_index"],
+            expected_ids=expected_ids)
+    except (ValueError, schema.SchemaError) as exc:
         raise SystemExit(f"--merge: {exc}")
-    reporter.stat("shards_merged", f"{len(shard_paths)}/{world_size}",
-                  note="per-rank shards combined into this report; fewer than world_size means "
-                       "--allow-partial was used and the EVAL coverage is incomplete.")
-    print(f"Merging {len(shard_paths)} shard file(s) from {recovery_dir}", flush=True)
-    scores, inferred, true, quant, sgms = [], [], [], [], []
-    have_quant = True
-    have_sgm = True
-    n_used = 0
-    for shard_path in shard_paths:
-        with np.load(str(shard_path)) as data:
-            if data["scores"].shape[0] == 0:
-                continue   # defensive: a zero-video shard contributes nothing
-            n_used += 1
-            scores.append(data["scores"])
-            inferred.append(data["inferred_log10"])
-            true.append(data["true_log10"])
-            if "posterior_quantiles" in data:
-                quant.append(data["posterior_quantiles"])
-            else:
-                have_quant = False   # a populated shard genuinely computed no View B
-            if "posterior_sgm" in data:
-                sgms.append(data["posterior_sgm"])
-            else:
-                have_sgm = False
-    if not scores:
-        raise SystemExit(
-            f"--merge: every shard in {recovery_dir} was empty (no recovered videos)")
-    scores = np.concatenate(scores, axis=0)
-    inferred = np.concatenate(inferred, axis=0)
-    true = np.concatenate(true, axis=0)
-    post_quantiles = np.concatenate(quant, axis=0) if (have_quant and quant) else np.asarray([])
-    post_sgm = np.concatenate(sgms, axis=0) if (have_sgm and sgms) else None
-    print(f"Merged {scores.shape[0]} videos from {n_used} shard(s).", flush=True)
+    reporter.stat("shards_merged", f"{n_used}/{world_size}",
+                  note="per-rank shards combined into this report; the merge requires every rank "
+                       "and every expected (task, sim) observation, so this is always complete.")
+    print(f"Merged {merged['scores'].shape[0]} videos from {n_used} shard(s).", flush=True)
     write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_path,
-                           scores, inferred, true, post_quantiles, run_start,
-                           post_sgm=post_sgm)
+                           merged, run_start)
     for shard_path in shard_paths:
         shard_path.unlink()
     print(f"Removed {len(shard_paths)} shard file(s).", flush=True)
+
+
+def _expected_observations(paths, args, data_bank_root, timing_label, compress, draw_spec):
+    """The EVAL inventory this run must cover: ``[(task, sim), ...]`` over every EVAL task and
+    every simulation it holds (capped by ``--max-sims``). Needs only the theta sets, so the
+    ``--merge`` step can compute it without a GPU."""
+    per_task_sims = {}
+    for task in range(args.eval_tasks):
+        theta_set = load_theta_set(
+            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"),
+            draw_spec, condition=args.condition)
+        n_sims = theta_set.shape[0]
+        per_task_sims[task] = min(n_sims, args.max_sims) if args.max_sims > 0 else n_sims
+    return [(t, s) for t in range(args.eval_tasks) for s in range(per_task_sims[t])]
 
 
 def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
@@ -415,9 +351,6 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     verbose_deep = args.debug or args.debug_dump
     debug_log = args.debug or args.debug_dump   # write per-step/theta detail to progress.log
 
-    # Summary views (View A = MAP-point figures; View B = posterior-credible figures).
-    do_map = args.summary in ("map", "both")
-    do_posterior = args.summary in ("posterior", "both")
     bin_mode = args.bin_mode
     posterior_samples = args.posterior_samples or eval_cfg.posterior_samples
 
@@ -445,10 +378,10 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  elite_prex_size      : {elite_prex_size}")
     print(f"  numb_steps           : {numb_steps}")
     print(f"  learning_rate        : {lr:.3e}   tolerance: {tolerance:.3e}")
-    print(f"  --summary            : {args.summary}   (View A map={do_map}, View B posterior={do_posterior})")
+    print(f"  point estimates      : map, median, sgm  (all three, always; "
+          f"{draw_label(pool_mode)}s summarized)")
     print(f"  --bin-mode           : {bin_mode}")
-    if do_posterior:
-        print(f"  --posterior-samples  : {posterior_samples}")
+    print(f"  --posterior-samples  : {posterior_samples}")
     progress_path = recovery_dir / "progress.log"
     print("\nOutput destinations:")
     print(f"  reads estimator : {estimator_path}")
@@ -494,8 +427,10 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # --merge: combine the per-shard arrays from a multi-GPU sharded run into the
     # final report, then exit (no recovery work, no GPU, no posterior needed).
     if args.merge:
+        expected = _expected_observations(paths, args, data_bank_root, timing_label, compress,
+                                          spec.draw_spec)
         _merge_shards(reporter, args, eval_cfg, spec.draw_spec, recovery_dir,
-                      recovery_array_path, run_start)
+                      recovery_array_path, run_start, expected)
         return
 
     reporter.check_file("estimator artifact", estimator_path)
@@ -510,6 +445,16 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         # Rebuild the prior on THIS worker's device for bounded rejection sampling.
         posterior.prior = spec.build_prior(device=str(device))
 
+    # ---- Provenance captured at STARTUP: the code as loaded, the checkpoint actually loaded
+    # (its verified weights checksum, not the path re-read later), the invocation identity the
+    # launcher assigned and this rank's execution attempt. The manifest is built from these, and
+    # the implementation records are compared again at write time: a file edited during the run
+    # makes the product fail closed at publication (it is not written).
+    code_at_start = code_provenance()
+    checkpoint_sha256 = posterior.weights_sha256
+    run_ident = schema.run_identity(product_label, distributed=topo.is_distributed)
+    exec_ident = schema.execution_identity()   # this attempt (its Slurm job, or None): recorded, never compared
+
     # ---- Probe the EVAL namespace, then take this worker's VIDEO shard ----
     # Sharding is at video granularity, not task granularity. Splitting whole tasks across
     # ranks leaves them with unequal task counts whenever the worker count does not divide
@@ -520,14 +465,8 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # worker count to within a single video. Each rank still opens each task's store at most
     # once (the pairs stay grouped by task), and zarr reads are lazy, so the finer split
     # costs only a few extra metadata reads.
-    per_task_sims = {}
-    for task in range(args.eval_tasks):
-        theta_set = load_theta_set(
-            paths.theta_set_path(task, data_bank_root, timing_label, compress, "EVAL"),
-            spec.draw_spec, condition=args.condition)
-        n_sims = theta_set.shape[0]
-        per_task_sims[task] = min(n_sims, args.max_sims) if args.max_sims > 0 else n_sims
-    all_videos = [(t, s) for t in range(args.eval_tasks) for s in range(per_task_sims[t])]
+    all_videos = _expected_observations(paths, args, data_bank_root, timing_label, compress,
+                                        spec.draw_spec)
     my_videos = shard_by_rank(all_videos, topo)     # ordered by task, then sim
     my_tasks = sorted({t for t, _ in my_videos})
     total_sims = len(my_videos)
@@ -564,8 +503,9 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     step_log = (lambda m: log_file_only(progress_fh, m)) if debug_log else None
 
-    # ---- MAP estimate over the EVAL namespace ----------------------------
-    scores, inferred_log10, true_log10, post_quantiles, post_sgm = [], [], [], [], []
+    # ---- The three point estimates over the EVAL namespace ---------------
+    scores, map_est, true_log10, post_quantiles, post_sgm = [], [], [], [], []
+    task_index, sim_index = [], []
     sgm_scale = prior_scale(spec.draw_spec)
     shard_note = (f" [shard rank {topo.rank}/{topo.world_size}: {len(my_tasks)} of "
                   f"{args.eval_tasks} tasks]" if topo.is_distributed else "")
@@ -573,7 +513,7 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                  f"START MAP recovery: {len(my_tasks)} EVAL task(s){shard_note}, "
                  f"{total_sims} videos total (pool={theta_prex_size}, "
                  f"elites={elite_prex_size}, steps={numb_steps}; "
-                 f"summary={args.summary}).")
+                 f"estimates=map,median,sgm over {posterior_samples} draws).")
     loop_start = time.time()
     done = 0
     try:
@@ -606,17 +546,19 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 true_log = to_flow(np.asarray(theta_set[sim], dtype=float), spec.draw_spec)
                 scores.append(score)
-                inferred_log10.append(theta_log)
+                map_est.append(theta_log)
                 true_log10.append(true_log)
-                if do_posterior:
-                    # View B: posterior credible summary for this video (median + IQR)
-                    # plus the sample geometric median of the same draws.
-                    summary, sgm_vec = posterior_summary(
-                        posterior, video_chunk, device, vista_device,
-                        posterior_samples, eval_cfg.theta_prex_batch_size,
-                        pool_mode=pool_mode, return_sgm=True, sgm_scale=sgm_scale)
-                    post_quantiles.append(summary)
-                    post_sgm.append(sgm_vec)
+                task_index.append(task)
+                sim_index.append(sim)
+                # The two draw-derived estimates, from ONE draw set per video: the quantile
+                # summary (its 0.50 level is the marginal median) and the SGM of the same draws.
+                summary, sgm_vec = posterior_summary(
+                    posterior, video_chunk, device, vista_device,
+                    posterior_samples, eval_cfg.theta_prex_batch_size,
+                    pool_mode=pool_mode, quantiles=QUANTILE_LEVELS,
+                    return_sgm=True, sgm_scale=sgm_scale)
+                post_quantiles.append(summary)
+                post_sgm.append(sgm_vec)
                 if show:
                     print(f"          original theta [LOG] {_theta_repr(true_log)}",
                           flush=True)
@@ -646,18 +588,55 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         if progress_fh is not None:
             progress_fh.close()
 
-    # ---- Write outputs ---------------------------------------------------
-    # One worker (world_size == 1) writes the final report directly. Multiple
-    # workers each write their partial arrays; the separate ``--merge`` step,
-    # run by the launcher once all shards finish, combines them into the report.
+    # ---- Assemble, validate, write ---------------------------------------
+    # The product is one dict: the three estimates, truth, scores, observation ids and the
+    # manifest. It is validated BEFORE anything is written, so an incomplete or non-finite
+    # product never reaches disk. One worker writes the final report directly; multiple workers
+    # each write a validated shard, and the ``--merge`` step combines them into the report.
+    manifest = schema.build_manifest(
+        stage="evaluation", parameter_keys=spec.parameter_keys,
+        coordinate_transform="parameterization.to_flow (log10 for log rows, linear rows as-is)",
+        pool_mode=pool_mode, draw_label=draw_label(pool_mode), n_summary_draws=posterior_samples,
+        quantile_levels=QUANTILE_LEVELS, sgm_scale=sgm_scale, sgm_coordinates="estimator",
+        optimizer=optimizer_contract(eval_cfg, learning_rate=lr, tolerance=tolerance,
+                                     theta_prex_size=theta_prex_size,
+                                     elite_prex_size=elite_prex_size, numb_steps=numb_steps,
+                                     pool_mode=pool_mode),
+        code=finalize_code_provenance(code_at_start), checkpoint_sha256=checkpoint_sha256,
+        run_identity=run_ident, execution=exec_ident, seed_policy=schema.seed_policy(args.seed),
+        window_geometry=None, condition_labels=None, stored_optional_fields=[],
+        n_observations=len(scores), rank=topo.rank if topo.is_distributed else None,
+        world_size=topo.world_size if topo.is_distributed else None,
+        estimate_definitions_version=ESTIMATE_DEFINITIONS_VERSION)
+    if scores:
+        arrays = dict(
+            scores=np.asarray(scores, dtype=float), map_estimate=np.asarray(map_est, dtype=float),
+            true_log10=np.asarray(true_log10, dtype=float),
+            posterior_quantiles=np.asarray(post_quantiles, dtype=float),
+            posterior_sgm=np.asarray(post_sgm, dtype=float),
+            task_index=np.asarray(task_index, dtype=np.int64),
+            sim_index=np.asarray(sim_index, dtype=np.int64))
+    else:
+        # A rank that drew no videos: correctly shaped (0, D) / (0, D, Q) / (0,) arrays, so the
+        # shard is valid and mergeable (an empty list converted to an array would be (0,)).
+        arrays = schema.empty_product_arrays("evaluation", n_parameters=len(spec.parameter_keys),
+                                             n_levels=len(QUANTILE_LEVELS))
+    arrays[schema.MANIFEST_KEY] = schema.encode_manifest(manifest)
+    # Validated BEFORE anything is written. An empty product is admitted only as a shard of a
+    # sharded run; a single-process run over nothing is an error, not a report.
+    try:
+        schema.validate_product(arrays, stage="evaluation",
+                                source=f"rank {topo.rank} product", allow_empty=topo.is_distributed)
+        if not topo.is_distributed:
+            schema.assert_unique_observations(schema.observation_ids(arrays, "evaluation"),
+                                              source="product", expected=all_videos)
+    except schema.SchemaError as exc:
+        raise SystemExit(f"Evaluation product failed the contract: {exc}")
     if topo.is_distributed:
-        _save_shard(reporter, topo, recovery_dir,
-                    scores, inferred_log10, true_log10, post_quantiles, run_start,
-                    post_sgm=post_sgm)
+        _save_shard(topo, recovery_dir, arrays, run_start)
     else:
         write_recovery_outputs(reporter, args, eval_cfg, spec.draw_spec, recovery_array_path,
-                               scores, inferred_log10, true_log10, post_quantiles,
-                               run_start, post_sgm=post_sgm)
+                               arrays, run_start)
 
 
 def build_evaluation_parser() -> argparse.ArgumentParser:
@@ -685,11 +664,6 @@ def build_evaluation_parser() -> argparse.ArgumentParser:
         help="Cap on simulations recovered per EVAL task (0 = all; useful for "
              "quick checks).",
     )
-    parser.add_argument(
-        "--allow-partial", action="store_true",
-        help="With --merge: combine the shards that exist even when some ranks never saved "
-             "theirs (the report then covers only the present shards and says so). Without "
-             "it an incomplete shard set aborts the merge, naming the missing ranks.")
     parser.add_argument(
         "--merge", action="store_true",
         help="Combine-only mode: read the per-shard recovery .npz files written by "
@@ -725,30 +699,27 @@ def build_evaluation_parser() -> argparse.ArgumentParser:
              f"posteriors that would stall). Default: {eval_cfg.pool_mode}.",
     )
     parser.add_argument(
-        "--summary", choices=("map", "posterior", "both"), default="map",
-        help="Which summary views to render: 'map' (View A: MAP-point recovery; "
-             "default), 'posterior' (View B: posterior credible intervals + "
-             "calibration), or 'both'. View B draws --posterior-samples per video.",
+        "--summary", action=RetiredOption,      # retired in 0.1.16: an explicit error, hidden from --help
     )
     parser.add_argument(
         "--bin-mode", choices=("prior", "quantile"), default="quantile",
-        help="Bin edges for the View A conditional-quantile bands: 'quantile' "
+        help="Bin edges for the MAP conditional-quantile bands: 'quantile' "
              "(equal-count data-quantile bins; default) or 'prior' (equal-width "
              "bins across the prior range).",
     )
     parser.add_argument(
         "--posterior-samples", type=int, default=None,
-        help=f"Samples per video for View B posterior summary "
+        help=f"Draws per video summarized by the quantiles, the median and the SGM "
              f"(default: {eval_cfg.posterior_samples}).",
     )
     parser.add_argument(
         "--n-bins", type=int, default=None,
-        help=f"Number of bins for the View A conditional-quantile bands "
+        help=f"Number of bins for the MAP conditional-quantile bands "
              f"(default: {eval_cfg.quantile_bins}). Lower it for a small smoke set.",
     )
     parser.add_argument(
         "--min-count", type=int, default=None,
-        help=f"Minimum points per bin to draw a View A band "
+        help=f"Minimum points per bin to draw a MAP band "
              f"(default: {eval_cfg.quantile_min_count}). Set to 1 to force bands "
              f"on a minimal smoke set.",
     )

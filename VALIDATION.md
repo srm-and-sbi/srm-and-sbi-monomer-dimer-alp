@@ -809,7 +809,7 @@ never seen, using the two MAP-recovery stages.
 
   ```bash
   python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py \
-      --total-time-seconds 2.0 --eval-tasks 1 --summary both --pool-mode unrestricted
+      --total-time-seconds 2.0 --eval-tasks 1 --pool-mode unrestricted
   ```
 
   Use `--pool-mode unrestricted` for a smoke or check run. The smoke-tested
@@ -828,29 +828,46 @@ never seen, using the two MAP-recovery stages.
 
   ```bash
   python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py \
-      --total-time-seconds 2.0 --summary both --pool-mode unrestricted
+      --total-time-seconds 2.0 --pool-mode unrestricted
   ```
 
-Both stages report two complementary views side by side, because they answer
-different questions: the **MAP point estimate** (the posterior mode) and the
-**posterior credible summary** (median plus interquartile range). A sharp
-posterior at the wrong location and a broad posterior at the right one are
-distinguishable only when both are shown. Each stage writes a self-contained
-report (figures, tables, arrays, and a live, tail-able `progress.log`) under
-`Posit/`.
+Both stages compute and store **three point estimates for every observation**,
+always; nothing selects among them (the former `--summary` option is retired
+and rejected). They are defined once, in `evaluation.POINT_ESTIMATES`, and each
+product records the contract it was made under in a `manifest_json`. That
+manifest is validated in full before a product is written or a report rendered
+(`artifact_schema.validate_product`: every contract entry present, typed and
+consistent; every estimate, score and truth finite; quantiles nondecreasing;
+identifiers integer-valued; optional arrays exactly as declared; shards of one
+computation only), and downstream
+analyses read products only through the schema, with an exact parameter-key
+match. The three estimates:
 
-Within View B, three point estimates are tabulated for every observation: the
-MAP, the 1-D posterior median (Q50 of each marginal) and the sample geometric
-median (SGM; the posterior sample closest, in prior-width-scaled log10 distance,
-to all other samples, so a joint summary that is itself a probable point). A
-point-estimate agreement table reports the median gaps between them and the
-share of observations whose MAP lies outside the posterior's central 90%
-interval. Read a large gap with a high outside share as the optimizer having
-climbed into a density spike the posterior samples do not visit (the flow's
-density is unconstrained outside its training support, which the `unrestricted`
-pool exposes): the medians, not the MAP, are then the point estimate to use.
-Evaluation repeats its recovery table for the median and the SGM, so the three
-summaries are judged against the truth on the same videos.
+- **MAP** (`map_estimate`): the numerical MAP candidate — the highest-scoring
+  point retained by the gradient-ascent optimizer of the flow's log-density,
+  initialized from the observation's candidate draws. The optimization is
+  unconstrained, so prior support and convergence to a mode are not guaranteed;
+  a value outside the prior box is a flow optimum, not a MAP of the
+  prior-supported posterior.
+- **median** (`posterior_quantiles` at the 0.50 level, located from the
+  manifest): the marginal median of the observation's draws, each coordinate
+  independently — a composite that need not be a sampled vector.
+- **SGM** (`posterior_sgm`): the sample geometric median of the same draws —
+  the complete draw minimizing the summed Euclidean distance to all others after
+  dividing each coordinate by its prior width; a realized draw. This is the
+  *posterior-draw SGM*; an SGM of window MAP vectors, or one taken in physical
+  coordinates, is a different quantity and is named as such where it appears.
+
+Under the `bounded` pool the draws are posterior draws; under `unrestricted`
+they are flow draws that may fall outside the prior's support — the manifest
+carries the label. Each stage repeats its recovery (or per-condition) table for
+all three, places them side by side in a "Point estimates compared" table, and
+reports their pairwise agreement together with the share of observations whose
+MAP lies outside the central 90% interval of the draws. A large gap with a high
+outside share establishes that the optimized candidate and the draw summaries
+disagree; the table does not decide why, and a conclusion about a parameter is
+read from all three together. Each stage writes a self-contained report
+(figures, tables, arrays, and a live, tail-able `progress.log`) under `Posit/`.
 
 For a small or undertrained posterior whose probability mass can fall outside
 the prior box, use the `unrestricted` candidate pool (`--pool-mode unrestricted`)

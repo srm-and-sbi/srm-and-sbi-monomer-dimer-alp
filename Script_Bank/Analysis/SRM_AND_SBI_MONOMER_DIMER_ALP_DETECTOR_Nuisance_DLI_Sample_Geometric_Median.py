@@ -55,6 +55,8 @@ import sys
 from datetime import datetime, timezone
 
 import numpy as np
+
+from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 from matplotlib.figure import Figure
 
 from srm_and_sbi_monomer_dimer_alp import detector_nuisance_dli as ndli
@@ -91,11 +93,12 @@ def parse_args(argv):
                         "per acquisition (see --map-source); 'posterior' the posterior-sample pool (all "
                         "draws, the full calibrated mass, density-weighted).")
     p.add_argument("--map-source", choices=("experiment", "window-sgm"), default="experiment",
-                   help="--collection map only: 'experiment' (default) the REAL optimized MAPs -- a "
-                        "MapEstimate pool cache if present, else the Detector Experiment MAP output; "
-                        "errors if neither exists (never a silent stand-in). 'window-sgm' the per-window "
-                        "Sample Geometric Median (the medoid of each window's posterior draws) from the "
-                        "posterior-sample pool -- an explicit samples-derived estimate.")
+                   help="--collection map only: 'experiment' (default) the per-window MAP candidates -- a "
+                        "MapEstimate pool cache if present, else the Detector Experiment product's "
+                        "map_estimate -- so the summary is an SGM of window MAPs; errors if neither exists "
+                        "(never a silent stand-in). 'window-sgm' the per-window Sample Geometric Median "
+                        "(the medoid of each window's posterior draws, physical coordinates) from the "
+                        "posterior-sample pool -- the summary is then an SGM of window posterior SGMs.")
     p.add_argument("--condition", required=True, choices=LABELING_CONDITIONS,
                    help="experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
                         "condition-specific Nuisance_DLI namespace, and the collection is restricted to "
@@ -205,12 +208,13 @@ def _load_map_collection(args, R, range_abs):
                 f"map-estimates (MapEstimate pool cache: {map_cache.name})")
     exp = R["experiment_map_path"]
     if exp.exists():
-        with np.load(str(exp), allow_pickle=False) as d:
-            vecs = np.asarray(d["inferred_log10"], dtype=float)
-            win = {"kind_index": np.asarray(d["kind_index"]), "cell": np.asarray(d["cell"]),
-                   "chunk": np.asarray(d["chunk"]), "kinds": np.asarray(d["kinds"])}
+        arrays, manifest = schema.load_product(exp, stage="experiment")
+        schema.assert_parameter_keys(manifest, det.DETECTOR_PARAMETER_KEYS, source=str(exp))
+        vecs = np.asarray(arrays["map_estimate"], dtype=float)
+        win = {"kind_index": np.asarray(arrays["kind_index"]), "cell": np.asarray(arrays["cell"]),
+               "chunk": np.asarray(arrays["chunk"]), "kinds": np.asarray(arrays["kinds"])}
         return (vecs, det.DETECTOR_PARAMETER_KEYS, win,
-                f"map-estimates (Detector Experiment MAP: {exp.name})")
+                f"window MAPs (Detector Experiment map_estimate: {exp.name})")
     raise FileNotFoundError(
         "--collection map --map-source experiment needs the real optimized MAPs, and neither source "
         f"is present:\n    MapEstimate cache : {map_cache}\n    Experiment MAP    : {exp}\n"
@@ -287,7 +291,7 @@ def _figure_plane(pool_log, results, keys, low, high, xi, yi, rng):
                edgecolors="none", label="pool draws")
     ur = next(r for r in results if r["variant"] == "unrestricted")
     ax.scatter(ur["sgm_abs"][xi], ur["sgm_abs"][yi], marker="*", s=420, c="gold",
-               edgecolors="k", linewidths=1.2, zorder=6, label="SGM (real sample)")
+               edgecolors="k", linewidths=1.2, zorder=6, label="SGM (a realized member)")
     ax.scatter(ur["vom_abs"][xi], ur["vom_abs"][yi], marker="X", s=210, c="magenta",
                edgecolors="k", linewidths=1.2, zorder=6, label="vector of medians")
     for lo_hi in (low, high):
@@ -390,7 +394,9 @@ def _write_report(args, R, pool_log, keys, choice, mode, n_source, low, high, re
         reporter.table(
             f"Sample Geometric Median vs vector of medians — {res['variant']} (n={res['n']}, method={res['method']})",
             ["parameter", "SGM (abs)", "vector-of-medians (abs)", "SGM (log10)", "VoM (log10)"], rows,
-            note="SGM = the median VECTOR (a real pool member, correlations intact); vector-of-medians = "
+            note="SGM = the median VECTOR (a real pool member, so a realizable configuration whose "
+                 "coordinates co-occurred; it avoids the composite, it does not by itself preserve the "
+                 "pool's correlations); vector-of-medians = "
                  "the per-dimension composite, which need not correspond to any acquisition. "
                  f"SGM in-box: {res['sgm_in_box']}; vector-of-medians in-box: {res['vom_in_box']}.")
 

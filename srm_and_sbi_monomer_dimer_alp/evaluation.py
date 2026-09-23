@@ -1,10 +1,13 @@
-"""MAP-recovery evaluation for the inference stage.
+"""Point-estimate machinery for the Evaluation and Experiment stages.
 
-Estimates the maximum-a-posteriori (MAP) parameter vector for each held-out
-EVAL video and compares it against the known ground-truth theta, quantifying
-how well the trained posterior recovers the simulation parameters.
+Every product of those stages carries THREE point estimates for each observation, defined once in
+:data:`POINT_ESTIMATES` below: the numerical MAP candidate (``map_estimate``), the marginal median
+of the observation's draws (the 0.50 level of ``posterior_quantiles``) and the SGM of the same draws
+(``posterior_sgm``). Evaluation compares each against the known ground-truth theta of the held-out
+EVAL videos; Experiment reports each per experimental condition. No one of them is produced or read
+without the other two.
 
-The estimator is a **seed-then-optimize** procedure (one MAP per video):
+The MAP candidate is a **seed-then-optimize** procedure (one per observation):
 
     1. collect_theta_prex  -- draw a pool of candidate theta from the posterior
                               conditioned on the video (respects prior bounds).
@@ -22,9 +25,15 @@ gradient steps use ``posterior.posterior_estimator`` (the flow, which exposes
 ``log_prob`` and tracks gradients but does not enforce bounds).
 
 Module contents:
-    map_estimate(...)         -- full seed-then-optimize MAP for one video.
-    recovery_stats(...)       -- per-parameter recovery error statistics.
+    POINT_ESTIMATES, QUANTILE_LEVELS, draw_label(...), point_estimate_rows(...), optimizer_contract(...)
+                              -- the three estimates' definitions and the recorded contract.
+    map_estimate(...)         -- full seed-then-optimize MAP candidate for one observation.
+    posterior_summary(...)    -- the quantiles (median at 0.50) and the SGM of one observation's draws.
+    sample_geometric_median(...) -- the medoid under a per-coordinate scaling.
+    recovery_stats(...)       -- per-parameter recovery error statistics of any point estimate.
     recovery_table(...)       -- (headers, rows) recovery summary for the report.
+    point_estimates_compared_table(...), point_estimate_agreement_table(...)
+                              -- the three estimates side by side.
 """
 
 from __future__ import annotations
@@ -34,11 +43,152 @@ import time
 import numpy as np
 import torch
 
+from .artifact_schema import DRAW_LABELS
 from .inference_support import normalize_video
 from .parameterization import entry_to_physical
 # band_label lives in the temporal-dynamics kernel (pure numpy, no machine profile) so the
 # recovery tolerances render identically wherever they are reported -- one definition, not two.
 from .temporal_dynamics import band_label
+
+
+# =============================================================================
+# The three point estimates: one vocabulary, one definition each
+# =============================================================================
+
+#: The five quantile levels every product stores along the last axis of ``posterior_quantiles``.
+#: The marginal median is the level 0.50; readers locate it by level from the product's manifest
+#: (``artifact_schema.median_level_index``), never by an assumed position.
+QUANTILE_LEVELS = (0.05, 0.25, 0.50, 0.75, 0.95)
+
+#: Bumped when a definition below changes meaning (not wording). Distinct from the package
+#: version and from the artifact schema version.
+ESTIMATE_DEFINITIONS_VERSION = 1
+
+#: The three point estimates, keyed by the stable machine name used in code, table notes,
+#: captions and documentation. Each definition states the operator, the source population, the
+#: observation-level grouping, the coordinate space and the distance scaling (where one applies),
+#: and the stored field that carries it. Configurable quantities -- candidate-pool size, elite
+#: count, step budget, draw count -- are deliberately absent from the text: they live in the
+#: product's manifest, where the values actually used are recorded.
+POINT_ESTIMATES = {
+    "map": {
+        "label": "numerical MAP candidate",
+        "short": "MAP",
+        "stored_field": "map_estimate",
+        "operator": "the highest-scoring point retained by the configured gradient-ascent "
+                    "optimizer of the flow's log-density, initialized from the top-scoring "
+                    "candidate draws",
+        "population": "the flow's conditional density for one observation; the candidate draws "
+                      "that seed the ascent are that observation's own draws",
+        "grouping": "one vector per observation",
+        "coordinates": "estimator (log10) coordinates",
+        "scaling": None,
+        "caveats": "the optimization is unconstrained: prior support and convergence to a mode "
+                   "are not guaranteed, so a value outside the prior box is a flow optimum, not "
+                   "a MAP of the prior-supported posterior",
+    },
+    "median": {
+        "label": "marginal median of draws",
+        "short": "median",
+        "stored_field": "posterior_quantiles",
+        "stored_slice": "the quantile at level 0.50",
+        "operator": "the 0.50 quantile of each coordinate, taken independently per coordinate",
+        "population": "one observation's summary draws (posterior draws under the bounded pool, "
+                      "flow draws under the unrestricted one)",
+        "grouping": "one vector per observation",
+        "coordinates": "estimator (log10) coordinates",
+        "scaling": None,
+        "caveats": "a coordinate-wise composite: the resulting vector is not necessarily a "
+                   "sampled vector and need not be a probable point of the joint",
+    },
+    "sgm": {
+        "label": "SGM of draws",
+        "short": "SGM",
+        "stored_field": "posterior_sgm",
+        "operator": "the sample geometric median: the complete draw minimizing the summed "
+                    "Euclidean distance to all other draws (a medoid)",
+        "population": "the same summary draws as the marginal median, for the same observation",
+        "grouping": "one vector per observation",
+        "coordinates": "estimator (log10) coordinates",
+        "scaling": "each coordinate divided by its prior width before the distance is taken",
+        "caveats": "a realized draw, so its coordinates co-occurred; selecting a member avoids a "
+                   "coordinate-wise composite but does not by itself preserve the "
+                   "distribution's correlations. Distinct from an SGM of MAP vectors, from a "
+                   "pooled SGM of per-window SGMs, and from an SGM in physical coordinates -- "
+                   "each of those names its own population and scaling where it is reported",
+    },
+}
+
+POINT_ESTIMATE_KEYS = tuple(POINT_ESTIMATES)          # ("map", "median", "sgm")
+
+
+def short_labels() -> dict:
+    """Machine key -> the short display token used in table headers, figure legends and dict
+    keys handed to the figure helpers (``{"map": "MAP", "median": "median", "sgm": "SGM"}``).
+    Display tokens never travel back into stored field names."""
+    return {k: v["short"] for k, v in POINT_ESTIMATES.items()}
+
+
+def draw_label(pool_mode: str) -> str:
+    """What the summary draws are under each candidate-pool mode: rejection sampling inside the
+    prior yields posterior draws; direct flow sampling yields flow draws that may lie outside the
+    prior's support. The stored field names are the same in both cases; the manifest and this
+    label carry the meaning. The table is :data:`artifact_schema.DRAW_LABELS`, which the schema
+    validator also enforces (a product's label must be the entry for its pool mode)."""
+    try:
+        return DRAW_LABELS[pool_mode]
+    except KeyError:
+        raise ValueError(f"unknown pool_mode {pool_mode!r} (bounded|unrestricted)") from None
+
+
+def point_estimate_note(pool_mode: str) -> str:
+    """One sentence per estimate for a report note, with the draw label resolved for this run."""
+    d = draw_label(pool_mode)
+    m, q, s = POINT_ESTIMATES["map"], POINT_ESTIMATES["median"], POINT_ESTIMATES["sgm"]
+    return (f"'{m['short']}' = {m['label']}: {m['operator']}, in {m['coordinates']}; {m['caveats']}. "
+            f"'{q['short']}' = {q['label']}: {q['operator']} over the observation's {d}s, in "
+            f"{q['coordinates']}; {q['caveats']}. "
+            f"'{s['short']}' = {s['label']}: {s['operator']} over the same {d}s, {s['scaling']}, in "
+            f"{s['coordinates']}; a realized draw. The three are read together; no one of them "
+            f"replaces the others.")
+
+
+def point_estimate_rows(pool_mode: str, median_index: int) -> list:
+    """Rows of the "Point estimates: definitions" table every report opens with -- built from
+    :data:`POINT_ESTIMATES` directly (key token, stored field, definition), with the draw label
+    resolved for this run and the median's validated level index shown."""
+    d = draw_label(pool_mode)
+    m, q, s = POINT_ESTIMATES["map"], POINT_ESTIMATES["median"], POINT_ESTIMATES["sgm"]
+    cap = lambda text: text[0].upper() + text[1:]
+    return [
+        [m["short"], m["stored_field"],
+         f"{m['label']}: {m['operator']}, in {m['coordinates']}. {cap(m['caveats'])}."],
+        [q["short"], f"{q['stored_field']} ({q['stored_slice']}, index {median_index})",
+         f"{q['label']}: {q['operator']} over the observation's {d}s, in {q['coordinates']}. "
+         f"{cap(q['caveats'])}."],
+        [s["short"], s["stored_field"],
+         f"{s['label']}: {s['operator']} over the same {d}s, {s['scaling']}, in "
+         f"{s['coordinates']}. {cap(s['caveats'])}."],
+    ]
+
+
+def optimizer_contract(eval_cfg, *, learning_rate, tolerance, theta_prex_size, elite_prex_size,
+                       numb_steps, pool_mode) -> dict:
+    """The MAP optimizer settings a product manifest (and the MapEstimate pool cache) records: the
+    values actually used, plus the marker of the bookkeeping correction -- kept distinct from the
+    artifact schema version, since either may change without the other."""
+    return {
+        "pool_mode": str(pool_mode), "theta_prex_size": int(theta_prex_size),
+        "elite_prex_size": int(elite_prex_size), "numb_steps": int(numb_steps),
+        "optimizer_patience": int(eval_cfg.optimizer_patience),
+        "scheduler_patience": int(eval_cfg.scheduler_patience),
+        "learning_rate": float(learning_rate),
+        "learning_rate_minimum": float(eval_cfg.learning_rate_minimum),
+        "learning_rate_factor": float(eval_cfg.learning_rate_factor),
+        "tolerance": float(tolerance),
+        # The returned score is the density AT the returned vector (optimize_elite, 0.1.15).
+        "bookkeeping": "best (score, vector) recorded before optimizer.step",
+    }
 
 
 # =============================================================================
@@ -337,17 +487,19 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
                       train_device: torch.device, vista_device: torch.device,
                       n_samples: int, theta_prex_batch_size: int,
                       pool_mode: str = "bounded",
-                      quantiles=(0.05, 0.25, 0.50, 0.75, 0.95),
+                      quantiles=QUANTILE_LEVELS,
                       return_samples: bool = False,
                       return_sgm: bool = False, sgm_scale=None):
-    """Per-parameter posterior quantile summary for one observation (View B).
+    """Per-parameter quantile summary of one observation's summary draws, and the draw-derived
+    point estimates ``median`` and ``sgm`` of :data:`POINT_ESTIMATES`.
 
-    Complements the MAP point estimate: draws ``n_samples`` from the posterior
-    conditioned on the video (via the same two-mode sampler as the candidate pool
-    -- ``bounded`` rejection sampling or ``unrestricted`` direct flow sampling) and
-    returns the requested quantiles of each parameter, i.e. the posterior credible
-    summary (median + IQR, optionally outer quantiles). This captures the
-    *within-observation* posterior uncertainty that the MAP mode discards.
+    Draws ``n_samples`` conditioned on the video through the same two-mode sampler as the
+    candidate pool (``bounded``: rejection sampling inside the prior, so posterior draws;
+    ``unrestricted``: direct flow sampling, so flow draws that may fall outside the prior's
+    support -- see :func:`draw_label`) and returns the quantiles of each parameter at the
+    ``quantiles`` levels (default :data:`QUANTILE_LEVELS`; the 0.50 level is the marginal
+    median). This captures the *within-observation* spread that a single point estimate
+    discards.
 
     ``return_samples`` additionally hands back the draws the quantiles were computed
     from. Quantiles describe a marginal per parameter and so discard the joint
@@ -569,13 +721,13 @@ def experiment_estimates_compared_table(parameterization, estimates_by_kind: dic
 # Recovery statistics (true vs. inferred, log10 space)
 # =============================================================================
 
-def recovery_stats(true_log10: np.ndarray, inferred_log10: np.ndarray,
+def recovery_stats(true_log10: np.ndarray, estimate_log10: np.ndarray,
                    guide: float = 0.3, guide_tight: float = 0.15) -> list:
     """Per-parameter recovery error statistics (in log10 units).
 
     Args:
         true_log10: ground-truth theta in log10, shape ``(N, D)``.
-        inferred_log10: inferred MAP theta in log10, shape ``(N, D)``.
+        estimate_log10: the point estimate in log10 (any of MAP, median, SGM), shape ``(N, D)``.
         guide: half-width of the "within guide" band (log10 units). The default
             0.3 ~= log10(2), so it counts recoveries within a factor of 2 of the truth.
         guide_tight: half-width of a tighter, nested band. The default 0.15
@@ -589,11 +741,11 @@ def recovery_stats(true_log10: np.ndarray, inferred_log10: np.ndarray,
         (within +/-guide_tight) -- computed over the finite (true, inferred) pairs.
     """
     true_log10 = np.asarray(true_log10, dtype=float)
-    inferred_log10 = np.asarray(inferred_log10, dtype=float)
+    estimate_log10 = np.asarray(estimate_log10, dtype=float)
     stats = []
     for i in range(true_log10.shape[1]):
         x = true_log10[:, i]
-        y = inferred_log10[:, i]
+        y = estimate_log10[:, i]
         mask = np.isfinite(x) & np.isfinite(y)
         x, y = x[mask], y[mask]
         error = y - x
@@ -652,7 +804,7 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
 
 def posterior_coverage_table(parameterization, true_log10: np.ndarray,
                              post_q: np.ndarray) -> tuple:
-    """Posterior calibration summary per parameter (View B, recovery).
+    """Posterior calibration summary per parameter (recovery stage).
 
     ``post_q`` is an ``(N, D, 5)`` array of per-observation posterior quantiles
     ``[Q05, Q25, Q50, Q75, Q95]`` (log10). Reports, per parameter, the fraction
@@ -707,7 +859,7 @@ def correlation_with_truth(true_values, inferred_values, min_pairs: int = 3):
 
 
 def recovery_table(parameterization, true_log10: np.ndarray,
-                   inferred_log10: np.ndarray, guide: float = 0.3,
+                   estimate_log10: np.ndarray, guide: float = 0.3,
                    guide_tight: float = 0.15) -> tuple:
     """Build a ``(headers, rows)`` recovery summary for the diagnostic report.
 
@@ -727,13 +879,13 @@ def recovery_table(parameterization, true_log10: np.ndarray,
     headers = ["parameter", "label", "n", "median err", "MAE", "RMSE",
                "q95|err|", f"within {band_label(guide)}",
                f"within {band_label(guide_tight)}", "outside prior", "corr(inf, true)"]
-    stats = recovery_stats(true_log10, inferred_log10, guide, guide_tight)
+    stats = recovery_stats(true_log10, estimate_log10, guide, guide_tight)
     true_log10 = np.asarray(true_log10, dtype=float)
-    inferred_log10 = np.asarray(inferred_log10, dtype=float)
+    estimate_log10 = np.asarray(estimate_log10, dtype=float)
     rows = []
     for i, (para, st) in enumerate(zip(parameterization, stats)):
-        outside = fraction_outside_prior(para, inferred_log10[:, i]) if inferred_log10.size else float("nan")
-        corr = correlation_with_truth(true_log10[:, i], inferred_log10[:, i]) if inferred_log10.size else None
+        outside = fraction_outside_prior(para, estimate_log10[:, i]) if estimate_log10.size else float("nan")
+        corr = correlation_with_truth(true_log10[:, i], estimate_log10[:, i]) if estimate_log10.size else None
         rows.append([
             para["KEY"],
             para.get("LABEL") or "-",

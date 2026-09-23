@@ -730,7 +730,8 @@ def _fd_draw_stats(draws, count_index, table):
     """Per-window f_B mean and quantiles from the within-draw fraction distribution.
 
     ``draws`` is ``(N, S, D)`` in estimator space. The fraction is formed INSIDE each draw
-    (correlations intact), giving an ``(N, S)`` distribution; returns its mean and the
+    (each draw's coordinates co-occur, so no coordinate-wise composite is formed), giving an
+    ``(N, S)`` distribution; returns its mean and the
     [5, 25, 75, 95] percentile bands -- the f_B credible intervals whose coverage is judged
     against the start-state truth.
     """

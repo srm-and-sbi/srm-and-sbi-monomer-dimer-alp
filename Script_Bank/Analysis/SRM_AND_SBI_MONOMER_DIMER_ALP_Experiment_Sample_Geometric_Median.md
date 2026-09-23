@@ -6,10 +6,20 @@
 
 > **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A`, a log10 row on [−2, 2] (`x_B = 2r / (1 + 2r)` is derived), and gave every learnable row its decided prior range (`PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*). The `sgm_plane` figure is now the log ratio `r` against the dissociation rate `κ_OFF`, both axes logarithmic; where the text below names the initial dimer fraction, read the derived `x_B`. The earlier numbers and figures stand as recorded.
 
+> **Note (2026-09-23).** Release 0.1.16 names this analysis's population explicitly: it is an **SGM of
+> window MAPs** — the Sample Geometric Median over the Experiment product's per-window MAP candidates
+> (`map_estimate`, one vector per analyzed window). It is a different quantity from the posterior-draw
+> SGM the Experiment stage stores for every window (`posterior_sgm`, the medoid of one window's draws in
+> estimator coordinates), and its distance is taken in physical coordinates normalized by the physical
+> prior range, not in estimator coordinates. The input is read through the artifact schema, so a
+> pre-0.1.16 product (`inferred_log10`) is refused rather than reinterpreted. Because the collection is
+> MAP-derived, the numbers quoted below inherit the MAP bookkeeping defect corrected in 0.1.15
+> (`DETECTOR_WORKFLOW.md` §9.8) and stand as the record of that run, not as current values.
+
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Sample_Geometric_Median.py`. It reduces the
-Experiment stage's cloud of MAP estimates on real MET single-particle-tracking recordings to a
-single representative parameter vector, and reports how that vector differs from the naive
-per-dimension summary.
+Experiment product's collection of per-window MAP candidates on real MET single-particle-tracking
+recordings to a single representative parameter vector — an SGM of window MAPs — and reports how that
+vector differs from the naive per-dimension summary.
 
 ## Why not the per-dimension median
 
@@ -24,9 +34,11 @@ multimodal cloud the composite is actively misleading: it lands in the low-densi
 *between* the modes, the one configuration the data most clearly rules out.
 
 The **Sample Geometric Median (SGM)** is the actual collection member minimizing the summed
-normalized Euclidean distance to every other member. Because it is a real member, its joint
-correlations are intact and it is guaranteed realizable: some window of some recording actually
-produced it. Reference: Ramirez Sierra & Sokolowski, *Mach. Learn.: Sci. Technol.* **6**, 015004
+normalized Euclidean distance to every other member. Because it is a real member, it is guaranteed
+realizable — some window of some recording actually produced it — and its coordinates co-occurred.
+That is what selecting a member buys: it avoids the coordinate-wise composite. A single vector does
+not, by itself, preserve the collection's correlations; that structure is reported separately in the
+correlation matrix. Reference: Ramirez Sierra & Sokolowski, *Mach. Learn.: Sci. Technol.* **6**, 015004
 (2025).
 
 This is not a stylistic preference. On the 2 s MET data the two summaries disagree by a factor of
@@ -55,12 +67,16 @@ prior range**. Two deliberate choices:
   ratio near 1 means the composite did not land in a low-density region *for this collection*,
   which happens when the cloud is unimodal and weakly correlated. The SGM's guarantee does not
   depend on that: it is realizable whatever the local density.
-- **Joint correlation matrix** — the structure the SGM preserves and the composite discards.
-  Pooled correlations can be inflated by a between-condition shift (Simpson's paradox), so the
-  report says which case it is computing.
-- **Out-of-prior mass**, per parameter. On real recordings this is a genuine finding, not a
-  defect: the estimates are unconstrained by the box, so mass outside it means the recordings pull
-  that parameter beyond the range the prior anticipated.
+- **Joint correlation matrix** — the collection's cross-parameter structure, which is what makes a
+  coordinate-wise composite unrepresentative. No single summary vector carries it; the SGM's merit
+  is being a realized member. Pooled correlations can be inflated by a between-condition shift
+  (Simpson's paradox), so the report says which case it is computing.
+- **Out-of-prior mass**, per parameter — the share of window MAPs beyond the prior box. It is a
+  measurement, not yet an interpretation: the gradient ascent that produces a MAP candidate is
+  unconstrained, so mass outside the box can come from the recordings pulling a parameter beyond
+  the range the prior anticipated, from an unconstrained flow optimum, or from an optimizer fault
+  (the 0.1.15 defect displaced MAPs by about one learning rate). The table establishes the share;
+  which reading applies needs the posterior-draw estimates of the same windows and separate checks.
 
 Figures: `sgm_plane` (initial dimer fraction versus dissociation rate, with both summary points;
 the fraction on a linear axis, the rate on a log axis),
@@ -96,8 +112,10 @@ across every report this repository produces.
 
 Per-workflow differences are carried by the spec resolver `_sgm_spec` — the parameterization
 module, the alias-qualified paths, the available collection sources, and the two parameters the
-plane figure shows. Biology exposes one collection (`experiment-map`, the real optimized MAPs);
-the detector additionally has Nuisance_DLI sources with no biology counterpart.
+plane figure shows. Biology exposes one collection (`experiment-map`: the per-window MAP candidates
+read from the Experiment product's `map_estimate`, so the summary is an SGM of window MAPs); the
+detector additionally has Nuisance_DLI sources with no biology counterpart. The report states the
+population it summarized in its `population` and `collection` entries.
 
 ## What it found on the 2 s MET data
 

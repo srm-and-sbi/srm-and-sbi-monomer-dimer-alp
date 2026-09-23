@@ -3,8 +3,9 @@
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI_Sample_Geometric_Median.py`. The Detector calibrates
 the imaging model against experimental recordings, producing a cloud of imaging parameter vectors (the six
 photophysics parameters) — realized as the posterior-sample pool, one MAP estimate per acquisition, or the
-built `Nuisance_DLI` artifact. This analysis reduces that cloud to a single representative vector while
-keeping its joint structure intact, and contrasts that vector with the naive per-dimension summary. This
+built `Nuisance_DLI` artifact. This analysis reduces that cloud to a single representative vector — a
+realized member of the chosen collection, which the report names by its population — and contrasts
+that vector with the naive per-dimension summary. This
 note explains what it computes, how to run it, and how to read the result, so it can be used and understood
 without reading the code.
 
@@ -19,7 +20,8 @@ one `sample_geometric_median` implementation, so the vector this analysis report
 choice freezes are identical: use this note to decide, and that build to commit.
 
 It reads only already-computed data — the built `Nuisance_DLI` artifact, the posterior-sample pool
-beside it, or the Detector Experiment MAP output, depending on the `--collection`/`--map-source` chosen
+beside it, or the Detector Experiment product's `map_estimate` (read through the artifact schema, which
+refuses an obsolete product), depending on the `--collection`/`--map-source` chosen
 below — so it needs neither the estimator nor a GPU and runs on any machine. The design of the nuisance
 it summarizes is in `DETECTOR_WORKFLOW.md`, section "Nuisance and artifact design"; the construction of
 the artifact is in the companion `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md` beside this note.
@@ -35,9 +37,10 @@ manifold, a configuration no acquisition ever produced.
 
 The correlation-preserving summary is the **Sample Geometric Median (SGM)**: the actual pool member that
 minimizes the sum of normalized distances to every other member (Ramirez Sierra & Sokolowski 2025; see
-Reference). Because it is an actual member, the returned vector is a real, co-occurring configuration
-with all of its cross-parameter correlations intact — a robust center-of-mass estimate of location,
-distinct from the maximum-a-posteriori point (the mode) and from the marginal medians. The analysis
+Reference). Because it is an actual member, the returned vector is a real, co-occurring configuration:
+selecting a member avoids composing coordinates that never co-occurred, though a single vector does not
+by itself preserve the pool's correlations — a robust center-of-mass estimate of location, distinct from
+the numerical MAP candidate and from the marginal medians. The analysis
 computes it two ways for comparison against the per-dimension vector of medians, and reports which
 coordinates the marginal summary would have misrepresented.
 
@@ -102,12 +105,17 @@ Arguments:
   `map` one estimate per acquisition (see `--map-source`), `posterior` the posterior-sample pool (all
   draws, density-weighted). Both stay on the CPU.
 - `--map-source` (`experiment` default, or `window-sgm`) — for `--collection map`, where the
-  one-estimate-per-acquisition comes from. `experiment` the REAL optimized MAPs — a `MapEstimate` pool
-  cache if present, otherwise the Detector Experiment stage's MAP output — failing loudly if neither
-  exists, never substituting a stand-in silently. `window-sgm` the per-window Sample Geometric Median
-  (the medoid of each window's posterior draws), an explicit samples-derived estimate computed CPU-only
-  from the posterior-sample pool. (This `window-sgm` is the SGM applied per window; it was previously a
-  silent fallback and is now an explicit, named choice.)
+  one-estimate-per-acquisition comes from, and hence which quantity the summary is:
+  - `experiment` — the per-window MAP candidates: a `MapEstimate` pool cache if present (its cache key
+    now includes the MAP computation contract, so a pool built by different code is stale), otherwise
+    the Detector Experiment product's `map_estimate`. The summary is then an **SGM of window MAPs**.
+    It fails loudly if neither source exists, never substituting a stand-in silently.
+  - `window-sgm` — the per-window Sample Geometric Median of each window's posterior draws, computed
+    CPU-only from the posterior-sample pool in physical coordinates normalized by the physical prior
+    range. The summary is then an **SGM of window posterior SGMs**. Note that this per-window SGM is
+    not the `posterior_sgm` the Experiment stage stores for the same window: that one is taken in
+    estimator coordinates scaled by prior width, and the geometric median is not invariant to the
+    change of coordinates, so the two need not select the same draw.
 - `--condition` (`FAB` or `INLB`, required) — the run's experimental condition: it selects the
   condition-specific `Nuisance_DLI` namespace (the condition slot of the runtime grammar) and
   restricts the collection to that condition's rows (`FAB` = MET-FAB, the monomer control;
@@ -152,7 +160,7 @@ out-of-prior mass, which flags whether the calibration is pressing against a pri
 The figures are deterministic. Every figure draws the pool together with both summary vectors so the
 contrast reads directly:
 
-- **PSF width versus brightness** — the pool in the (`mu_r`, `mu_pc`) plane with the SGM (a real sample)
+- **PSF width versus brightness** — the pool in the (`mu_r`, `mu_pc`) plane with the SGM (a realized member)
   and the vector of medians marked, and the prior box drawn. When the pool is multimodal, the marginal
   summary drifts toward the low-density region between modes while the SGM stays on a real configuration.
 - **Pairwise corner** — the pool across all six imaging parameters with the two vectors overplotted.

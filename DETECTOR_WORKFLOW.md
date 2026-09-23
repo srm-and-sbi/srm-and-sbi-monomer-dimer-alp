@@ -621,7 +621,7 @@ One user choice, **`posterior_sample_pool_choice`**, turns the pool into the art
 | `gaussian` | a full-covariance multivariate normal fit to the pool | linear only (via the covariance) |
 | `box` | a per-parameter uniform over pool quantiles | none (independent per dimension) |
 | `box_user` | a per-parameter uniform over user-set ranges | none |
-| `sgm_percentiles` | whole actual vectors at signed distance-to-SGM percentiles (a frozen SGM, or a small pool) | preserved exactly (whole vectors) |
+| `sgm_percentiles` | whole actual vectors at signed distance-to-SGM percentiles -- an SGM of window MAPs under `selection_source = "experiment"`, of window posterior SGMs under `"window-sgm"`; one frozen vector (`[50]`) or a small pool | whole vectors: a multi-member pool keeps its members' co-occurring coordinates; a single frozen vector carries none |
 
 `raw` is the faithful form: resampling whole vectors preserves the joint structure exactly, including the ridges
 the calibration constrains — the ADU floor depends on the product `gamma·kappa_o`, so those two ride a joint
@@ -1558,3 +1558,17 @@ while `window-sgm` summarizes posterior draws.
 **Status.** Fixed in 0.1.15 and validated on the analytic case. The `CAP256` Experiment is the first stage
 re-run (JUPITER 1953816, with the per-window optimizer trace recorded); the previous product is preserved
 beside it as `..._CAP256_MAP_Experiment_RUN_1951236` so the two can be compared on the same 600 windows.
+
+From 0.1.16 every Evaluation and Experiment product carries all three point estimates for every
+observation -- `map_estimate`, the marginal median of the draws (the 0.50 level of `posterior_quantiles`)
+and `posterior_sgm` -- with a `manifest_json` recording the computation contract (optimizer settings,
+draw count and label, quantile levels, SGM scaling, the optional arrays the run stores, seed policy,
+window geometry and condition labels for the experiment stage, code identity at startup and at write,
+the checksum of the checkpoint actually loaded, the launcher's invocation identity, and the execution
+attempt that wrote each product). The manifest is validated in full, not
+merely stored, and the writers validate before they persist or render; every consumer reads a
+product through the schema and requires its parameter keys to match the workflow's exactly. The
+estimate-selection option is retired, the stored MAP field is renamed from `inferred_log10` to
+`map_estimate` with no fallback, and the definitions live in one place (`evaluation.POINT_ESTIMATES`).
+Renaming a field certifies no numerical correction: the products listed above are recomputed, not
+converted.

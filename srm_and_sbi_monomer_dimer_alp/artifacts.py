@@ -121,7 +121,8 @@ def load_estimator(path, device: str = "cpu", *, expected_parameter_keys=None) -
     Reconstructs the uncompiled estimator from the rebuild spec under the current
     torch, loads the compile-stripped weights (`weights_only=True`), verifies the
     checksum, and attaches a fresh device-aware `BoxUniform` prior. No
-    torch-internal or compiled code is deserialized.
+    torch-internal or compiled code is deserialized. The returned posterior carries
+    ``weights_sha256``, the checksum of the weights it was built from.
 
     If ``expected_parameter_keys`` is given, the artifact's stored parameter schema
     is checked first (`assert_schema_compatible`) and a mismatch raises before any
@@ -150,7 +151,12 @@ def load_estimator(path, device: str = "cpu", *, expected_parameter_keys=None) -
         high=torch.tensor(data["prior_high"], dtype=torch.float32),
         device=device,
     )
-    return DirectPosterior(estimator, prior)
+    posterior = DirectPosterior(estimator, prior)
+    # The checksum of the weights ACTUALLY loaded (verified above against the bytes), attached so a
+    # stage can record the checkpoint it ran with at startup instead of re-reading the path later
+    # (a path may be replaced while a job runs; the loaded weights cannot).
+    posterior.weights_sha256 = manifest["weights_sha256"]
+    return posterior
 
 
 def load_estimator_manifest(path) -> dict:
@@ -204,3 +210,10 @@ def assert_schema_compatible(manifest_or_path, *, expected_parameter_keys) -> No
             f"  expected ({len(expected)}): {expected}\n"
             "Regenerate and retrain under the current schema."
         )
+
+
+def estimator_weights_sha256(path) -> str:
+    """The weights checksum an estimator artifact records in its manifest, read without rebuilding
+    the flow. This is the checkpoint identity an Evaluation / Experiment product manifest stores."""
+    with np.load(path, allow_pickle=False) as data:
+        return str(json.loads(str(data["manifest"]))["weights_sha256"])

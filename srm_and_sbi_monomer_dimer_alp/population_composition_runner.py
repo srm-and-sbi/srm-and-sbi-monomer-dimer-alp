@@ -24,7 +24,7 @@ once in :func:`_population_composition_spec` -- so that everything workflow-spec
 place and a future workflow carrying a stoichiometry plugs in without touching the body.
 
 INPUTS, AND WHAT EACH ONE COSTS IF ABSENT.
-  * the Experiment MAP output **with per-window posterior draws** (``--dump-posterior-samples``):
+  * the Experiment product **with per-window posterior draws** (``--dump-posterior-samples``):
     required. The composition must be formed inside each draw, so the stored marginal quantiles
     cannot substitute -- a fraction built from marginals is a different quantity, not a coarser one.
   * the MAP_Recovery output: optional. Without it the experimental half still runs and the report
@@ -40,6 +40,8 @@ import argparse
 from dataclasses import dataclass
 
 import numpy as np
+
+from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 from matplotlib.figure import Figure
 
 from .labeling import LABELING_CONDITIONS
@@ -73,49 +75,49 @@ class CompositionSpec:
 
 # ---- loading -----------------------------------------------------------------------------------
 
-def load_experiment_draws(path, n_params):
+def load_experiment_draws(path, parameter_keys):
     """Per-window posterior draws and their labels from a completed Experiment stage.
 
-    Fails loud in two distinguishable ways, because the remedies differ: a missing output means the
-    stage was never run, while an output without ``posterior_samples_cloud`` means it ran without
-    ``--dump-posterior-samples`` and must be re-run. Substituting the stored quantiles would produce
-    a confident report about a different quantity.
+    The product is read through the artifact schema (:func:`artifact_schema.load_product`), so an
+    obsolete or malformed product is refused rather than read, and its parameter keys must equal
+    this workflow's key for key and in order. Fails loud in two further, distinguishable ways,
+    because the remedies differ: a missing output means the stage was never run, while an output
+    without ``posterior_samples_cloud`` means it ran without ``--dump-posterior-samples`` and must
+    be re-run. Substituting the stored quantiles would produce a confident report about a
+    different quantity.
     """
     if not path.exists():
         raise FileNotFoundError(
             f"the population composition needs the Experiment stage's per-window posterior draws, "
             f"and the Experiment output is absent:\n    {path}\nRun the biology Experiment stage for "
             f"this timing with --dump-posterior-samples first.")
-    with np.load(str(path), allow_pickle=False) as d:
-        if "posterior_samples_cloud" not in d.files:
-            raise SystemExit(
-                f"the Experiment output\n    {path}\nholds no 'posterior_samples_cloud'. The "
-                f"composition is formed inside each posterior draw, so the stored marginal quantiles "
-                f"cannot substitute: a fraction of marginals is a different quantity, not a coarser "
-                f"one. Re-run the Experiment stage with --dump-posterior-samples "
-                f"(--summary posterior|both).")
-        cloud = np.asarray(d["posterior_samples_cloud"], dtype=float)
-        labels = dict(kind_index=d["kind_index"].astype(int), cell=d["cell"].astype(int),
-                      chunk=d["chunk"].astype(int), kinds=[str(k) for k in d["kinds"]])
-    if cloud.shape[-1] != n_params:
-        raise ValueError(f"Experiment draws carry {cloud.shape[-1]} parameters but this workflow has "
-                         f"{n_params}.")
+    arrays, manifest = schema.load_product(path, stage="experiment")
+    schema.assert_parameter_keys(manifest, parameter_keys, source=str(path))
+    if "posterior_samples_cloud" not in arrays:
+        raise SystemExit(
+            f"the Experiment output\n    {path}\nholds no 'posterior_samples_cloud'. The "
+            f"composition is formed inside each posterior draw, so the stored marginal quantiles "
+            f"cannot substitute: a fraction of marginals is a different quantity, not a coarser "
+            f"one. Re-run the Experiment stage with --dump-posterior-samples.")
+    cloud = np.asarray(arrays["posterior_samples_cloud"], dtype=float)
+    labels = dict(kind_index=arrays["kind_index"].astype(int), cell=arrays["cell"].astype(int),
+                  chunk=arrays["chunk"].astype(int), kinds=[str(k) for k in arrays["kinds"]])
     return cloud, labels
 
 
-def load_recovery(path, n_params):
-    """Held-out truth and MAP estimates for the synthetic validation half, or ``None`` if absent."""
+def load_recovery(path, parameter_keys):
+    """Held-out truth and the MAP estimate for the synthetic validation half, or ``None`` if the
+    Recovery product is absent. The product is validated against the artifact schema (an
+    obsolete ``inferred_log10`` product is refused, not silently read) and its parameter keys
+    must equal this workflow's exactly. This arm is MAP-based by design; extending it to the
+    marginal median and the SGM is a separate task."""
     if not path.exists():
         return None
-    with np.load(str(path), allow_pickle=False) as d:
-        if "true_log10" not in d.files or "inferred_log10" not in d.files:
-            return None
-        true_log10 = np.asarray(d["true_log10"], dtype=float)
-        inferred_log10 = np.asarray(d["inferred_log10"], dtype=float)
-    if true_log10.shape[1] != n_params:
-        raise ValueError(f"MAP_Recovery carries {true_log10.shape[1]} parameters but this workflow "
-                         f"has {n_params}.")
-    return true_log10, inferred_log10
+    arrays, manifest = schema.load_product(path, stage="evaluation")
+    schema.assert_parameter_keys(manifest, parameter_keys, source=str(path))
+    true_log10 = np.asarray(arrays["true_log10"], dtype=float)
+    map_estimate = np.asarray(arrays["map_estimate"], dtype=float)
+    return true_log10, map_estimate
 
 
 # ---- figures (object API; each returns a Figure, never saves) -----------------------------------
@@ -528,7 +530,7 @@ def run_population_composition(cfg, args):
         return 0
 
     rng = np.random.default_rng(args.seed)
-    cloud, labels = load_experiment_draws(spec.experiment_npz, len(spec.parameter_keys))
+    cloud, labels = load_experiment_draws(spec.experiment_npz, spec.parameter_keys)
     kinds = labels["kinds"]
     n_kinds = len(kinds)
 
@@ -569,14 +571,14 @@ def run_population_composition(cfg, args):
     contrast = pc.condition_contrast(cell_values) if n_kinds >= 2 else []
 
     recovery = None
-    loaded = load_recovery(spec.recovery_npz, len(spec.parameter_keys))
+    loaded = load_recovery(spec.recovery_npz, spec.parameter_keys)
     if loaded is not None:
-        true_log10, inferred_log10 = loaded
-        rows, true_comp, inf_comp = pc.recovery_statistics(true_log10, inferred_log10,
+        true_log10, map_estimate = loaded
+        rows, true_comp, inf_comp = pc.recovery_statistics(true_log10, map_estimate,
                                                            spec.count_index, spec.to_physical)
         recovery = dict(
             rows=rows, true_comp=true_comp, inferred_comp=inf_comp,
-            parts=pc.parts_versus_whole(true_log10, inferred_log10, spec.count_index,
+            parts=pc.parts_versus_whole(true_log10, map_estimate, spec.count_index,
                                         spec.to_physical),
             stratum=pc.recovery_stratum(true_comp, inf_comp, pc.DIMER_INDEX, args.stratum_threshold))
 

@@ -44,6 +44,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
+
+from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 import matplotlib
 matplotlib.use("Agg")            # headless: build and save figures without a display
 import matplotlib.pyplot as plt
@@ -941,27 +943,26 @@ def run_temporal_dynamics(cfg, args):
             f"Experiment array not found: {spec.npz_path}. Run the {cfg.tag} Experiment stage "
             f"for --total-time-seconds {args.total_time_seconds} first.")
 
-    with np.load(str(spec.npz_path), allow_pickle=False) as d:
-        inferred_log10 = np.asarray(d["inferred_log10"], dtype=float)
-        kind_index = d["kind_index"].astype(int)
-        cell = d["cell"].astype(int)
-        chunk = d["chunk"].astype(int)
-        kinds = [str(k) for k in d["kinds"]]
-        quant = (np.asarray(d["posterior_quantiles"], dtype=float)
-                 if "posterior_quantiles" in d.files else None)
-        sgm = (np.asarray(d["posterior_sgm"], dtype=float)
-               if "posterior_sgm" in d.files else None)
-        # Raw per-window draws, present only when the Experiment stage ran with
-        # --dump-posterior-samples. Their absence costs the pooled-density figure and nothing else.
-        cloud = (np.asarray(d["posterior_samples_cloud"], dtype=float)
-                 if "posterior_samples_cloud" in d.files else None)
+    # The product is validated on load: all three point estimates are present by contract, so
+    # none of the views below is conditional on a stored field; an obsolete product is refused.
+    arrays, manifest = schema.load_product(spec.npz_path, stage="experiment")
+    schema.assert_parameter_keys(manifest, spec.keys, source=str(spec.npz_path))   # keys AND order
+    qi = schema.median_level_index(manifest)
+    map_estimate = np.asarray(arrays["map_estimate"], dtype=float)
+    kind_index = arrays["kind_index"].astype(int)
+    cell = arrays["cell"].astype(int)
+    chunk = arrays["chunk"].astype(int)
+    kinds = [str(k) for k in arrays["kinds"]]
+    quant = np.asarray(arrays["posterior_quantiles"], dtype=float)
+    sgm = np.asarray(arrays["posterior_sgm"], dtype=float)
+    # Raw per-window draws, present only when the Experiment stage ran with
+    # --dump-posterior-samples. Their absence costs the pooled-density figure and nothing else.
+    cloud = (np.asarray(arrays["posterior_samples_cloud"], dtype=float)
+             if "posterior_samples_cloud" in arrays else None)
 
-    if inferred_log10.shape[1] != len(spec.keys):
-        raise ValueError(f"Experiment output has {inferred_log10.shape[1]} parameters but the "
-                         f"{cfg.tag} workflow has {len(spec.keys)}: {spec.keys}")
 
     grid, n_cells, n_chunks = tdk.reshape_to_grid(
-        inferred_log10, kind_index, cell, chunk, len(kinds))
+        map_estimate, kind_index, cell, chunk, len(kinds))
     abs_grid = spec.to_physical(grid)
     # A chunk is a WINDOW, not an instant. Edges span the recording's true extent (n_chunks*step,
     # e.g. 0..20 s for ten 2 s windows) and drive the step plots; the drift fit uses window CENTRES,
@@ -985,8 +986,8 @@ def run_temporal_dynamics(cfg, args):
     # Every stored point estimate, read together: MAP always, posterior median and SGM when the
     # Experiment run stored them. One table; one overview figure per condition with the
     # posterior's own per-window bands drawn once for the three lines.
-    est_grids, _, _ = tdk.point_estimate_grids(inferred_log10, kind_index, cell, chunk,
-                                               len(kinds), quant, sgm)
+    est_grids, _, _ = tdk.point_estimate_grids(map_estimate, kind_index, cell, chunk,
+                                               len(kinds), quant, sgm, median_index=qi)
     drift_rows = tdk.window_drift_rows(est_grids, [CONDITION_DISPLAY.get(k, k) for k in kinds],
                                        spec.keys, spec.to_physical, spec.log_rows)
 
@@ -1010,12 +1011,12 @@ def run_temporal_dynamics(cfg, args):
 
     recovery = None
     if spec.recovery_npz.exists():
-        with np.load(str(spec.recovery_npz), allow_pickle=False) as d:
-            if "true_log10" in d.files and "inferred_log10" in d.files:
-                recovery = tdk.recovery_fractions(d["true_log10"], d["inferred_log10"],
-                                                  spec.log_rows)
+        rec_arrays, rec_manifest = schema.load_product(spec.recovery_npz, stage="evaluation")
+        schema.assert_parameter_keys(rec_manifest, spec.keys, source=str(spec.recovery_npz))
+        recovery = tdk.recovery_fractions(rec_arrays["true_log10"], rec_arrays["map_estimate"],
+                                          spec.log_rows)
 
-    print(f"\nLoaded {inferred_log10.shape[0]} estimates: {len(kinds)} conditions x "
+    print(f"\nLoaded {map_estimate.shape[0]} estimates: {len(kinds)} conditions x "
           f"{n_cells} recordings x {n_chunks} windows.")
     print(f"  windows            : " + ", ".join(
         f"[{edges[i]:g},{edges[i + 1]:g})" for i in range(n_chunks)) + " s")
@@ -1090,7 +1091,7 @@ def run_temporal_dynamics(cfg, args):
         plt.close(figo)
         print(f"  wrote window_drift_overview_{kind}.png ({', '.join(est_grids)})")
 
-    meta = {"npz_name": spec.npz_path.name, "n_estimates": int(inferred_log10.shape[0]),
+    meta = {"npz_name": spec.npz_path.name, "n_estimates": int(map_estimate.shape[0]),
             "n_cells": n_cells, "n_chunks": n_chunks, "step": step,
             "n_samples_per_window": int(cloud.shape[1]) if cloud is not None else 0,
             "pooled_scale": args.pooled_scale,

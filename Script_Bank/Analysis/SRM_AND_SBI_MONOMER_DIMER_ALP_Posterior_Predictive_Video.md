@@ -40,9 +40,11 @@ says so.
 ## Selecting the MAP vector: `--map-source`
 
 - `chunk` — one specific window's estimate.
-- `cell-sgm` (**default**) — the Sample Geometric Median over that cell's chunk estimates: an actual
-  chunk's vector, so its parameter correlations are intact and the render corresponds to a
-  configuration the posterior genuinely produced.
+- `cell-sgm` (**default**) — an **SGM of that cell's window MAPs**: the Sample Geometric Median over
+  the cell's per-window MAP candidates, so the render uses an actual window's vector whose
+  coordinates co-occurred (it avoids composing coordinates, it does not preserve the collection's
+  correlations). It is a different quantity from the posterior-draw SGM the Experiment product
+  stores per window (`posterior_sgm`).
 - `cell-median` — the per-dimension median. Faster to explain, but it composes coordinates that need
   never have co-occurred, and for a *render* that matters: the simulator is then asked to realize a
   combination no chunk supported. Retained as an option; not the default.
@@ -53,8 +55,10 @@ is kept out of the stage dispatcher.
 
 ## What it does
 
-Each workflow's Experiment stage estimates its inferred parameter block for each experimental
-recording by MAP, keyed by `(kind, cell, chunk)`. This script takes one such estimate, renders a
+Each workflow's Experiment stage stores three point estimates of its inferred parameter block for
+each experimental window, keyed by `(kind, cell, chunk)`; this script renders from the MAP candidate
+(`map_estimate`, read through the artifact schema, which refuses an obsolete product). It takes one
+such estimate, renders a
 synthetic recording under it — with the other block held fixed or drawn as the table above
 specifies — at the experimental recording's own length, and places the two side by side. A close
 match is evidence that the estimated model reproduces how the experimental recording looks; a poor
@@ -85,8 +89,8 @@ Arguments:
 - `--chunk` — selects one MAP entry for `(kind, cell)`; required only for
   `--map-source chunk`.
 - `--map-source` — `chunk` (one specific window's MAP, at the selected `(kind, cell, chunk)`),
-  `cell-sgm` (the **default**; the Sample Geometric Median over that cell's chunk MAPs — a real
-  chunk's estimate with its correlations intact), or `cell-median` (the per-dimension median
+  `cell-sgm` (the **default**; an SGM of that cell's window MAPs — a real window's `map_estimate`
+  whose coordinates co-occurred), or `cell-median` (the per-dimension median
   over that cell's chunk MAPs). `--chunk` is ignored in both cell modes. See *Selecting the MAP
   vector* above.
 - `--experiment-span-seconds` — recording length used only to locate the `.tif` (default

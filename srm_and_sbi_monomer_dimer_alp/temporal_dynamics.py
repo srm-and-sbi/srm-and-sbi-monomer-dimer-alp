@@ -452,21 +452,22 @@ def within_window_interval(quant_grid_flow):
 POINT_ESTIMATE_ORDER = ("MAP", "posterior median", "SGM")
 
 
-def point_estimate_grids(inferred_log10, kind_index, cell, chunk, n_kinds,
-                         post_quantiles=None, post_sgm=None):
-    """Dense ``(kind, cell, chunk, D)`` grids for every point estimate a run stored.
+def point_estimate_grids(map_estimate, kind_index, cell, chunk, n_kinds,
+                         post_quantiles, post_sgm, *, median_index):
+    """Dense ``(kind, cell, chunk, D)`` grids for the three point estimates of a product.
 
-    The MAP is always present. The posterior median is the stored 50 % quantile
-    (``post_quantiles[:, :, 2]``) and the SGM is ``post_sgm``; each is included only when the
-    run stored it, so a report never invents a view. Returns ``(grids, n_cells, n_chunks)`` with
-    ``grids`` an ordered dict in the order MAP, posterior median, SGM.
+    All three are required: ``map_estimate``; the marginal median, the ``median_index`` level
+    of ``post_quantiles`` (located from the product manifest, never assumed); and ``post_sgm``.
+    Returns ``(grids, n_cells, n_chunks)`` with ``grids`` an ordered dict keyed by the display
+    tokens MAP, posterior median, SGM.
     """
     grids = {}
-    g, n_cells, n_chunks = reshape_to_grid(inferred_log10, kind_index, cell, chunk, n_kinds)
+    g, n_cells, n_chunks = reshape_to_grid(map_estimate, kind_index, cell, chunk, n_kinds)
     grids["MAP"] = g
-    q = None if post_quantiles is None else np.asarray(post_quantiles, dtype=float)
-    if q is not None and q.size:
-        grids["posterior median"] = reshape_to_grid(q[:, :, 2], kind_index, cell, chunk, n_kinds)[0]
+    q = np.asarray(post_quantiles, dtype=float)
+    if q.size:
+        grids["posterior median"] = reshape_to_grid(q[:, :, median_index], kind_index, cell,
+                                                    chunk, n_kinds)[0]
     s = None if post_sgm is None else np.asarray(post_sgm, dtype=float)
     if s is not None and s.size:
         grids["SGM"] = reshape_to_grid(s, kind_index, cell, chunk, n_kinds)[0]

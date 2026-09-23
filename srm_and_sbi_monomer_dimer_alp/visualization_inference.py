@@ -142,15 +142,9 @@ def _overlay_quantile_bands(ax, centers, q05, q25, q50, q75, q95):
     return True
 
 
-def _draw_placeholder(ax, text):
-    """Stamp a panel that is intentionally not presented with a centered message."""
-    ax.text(0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center",
-            fontsize=10, color="0.4", wrap=True)
-    ax.set_xticks([])
-    ax.set_yticks([])
 
 
-def _draw_recovery_axis(ax, true_log10, inferred_log10, prior_range=None,
+def _draw_recovery_axis(ax, true_log10, map_estimate, prior_range=None,
                         n_bins=20, min_count=50, bin_mode="quantile"):
     """Draw the recovery scatter (true vs. inferred, log10) + bands on ``ax``.
 
@@ -159,7 +153,7 @@ def _draw_recovery_axis(ax, true_log10, inferred_log10, prior_range=None,
     ``bin_mode`` selects data-quantile vs prior-range bin edges.
     """
     x = np.asarray(true_log10, dtype=float).ravel()
-    y = np.asarray(inferred_log10, dtype=float).ravel()
+    y = np.asarray(map_estimate, dtype=float).ravel()
     mask = np.isfinite(x) & np.isfinite(y)
     x, y = x[mask], y[mask]
     limits = (tuple(prior_range) if prior_range is not None
@@ -180,10 +174,10 @@ def _draw_recovery_axis(ax, true_log10, inferred_log10, prior_range=None,
         ax.text(0.5, 0.02, f"bands sparse (n<{min_count}/bin) — scatter only",
                 transform=ax.transAxes, ha="center", va="bottom", fontsize=8,
                 color="tab:red", alpha=0.8)
-    ax.set_title("View A: recovery (MAP)", fontsize=11)
+    ax.set_title("MAP: inferred against true", fontsize=11)
 
 
-def _draw_error_axis(ax, true_log10, inferred_log10, prior_range=None,
+def _draw_error_axis(ax, true_log10, map_estimate, prior_range=None,
                      n_bins=20, min_count=50, error_guide=0.3,
                      error_guide_tight=0.15, error_ylim_floor=0.5,
                      error_ylim_quantile=0.95, bin_mode="quantile"):
@@ -197,7 +191,7 @@ def _draw_error_axis(ax, true_log10, inferred_log10, prior_range=None,
     error_ylim_quantile))``.
     """
     x = np.asarray(true_log10, dtype=float).ravel()
-    y = np.asarray(inferred_log10, dtype=float).ravel()
+    y = np.asarray(map_estimate, dtype=float).ravel()
     mask = np.isfinite(x) & np.isfinite(y)
     x, y = x[mask], y[mask]
     error = y - x
@@ -226,12 +220,12 @@ def _draw_error_axis(ax, true_log10, inferred_log10, prior_range=None,
         ax.text(0.5, 0.02, f"bands sparse (n<{min_count}/bin) — scatter only",
                 transform=ax.transAxes, ha="center", va="bottom", fontsize=8,
                 color="tab:red", alpha=0.8)
-    ax.set_title("View A: error (MAP)", fontsize=11)
+    ax.set_title("MAP: error (inferred - true)", fontsize=11)
 
 
 def _draw_posterior_recovery_axis(ax, true_log10, map_inferred, post_median,
                                   post_q25, post_q75, prior_range=None):
-    """Draw View B (true vs posterior median +/- IQR, with the MAP overlaid) on ``ax``.
+    """Draw true against the marginal median +/- IQR of the draws, with the MAP overlaid, on ``ax``.
 
     Both estimators are shown so the posterior median is not mistaken for the
     point estimate: blue circles + bars are the posterior median and IQR
@@ -260,21 +254,21 @@ def _draw_posterior_recovery_axis(ax, true_log10, map_inferred, post_median,
     ax.set_xlim(limits)
     ax.set_ylim(limits)
     ax.legend(fontsize=8, frameon=False)
-    ax.set_title("View B: posterior + MAP", fontsize=11)
+    ax.set_title("median +/- IQR of draws, MAP overlaid", fontsize=11)
 
 
-def figure_recovery_combined(true_log10, inferred_log10, post_q,
+def figure_recovery_combined(true_log10, map_estimate, post_q, median_index,
                              prior_range=None, label="", n_bins=20, min_count=50,
                              error_guide=0.3, error_guide_tight=0.15,
                              error_ylim_floor=0.5,
-                             error_ylim_quantile=0.95, bin_mode="quantile",
-                             show_map=True, show_posterior=False):
-    """Combined recovery figure for one parameter: View A (MAP) + View B (posterior).
+                             error_ylim_quantile=0.95, bin_mode="quantile"):
+    """Recovery figure for one parameter, three panels: MAP against truth, MAP error, and the
+    marginal median +/- IQR of the draws against truth with the MAP overlaid.
 
-    A 1x3 row: [View A recovery scatter] [View A error] [View B posterior median
-    +/- IQR]. Views that are not requested are kept as panels and stamped so their
-    absence is explicit. ``post_q`` is a per-observation ``(N, 5)`` quantile array
-    ``[Q05,Q25,Q50,Q75,Q95]`` (or None when View B is off).
+    ``post_q`` is the per-observation ``(N, Q)`` quantile array; ``median_index`` locates the
+    0.50 level along its last axis (from the product manifest -- never assumed), and the IQR is
+    the two levels adjacent to it. Every panel is always drawn: a product carries all three
+    estimates by contract, so there is no absent view to stamp.
 
     Returns:
         A headless ``matplotlib.figure.Figure``.
@@ -283,30 +277,24 @@ def figure_recovery_combined(true_log10, inferred_log10, post_q,
 
     fig = Figure(figsize=(16, 5.2))
     ax_rec, ax_err, ax_post = (fig.add_subplot(1, 3, k) for k in (1, 2, 3))
-    if show_map:
-        _draw_recovery_axis(ax_rec, true_log10, inferred_log10, prior_range,
-                            n_bins, min_count, bin_mode)
-        _draw_error_axis(ax_err, true_log10, inferred_log10, prior_range, n_bins,
-                         min_count, error_guide=error_guide,
-                         error_guide_tight=error_guide_tight,
-                         error_ylim_floor=error_ylim_floor,
-                         error_ylim_quantile=error_ylim_quantile, bin_mode=bin_mode)
-    else:
-        _draw_placeholder(ax_rec, "View A not computed\n(--summary posterior)")
-        _draw_placeholder(ax_err, "View A not computed\n(--summary posterior)")
-    if show_posterior and post_q is not None:
-        _draw_posterior_recovery_axis(ax_post, true_log10, inferred_log10,
-                                      post_q[:, 2], post_q[:, 1], post_q[:, 3],
-                                      prior_range)
-    else:
-        _draw_placeholder(ax_post, "View B not computed\n(--summary map)")
+    _draw_recovery_axis(ax_rec, true_log10, map_estimate, prior_range,
+                        n_bins, min_count, bin_mode)
+    _draw_error_axis(ax_err, true_log10, map_estimate, prior_range, n_bins,
+                     min_count, error_guide=error_guide,
+                     error_guide_tight=error_guide_tight,
+                     error_ylim_floor=error_ylim_floor,
+                     error_ylim_quantile=error_ylim_quantile, bin_mode=bin_mode)
+    q = np.asarray(post_q, dtype=float)
+    _draw_posterior_recovery_axis(ax_post, true_log10, map_estimate,
+                                  q[:, median_index], q[:, median_index - 1],
+                                  q[:, median_index + 1], prior_range)
     if label:
         fig.suptitle(label, fontsize=13)
     return fig
 
 
 def _draw_experiment_distribution_axis(ax, values_by_kind, prior_range=None, seed=0):
-    """Draw View A (per-condition MAP-point distribution) for one parameter on ``ax``.
+    """Draw the per-condition distribution of the MAP for one parameter on ``ax``.
 
     No ground truth for real data, so this shows the *distribution* of the inferred
     MAP value across all (cell, chunk) estimates -- one box per condition (kind),
@@ -336,11 +324,11 @@ def _draw_experiment_distribution_axis(ax, values_by_kind, prior_range=None, see
     ax.set_xticklabels(kinds)
     ax.set_xlabel("experimental condition")
     ax.set_ylabel(r"inferred [$\log_{10}$]")
-    ax.set_title("View A: MAP", fontsize=11)
+    ax.set_title("MAP: distribution per condition", fontsize=11)
 
 
 def _draw_experiment_posterior_axis(ax, by_kind, prior_range=None, seed=0):
-    """Draw View B (per-condition posterior median +/- IQR, with MAP) for one parameter.
+    """Draw each window's marginal median +/- IQR of the draws, with its MAP, per condition.
 
     Each chunk is drawn as its **posterior median** with **IQR (Q25-Q75)** error
     bars (blue) and its **MAP** (orange cross), jittered within its condition --
@@ -377,17 +365,17 @@ def _draw_experiment_posterior_axis(ax, by_kind, prior_range=None, seed=0):
     ax.set_xlabel("experimental condition")
     ax.set_ylabel(r"inferred [$\log_{10}$]")
     ax.legend(fontsize=8, frameon=False)
-    ax.set_title("View B: posterior + MAP", fontsize=11)
+    ax.set_title("median +/- IQR of draws, MAP overlaid", fontsize=11)
 
 
 def figure_experiment_combined(values_by_kind, by_kind_post, prior_range=None,
-                               label="", seed=0, show_map=True, show_posterior=False):
-    """Combined experiment figure for one parameter: View A (MAP) + View B (posterior).
+                               label="", seed=0):
+    """Experiment figure for one parameter, two panels: the per-condition distribution of the
+    MAP, and each window's marginal median +/- IQR of the draws with its MAP overlaid.
 
-    A 1x2 row: [View A: per-condition MAP-point box] [View B: per-condition
-    posterior median +/- IQR + MAP]. A view that is not requested is kept as a panel
-    and stamped so its absence is explicit. ``values_by_kind`` is ``{kind: 1D MAP
-    log10}``; ``by_kind_post`` is ``{kind: (n,4) [MAP,median,q25,q75]}`` (or None).
+    ``values_by_kind`` is ``{kind: 1D MAP log10}``; ``by_kind_post`` is ``{kind: (n,4)
+    [MAP, median, q25, q75]}``. Both panels are always drawn: a product carries all three
+    estimates by contract.
 
     Returns:
         A headless ``matplotlib.figure.Figure``.
@@ -396,14 +384,8 @@ def figure_experiment_combined(values_by_kind, by_kind_post, prior_range=None,
 
     fig = Figure(figsize=(12, 5.5))
     ax_map, ax_post = fig.add_subplot(1, 2, 1), fig.add_subplot(1, 2, 2)
-    if show_map and values_by_kind is not None:
-        _draw_experiment_distribution_axis(ax_map, values_by_kind, prior_range, seed)
-    else:
-        _draw_placeholder(ax_map, "View A not computed\n(--summary posterior)")
-    if show_posterior and by_kind_post is not None:
-        _draw_experiment_posterior_axis(ax_post, by_kind_post, prior_range, seed)
-    else:
-        _draw_placeholder(ax_post, "View B not computed\n(--summary map)")
+    _draw_experiment_distribution_axis(ax_map, values_by_kind, prior_range, seed)
+    _draw_experiment_posterior_axis(ax_post, by_kind_post, prior_range, seed)
     if label:
         fig.suptitle(label, fontsize=13)
     return fig
@@ -592,6 +574,8 @@ def figure_window_drift(keys, labels, medians_by_estimate, bands=None, prior_ran
         T = next(iter(medians_by_estimate.values())).shape[0]
         x = np.arange(T)
         if bands is not None:
+            # Q axis = artifact_schema.CANONICAL_QUANTILE_LEVELS, validated when the product was
+            # loaded: levels (0, 4) bound the 90 % interval, (1, 3) the 50 % interval.
             b = np.asarray(bands, dtype=float)[:, i, :]
             outer = np.isfinite(b[:, 0]) & np.isfinite(b[:, 4])
             inner = np.isfinite(b[:, 1]) & np.isfinite(b[:, 3])
