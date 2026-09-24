@@ -125,9 +125,10 @@ ELIGIBILITY = {"min_decay_snr": 3.0, "max_se_log10": 0.25}
 # used -- it is unavailable on an experimental recording.
 LAMBDA_RATE_DEFAULT = 10 ** (0.5 * sum(det.DETECTOR_PARAMETERIZATION[det.DETECTOR_FIND["lambda_rate"]]["PRIOR_RANGE"]))
 ACCEPTANCE = {"prob_bleach_mae_dex": 0.10, "acceptance_frames": 1000}
-# Relative noise of the total-fluorescence curve per frame at the MET-FAB emitter density,
-# measured on rendered recordings. Used only to state the information bound beside the result.
-RELATIVE_NOISE = 0.028
+# Relative noise of the total-fluorescence curve per frame at the MET-FAB emitter density, taken
+# from the kernel so this script and the budget utility cannot quote different values for the same
+# quantity. Used only to state the information bound beside the result.
+RELATIVE_NOISE = ib.FIELD_RELATIVE_NOISE_MET_FAB
 SELFTEST_SEED = 20260918
 
 

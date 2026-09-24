@@ -74,6 +74,9 @@ with more recorded beside them.
 
 ### Changed
 
+- `Direct_Fluorescence_Loss` takes the whole-field relative noise from the kernel constant
+  `information_budget.FIELD_RELATIVE_NOISE_MET_FAB` instead of restating its value, closing the drift the
+  review of the budget had flagged; its note no longer describes the acceptance steps as pending.
 - The section headings of the three direct-estimator companion notes no longer carry package versions
   (`Acceptance mechanics`, not `Acceptance mechanics (0.1.13)`): the workspace document rules keep version
   labels out of body text, and this log records when each section arrived. Headings that identify the code

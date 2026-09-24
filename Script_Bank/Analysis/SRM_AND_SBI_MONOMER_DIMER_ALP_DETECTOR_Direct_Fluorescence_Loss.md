@@ -134,9 +134,8 @@ carries production filenames while holding only a couple of videos.
 **Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
 the accuracy step of those rules; §9.6 adds the evidence-adequacy, operational-success, operating-subgroup,
 and uncertainty-coverage requirements and the order in which they are evaluated, and defines the verdicts
-`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. The implementation of those
-steps in this utility is the 0.1.13 work in progress; until it lands, a report from this script states only
-the accuracy step.
+`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. This utility evaluates
+every step through the shared kernel and reports all verdicts side by side.
 
 The report gives the mean absolute log10 error against the prespecified threshold of **0.10
 dex at 1000 frames** (6.7% of the 1.5 dex prior width), together with the bias, the
