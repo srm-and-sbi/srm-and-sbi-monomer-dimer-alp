@@ -5,6 +5,69 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.18 - 2026-09-24
+
+Regenerates the first analyses downstream of the 0.1.17 optimizer and records what the corrected MAP
+shows. Bounds the PSF-integration working memory using 2 s frame blocks; total renderer memory still
+grows with recording length. The one code change leaves every rendered video bit-identical; no stage,
+parameter role, or preprocessing step changes.
+
+### Changed
+
+- **Experiment stage regenerated for the multiple-dye baseline and `CAP256`** (JUPITER jobs 1972300
+  and 1972333, four nodes each, unrestricted pool, 60 MET-FAB recordings in ten windows). All 1,200
+  ascents stopped on patience (median 276 and 378 steps); the products validate under artifact schema 2
+  and estimate definitions 2 with the frozen optimizer settings. The pre-0.1.17 baseline and `CAP256`
+  MAP products on JUPITER were deleted; the `CAP256` originals are kept on the PC beside the new
+  products as `_RUN_<jobid>` copies for now. The regenerated comparison record
+  `..._CAP256_vs_Baseline_Experiment` reads both products through the artifact schema, matches windows
+  on their stored identifiers, totals the stop reasons from the job logs and stores the scripts, the
+  logs and the source checksums beside its statistics and figures.
+- **The renderer integrates the PSF in 2 s frame blocks** (`simulation_dli_support.add_pixel_counts`;
+  the block, `PSF_FRAME_BLOCK`, is the frame count of 2 s at the fixed cadence, 100 frames, and
+  `psf_frame_blocks` gives the layout). The blocks are computational only: trajectories, labeling,
+  flicker and bleaching are generated once for the whole recording and stay continuous across block
+  boundaries; only the PSF accumulation is split. The integration's temporaries scale with pixels ×
+  emitters × frames, so one isolated 20 s render with 900 dyes, about the largest emitter count recorded
+  in the completed 20 s tasks (880), peaked at 7.88 GiB. The 20 s FAB EVAL rendering of 2026-09-22
+  (JUWELS job 14266249, ten tasks per node) ended with 3 of 20 tasks complete (625 of 2,000 videos): the
+  other rendering processes were killed with no Python error while the batch step's sampled `MaxRSS`
+  reached 78.5 and 82.0 GiB of the 91.8 GiB configured per node. `MaxRSS` is the maximum across a step's
+  accounting tasks; it covers a whole node here only because the launcher starts the ten renderers as
+  background children of the batch script, one accounting task. That is consistent with memory
+  exhaustion but does not establish it: Slurm recorded the job as failed, not out of memory, and no log
+  holds an explicit out-of-memory record. Its reaction-diffusion stage had completed. Blocking bounds
+  the integration's working memory at the 2 s size. On one isolated render with 900 dyes the peak falls
+  from 7.88 to 3.50 GiB at 20 s, from 4.16 to 1.98 GiB at 10 s and from 2.30 to 1.44 GiB at 5 s; at 2 s
+  (1.18 GiB) and 1 s (0.81 GiB) the recording is one block and the integration runs in one pass, as
+  before. Render time is unchanged. Total renderer memory still grows with recording length: the
+  full-length intensity, emitter tracks and brightness, the noise model's arrays and the output frames
+  are not blocked. A production task holds more than one render call (it loads trajectories, converts
+  and compresses each video, and keeps the previous video's frames), so ten 20 s tasks per node are
+  expected to fit, pending a full-task memory confirmation on JUWELS from a completed ten-task run and
+  its final accounting. Frames are independent throughout the integration, so the output does not
+  change: `tests/test_render_frame_blocking.py` holds the intensity and the rendered video under a fixed
+  seed to the single-pass computation, bit for bit, at 1, 2, 5, 10 and 20 s, on scenes with monomers,
+  dissociating dimers, zero to three dyes per subunit, absent particles and bleached dyes, and at twelve
+  block sizes from 1 to 4,096 frames. On the PC its 5 tests and the 68 existing tests pass.
+
+### Documentation
+
+- `DETECTOR_WORKFLOW.md` §9.8 — the regenerated Experiment stage and the finding that the remaining MAP
+  behavior follows from the shape of each estimator's learned density and the seed-dependence of the
+  ascent on it: `CAP256`'s density holds two competing joint solutions for bleaching of nearly equal
+  height (0.004 to 0.20 nats apart on the probed windows), between which the ascent's seeds select from
+  window to window while the median and the SGM stay at the prior center of a weakly constrained
+  parameter; its `sigma_r` and `mu_r` densities are skewed, placing the MAP a stable half-IQR below the
+  median; the baseline's ascents converge consistently and its three estimates coincide. A probe on the
+  real checkpoints (six windows, nine independent candidate pools each, density profiles, one ascent
+  seeded in each branch) reproduces every MAP within its region to 0.04 dex, so the instability is not
+  the corrected bookkeeping. The brightness gap to the per-detection reference of §6.7 is qualified as an
+  arithmetic comparison. The §9.7 and §6.11 banners name what is regenerated and what is pending.
+- `VALIDATION.md` §3.4 — step 4 (regenerated analyses) with its status, and the reporting rule extended
+  with the empirical case for reading the three point estimates together.
+- `PROJECT_CONTEXT.md` — one-sentence pointer to that case.
+
 ## 0.1.17 - 2026-09-23
 
 Resolves the MAP optimizer before the analyses downstream of training and testing are regenerated,

@@ -517,7 +517,10 @@ choice between an improved neural estimator and a hybrid.
 > **MAP numbers here are under recomputation (§9.8).** The MAP routine returned coordinates one
 > optimizer step away from the point whose density it reported; the defect is fixed in 0.1.15 and the
 > affected stages are being re-run. The posterior-median and SGM columns, and every sampling-based
-> calibration result, are unaffected.
+> calibration result, are unaffected. The multiple-dye Experiment was regenerated on 2026-09-24: its
+> corrected MAP view lies within 0.07 dex of its posterior-median view on every parameter (§9.8), so the
+> multiple-dye MAP column below and the multiple-dye point-estimate agreement paragraph are superseded;
+> the one-dye Experiment is still to be regenerated.
 
 
 From the two Experiment reports (60 MET-FAB recordings, 600 windows, `--pool-mode unrestricted`); the three
@@ -1501,7 +1504,9 @@ comparison recorded above. Open: repeat training of `capacity256`; the 20 s tier
 > above, and the reading that `capacity256`'s MAP "separates further from the posterior", is
 > provisional until the affected stages are re-run. The calibration comparison, the posterior-median
 > and SGM recovery, and the `prob_photo_bleach` collapse are unaffected: they come from posterior
-> draws and never from that routine.
+> draws and never from that routine. The Experiment stages of both estimators were regenerated on
+> 2026-09-24 (§9.8, record `..._CAP256_vs_Baseline_Experiment`); the Evaluation stages, and with them
+> the MAP rows of the recovery tables above, are pending.
 
 ### 9.8 A defect in the MAP routine, and what it puts under recomputation
 
@@ -1585,3 +1590,78 @@ budget, and retains every strictly better pair; on ten recordings it reaches the
 and its two pools agree to within 0.03 IQR. Products made earlier are refused on read (artifact schema
 version 2, estimate-definitions version 2), and the recomputation listed under Scope follows the freeze of this
 configuration.
+
+**Regenerated Experiment stage (2026-09-24).** The multiple-dye baseline and `CAP256` Experiment stages were
+re-run under 0.1.17 on JUPITER (jobs 1972300 and 1972333, four nodes each, the unrestricted pool, all 60 MET-FAB
+recordings in ten windows), the pre-0.1.17 products having been deleted; the regenerated comparison is the record
+`..._2S_50FPS_CAP256_vs_Baseline_Experiment` on the PC Posit tier, whose README carries the full tables, the
+job logs, the scripts and the probe described below. Every one of the 1,200 ascents stopped on patience, after a
+median 276 steps (baseline) and 378 (`CAP256`); no ascent hit the step budget or a non-finite score. The MAP
+now sits where the density's maximum is: on the baseline the median |MAP − posterior median| is 0.001 to 0.014 dex
+on five parameters and 0.066 dex on `prob_photo_bleach`, all at most 0.17 posterior IQR, and the MAP lies inside
+its own central 50 % interval in every window; the 0.128 dex bands are gone. The two estimators' MAPs now rank the
+recordings alike on `mu_pc`, `sigma_pc` and `lambda_rate` (correlations 0.87 to 0.90 across the 600 matched
+windows, against 0.04 to 0.28 before), exactly as their medians do. The one-dye Experiment and all three
+Evaluation stages are still to be regenerated.
+
+**What the corrected MAP shows, and why the three point estimates are read together.** With the step scale
+resolved, the remaining MAP behavior follows from the shape of each estimator's learned density and from the
+seed-dependence of a numerical ascent on it; it differs between the two estimators and among the parameters.
+Three features stand out, measured on the regenerated products and
+confirmed by a probe on the real checkpoints and two of the real recordings (cells 16 and 32; six windows; six
+independent unrestricted candidate pools and three bounded ones per window; one-dimensional log-density profiles
+through the MAP and through the median vector; one ascent seeded in each bleaching branch).
+
+- *`CAP256`'s bleaching MAP switches between two competing joint-density solutions of nearly equal height.* Its 600 bleaching MAPs
+  separate into 115 windows near −1.80 and 445 near −0.68 (40 between), while the posterior median stays at the
+  prior center (−1.26, IQR 0.69, central 90 % interval spanning 87 % of the prior width) and the SGM agrees with
+  the median to 0.02 dex. Within a recording the MAP's window-to-window standard deviation is 0.28 dex against
+  0.017 for the median (cell 16: MAP −1.80 in windows 0 to 3, −0.69 in windows 4 to 9; median −1.3 throughout).
+  Seeded in either branch, the ascent returns a full-vector optimum in that branch deterministically; the two
+  optima sit at bleaching values of −1.80 and −0.68, differ in the other coordinates by up to 0.08 dex, and their
+  log densities differ by 0.004 to 0.20 nats on the six probed windows. Along the bleaching axis through the MAP
+  a second maximum appears on only two of the six windows, so this is not established as a bimodal bleaching
+  marginal: the competing solutions are joint, and the draws spread nearly uniformly over the prior (33 to 37 %
+  below −1.5, 21 to 23 % above −0.9). The production ascent, seeded by the two best of 1,000 draws, climbs into
+  whichever region holds its seeds and does not always reach the higher of the two: it switched region between
+  independent pools only where the gap was below 0.04 nats (three of six windows) and never where it was
+  0.12 nats or more. Within a region six independent pools agree to 0.04 dex or better (score spread at most
+  0.025 nats), and on the baseline they agree exactly. The switching does not reproduce the previous
+  bookkeeping defect. Repeated ascents find competing high-density solutions; initialization affects which
+  solution is returned, without establishing global convergence, and the production ascent can miss the
+  higher one where the two are close. On these 2 s windows this estimator constrains
+  bleaching weakly, the same reading its synthetic recovery gave (§9.7, correlation 0.16 with the truth,
+  provisional until the Evaluation is regenerated). The switch is not a physical change: a 1.1 dex jump of the
+  MAP between adjacent windows coincides with a change of the median below 0.01 dex.
+- *`CAP256`'s `sigma_r` and `mu_r` MAPs sit a stable distance below their medians.* The offset is −0.152 dex on
+  `sigma_r` (0.53 IQR) and −0.013 dex on `mu_r` (0.39 IQR), of the same sign in all 60 recordings, reproduced to
+  0.001 dex across independent pools, and proportional to each window's IQR (correlation 0.93 to 0.96 between
+  |MAP − median| and the IQR). On the probed windows the log density along `sigma_r` has one maximum near −0.80
+  with a long shoulder toward larger `sigma_r`: the mode of a skewed density lies away from its median. This is a stable feature of the posterior's
+  shape, not a fluctuation, and it is estimator-specific: the baseline's `sigma_r` MAP and median differ by
+  0.009 dex.
+- *The baseline's bleaching estimate moves as a whole.* Its MAP, median and SGM fluctuate equally within a
+  recording (standard deviations of 0.33, 0.32 and 0.31 dex across the ten windows), fall together by about
+  0.5 dex from the first window to the last in 92 % of recordings, and on the six probed windows its ascents
+  converge consistently to one optimum that the MAP and the median share to 0.07 dex. Changing the point
+  estimate would change nothing here: the inferred distribution itself changes with the window, which
+  establishes a changing inferred distribution and not, by itself, a changing physical bleaching rate.
+
+The methodological consequence is the one `VALIDATION.md` §3.4 states as the reporting rule, now with its
+empirical case. A MAP is a single point of the density; where the density has competing high-density regions
+or a long shoulder, that point is an unstable or displaced summary of a distribution whose center the median
+and the SGM report consistently. Their agreement establishes the center, not a measurement: for `CAP256`'s
+bleaching both summarize a broad, nearly prior-like distribution, and a stable median at the prior center with
+an interval spanning most of the prior is the sign of a parameter this estimator constrains weakly. Neither
+estimate alone tells these situations apart; the three together, beside the interval width, do. On the
+regenerated products the estimators agree window by window on the brightness pair and the flicker rate on every
+estimate, disagree on `mu_r`, `sigma_r` and bleaching on every estimate (correlations near zero), and both
+reproduce the within-recording brightness fall and flicker-rate rise on all three estimates. Both place the
+per-dye brightness `mu_pc` at 135 to 139 photons against the per-detection reference of about 386 photons in
+§6.7; a spot can carry several dyes and the two quantities differ in selection as well, so that 0.45 dex gap is
+an arithmetic comparison, not a demonstrated brightness bias. Which estimator is closer to the
+truth on the three disputed parameters is for the regenerated Evaluation on synthetic truth to assess in
+recovery and calibration; it cannot by itself decide which experimental estimate is physically correct. The
+joint structure of the posterior, the parameter-pair dependence within each window's draws that a single point
+cannot carry and that the competing solutions above point to, is the next layer of this reading and is not
+analyzed here.

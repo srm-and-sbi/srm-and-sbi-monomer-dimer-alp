@@ -274,6 +274,27 @@ controller (§5) drives this. Its per-case wall time is 24 h for every 2 s and 5
 `export TIME=12:00:00` in that machine's `hpc_local.env` (the booster partition allows
 nothing else).
 
+Rendering memory per task grows with the recording length. Since 0.1.18 the PSF
+integration runs in 2 s frame blocks, which bounds its working memory; the full-length
+intensity, emitter tracks and brightness, the noise model's arrays and the output
+frames still scale with the frame count. One isolated render with 900 dyes peaks at
+1.18 GiB at 2 s and 3.50 GiB at 20 s, against 7.88 GiB at 20 s before blocking. A
+production task holds more than one render call (trajectory loading, video conversion
+and compression, the previous video's frames), so ten packed 20 s tasks on a JUWELS
+node (91.8 GiB configured) are expected to fit, pending a full-task memory
+confirmation on JUWELS. That confirmation is the completed ten-task run and its final
+accounting, not its first minutes: memory varies with the trajectory, and a sampled
+reading below the limit neither proves headroom nor excludes a peak between samples.
+The reading to use is the batch step's `MaxRSS` in `sacct`, sampled every 30 s. Slurm
+defines `MaxRSS` as the maximum across a step's accounting tasks, so it is a node
+total only because this launcher starts the packed renderers as background children of
+the batch script, one accounting task; the figures here concern this launch layout,
+not any ten-task Slurm job. Before blocking, the ten-per-node 20 s rendering job
+14266249 lost 17 of 20 tasks to killed processes at a sampled batch-step `MaxRSS` of
+78.5 and 82.0 GiB. A bare `Killed` message is consistent with forced termination,
+including OOM. Confirm the cause from Slurm accounting or an explicit OOM diagnostic
+before changing task packing.
+
 **Check (`test`), 1 s smoke — TRAIN 16 / TEST 4 / EVAL 2 tasks, 10 sims/task:**
 
 ```bash

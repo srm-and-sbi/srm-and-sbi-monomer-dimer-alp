@@ -1010,10 +1010,39 @@ freeze follows its review.*
   5.6e-4 nats. The two pools agree to a median 0.0009 IQR (maximum 0.03). The
   effective settings equal the requested ones.
 
+**4. Regenerated analyses.** Every Evaluation and Experiment product of the
+affected estimators, and every analysis reading their MAP arrays, is recomputed
+under the frozen configuration; products made earlier are refused on read.
+
+*Status: the Experiment stage of the multiple-dye baseline and of `CAP256` is
+regenerated (2026-09-24, `DETECTOR_WORKFLOW.md` §9.8); their Evaluation stages,
+the one-dye stages and the derived analyses are pending.* All 1,200 ascents
+stopped on patience; the baseline's MAP lies within 0.07 dex of its posterior
+median on every parameter and inside its own central 50 % interval in every
+window. What remains of the MAP's behavior is the shape of each estimator's
+learned density, which the regenerated products and a probe on the real
+checkpoints make explicit (§9.8): `CAP256`'s learned density has two competing
+joint solutions of nearly equal height for bleaching, near the two ends of the
+prior, and the seed-dependent ascent selects between them from window to window
+while the median and the SGM stay at the prior center; its `sigma_r` and `mu_r`
+densities are skewed, so the MAP sits a stable half-IQR below the median; the
+baseline's ascents converge consistently on the probed windows and its three
+estimates coincide, moving together along a recording. Independent candidate
+pools reproduce every MAP within its region to 0.04 dex: the instability is the
+density's shape together with the ascent's initialization, not the corrected
+bookkeeping.
+
 **Reporting rule.** For each method, distinguish **implementation
 correctness**, **sampling or optimization stability**, and **accuracy against
 synthetic truth**. Close agreement among the point estimates does not establish
-that a parameter is recoverable.
+that a parameter is recoverable. The regenerated Experiment products give the
+empirical case for reading the three estimates together: a MAP is one point of
+the density, displaced by a skewed marginal and switching between competing
+high-density regions, while a median and an SGM that stay at the prior center
+with an interval spanning most of it agree on a center without establishing a
+measurement. Each of these readings needs the other estimates and the interval
+width to be told apart from a well-determined center; no single estimate
+carries it.
 
 ---
 

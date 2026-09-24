@@ -35,7 +35,9 @@ Module contents:
 
     Intensity rendering
         compute_intensity         (top-level pixel-grid intensity assembly)
-        add_pixel_counts          (helper: integrate Gaussian PSF over pixel grid)
+        add_pixel_counts          (helper: integrate Gaussian PSF over pixel grid,
+                                   in consecutive 2 s frame blocks)
+        psf_frame_blocks          (the frame ranges of those blocks)
 
     Brightness photo-physics
         generate_brightness_photons      (stationary continuous per-dye brightness:
@@ -246,6 +248,34 @@ def generate_frames(intensity: np.ndarray,
 # Intensity rendering (Gaussian PSF integration over pixel grid)
 # =============================================================================
 
+# Frames per block of the PSF integration in `add_pixel_counts`: the frame count of a 2 s
+# recording at the fixed cadence (100 frames at 50 frames per second). The integration's
+# temporaries scale with pixels x emitters x frames. Integrating block by block holds them at
+# the size of one 2 s recording whatever the recording length, and a recording of at most one
+# block (a 1 s or 2 s tier) runs in a single pass, the computation those tiers were rendered
+# with. The blocks are computational only: the emitter tracks and brightness they integrate come
+# from one continuous simulation of the whole recording, and only the PSF accumulation is split.
+# Frames are independent throughout the integration, so the block size does not change
+# the result (tests/test_render_frame_blocking.py holds it to the single-pass computation, bit
+# for bit, at 1, 2, 5, 10 and 20 s).
+PSF_FRAME_BLOCK_SECONDS = 2.0
+PSF_FRAME_BLOCK = int(round(PSF_FRAME_BLOCK_SECONDS / PARAMETERS.simulation.timing.frame_time_seconds))
+
+
+def psf_frame_blocks(n_frames: int, frame_block: Optional[int] = None) -> list:
+    """Consecutive ``(start, stop)`` frame ranges of the blocked PSF integration.
+
+    ``frame_block`` defaults to `PSF_FRAME_BLOCK` (2 s). A recording of at most one block is
+    one range; a longer one is full blocks followed by a shorter final block where the frame
+    count is not a multiple (a 5 s recording: 100, 100 and 50 frames).
+    """
+    block = PSF_FRAME_BLOCK if frame_block is None else int(frame_block)
+    if block < 1:
+        raise ValueError(f"frame_block must be a positive number of frames, got {frame_block!r}.")
+    n_frames = int(n_frames)
+    return [(start, min(start + block, n_frames)) for start in range(0, n_frames, block)]
+
+
 def _erf(x: np.ndarray, bounds: np.ndarray, sqrt_2sigma: np.ndarray) -> np.ndarray:
     """Integrate a Gaussian PSF along ONE coordinate over a pixel grid.
 
@@ -292,7 +322,9 @@ def add_pixel_counts(intensity: np.ndarray,
                      brightness_array: np.ndarray,
                      xbounds: np.ndarray,
                      ybounds: np.ndarray,
-                     PSF: Gaussian) -> np.ndarray:
+                     PSF: Gaussian,
+                     *,
+                     frame_block: Optional[int] = None) -> np.ndarray:
     """Accumulate per-emitter PSF contributions onto a pixel-grid intensity.
 
     For each emitter j and each frame k, adds the per-pixel Gaussian-PSF
@@ -300,6 +332,12 @@ def add_pixel_counts(intensity: np.ndarray,
     particles (entries marked `NaN` in `tracks`) are masked out before
     integration: their positions are pushed beyond the boundary, and
     their brightness is zeroed.
+
+    The integration runs over consecutive frame blocks (`psf_frame_blocks`,
+    2 s by default), so its temporaries, which scale with pixels x emitters x
+    frames, never exceed the size of a 2 s recording. Every step is
+    independent across frames (the emitter sum runs within a frame), so the
+    result does not depend on the block size.
 
     Args:
         intensity: Pixel-grid intensity array of shape
@@ -312,6 +350,7 @@ def add_pixel_counts(intensity: np.ndarray,
         xbounds, ybounds: 1D arrays of pixel boundary positions along each
             axis (length `n_pixels + 1`).
         PSF: A `Gaussian` instance with `sqrt_2sigma` of shape `(n_emitters,)`.
+        frame_block: Frames per integration block; `PSF_FRAME_BLOCK` (2 s) when None.
 
     Returns:
         The modified `intensity` array (same reference; updated in place).
@@ -328,14 +367,16 @@ def add_pixel_counts(intensity: np.ndarray,
     # is approximated by indexing on the x-coord row only ([0]).
     ghost_mask_zero = np.moveaxis(ghost_mask, 0, 2)[[0], :, :]  # (1, n_emitters, n_frames)
     brightness_array[ghost_mask_zero] = 0
-    # Step 4: PSF integral along x, weighted by brightness.
-    X = _erf(tracks[:, [0], :], xbounds, PSF.sqrt_2sigma)      # (n_pix_x, n_emitters, n_frames)
-    X *= brightness_array
-    # Step 5: PSF integral along y.
-    Y = _erf(tracks[:, [1], :], ybounds, PSF.sqrt_2sigma)      # (n_pix_y, n_emitters, n_frames)
-    Y = np.transpose(Y, (1, 0, 2))                              # (n_emitters, n_pix_y, n_frames)
-    # Step 6: combine via einsum -> (n_pix_x, n_pix_y, n_frames), summed over emitters.
-    intensity += np.einsum("ijk,jlk->ilk", X, Y)
+    # Steps 4-6 run per frame block [a, b); a recording of at most one block is one pass.
+    for a, b in psf_frame_blocks(tracks.shape[0], frame_block):
+        # Step 4: PSF integral along x, weighted by brightness.
+        X = _erf(tracks[a:b, [0], :], xbounds, PSF.sqrt_2sigma)  # (n_pix_x, n_emitters, b - a)
+        X *= brightness_array[:, :, a:b]
+        # Step 5: PSF integral along y.
+        Y = _erf(tracks[a:b, [1], :], ybounds, PSF.sqrt_2sigma)  # (n_pix_y, n_emitters, b - a)
+        Y = np.transpose(Y, (1, 0, 2))                            # (n_emitters, n_pix_y, b - a)
+        # Step 6: combine via einsum -> (n_pix_x, n_pix_y, b - a), summed over emitters.
+        intensity[:, :, a:b] += np.einsum("ijk,jlk->ilk", X, Y)
     return intensity
 
 
