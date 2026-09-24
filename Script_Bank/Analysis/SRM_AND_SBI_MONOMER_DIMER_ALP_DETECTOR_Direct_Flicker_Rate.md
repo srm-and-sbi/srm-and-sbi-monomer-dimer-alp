@@ -102,7 +102,7 @@ experimental recordings is a cross-check, not an arbiter (`DETECTOR_WORKFLOW.md`
 
 On four 6 s scenes spanning the prior, the estimator passed both criteria — correlation 0.9997
 against the 0.80 threshold, mean absolute error 0.0596 dex against 0.08 — with these points
-(re-run 2026-09-21 under the exact log-grid refinement of 0.1.13; the 2026-09-18 run under the
+(re-run 2026-09-21 under the exact log-grid refinement; the 2026-09-18 run under the
 equal-spacing formula gave 1.839, 3.614, 5.310, 9.173 and a mean absolute error of 0.0637 dex):
 
 | true λ | estimate | error (dex) | bootstrap 90 % range | usable traces |
@@ -123,9 +123,8 @@ validation on the reserved set; until then the range is reported as it is and it
 the full-scale runs is the measurement of record. The estimator ranks flicker rates far better than it places
 them. **Dye multiplicity does not explain it** — the multiplicity band is 0.009 dex at the
 center of the `sigma_pc` prior, about a sixth of the observed offset — so the remainder is a
-property of the measurement chain, most plausibly track fragmentation: a linker that splits one
-emitter into two traces decorrelates the series faster than the model arm, which assumes intact
-traces, and a faster decay reads as a higher rate.
+property of the measurement chain. The mismatch study below, on two-second multiple-dye scenes,
+places most of the fast bias in detection gaps and photometry noise, with a small share in linking.
 
 The predicted low-λ-worst pattern holds at the ends (0.0734 at the bottom against 0.0545 at the
 top) but not monotonically — the best point is λ=5, not λ=8. Four scenes is too few to resolve
@@ -158,9 +157,8 @@ for the ten-point grid. `--dry-run` resolves settings and prints what it would r
 **Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
 the accuracy step of those rules; §9.6 adds the evidence-adequacy, operational-success, operating-subgroup,
 and uncertainty-coverage requirements and the order in which they are evaluated, and defines the verdicts
-`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. The implementation of those
-steps in this utility is the 0.1.13 work in progress; until it lands, a report from this script states only
-the accuracy step.
+`PASS`, `FAIL (operational | accuracy | uncertainty)` and `INSUFFICIENT EVIDENCE`. This utility evaluates
+every step through the shared kernel and reports all verdicts side by side.
 
 The report gives the Pearson correlation and mean absolute log10 error against the prespecified
 thresholds — correlation ≥ 0.80 and MAE ≤ 0.08 dex, the latter being 8% of the 1.0 dex prior
@@ -195,7 +193,7 @@ recomputed from the arrays without rerunning the estimator.
 
 **Refinement on the real grid.** The grid `[1, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 14]` is uneven in
 log-rate, so the parabolic refinement between the bracketing points is fitted on the actual
-log-grid coordinates. An equal-spacing formula used before 0.1.13 returned 4.3506 for an exactly
+log-grid coordinates. An equal-spacing formula used earlier returned 4.3506 for an exactly
 quadratic objective with its minimum at 4.3; the corrected fit returns 4.3. The refinement is applied
 only when the parabola curves upward and its vertex lies inside the bracket; otherwise the grid
 minimum is kept and counted under "interior estimates left unrefined". Grid minima at 1 or 14 are
@@ -228,9 +226,9 @@ center (0.06 dex) probed none of these conditions, and the exact-parabola correc
 
 Decisions: the unchanged two-second rerun is paused. The model arm matches track spans and detrends but
 does not represent gaps, detection and linking selection, measurement noise, dye multiplicity, or
-bleaching in the observed traces; which omission drives the bias is not isolated. Next: a mismatch study
-on a small representative development subset (spanning the rate and brightness quarters), adding the
-omitted effects to the model arm one at a time and recording which closes the signed error; and a
+bleaching in the observed traces; which omission drives the bias was not isolated by this run. The
+mismatch study that followed renders its own scenes with known truth instead of reading a development
+subset, and rebuilds the observed traces one step at a time; its outcome is recorded below. Still open: a
 comparison against estimation over the full experimental recording with one rate and its uncertainty
 propagated to the windows, contingent on validating that the rate is constant over a recording at that
 duration. The comparator is the multiple-dye neural posterior estimator on the same recordings (bias, MAE,
@@ -265,6 +263,112 @@ the detections outside the matched set. A contrast suggests a contribution of th
 scenes and this ordering, not a causal decomposition; every level reports how many scenes produced an
 estimate and why the others did not. The harness reads no EVAL task; the development tasks confirm what
 it finds.
+
+**Outcome of the default grid (2026-09-24, code 9a9076a, rcl01).** Twenty-four two-second scenes under the
+bare FAB dye-count law, true rates 1.25, 2, 4 and 8 per second at 120, 240 and 480 photons per dye, every
+level producing an estimate in every scene. The production level reproduces the development tier's pattern:
++0.094 dex over all scenes, +0.237 at 1.25 per second against +0.035 at 8, and +0.113 at 120 photons against
++0.088 at 480. The paired contrasts between adjacent levels, mean and median in dex, are: dye multiplicity
+−0.004 and +0.002; span selection +0.015 and +0.007; detection gaps +0.025 and +0.032; photometry +0.047 and
++0.010; linking alone +0.008 and +0.014; detections outside the matched set +0.006 and +0.005. The photometry
+contrast is concentrated at the slowest rate (+0.17 at 1.25 per second) and the dimmest brightness (+0.077
+at 120 photons) and is near zero from 4 per second up; the detection-gap contrast is spread over the rates
+(−0.003, +0.045, +0.035 and +0.024 from 1.25 to 8 per second). Under these scenes and this ordering, the
+fast bias enters where the true photons give way to the measurement, in the detection gaps and the
+photometry, and not in the dye count or the linker. Both steps act on the observed traces and have
+observable anchors (next section); whether a correction built on them closes the bias is for the harness
+to show. The single-dye and bleaching variants have not been run, so nothing here speaks to bleaching, and
+the multiplicity contrast holds for these scenes; the harness note carries the full tables.
+
+**Standing of this estimator (decision of 2026-09-24).** The flicker-rate estimator is a biased cross-check
+of the working value of `lambda_rate`, not its source. The development tier placed its bias at +0.11 dex
+overall and up to +0.26 dex at the slowest rates, the mismatch study located it in the detection gaps and
+the photometry noise of the observation chain, and further refinement is unlikely to change the immediate
+decision about the imaging values. Development is closed here: the harness keeps its per-level shapes and
+pooled sums for the record, and no correction-and-validation cycle follows. The working value of
+`lambda_rate` comes from the calibration results and the derivation of record, with this estimator's
+readings and their known bias recorded beside it. The classification is specific to this estimator: the
+direct PSF recovery, `sigma_r` above all, remains a candidate source for the working imaging vector. An
+imaging parameter is reopened only if its plausible
+uncertainty changes a biological conclusion materially, not because another diagnostic can be imagined.
+
+## Every input is observable on an experimental recording
+
+The estimator exists to run on experimental recordings, which have no ground truth. So every quantity it
+uses is one of three kinds: a setting of the detector, a camera value known from the acquisition, or a
+number computed from the recording itself. The seven levels of the mismatch study use truth (each dye's
+photons, each detection's subunit); they are development scaffolding, and only the production chain,
+detect, fit, link, detrend, pool and match, ever runs on an experimental recording. A correction of the
+fast bias is held to the rule §9.6 sets for the PSF estimator's correction: it may use only quantities
+available on experimental recordings, and it is validated once on the reserved tasks.
+
+| input | kind | where it comes from | kernel function |
+|---|---|---|---|
+| the frames, stored 8-bit and converted to ADU by the fixed global map | recording | the video | `levels_to_adu` |
+| detection threshold of four filtered background standard deviations, matched-filter width, isolation radius, border margin, fit patch | detector settings | `--n-sigma`, `--half-px` and the kernel defaults | `detect_spots`, `measure_spot_widths` |
+| background level and background noise, from the five SCOPE camera values | camera values | the acquisition values of `DETECTOR_WORKFLOW.md` §6.3, on which the SCOPE box is centered: gain ratio, baseline, read noise and quantum efficiency are acquisition settings and a datasheet value; the optical background is a measured quantity, obtained from the frames conditional on those constants (§6.4). A tier run reads each recording's drawn values from its `Nuisance_SCOPE` record; an experimental run uses the acquisition values. The box is a tight anchor around them | `background_mean_adu`, `background_sigma_adu` |
+| per-detection fitted amplitude, the background-subtracted total spot signal, and its fit covariance | recording | the least-squares fit of each detection | `fit_spot_width` |
+| traces: the frames each spot was fitted in, their spans and gaps | recording | linking of the detections | `link_spot_tracks`, `spot_intensity_traces` |
+| pooled autocorrelation, lag 0 included | recording | the detrended log-amplitudes; lag 0 is accumulated and then discarded by the lag-1 normalization | `flicker_pooled_acf`, `flicker_data_shape` |
+| the model arm | nothing from the recording beyond the spans | simulated single-dye traces at the grid rates, cut to the observed spans | `flicker_model_shape` |
+
+Not needed, and not used: the true rate; `mu_pc` and `sigma_pc`, which cancel under the detrend and the
+normalization in the single-dye model; the dye count of a spot, whose effect is bounded above and was
+near zero in the mismatch study's scenes; the bleaching rate, which the per-trace detrend is designed to
+remove (the harness's bleaching variant has not been run); and which detections belong to which subunit,
+which only the harness knows.
+
+**What a correction may use.** The two steps the mismatch study points to, detection gaps and photometry
+noise, act on the traces after the true photons are formed. Each has observable anchors, with the
+qualifications that make the correction a modeling step rather than a lookup:
+
+- *Detection*: the detector thresholds the matched-filter **peak** of a spot, while the fit returns its
+  **integrated** signal; the two are related through the spot's width and the filter, both known (the
+  width from the fit). A censoring model therefore applies the detector's own rule to a simulated spot
+  rather than a ratio of two numbers, and the synthetic chain loses frames through more than the
+  threshold: the isolation rule that drops the dimmer of two close spots, the border margin, fits
+  rejected on their width or their error, bleaching, and the linker's gap limit. The detected amplitudes
+  are themselves selected by detection, so the missing part of the brightness distribution is inferred
+  through the model, not read off.
+- *Photometry noise*: the amplitude's standard error from the fit covariance, which the fit computes
+  (with the known camera values) and returns today only for the width, gives the size of the noise, not
+  its correlation in time. The lag-0 excess of the pooled autocorrelation, which the accumulator already
+  holds, mixes photometry noise with brightness fluctuations faster than a frame and separates them only
+  under an assumption.
+- *Frame sets*: the spans and gaps of the traces, already used.
+
+A correction in the data arm, normalizing at a later lag or matching from lag 3 on, needs no new input at
+all; its success cannot be predicted from a white-noise argument, because the per-trace detrend makes even
+white photometry noise correlated across the lags, so it is tested on the harness, not assumed. A
+correction in the model arm, simulated traces passed through the detector's loss rules and carrying noise
+of the measured size, is a modeling extension whose adequacy the harness has to show; its inputs are
+observable, which is necessary and not sufficient. None of the inputs is an inferred parameter, so the
+circularity that rules out modeling multiplicity through `sigma_pc` does not arise.
+
+**Why gaps are modeled, not counted.** Frames go missing from a trace for several reasons: in the
+synthetic chain a dim frame falls below the threshold, a spot loses the isolation rule to a brighter
+neighbor, sits inside the border margin, has its fit rejected, bleaches, or exceeds the linker's gap
+limit; on an experimental recording a dye may also enter a dark state and a probe may unbind. The pooled
+accumulator skips every pair that touches a gap, which avoids treating gaps as zeros but does not make
+the shape unbiased: that depends on why the frames are missing, how the traces are selected, and how each
+incomplete trace is detrended. Brightness-driven losses are the ones that remove dim frames selectively,
+and a model arm has to reproduce them through the detector's rules; a raw gap fraction cannot tell them
+apart from the others. An excess of observed gaps over what the modeled observation process predicts then
+indicates a mismatch with that process on an experimental recording; it does not by itself identify dark
+states or probe residence.
+
+**Consistency checks on an experimental recording.** Without truth, four checks remain, each with its
+limit. The corrected model shape should fit the pooled shape over all twelve lags rather than pass through
+one point; a good fit is consistent with the rate, it does not establish it. Bright and dim spots should
+give the same rate, since the bias on the tier depends on brightness; a disagreement can be residual bias
+or physical heterogeneity between the spots. Estimating from every second frame of the same traces should
+give the same rate in seconds; the subsampled traces are detrended and matched against a model arm at the
+doubled frame interval, and detection and linking are not redone, so this tests the shape match and the
+detrend rather than the whole chain. The value is compared with the derivation of record from the
+localization tables (5.1 and 4.7 per second) and with the neural posterior's rate marginal on the same
+windows; both are references that share assumptions with this estimator, not ground truth. Passing all
+four bounds the failure modes that matter; it proves no value. An experiment mode of this utility does not
+exist yet; when it is written, its report carries these checks in place of a verdict.
 
 ## Essential notes
 

@@ -5,6 +5,96 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.20 - 2026-09-24
+
+The flicker mismatch harness keeps the pooled autocorrelation shape of every observation level, and the
+wording of the information budget and of the flicker estimator's note is held to what the computations
+establish. No canonical stage, parameter role, preprocessing step, or estimate changes; the flicker
+estimator's shape is computed by the same arithmetic as before.
+
+### Added
+
+- `Direct_Flicker_Mismatch` keeps, for every scene and level, the pooled shape itself (normalized at lag 1;
+  the match uses lags 1 to 12), the ratio of the pooled lag-0 to lag-1 value, and the model arm's shape at
+  the true rate cut to that level's spans. The report tabulates, by level against the true rate and the
+  brightness, the log ratio of the shape to that model curve at lag 2 and its further change over the later
+  lags, from lag 3 on where the model is at least 0.3, and the lag-0 ratio. A constant proportional
+  discrepancy across the later lags is consistent with a lag-one normalization effect; the statistic alone
+  cannot establish that mechanism or validate a correction, deviations of opposite sign cancel in it, and it
+  does not separate selective loss of dim frames from noise made correlated by the per-trace detrend. The
+  lag-0 ratio is a diagnostic ratio, moved by the flicker, the detrend and the gaps as well as by photometry
+  noise. The pooled lag product-sums and pair counts of every level (lags 0 to 40) are saved, so no other
+  reading of them needs a rerun. A second figure draws the shapes and their differences
+  from the model for the slowest rate at the dimmest and brightest brightness and for the fastest rate at
+  the dimmest. The last matched lags are not used for a ratio: there the model approaches zero, turns
+  negative from 4 per second up at two-second spans, and a small difference becomes an arbitrarily large
+  log ratio. The arrays carry `shape`, `model_true`, `lag0_over_lag1`, `lags`, `acf_sum`, `acf_pairs` and
+  `acf_lags`. The
+  kernel exposes the pooled product-sums as `direct_imaging_estimates.flicker_pooled_acf`;
+  `flicker_data_shape` normalizes that same result with identical arithmetic (bit-identical to the
+  committed tree on 300 random gapped traces). Two tests cover the helper and the kept shapes.
+
+### Decisions
+
+- The direct flicker-rate estimator is classified as a biased cross-check of the working `lambda_rate`, not
+  its source, and its development is closed: the harness keeps its per-level shapes and pooled sums for the
+  record, and no correction-and-validation cycle follows. `lambda_rate` stays in the inferred block. The
+  classification is parameter-specific: the direct PSF recovery, `sigma_r` above all, remains a candidate
+  source for the working imaging vector. An
+  imaging parameter is reopened only if its plausible uncertainty changes a biological conclusion
+  materially. Recorded in both companion notes.
+
+### Verification
+
+- `flicker_data_shape` returns bit-identical shapes and 1/e crossings before and after the refactor (the
+  committed tree and this one, separate processes, 300 random gapped traces with non-positive samples).
+- All 93 tests pass on the committed tree: the 72 existing ones, the 19 guard tests of 0.1.19 and the 2 new
+  ones. A one-scene harness run on the PC (1.25 per second, 120 photons per dye, 1.7 minutes) completes all
+  seven levels and writes both figures, the new tables and the arrays, the pooled sums included; it is a
+  code check, not evidence about the bias.
+
+### Changed
+
+- The flicker estimator's companion note gains the section "Every input is observable on an experimental
+  recording": what the production chain reads (detector settings, the §6.3 acquisition camera values, and
+  quantities computed from the recording), what it never needs, the observable anchors a correction of the
+  fast bias may use in either arm and the qualifications that make such a correction a modeling step (the
+  detector thresholds a filtered peak while the fit returns an integrated signal; frames are lost through
+  several rules; a scalar amplitude error carries no temporal correlation; the per-trace detrend correlates
+  white noise), why gaps are modeled through the detector's rules rather than counted, and the consistency
+  checks that stand in for a verdict on experimental recordings, each with its limit. Its
+  development-outcome text points to the mismatch study instead of naming track fragmentation as the most
+  plausible cause, and it no longer describes the acceptance steps as pending.
+- The information budget is described as an approximate precision benchmark under a simplified observation
+  model, in the kernel module, the utility, its note and `DETECTOR_WORKFLOW.md` §9.5, whose heading reads
+  "approximate precision benchmarks" instead of promising to separate a weak estimator from uninformative
+  data: it helps prioritize measurements and recording durations and does not establish full-video
+  identifiability or decide which parameters leave the inferred block. The photobleaching utility and note
+  state the cubic law only for the short-window, shallow-decay limit with known amplitude and offset and
+  independent constant-variance noise, and the Ornstein–Uhlenbeck process as the log-brightness. Removed
+  the statement that a measured error below a bound would
+  indicate a bug, and the claim that the cubic duration law survives profiling the amplitude and offset:
+  the computed bound falls 5.6× from 100 to 200 frames at `p = 0.01` (the law says 2.8×) and 1.7× from
+  1000 to 3000 frames at `p = 0.32` (the law says 5.2×). The effective-sample-size adjustment is named as a
+  mean-estimation approximation applied to a fitted rate, and the summed-intensity autocorrelation as close
+  to, not equal to, the log-brightness exponential (lag-one 0.934 against 0.939 at `sigma_pc = 0.42`). The
+  photobleaching note's eligibility paragraph describes the observable rule the utility applies (fit
+  converged, decay at least three times the residual scatter, standard error on log10 p at most 0.25 dex)
+  instead of a range the benchmark permits.
+
+### Development diagnostics
+
+- Flicker mismatch study, default grid (24 two-second scenes under the bare FAB law, rcl01, 1.9 minutes;
+  every level estimated every scene). Paired contrasts, mean and median in dex: dye multiplicity −0.004 and
+  +0.002; span selection +0.015 and +0.007; detection gaps +0.025 and +0.032; photometry +0.047 and +0.010,
+  concentrated at 1.25 per second (+0.17) and 120 photons per dye (+0.077); linking alone +0.008 and +0.014;
+  detections outside the matched set +0.006 and +0.005. The production level reproduces the development
+  tier's pattern (+0.094 dex overall, +0.237 at 1.25 per second, +0.113 at 120 photons). Under these scenes
+  and this ordering the bias enters with the detection gaps and the photometry, and in these scenes not with
+  the dye count or the linker; both steps have observable anchors, and whether a correction built on them
+  closes the bias is for the harness to show. Recorded in both companion notes. The single-dye and
+  bleaching variants have not been run.
+
 ## 0.1.19 - 2026-09-24
 
 Development tooling for the direct imaging estimators, the declared split of the EVAL tiers into

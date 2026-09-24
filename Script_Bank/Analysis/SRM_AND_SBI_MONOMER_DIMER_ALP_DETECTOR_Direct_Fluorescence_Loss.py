@@ -18,11 +18,13 @@ Why the observable is total fluorescence, and why the recording must be long
     clip, so a 2 s recording spans exactly one window and sees the decay once. Three effects
     compound from there.
 
-    First, the brightness flicker is a stationary Ornstein-Uhlenbeck process with a
+    First, the log-brightness flicker is a stationary Ornstein-Uhlenbeck process with a
     correlation time of roughly fifteen frames, so consecutive frames of a fluorescence curve
     are not independent samples of the decay: a 100-frame recording carries about THREE
-    effectively independent samples, not a hundred. Second, decay-rate information grows as
-    the cube of the duration. Third, and decisively, the amplitude and the offset of the curve
+    effectively independent samples, not a hundred. Second, a longer recording sees more of
+    the decay; in the short-window, shallow-decay limit with known amplitude and offset and
+    independent constant-variance noise, rate information would grow approximately as the cube
+    of the duration. Third, and decisively, the amplitude and the offset of the curve
     are unknown and must be fitted alongside the rate; where the decay is shallow, the
     exponential is close to a straight line over the observed window and only the PRODUCT of
     amplitude and rate is determined, so the rate itself is barely constrained.

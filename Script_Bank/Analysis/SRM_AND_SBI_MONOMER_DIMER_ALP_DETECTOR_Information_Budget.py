@@ -1,22 +1,23 @@
-"""Information budget: what the recordings can support, independently of the estimator.
+"""Information budget: approximate precision benchmarks under a simplified observation model.
 
 An estimator that misses a parameter can be failing for two very different reasons: it may
 be a poor estimator, or the recordings may not carry the information. Those call for
 opposite responses -- improve the estimator, or stop trying to infer the parameter -- and a
-measured error alone cannot tell them apart. This utility computes the second quantity: a
-Cramer-Rao lower bound on the standard deviation of ANY unbiased estimator of each imaging
-parameter from one recording, and places it beside the two measured numbers.
+measured error alone cannot tell them apart. This utility computes an approximate benchmark
+for the second question: a Cramer-Rao bound on the standard deviation of an unbiased estimator
+of each imaging parameter under a simplified observation model, from one recording, placed
+beside the two measured numbers.
 
-    bound     what the data allow                     (computed here)
+    bound     an approximate benchmark under the reduced model (computed here)
     direct    what the direct estimators achieve      (their reports)
     neural    the posterior width of the amortized flow (the calibration report)
 
 Reading the three together grades each parameter:
 
-    neural at the bound         already inferred as well as the data permit; a change of
-                                estimator or a wider inferred block will not improve it
-    neural far from the bound   probable headroom; the estimator or its training is the
-                                first place to look
+    neural near the bound       little to gain from a different estimator under the reduced
+                                model; not a proof that the data are exhausted
+    neural far from the bound   headroom worth looking for; the estimator or its training is
+                                the first place to look
     bound wider than the prior  the reduced model expects one recording to constrain the
                                 parameter poorly: a candidate to leave the inferred block,
                                 not a proof of non-identifiability (the bound is approximate,
@@ -32,8 +33,11 @@ integration, and the temporal correlation of the brightness flicker -- which is 
 single term in the photobleaching budget and the one most easily missed. They do NOT include
 emitters entering and leaving the field, reactions changing a spot's dye multiplicity,
 overlapping spots, or the truncation of the observable population by detectability. Every
-bound here is therefore OPTIMISTIC: a floor on the achievable error, never a prediction of it.
-A measured error below one of these bounds would indicate a bug, not a good estimator.
+bound here is therefore OPTIMISTIC for its reduced statistic, never a prediction of achievable
+error and never a limit on inference from the full video. A measured scatter well below one of
+them is a prompt to check the measurement and the benchmark, not an automatic failure: the
+bound concerns an unbiased estimator's standard deviation, and a biased or Bayesian estimator
+can legitimately do better.
 
 Usage (from the repo root):
     MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \\
@@ -304,13 +308,17 @@ def main(argv=None):
         "prob_photo_bleach: duration and the flicker-correlation cost",
         ["seconds", "frames", "p", "effective frames", "bound if independent (dex)",
          "bound with flicker (dex)"], dur_rows,
-        note="Decay-rate information grows as the cube of the duration, so ten times the frames "
-             "is about thirty-two times the precision. The last two columns separate that from "
-             "the flicker: the brightness is an Ornstein-Uhlenbeck process with a correlation "
-             "time of roughly fifteen frames, so consecutive frames of a fluorescence curve are "
-             "not independent samples of the decay, and the effective sample size is far below "
-             "the frame count. That term, not the frame count alone, is why the parameter is "
-             "unmeasurable in a two-second clip at the bottom of its prior.")
+        note="With the amplitude and offset profiled out, the bound falls with duration faster "
+             "than the cubic law (which holds approximately in the short-window, shallow-decay limit "
+             "with known amplitude and offset and independent constant-variance noise) where the "
+             "decay is shallow, and more "
+             "slowly where it completes within the window; the table, not a scaling law, carries "
+             "the duration dependence. The last two columns separate that from the flicker: the "
+             "log-brightness is an Ornstein-Uhlenbeck process with a correlation time of roughly "
+             "fifteen frames, so consecutive frames of a fluorescence curve are not independent "
+             "samples of the decay; the effective-frames column approximates that cost (a "
+             "mean-estimation result applied to a fitted rate). Under this reduced model the "
+             "parameter is unmeasurable in a two-second clip at the bottom of its prior.")
 
     # ---- optional overlay of measured numbers ----------------------------------------------
     measured = {}
@@ -329,9 +337,12 @@ def main(argv=None):
         if cmp_rows:
             reporter.table("Measured spread against the bound",
                            ["parameter", "source", "bound", "measured", "ratio"], cmp_rows,
-                           note="A ratio near one means the estimator is already extracting "
-                                "essentially all the information the recording carries. A large "
-                                "ratio means headroom remains.")
+                           note="A ratio near one suggests little to gain from a different "
+                                "estimator under the reduced model; a large ratio suggests "
+                                "headroom worth looking for. The benchmark constrains an "
+                                "unbiased estimator's scatter under a reduced statistic, so "
+                                "neither reading is a proof, and a ratio below one is a prompt "
+                                "to check the measurement and the benchmark.")
 
     # ---- invariants the algebra must satisfy ----------------------------------------------
     # A bound is easy to get subtly wrong and hard to notice, because a wrong number still

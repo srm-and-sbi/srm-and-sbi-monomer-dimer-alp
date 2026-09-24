@@ -1,10 +1,12 @@
 # Information budget — method and usage
 
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Information_Budget.py`. This utility
-computes, for each learnable imaging parameter, an approximate lower benchmark on the standard
-deviation of an unbiased estimator from one recording — what the data allow under a reduced
-model, independently of which estimator is used. This note explains what it computes, how to run it, and how to read the
-result, without reading the code.
+computes, for each learnable imaging parameter, an approximate benchmark for the standard
+deviation of an unbiased estimator from one recording under a simplified observation model,
+independently of which estimator is used. It helps prioritize measurements and recording
+durations; it does not establish what the full video can support or decide which parameters
+leave the inferred block. This note explains what it computes, how to run it, and how to read
+the result, without reading the code.
 
 This is a special-situation utility, not one of the canonical pipeline stages. It lives in
 `Script_Bank/Analysis`, is never wired into the stage dispatcher, and reads nothing: the
@@ -24,16 +26,17 @@ supplying the missing third number:
 
 | | what it is | where it comes from |
 |---|---|---|
-| **bound** | what the data allow | computed here |
+| **bound** | an approximate precision benchmark under the reduced model | computed here |
 | **direct** | what a direct, non-neural estimator achieves | the direct-estimator reports |
 | **neural** | the posterior width of the amortized flow | the calibration report, §6.9 |
 
 Reading them together grades each parameter:
 
-- **neural near the bound** — unlikely to gain much from a different estimator or a wider
-  inferred block.
-- **neural far from the bound** — probable headroom; the estimator or its training is the first
-  place to look.
+- **neural near the bound** — little to gain from a different estimator or a wider inferred
+  block under the reduced model; not a proof that the data are exhausted, since a reduced
+  statistic can discard information the full video carries.
+- **neural far from the bound** — headroom worth looking for; the estimator or its training is
+  the first place to look.
 - **bound wider than the prior** — the reduced model expects one recording to constrain the
   parameter poorly, which makes it a candidate to leave the inferred block. It does not prove
   non-identifiability: the bound is approximate, treats a reduced observable rather than the
@@ -87,13 +90,17 @@ not the reciprocal of its own diagonal. That distinction decides the answer. Whe
 shallow, the exponential is nearly a straight line over the observed window, the three
 parameters become nearly degenerate, and only the product `A k` is determined — the rate alone
 is barely constrained however many frames are collected. Treating `A` and `B` as known
-understates the bound by an order of magnitude exactly in that regime. With them known the
-bound would reduce to the familiar `sd(k) >= eps sqrt(3 / T^3)`; the cubic dependence on
-duration survives profiling. The model's parameter is a probability over a **fixed**
+understates the bound by an order of magnitude exactly in that regime. In the short-window, shallow-decay limit with known amplitude and offset and independent constant-variance noise, rate information grows approximately as duration cubed,
+the familiar `sd(k) >= eps sqrt(3 / T^3)`; that cubic law does not carry
+over once they are profiled. Where the decay is shallow the bound falls faster than the law as
+the window lengthens (5.6× from 100 to 200 frames at `p = 0.01`, against 2.8× for the law), and
+where the decay completes within the window it falls more slowly (1.7× from 1000 to 3000 frames
+at `p = 0.32`, against 5.2×), so the table, not a scaling law, carries the duration dependence.
+The model's parameter is a probability over a **fixed**
 hundred-frame reference window, not over the clip, so the rate bound is propagated through
 `p = 1 - exp(-100 k)`.
 
-**The flicker correlation, which dominates.** The brightness is an Ornstein–Uhlenbeck process
+**The flicker correlation, which dominates.** The log-brightness is an Ornstein–Uhlenbeck process
 with correlation time `1 / lambda_rate`, so consecutive frames of a total-fluorescence curve
 are *not* independent samples of the decay. The effective count is
 `n_eff = n (1 - rho) / (1 + rho)` with `rho = exp(-lambda_rate * frame_time)`. At the center

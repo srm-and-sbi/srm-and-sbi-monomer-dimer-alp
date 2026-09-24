@@ -942,14 +942,15 @@ constrain PSF properties and fluorescence loss where validated; unresolved quant
 explicit nuisance uncertainty. Adoption depends on validating both the replacement measurements and
 the reduced estimator.
 
-### 9.5 The information budget — separating a weak estimator from uninformative data
+### 9.5 The information budget — approximate precision benchmarks
 
 An estimator that recovers a parameter poorly admits two explanations that look identical in
 the results: the estimator may be weak, or the recordings may not carry the information.
 They call for opposite responses — improve the estimator, or stop inferring the parameter —
 so the calibration outcome of §6.9 cannot on its own decide the reduced block §9.4 proposes.
-The missing quantity is an estimator-independent benchmark for what the data allow, approximate
-but computed from the forward model alone. With it, each parameter is graded by three numbers:
+An estimator-independent benchmark helps orient that decision without settling it: it is
+approximate, computed from the forward model under a simplified observation model, and blind to
+information that its reduced statistic discards. With it, each parameter is placed by three numbers:
 
 | quantity | meaning | source |
 |---|---|---|
@@ -957,9 +958,10 @@ but computed from the forward model alone. With it, each parameter is graded by 
 | direct | the scatter a direct, non-neural estimator achieves | the direct-estimator utilities |
 | neural | the posterior width of the amortized flow | §6.9 |
 
-A neural posterior near the benchmark is unlikely to gain much from a different estimator or a
-change to the inferred block. One far from it has probable headroom, and the estimator or its
-training is the first place to look. A benchmark wider than the parameter's own prior says the
+A neural posterior near the benchmark suggests little to gain from a different estimator or a
+change to the inferred block under the reduced model, not that the data are exhausted. One far
+from it suggests headroom worth looking for, and the estimator or its training is the first place
+to look. A benchmark wider than the parameter's own prior says the
 reduced model expects one recording to constrain the parameter poorly, which makes the parameter a
 candidate to leave the inferred block; it does not prove non-identifiability, because the benchmark
 is approximate, treats a reduced observable rather than the full video, and constrains an unbiased
@@ -990,12 +992,14 @@ estimator shows exactly that transition, which is why it links before summarizin
 **Duration, correlation, and the shallow-decay degeneracy.** Three effects set what a
 recording can say about `prob_photo_bleach`, and they compound.
 
-Decay-rate information grows as the cube of the recording length, so ten times the frames is
-about thirty-two times the precision on a rate. Against that, the brightness is a stationary
-Ornstein–Uhlenbeck process, so consecutive frames of a total-fluorescence curve are not
-independent samples of the decay; the effective count is `n(1−rho)/(1+rho)` with
-`rho = exp(−lambda_rate·delta_frame)`, and at the center of the `lambda_rate` prior a 100-frame
-recording carries roughly three effectively independent samples rather than a hundred.
+In the short-window, shallow-decay limit with known amplitude and offset and independent constant-variance noise, rate information grows approximately as duration cubed, so ten times the frames would be about thirty-two times the precision on a rate; with the
+amplitude and offset profiled out (below) the dependence is steeper where the decay is shallow and
+shallower where it completes within the window, and the table carries it. Against that, the
+log-brightness is a stationary Ornstein–Uhlenbeck process, so consecutive frames of a
+total-fluorescence curve are not independent samples of the decay; the effective count
+`n(1−rho)/(1+rho)` with `rho = exp(−lambda_rate·delta_frame)` approximates that cost (a
+mean-estimation result applied to a fitted rate), and at the center of the `lambda_rate` prior a
+100-frame recording carries roughly three effectively independent samples rather than a hundred.
 
 The third effect dominates and is the one most easily missed. The amplitude and offset of the
 curve are unknown and are fitted alongside the rate. Where the decay is shallow, the

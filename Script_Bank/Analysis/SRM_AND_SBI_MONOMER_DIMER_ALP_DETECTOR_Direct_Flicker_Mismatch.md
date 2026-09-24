@@ -80,6 +80,26 @@ What the harness shows holds for its scenes: one diffusion coefficient, subunit 
 other imaging values at their prior centers. A finding is confirmed on the development tasks of the tier
 before it changes the estimator, and the changed estimator is judged once on the reserved tasks.
 
+**The shapes behind the estimates.** For every level the harness also keeps the pooled shape itself
+(normalized at lag 1; the match uses lags 1 to 12), the ratio of the pooled lag-0 to lag-1 value, and
+the model arm's shape at the true rate cut to that level's spans, which is the curve the estimator would
+have to see to read the truth. The log ratio of a level's shape to that curve is read at lag 2 and, as a
+further change, over the later lags from lag 3 on where the model is at least 0.3; the last matched lags
+are not used for it, because there the model approaches zero, turns negative at fast rates, and a small
+difference becomes an arbitrarily large log ratio. A constant proportional discrepancy across the later
+lags is consistent with a lag-one normalization effect; the aggregate statistic alone cannot establish
+that mechanism or validate a correction, and deviations of opposite sign at different lags cancel in it.
+Selective loss of dim frames and photometry noise made correlated across lags by the per-trace detrend
+both change the later lags, and the statistic does not separate them. The lag-0 ratio is a diagnostic
+ratio, not a measurement of the photometry noise: the flicker itself, the detrend and the gaps move it as
+well as variance uncorrelated between frames. The pooled lag product-sums and pair counts of every level
+(lags 0 to 40) are saved with the arrays, so any other reading of them needs no rerun. The report
+tabulates both log ratios and the lag-0 ratio by level against the true rate and the brightness. The second figure draws the shapes and
+their differences from the model for the slowest rate at the dimmest and the brightest brightness and for
+the fastest rate at the dimmest; the lags of one scene scatter by a few hundredths, so a cell of two
+scenes is read for its trend, not lag by lag. A signature suggests a mechanism under these scenes; it
+does not by itself validate a correction.
+
 ## How to run
 
 ```
@@ -101,15 +121,56 @@ the default 24 scenes take about five minutes on 16 workers. On JUWELS the wrapp
 `<data_bank_root>/Posit/<alias>_<timing>_Direct_Flicker_Mismatch_<labeling>[_BLEACH_<p>][_<suffix>]/`
 holds `report.md`, `direct_flicker_mismatch.npz` (per scene and level: the true values, the estimate,
 the signed error, the reason for a missing estimate, the grid-edge and refinement flags, the trace count
-and median span; per scene, the matched detections and the two kinds outside the matched set),
+and median span, the pooled shape, the model shape at the true rate and the lag-0 to lag-1 ratio; per
+scene, the matched detections and the two kinds outside the matched set),
 `summary.json` (per level: estimates produced, reasons, means over the scenes with an estimate and over
 the scenes where every level produced one; per step: the paired contrast and its count),
-`provenance.json` (command, host, versions, implementation hash at startup and at write) and the figure.
+`provenance.json` (command, host, versions, implementation hash at startup and at write) and the figures.
 The folder name carries the labeling (`FAB_LAW`, `INLB_LAW` or `SINGLE_DYE`) and, when bleaching is on,
 its probability (`BLEACH_0p056`), so the documented variants never share a folder. A run never reuses a
 folder: an existing one is refused before anything is rendered, and any other change of settings needs
 its own `--run-suffix`. A run whose implementation changed while it executed is marked `INVALID` and
 exits with status 3.
+
+## Outcome of the default grid (2026-09-24, code 9a9076a)
+
+Run on rcl01 in 1.9 minutes of wall time; output `..._2S_50FPS_Direct_Flicker_Mismatch_FAB_LAW_9a9076a`
+with `report.md`, the arrays, `summary.json`, `provenance.json` (implementation hash identical at startup
+and at write) and `stdout.log`. All 24 scenes produced an estimate at every level; no scene was refused for
+too few traces or too few pairs; one or two estimates per truth level fell on a grid edge, none at the
+fitted levels. A scene holds a median of 13,302 matched detections against 496 with no visible subunit
+within 1.5 px and no second fits near a matched subunit.
+
+| step | what changes | mean (dex) | median (dex) |
+|---|---|---|---|
+| `dye_truth_full` → `spot_truth_full` | dye multiplicity | −0.004 | +0.002 |
+| `spot_truth_full` → `spot_truth_span` | span selection | +0.015 | +0.007 |
+| `spot_truth_span` → `spot_truth_detected` | detection gaps | +0.025 | +0.032 |
+| `spot_truth_detected` → `fitted_oracle` | photometry | +0.047 | +0.010 |
+| `fitted_oracle` → `fitted_linked` | linking only | +0.008 | +0.014 |
+| `fitted_linked` → `production` | detections outside the matched set | +0.006 | +0.005 |
+
+All 24 scenes entered every contrast. By true rate, the production level reads +0.237 dex at 1.25 per
+second, +0.052 at 2, +0.050 at 4 and +0.035 at 8; by brightness +0.113 at 120 photons per dye, +0.080 at
+240 and +0.088 at 480; the two whole-recording truth levels read −0.003 and −0.008 over all scenes. The
+photometry contrast is concentrated at the slowest rate (+0.17 dex at 1.25 per second) and the dimmest
+brightness (+0.077 at 120 photons per dye) and is near zero from 4 per second up; the detection-gap
+contrast is spread over the rates (−0.003, +0.045, +0.035 and +0.024 from 1.25 to 8 per second). The
+production level reproduces the development tier's pattern (+0.11 dex overall, +0.26 at the slowest rates,
++0.16 in the dim half).
+
+Reading, under these scenes and this ordering: the fast bias enters where the true photons give way to the
+measurement, in the detection gaps and the photometry noise. In these scenes the dye count contributes
+nothing measurable, the linker little, and the detections outside the matched set little; a grid of one
+diffusion coefficient, one dye-count law and bleaching off does not generalize those three findings. The
+two steps that carry the bias act on the observed traces and have observable anchors, so a correction
+needs no inferred parameter; whether a correction built on them closes the bias is for this harness to
+show, and the estimator's companion note sets out the anchors and their limits. The two mechanisms should differ in their
+signature on the pooled shape (a noise term that inflates the first lag against a censoring that steepens
+the whole decay). The harness now keeps the pooled shape of every level and its departure from the model
+at the true rate for the record. Development of the flicker estimator was closed on 2026-09-24: it stands
+as a biased cross-check of the working `lambda_rate`, and no correction-and-validation cycle follows. The
+single-dye and bleaching variants have not been run and are not planned.
 
 ## References
 

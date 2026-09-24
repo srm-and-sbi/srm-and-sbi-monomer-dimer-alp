@@ -226,6 +226,73 @@ def test_harness_records_why_a_level_has_no_estimate():
     assert hm.mean_cell(c["err"][:, -1], np.ones(2, bool)).endswith("(1)")
 
 
+def test_pooled_acf_is_the_shape_before_normalization():
+    rng = np.random.default_rng(3)
+    traces = []
+    for _ in range(40):
+        x = np.zeros(100)
+        for t in range(1, 100):
+            x[t] = 0.9 * x[t - 1] + rng.normal(0.0, 0.3)
+        traces.append((np.arange(100), 200.0 * np.exp(x)))
+    csum, cnt = die.flicker_pooled_acf(traces)
+    shape, _ = die.flicker_data_shape(traces)
+    rho = csum / np.maximum(cnt, 1)
+    rho = rho / rho[0]
+    assert np.array_equal(shape, rho[1:] / rho[1])            # the shape is the same arithmetic
+    assert cnt[0] == 40 * 100 and cnt[1] == 40 * 99
+    noisy = [(f, a * np.exp(rng.normal(0.0, 0.3, a.size))) for f, a in traces]
+    c2, n2 = die.flicker_pooled_acf(noisy)
+    r2 = c2 / np.maximum(n2, 1)
+    assert r2[0] / r2[1] > csum[0] / csum[1] * (cnt[1] / cnt[0])   # white noise raises lag 0 over lag 1
+
+
+def test_harness_keeps_each_level_shape_and_its_model_at_the_truth():
+    hm = _load("Direct_Flicker_Mismatch")
+    from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import generate_brightness_photons
+    photons = generate_brightness_photons(nframes=100, nemitters=60, mu_pc=386.0, sigma_pc=0.6,
+                                          lambda_rate=3.0, prob_photo_bleach=0.0,
+                                          numb_photo_bleach=100, delta_frame=0.02, seed=1)
+    traces = [(np.arange(100), photons[:, e]) for e in range(60)]
+    r = hm.estimate_level(traces, n_model_traces=200, lambda_true=3.0)
+    assert r["reason"] is None
+    assert r["shape"].shape == r["model_true"].shape == (hm.N_LAGS,)
+    assert r["shape"][0] == 1.0 and r["model_true"][0] == 1.0    # normalized at lag 1 by construction
+    assert np.isfinite(r["lag0_over_lag1"]) and r["lag0_over_lag1"] > 1.0
+    # the raw pooled sums and pair counts are kept (lags 0 to N_LAGS) and reproduce the ratio
+    assert r["acf_sum"].shape == r["acf_pairs"].shape == (hm.N_LAGS + 1,)
+    rho = r["acf_sum"] / np.maximum(r["acf_pairs"], 1)
+    assert np.isclose(rho[0] / rho[1], r["lag0_over_lag1"]) and r["acf_pairs"][0] == 60 * 100
+    # single-dye traces at the true rate, no noise: the estimate sits near the truth
+    assert abs(np.log10(r["lambda_rate"]) - np.log10(3.0)) < 0.15
+    early, later = hm.shape_signature(r["shape"][None, None, :], r["model_true"][None, None, :])
+    assert early.shape == later.shape == (1, 1) and np.isfinite(early).all() and np.isfinite(later).all()
+    # the signature separates an effect confined to lag 1 from one that grows with the lag, and never
+    # reads lags where the model has fallen below the floor (here lags 9 to 12, down to zero)
+    m = np.zeros(hm.N_LAGS)
+    m[:12] = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05, 0.0]
+    lag_one_only = np.r_[1.0, 0.95 * m[1:]]
+    lag_one_only[11] = -0.5                    # noise where the model is zero must not matter
+    e1, l1 = hm.shape_signature(lag_one_only, m)
+    assert np.isclose(e1, np.log(0.95)) and abs(l1) < 1e-12
+    e2, l2 = hm.shape_signature(m ** 1.5, m)
+    assert np.isclose(e2, 0.5 * np.log(0.9)) and l2 < -0.1
+    assert np.isnan(hm.shape_signature(np.full(hm.N_LAGS, np.nan), m)[1])
+    # the aggregate is blind to deviations of opposite sign at different lags: documented, not hidden
+    canceling = m.copy()
+    canceling[3] += 0.1
+    canceling[5] -= 0.1
+    assert abs(hm.shape_signature(canceling, m)[1]) < 1e-12
+    # a level without an estimate carries NaN shapes, and the collection keeps the arrays aligned
+    few = hm.estimate_level(traces[:3], n_model_traces=10, lambda_true=3.0)
+    assert few["reason"] == "too_few_traces" and np.isnan(few["shape"]).all()
+    c = hm.collect_levels([dict(lambda_rate=3.0, mu_pc=120.0, levels=[r] * 6 + [few])])
+    assert c["shape"].shape == (1, len(hm.LEVELS), hm.N_LAGS) and np.isnan(c["lag0"][0, -1])
+    assert c["acf_sum"].shape == (1, len(hm.LEVELS), hm.N_LAGS + 1) and np.isnan(c["acf_pairs"][0, -1]).all()
+    assert hm.shape_cells(np.array([1.25, 8.0]), np.array([120.0, 480.0])) == [(1.25, 120.0), (1.25, 480.0),
+                                                                                 (8.0, 120.0)]
+    assert hm.shape_cells(np.array([1.25]), np.array([120.0])) == [(1.25, 120.0)]
+
+
 # ---- PSF observables ------------------------------------------------------------------------
 
 def _psf_measurements(tracks):

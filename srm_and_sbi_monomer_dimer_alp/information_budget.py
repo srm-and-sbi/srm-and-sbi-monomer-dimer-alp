@@ -1,4 +1,4 @@
-"""Information budget: what a recording can support, independently of any estimator.
+"""Information budget: approximate precision benchmarks under a simplified observation model.
 
 Pure analytic kernels. Every function here takes numbers and returns numbers; none reads
 a file, resolves a machine profile, or prints.
@@ -6,21 +6,27 @@ a file, resolves a machine profile, or prints.
 An estimator that misses a parameter can be failing for two very different reasons: it may
 be a poor estimator, or the recordings may not carry the information. Those call for
 opposite responses -- improve the estimator, or stop trying to infer the parameter -- and
-measured accuracy alone cannot tell them apart. This module computes the second quantity:
-a Cramer-Rao lower bound on the standard deviation of ANY unbiased estimator of each
-imaging parameter, from one recording of a given size. Comparing three numbers then grades
-the situation:
+measured accuracy alone cannot tell them apart. This module computes an approximate
+precision benchmark for the second question: a Cramer-Rao bound on the standard deviation of
+an unbiased estimator of each imaging parameter under a SIMPLIFIED observation model (a
+reduced statistic of the video, a Gaussian likelihood, and an approximate treatment of the
+temporal correlation), from one recording of a given size. Comparing three numbers then
+orients the work:
 
-    bound    what the data allow, computed here
+    bound    an approximate benchmark under the reduced model, computed here
     direct   what the direct estimators achieve, measured
     neural   the posterior width of the amortized flow, measured
 
-A parameter whose neural posterior already sits at the bound is being inferred as well as
-it can be, and a wider inferred block will not help it. A parameter far from the bound has
-recoverable headroom. A parameter whose bound is itself wider than its prior is not
-identifiable from one recording at all, and belongs outside the inferred block whatever
-estimator is used. This is the quantitative criterion behind `DETECTOR_WORKFLOW.md` sec. 9.4,
-which is a proposal and not in force.
+A neural posterior near the benchmark suggests little to gain from a different estimator
+under the reduced model; one far from it suggests headroom worth looking for; a benchmark
+wider than the parameter's prior says the reduced model expects one recording to constrain
+the parameter poorly. None of these is a proof. A reduced statistic can discard information
+the full video carries; the bound concerns the repeated-sampling variance of an unbiased
+estimator and is not directly comparable to a prior-averaged error or to one posterior's
+width; and a biased or Bayesian estimator can legitimately fall below it. The benchmarks
+help prioritize measurements and recording durations. They do not establish full-video
+identifiability or decide which parameters leave the inferred block; that decision is the
+proposal of `DETECTOR_WORKFLOW.md` sec. 9.4, which is not in force.
 
 Scope and honesty about the approximations. These are bounds under a Gaussian approximation
 to the EMCCD likelihood, using the exact variance law of the Poisson-Gamma-Normal chain,
@@ -37,17 +43,19 @@ dominate and are easy to get wrong:
     photon count relative to an ideal detector;
   - the pixel integration, handled by numerically differentiating the same pixel-integrated
     Gaussian the renderer uses, rather than by a continuum approximation;
-  - the CORRELATION of the brightness flicker in time, which reduces the number of
-    effectively independent frames and costs a constant factor 5.6 in any decay-rate
-    standard deviation, at the center of the lambda_rate prior;
+  - the CORRELATION of the brightness flicker in time, folded in through an effective-
+    sample-size approximation (a mean-estimation result applied to a fitted rate, not the
+    exact correlated likelihood), which costs about a factor 5.6 in the decay-rate standard
+    deviation at the center of the lambda_rate prior;
   - the DEGENERACY of a shallow decay with its own unknown amplitude and offset, which costs
     between 2.7x at the top of the prob_photo_bleach prior and 150x at the bottom, and is
     therefore the dominant term everywhere except the very top.
 
-What is NOT modeled, and therefore makes every bound here optimistic: emitters leaving and
-entering the field, reactions changing a spot's multiplicity mid-recording, spot overlap,
-and the truncation of the observable population by detectability. A real estimator faces
-all four. These bounds are a floor on the achievable error, not a prediction of it.
+What is NOT modeled, and therefore makes every bound here optimistic for its reduced
+statistic: emitters leaving and entering the field, reactions changing a spot's multiplicity
+mid-recording, spot overlap, and the truncation of the observable population by
+detectability. A real estimator faces all four. These are approximate benchmarks, not
+predictions of achievable error and not limits on what the full video can support.
 """
 
 from __future__ import annotations
@@ -260,21 +268,26 @@ def effective_sample_size_ar1(n_frames: int, rho: float) -> float:
     """Effectively independent frames in a series whose noise is AR(1)-correlated.
 
     ``n_eff = n * (1 - rho) / (1 + rho)``, the standard variance-inflation result for the
-    mean of a correlated series. It is easy to miss: the brightness flicker is an
+    mean of a correlated series. It is easy to miss: the log-brightness flicker is an
     Ornstein-Uhlenbeck process with correlation time ``1 / lambda_rate``, so consecutive
     frames of a total-fluorescence curve are NOT independent samples of the decay. At the
     center of the ``lambda_rate`` prior, ``rho = 0.9387``, so a hundred-frame recording
     carries about 3.2 effectively independent samples of the decay rather than a hundred.
 
-    The resulting inflation of a decay-rate standard deviation is ``sqrt(n / n_eff)``, which
-    is ``sqrt((1 + rho) / (1 - rho))`` and therefore INDEPENDENT of the recording length: a
-    constant factor 5.6 at the prior center, the same at 100 frames as at 1000. It is a fixed
+    The inflation of a decay-rate standard deviation applied here is ``sqrt(n / n_eff)``,
+    which is ``sqrt((1 + rho) / (1 - rho))`` and therefore INDEPENDENT of the recording length:
+    a constant factor 5.6 at the prior center, the same at 100 frames as at 1000. It is a fixed
     tax on the measurement, not something a longer recording escapes -- a longer recording
-    helps through the duration term instead.
+    helps through the duration term instead. It is an approximation: the formula is the
+    variance-inflation result for a MEAN, carried over to a fitted rate; the exact bound would
+    come from the correlated likelihood itself.
 
-    The correlation time of the SUMMED field is the same as one dye's: a sum of independent
-    Ornstein-Uhlenbeck processes has the same normalized autocorrelation, so applying this to
-    a whole-field flux curve is correct. Summing reduces the fluctuation AMPLITUDE as the
+    The correlation time of the SUMMED field is taken as one dye's. The renderer makes the
+    LOG-brightness an Ornstein-Uhlenbeck process, so the intensity is its exponential; a sum of
+    independent, identically distributed intensity processes keeps the intensity's normalized
+    autocorrelation, and that autocorrelation is close to, but not exactly, the exponential
+    correlation of the log-brightness used for ``rho`` here (at ``sigma_pc = 0.42`` the lag-one
+    values are 0.934 against 0.939). Summing reduces the fluctuation AMPLITUDE as the
     reciprocal square root of the dye count, which the caller carries in ``relative_noise``,
     not the correlation time.
 
@@ -304,10 +317,15 @@ def crb_decay_rate(n_frames: int, relative_noise: float, rate_per_frame: float,
     right only in the middle, and the effect is far larger exactly where the answer decides
     whether a recording is long enough.
 
-    With the amplitude and offset known the bound would reduce to the familiar
-    ``sd(k) >= eps sqrt(3 / T^3)``. That cubic dependence on duration survives profiling and
-    is why a photobleaching probability unmeasurable in a two-second clip becomes measurable
-    in a twenty-second recording.
+    In the short-window, shallow-decay limit with known amplitude and offset and independent constant-variance noise, rate information grows approximately as duration cubed,
+    the familiar ``sd(k) >= eps sqrt(3 / T^3)``. That cubic law does NOT
+    carry over once the amplitude and offset are profiled: where the decay is shallow the
+    degeneracy relaxes as the window lengthens, so the bound falls faster than the law says
+    (at ``p = 0.01`` by 5.6x from 100 to 200 frames and by about 300x from 100 to 1000, against
+    2.8x and 32x for the law), and where the decay completes within the window it falls more
+    slowly (at ``p = 0.32`` by 1.7x from 1000 to 3000 frames, against 5.2x). The computed
+    table, not the law, is what says a photobleaching probability unmeasurable in a two-second
+    clip becomes measurable in a twenty-second recording.
 
     Args:
         n_frames: number of frames observed.

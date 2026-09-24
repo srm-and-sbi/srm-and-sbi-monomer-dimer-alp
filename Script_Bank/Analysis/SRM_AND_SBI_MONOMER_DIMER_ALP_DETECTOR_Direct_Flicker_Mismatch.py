@@ -124,6 +124,9 @@ DIFFUSION_UM2_PER_S = 0.05  # a typical receptor, as in the direct estimators' s
 SEED_BASE = 20260924
 BLEACH_OFF = 1e-12          # the renderer's stand-in for no bleaching
 UNMATCHED, SECOND_FIT = -1, -2   # codes of the detections outside the matched set
+N_LAGS = die._ACF_MAX_LAG        # lags the kernel pools: the length of a shape
+LAST_LAG = die._ACF_FIT_LAGS     # the last lag the shape match uses
+MODEL_FLOOR = 0.3               # later lags are read only where the model shape at the truth is at least this
 
 
 def _scope_center() -> dict:
@@ -276,24 +279,42 @@ def level_traces(level: str, scene: dict, m: dict, tid: np.ndarray, matched: np.
     return out
 
 
-def estimate_level(traces: list, *, n_model_traces: int) -> dict:
-    """The production shape match on one level's traces, with the estimator's own refusals."""
+def estimate_level(traces: list, *, n_model_traces: int, lambda_true: float | None = None) -> dict:
+    """The production shape match on one level's traces, with the estimator's own refusals.
+
+    Beside the estimate, the level's pooled shape itself is kept (normalized at lag 1; the match
+    uses its first ``LAST_LAG`` lags), the pooled lag product-sums and pair counts it was formed
+    from (lags 0 to ``N_LAGS``, so nothing needs a rerun), the ratio of the pooled lag-0 to lag-1
+    value (a diagnostic ratio: photometry noise, the flicker itself, the detrend and the gaps all
+    move it, so it is not a measurement of the noise alone), and, when ``lambda_true`` is given,
+    the model arm's shape at the true rate cut to this level's spans: the curve the estimator
+    would have to see to read the truth, so the departure of the data shape from it is what moves
+    the estimate.
+    """
     nan = float("nan")
     none = dict(lambda_rate=nan, n_traces=len(traces), span_median=nan, refined=False,
-                at_grid_edge=False)
+                at_grid_edge=False, shape=np.full(N_LAGS, nan), model_true=np.full(N_LAGS, nan),
+                lag0_over_lag1=nan, acf_sum=np.full(N_LAGS + 1, nan), acf_pairs=np.full(N_LAGS + 1, nan))
     if len(traces) < 5:
         return dict(none, reason="too_few_traces")
     shape, _ = die.flicker_data_shape(traces)
     if shape is None:
         return dict(none, reason="too_few_pairs")
+    csum, cnt = die.flicker_pooled_acf(traces)
+    rho = csum / np.maximum(cnt, 1)
     spans = np.asarray([int(f.max() - f.min() + 1) for f, _ in traces], dtype=np.int64)
-    grid, shapes = die.flicker_model_shapes(
-        spans, frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds,
-        n_traces=n_model_traces)
+    dt = PARAMETERS.simulation.timing.frame_time_seconds
+    grid, shapes = die.flicker_model_shapes(spans, frame_time_seconds=dt, n_traces=n_model_traces)
     r = die.match_shapes(shape, grid, shapes)
+    model_true = (die.flicker_model_shape(float(lambda_true), spans, n_traces=n_model_traces,
+                                          frame_time_seconds=dt)
+                  if lambda_true is not None else np.full(N_LAGS, nan))
     return dict(lambda_rate=float(r["lambda_rate"]), n_traces=len(traces),
                 span_median=float(np.median(spans)), refined=bool(r["refined"]),
-                at_grid_edge=bool(r["at_grid_edge"]), reason=None)
+                at_grid_edge=bool(r["at_grid_edge"]), reason=None,
+                shape=np.asarray(shape, dtype=float), model_true=np.asarray(model_true, dtype=float),
+                lag0_over_lag1=float(rho[0] / rho[1]) if rho[1] != 0 else nan,
+                acf_sum=np.asarray(csum, dtype=float), acf_pairs=np.asarray(cnt, dtype=float))
 
 
 def run_scene(job) -> dict:
@@ -310,7 +331,7 @@ def run_scene(job) -> dict:
            if m["sqrt2sigma"].size else np.zeros(0, dtype=np.int64))
     matched = match_to_subunits(m, scene["true_xy"], scene["visible"])
     rows = [estimate_level(level_traces(level, scene, m, tid, matched, min_length),
-                           n_model_traces=n_model_traces) for level in LEVELS]
+                           n_model_traces=n_model_traces, lambda_true=lam) for level in LEVELS]
     n_vis = int(scene["visible"].sum())
     found = np.unique(matched[matched >= 0]).size
     return dict(scene=i, lambda_rate=lam, mu_pc=mu_pc, replicate=rep, seed=seed,
@@ -325,18 +346,32 @@ def run_scene(job) -> dict:
 # ==========================================================================================
 
 def collect_levels(results: list) -> dict:
-    """Per scene and level: the estimate, its signed log10 error, and why a level produced none."""
+    """Per scene and level: the estimate, its signed log10 error, why a level produced none, and
+    the shapes behind it (the pooled shape, the model shape at the true rate, the lag-0 ratio)."""
     lam = np.array([r["lambda_rate"] for r in results], dtype=float)
     est = np.array([[x["lambda_rate"] for x in r["levels"]] for r in results], dtype=float)
     with np.errstate(invalid="ignore", divide="ignore"):
         err = np.log10(est) - np.log10(lam)[:, None]
+
+    def vec(x, key, n=N_LAGS):
+        v = x.get(key)
+        return np.full(n, np.nan) if v is None else np.asarray(v, dtype=float)
+
     return dict(
         lam=lam, mu=np.array([r["mu_pc"] for r in results], dtype=float), est=est, err=err,
         reason=np.array([[x["reason"] or "" for x in r["levels"]] for r in results], dtype="<U32"),
         at_grid_edge=np.array([[x["at_grid_edge"] for x in r["levels"]] for r in results], dtype=bool),
         refined=np.array([[x["refined"] for x in r["levels"]] for r in results], dtype=bool),
         n_traces=np.array([[x["n_traces"] for x in r["levels"]] for r in results], dtype=float),
-        span=np.array([[x["span_median"] for x in r["levels"]] for r in results], dtype=float))
+        span=np.array([[x["span_median"] for x in r["levels"]] for r in results], dtype=float),
+        shape=np.array([[vec(x, "shape") for x in r["levels"]] for r in results], dtype=float),
+        model_true=np.array([[vec(x, "model_true") for x in r["levels"]] for r in results], dtype=float),
+        lag0=np.array([[x.get("lag0_over_lag1", np.nan) for x in r["levels"]] for r in results],
+                      dtype=float),
+        acf_sum=np.array([[vec(x, "acf_sum", N_LAGS + 1) for x in r["levels"]] for r in results],
+                         dtype=float),
+        acf_pairs=np.array([[vec(x, "acf_pairs", N_LAGS + 1) for x in r["levels"]] for r in results],
+                           dtype=float))
 
 
 def mean_cell(err_column: np.ndarray, mask: np.ndarray) -> str:
@@ -358,6 +393,96 @@ def step_rows(err: np.ndarray) -> list:
                      f"{np.median(d):+.3f}" if d.size else "n/a",
                      f"{d.size} of {err.shape[0]}"])
     return rows
+
+
+def shape_signature(shape: np.ndarray, model_true: np.ndarray) -> tuple:
+    """Where a pooled shape departs from the model shape at the true rate.
+
+    ``early`` is ln(shape / model) at lag 2, the first lag after the normalizing one. ``later`` is
+    the further change over the later lags: ln of the ratio of the summed shape to the summed model
+    over the lags from 3 on where the model is at least ``MODEL_FLOOR``, minus ``early``. Both are
+    read where the model is well above zero; in the last matched lags the model approaches zero
+    (and turns negative at fast rates), so a small absolute difference there becomes an arbitrarily
+    large log ratio. A constant proportional discrepancy across the later lags is consistent with a lag-one normalization effect; the aggregate statistic alone cannot establish that mechanism or validate a correction, and deviations of opposite sign at different lags cancel in it. Arrays are ``(..., N_LAGS)`` with lag ``k`` at index
+    ``k - 1``; a level without a shape gives NaN."""
+    sh = np.asarray(shape, dtype=float)[..., :LAST_LAG]
+    mt = np.asarray(model_true, dtype=float)[..., :LAST_LAG]
+    lag = np.arange(1, LAST_LAG + 1)
+    use = (lag >= 3) & (mt >= MODEL_FLOOR)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        early = np.log(sh[..., 1] / mt[..., 1])
+        num = np.where(use, sh, 0.0).sum(axis=-1)
+        den = np.where(use, mt, 0.0).sum(axis=-1)
+        later = np.where(use.any(axis=-1), np.log(num / den), np.nan) - early
+    return early, later
+
+
+def signature_cell(values: np.ndarray, mask: np.ndarray, fmt: str = "+.3f") -> str:
+    """Mean of the finite values in ``mask`` with their count, or ``n/a``."""
+    v = values[mask]
+    v = v[np.isfinite(v)]
+    return f"{v.mean():{fmt}} ({v.size})" if v.size else "n/a"
+
+
+def shape_cells(lam: np.ndarray, mu: np.ndarray) -> list:
+    """The scenes the shape figure draws: the slowest rate at the dimmest and the brightest
+    brightness, and the fastest rate at the dimmest, without repeats."""
+    cells = []
+    for lv, mv in ((lam.min(), mu.min()), (lam.min(), mu.max()), (lam.max(), mu.min())):
+        if (float(lv), float(mv)) not in cells:
+            cells.append((float(lv), float(mv)))
+    return cells
+
+
+def make_shape_figure(c: dict, reporter) -> None:
+    """The pooled shapes of every level against the model at the true rate, and their log ratios,
+    for the scenes of `shape_cells`; each curve averages the scenes of its cell where that level
+    produced an estimate."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    lam, mu = c["lam"], c["mu"]
+    cells = shape_cells(lam, mu)
+    lags = np.arange(1, LAST_LAG + 1)
+    fig, axes = plt.subplots(2, len(cells), figsize=(4.4 * len(cells), 7.0), squeeze=False)
+    for col, (lv, mv) in enumerate(cells):
+        sel = (lam == lv) & (mu == mv)
+        top, bottom = axes[0][col], axes[1][col]
+        ref = None
+        for li, level in enumerate(LEVELS):
+            sh = c["shape"][sel, li, :LAST_LAG]
+            mt = c["model_true"][sel, li, :LAST_LAG]
+            ok = np.isfinite(sh).all(axis=1) & np.isfinite(mt).all(axis=1)
+            if not ok.any():
+                continue
+            sh_m, mt_m = sh[ok].mean(axis=0), mt[ok].mean(axis=0)
+            top.plot(lags, sh_m, marker="o", ms=3, lw=1.3, label=level)
+            bottom.plot(lags, sh_m - mt_m, marker="o", ms=3, lw=1.3, label=level)
+            if level == "production":
+                ref = mt_m
+        if ref is not None:
+            top.plot(lags, ref, color="k", ls="--", lw=1.2,
+                     label="model at the true rate (production spans)")
+        bottom.axhline(0.0, color="k", lw=0.8)
+        top.set_title(f"lambda {lv:g}/s, mu_pc {mv:.0f} photons per dye", fontsize=10)
+        top.set_xticks(lags[1::2])
+        bottom.set_xticks(lags[1::2])
+        bottom.set_xlabel("lag (frames)")
+    axes[0][0].set_ylabel("pooled shape (lag 1 = 1)")
+    axes[1][0].set_ylabel("shape minus model at the true rate")
+    axes[0][-1].legend(frameon=False, fontsize=6.5, loc="lower left")
+    fig.tight_layout()
+    reporter.save_figure("flicker_mismatch_shapes_by_level", fig,
+                         caption="Top: the pooled shape of every level, averaged over the scenes of "
+                                 "the cell where that level produced an estimate, with the model "
+                                 "arm's shape at the true rate cut to the production level's spans. "
+                                 "Bottom: each level's shape minus the model at the true rate cut to "
+                                 "that level's own spans. A difference that stays proportional to the "
+                                 "curve across the later lags is consistent with a lag-one normalization "
+                                 "effect; the curves alone cannot establish that mechanism or validate a "
+                                 "correction. One scene's lags scatter by a few hundredths.")
+    plt.close(fig)
 
 
 def make_figure(lam, mu, err, common, reporter):
@@ -529,6 +654,44 @@ def main(argv=None):
         [[lv, f"{np.nanmedian(c['n_traces'][:, li]):.0f}",
           f"{np.nanmedian(c['span'][:, li]):.0f}" if np.isfinite(c['span'][:, li]).any() else "n/a"]
          for li, lv in enumerate(LEVELS)])
+    early, later = shape_signature(c["shape"], c["model_true"])
+    reporter.table(
+        "Pooled shape against the model at the true rate, by level and true rate: "
+        "log ratio at lag 2 / its further change over the later lags",
+        ["level"] + [f"lambda {v:g}" for v in lams] + ["all"],
+        [[lv] + [f"{signature_cell(early[:, li], lam == v)} / {signature_cell(later[:, li], lam == v)}"
+                 for v in lams]
+             + [f"{signature_cell(early[:, li], every)} / {signature_cell(later[:, li], every)}"]
+         for li, lv in enumerate(LEVELS)],
+        note=f"Each cell: the mean over the scenes with an estimate (count) of ln(shape / model at the "
+             f"true rate) at lag 2, then its further change over the later lags: lag 3 on, wherever the "
+             f"model is at least {MODEL_FLOOR} (the ratio of the sums over those lags). The model curve "
+             f"is cut to the level's own spans, so it is the curve the estimator would read the truth "
+             f"from. Both values are read where the model is well above zero; in the last matched lags "
+             f"it approaches zero and a small difference becomes a large log ratio. A constant "
+             f"proportional discrepancy across the later lags is consistent with a lag-one normalization "
+             f"effect; the aggregate statistic alone cannot establish that mechanism or validate a "
+             f"correction, and deviations of opposite sign at different lags cancel in it. "
+             f"Selective loss of dim frames and photometry noise made correlated across lags by the "
+             f"per-trace detrend both change the later lags, and the statistic does not separate them.")
+    reporter.table(
+        "The same log ratios by level and brightness",
+        ["level"] + [f"mu_pc {v:g}" for v in mus],
+        [[lv] + [f"{signature_cell(early[:, li], mu == v)} / {signature_cell(later[:, li], mu == v)}"
+                 for v in mus]
+         for li, lv in enumerate(LEVELS)])
+    reporter.table(
+        "Pooled lag-0 over lag-1 value, by level and true rate",
+        ["level"] + [f"lambda {v:g}" for v in lams] + ["all"],
+        [[lv] + [signature_cell(c["lag0"][:, li], lam == v, ".3f") for v in lams]
+             + [signature_cell(c["lag0"][:, li], every, ".3f")]
+         for li, lv in enumerate(LEVELS)],
+        note="A diagnostic ratio, not a measurement of the photometry noise: the flicker itself, the "
+             "per-trace detrend and the gaps move it as well as variance uncorrelated between frames. "
+             "The shape discards lag 0 by normalizing at lag 1. The truth levels carry no photometry "
+             "noise, so a rise between spot_truth_detected and fitted_oracle accompanies the photometry "
+             "step, and a change between spot_truth_span and spot_truth_detected accompanies the gaps. "
+             "The pooled sums and pair counts behind every level are saved with the arrays.")
     reporter.stat("median share of visible subunits detected",
                   float(np.median([r["detected_share"] for r in results])),
                   note="subunits with at least one accepted fit matched to them")
@@ -543,6 +706,7 @@ def main(argv=None):
                        "subunits without changing a visible one's dye count; here --n-subunits sets "
                        "the density of visible spots")
     make_figure(lam, mu, err, common, reporter)
+    make_shape_figure(c, reporter)
 
     code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
     changed = bool(code["changed_during_run"])
@@ -556,7 +720,10 @@ def main(argv=None):
                         n_visible=np.array([r["n_visible"] for r in results]),
                         n_matched=np.array([r["n_matched"] for r in results]),
                         n_unmatched=np.array([r["n_unmatched"] for r in results]),
-                        n_second_fit=np.array([r["n_second_fit"] for r in results]))
+                        n_second_fit=np.array([r["n_second_fit"] for r in results]),
+                        shape=c["shape"], model_true=c["model_true"], lag0_over_lag1=c["lag0"],
+                        lags=np.arange(1, N_LAGS + 1), acf_sum=c["acf_sum"], acf_pairs=c["acf_pairs"],
+                        acf_lags=np.arange(0, N_LAGS + 1))
     per_level = {}
     for li, lv in enumerate(LEVELS):
         ok = np.isfinite(err[:, li])
@@ -565,7 +732,13 @@ def main(argv=None):
             reasons={rs: int((c["reason"][:, li] == rs).sum()) for rs in FAILURE_REASONS},
             at_grid_edge=int(c["at_grid_edge"][:, li].sum()),
             mean_error_dex=float(err[ok, li].mean()) if ok.any() else None,
-            mean_error_dex_every_level=float(err[common, li].mean()) if n_common else None)
+            mean_error_dex_every_level=float(err[common, li].mean()) if n_common else None,
+            mean_log_ratio_lag2=(float(np.nanmean(early[ok, li]))
+                                 if np.isfinite(early[ok, li]).any() else None),
+            mean_log_ratio_further_change=(float(np.nanmean(later[ok, li]))
+                                           if np.isfinite(later[ok, li]).any() else None),
+            mean_lag0_over_lag1=(float(np.nanmean(c["lag0"][ok, li]))
+                                 if np.isfinite(c["lag0"][ok, li]).any() else None))
     steps = {}
     for li in range(1, len(LEVELS)):
         d = err[:, li] - err[:, li - 1]
@@ -577,6 +750,9 @@ def main(argv=None):
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
         json.dump(dict(levels=list(LEVELS), level_notes=LEVEL_NOTES, per_level=per_level, steps=steps,
                        scenes=len(results), scenes_every_level=n_common,
+                       shape_cells=[dict(lambda_rate=lv, mu_pc=mv) for lv, mv in shape_cells(lam, mu)],
+                       later_lags=f"lag 3 to {LAST_LAG} wherever the model shape at the truth is at "
+                                  f"least {MODEL_FLOOR}",
                        labeling=f"{args.labeling} (bare law, probe occupancy 1)",
                        prob_photo_bleach=args.prob_photo_bleach,
                        implementation=("INVALID (implementation changed during the run)" if changed

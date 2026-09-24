@@ -1092,19 +1092,19 @@ def spot_intensity_traces(measurements: dict, track_id: np.ndarray, *,
     return traces, np.asarray(spans, dtype=np.int64)
 
 
-def flicker_data_shape(traces: list) -> Tuple[Optional[np.ndarray], float]:
-    """Pooled, detrended, lag-1-normalized ln-intensity autocorrelation of the traces.
+def flicker_pooled_acf(traces: list) -> Tuple[np.ndarray, np.ndarray]:
+    """Pooled lag product-sums and pair counts of the detrended ln-intensity traces, lags 0 to
+    ``_ACF_MAX_LAG``.
 
-    Each trace is logged and linearly detrended against its own frame index, which removes
-    photobleaching and the per-emitter mean together -- both are multiplicative in intensity
-    and so additive in the log. Non-positive samples become gaps rather than causing the
-    whole track to be dropped: background-subtracted video photometry goes negative for dim
-    frames, and discarding those tracks entirely would select against faint emitters.
+    This is the raw material of `flicker_data_shape`, which normalizes it and discards lag 0.
+    It is exposed for diagnostics that need lag 0, which the shape discards by normalizing at
+    lag 1. The ratio of the lag-0 to the lag-1 value is a diagnostic ratio, not a measurement of
+    the photometry noise: variance uncorrelated between frames raises it, but the flicker itself,
+    the detrend and the gaps move it too. Each trace is logged and linearly detrended against its own frame index, and
+    non-positive samples become gaps (see `flicker_data_shape`).
 
     Returns:
-        ``(shape, tau_seconds_placeholder)``: the decay shape over lags 1.., or ``None`` if
-        too few pairs were pooled, and the interpolated 1/e crossing in FRAMES (``nan`` if
-        the shape never crosses).
+        ``(csum, cnt)``: the pooled product-sums and the number of pairs at each lag.
     """
     csum = np.zeros(_ACF_MAX_LAG + 1)
     cnt = np.zeros(_ACF_MAX_LAG + 1)
@@ -1120,6 +1120,24 @@ def flicker_data_shape(traces: list) -> Tuple[Optional[np.ndarray], float]:
         coef = np.polyfit(t[finite], series[finite], 1)
         series = series - np.polyval(coef, t)
         _accumulate_acf(series, csum, cnt)
+    return csum, cnt
+
+
+def flicker_data_shape(traces: list) -> Tuple[Optional[np.ndarray], float]:
+    """Pooled, detrended, lag-1-normalized ln-intensity autocorrelation of the traces.
+
+    Each trace is logged and linearly detrended against its own frame index, which removes
+    photobleaching and the per-emitter mean together -- both are multiplicative in intensity
+    and so additive in the log. Non-positive samples become gaps rather than causing the
+    whole track to be dropped: background-subtracted video photometry goes negative for dim
+    frames, and discarding those tracks entirely would select against faint emitters.
+
+    Returns:
+        ``(shape, tau_seconds_placeholder)``: the decay shape over lags 1.., or ``None`` if
+        too few pairs were pooled, and the interpolated 1/e crossing in FRAMES (``nan`` if
+        the shape never crosses).
+    """
+    csum, cnt = flicker_pooled_acf(traces)
     if cnt[1] < _ACF_MIN_PAIRS:
         return None, float("nan")
     shape = _acf_shape(csum, cnt)

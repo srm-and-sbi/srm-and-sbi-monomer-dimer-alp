@@ -70,12 +70,16 @@ same point.
 This is the parameter for which recording length is decisive, and the reason is not only the
 frame count.
 
-Decay-rate information grows as the **cube** of the duration, so ten times the frames is about
-thirty-two times the precision on the rate. On top of that, the brightness is a stationary
-Ornstein–Uhlenbeck process with a correlation time of roughly fifteen frames, so consecutive
-frames of a fluorescence curve are **not** independent samples of the decay. The effective
-count is `n(1−rho)/(1+rho)`: a 100-frame recording carries about **three** effectively
-independent samples, not a hundred.
+In the short-window, shallow-decay limit with known amplitude and offset and independent
+constant-variance noise, rate information grows approximately as the **cube** of the duration,
+ten times the frames giving about thirty-two times the precision on the rate; with
+both fitted, the dependence is steeper where the decay is shallow and shallower where it
+completes within the window, so the table below, not the law, carries it. On top of that, the
+log-brightness is a stationary Ornstein–Uhlenbeck process with a correlation time of roughly
+fifteen frames, so consecutive frames of a fluorescence curve are **not** independent samples of
+the decay. The effective count `n(1−rho)/(1+rho)`, a mean-estimation approximation applied here to
+a fitted rate, gives about **three** effectively independent samples in a 100-frame recording,
+not a hundred.
 
 A third effect matters more than either, and is easy to miss. The amplitude and the offset of
 the curve are unknown and must be fitted alongside the rate. Where the decay is shallow the
@@ -102,9 +106,13 @@ estimator using total fluorescence, with an effective-sample-size adjustment for
 correlation — and does not establish a fundamental recovery limit for inference from the full
 video; it is the reason this estimator is held to its threshold at 1000 frames and not at 100.
 
-The acceptance threshold is therefore stated at 1000 frames **and** restricted to the range
-where the bound permits it. Outside that range the report records the estimate and states that
-no threshold applies, rather than passing or failing it.
+The acceptance threshold is therefore stated at 1000 frames, and which recordings it applies to is
+decided by an **observable** eligibility rule, never by the benchmark or the true value
+(`DETECTOR_WORKFLOW.md` §9.6): a recording is usable when its fit converged, its fitted total
+decay is at least three times the residual scatter, and the fit's own standard error on log10 p is
+at most 0.25 dex. The accuracy threshold applies to the usable recordings; the recovery of the
+rejected ones is reported beside them, so that selection cannot hide a failure. The report states
+the benchmark at the prior center as explanatory context only.
 
 ## Requirements
 
