@@ -65,8 +65,9 @@ with more recorded beside them.
   mean and paired contrast carries its scene count. A contrast suggests a contribution under those scenes
   and that ordering. Scenes use the bare dye-count law at probe occupancy 1. It reads no EVAL task.
 - `Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh`: the direct estimators and
-  the mismatch study on one whole CPU node, submitted directly with `sbatch` (HPC README §6). `PURPOSE=`
-  declares a tier run's purpose and is required; the log states that exit statuses 1 and 2 also cover an uncaught exception
+  the mismatch study on one whole CPU node, submitted directly with `sbatch` (HPC README §6). It requests
+  48 CPUs per task, one per physical core: JUWELS counts cores here, refuses 96, and allocates the whole
+  96-thread node for 48. `PURPOSE=` declares a tier run's purpose and is required; the log states that exit statuses 1 and 2 also cover an uncaught exception
   and an argument error or refusal.
 - `tests/test_direct_estimator_guards.py`: the required purpose and its checks against the declared split, the
   folder refusal in every utility, the harness's variant folders, linking contrast and failure records, the

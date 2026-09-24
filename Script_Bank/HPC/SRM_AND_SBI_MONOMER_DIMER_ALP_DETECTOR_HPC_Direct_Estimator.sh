@@ -41,7 +41,7 @@
 #SBATCH --partition=YOUR_PARTITION
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=96
+#SBATCH --cpus-per-task=48   # one per physical core; JUWELS counts cores here and allocates the whole node (96 threads)
 #SBATCH --time=06:00:00
 #SBATCH --mail-type=FAIL
 #SBATCH --output=%x_%j.out
