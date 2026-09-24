@@ -47,6 +47,27 @@ IMPLEMENTATION_FILES = (
 )
 
 
+# The files whose code determines a direct-estimator result: the utilities, their shared kernels,
+# and the renderer and labeling law their self-tests and harnesses draw scenes from. An analysis
+# run folder records their hash at startup and at write (DETECTOR_WORKFLOW.md sec. 9.6: the commit
+# identifier alone does not capture the executed version).
+DIRECT_ESTIMATOR_FILES = (
+    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_PSF_Width.py",
+    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Rate.py",
+    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Fluorescence_Loss.py",
+    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Mismatch.py",
+    "srm_and_sbi_monomer_dimer_alp/direct_imaging_estimates.py",
+    "srm_and_sbi_monomer_dimer_alp/direct_acceptance.py",
+    "srm_and_sbi_monomer_dimer_alp/information_budget.py",
+    "srm_and_sbi_monomer_dimer_alp/simulation_dli_support.py",
+    "srm_and_sbi_monomer_dimer_alp/labeling.py",
+    "srm_and_sbi_monomer_dimer_alp/detector_parameterization.py",
+    "srm_and_sbi_monomer_dimer_alp/parameterization.py",
+    "srm_and_sbi_monomer_dimer_alp/io.py",
+    "srm_and_sbi_monomer_dimer_alp/provenance.py",
+)
+
+
 def repo_root() -> Path:
     """The repository root, taken as the parent of the package directory."""
     return Path(__file__).resolve().parent.parent
@@ -125,3 +146,55 @@ def finalize_code_provenance(startup: dict, root=None, files=IMPLEMENTATION_FILE
         "implementation_at_write": at_write,
         "changed_during_run": at_write["sha256"] != startup["implementation"]["sha256"],
     }
+
+
+def reserve_run_folder(path) -> Path:
+    """Create an analysis run folder that does not exist yet, in one atomic step.
+
+    A run folder holds exactly one run. Writing into an existing one would replace an earlier run's
+    arrays, report and provenance record, so an existing folder raises ``FileExistsError``. The
+    utilities check before they compute, so the refusal comes before any work; creating the folder
+    atomically also keeps two concurrent runs from sharing it. The parent is created as needed.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.mkdir()
+    return p
+
+
+def analysis_run_record(startup: dict, *, argv, files=DIRECT_ESTIMATOR_FILES, extra=None,
+                        root=None, code=None) -> dict:
+    """The provenance record an analysis run folder stores as ``provenance.json``.
+
+    It holds the command line, host, Slurm job, package and library versions, the commit the
+    submitter declares (``SRM_AND_SBI_CODE_COMMIT``; a synced tree without ``.git`` cannot report
+    its own), and the code block of `finalize_code_provenance` over ``files``: the implementation
+    hash at startup and at write, and whether the two differ. ``code`` passes a block the caller has
+    already finalized, so the record and the run's validity rest on the same comparison. ``extra``
+    adds run facts such as the purpose, the tasks read and the number of recordings.
+    """
+    import datetime
+    import os
+    import platform
+    import sys
+
+    import numpy
+    import scipy
+
+    from . import __version__
+
+    record = {
+        "written_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "host": platform.node(),
+        "argv": [str(a) for a in argv],
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "code_commit_declared": os.environ.get("SRM_AND_SBI_CODE_COMMIT"),
+        "package_version": __version__,
+        "python": sys.version.split()[0],
+        "numpy": numpy.__version__,
+        "scipy": scipy.__version__,
+        "code": code if code is not None else finalize_code_provenance(startup, root, files),
+    }
+    if extra:
+        record.update(extra)
+    return record

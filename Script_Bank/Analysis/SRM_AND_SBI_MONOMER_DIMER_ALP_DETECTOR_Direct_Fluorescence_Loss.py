@@ -57,21 +57,27 @@ Prespecified acceptance (fixed before the first run)
 Usage (from the repo root):
     MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \\
         Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Fluorescence_Loss.py \\
-        --condition FAB --total-time-seconds 2.0 --tasks 0 --max-videos 200
+        --condition FAB --total-time-seconds 20.0 --tasks 0 1 --expect-videos-per-task 100 \\
+        --max-videos 200 --purpose development --run-suffix <commit>
 
+    ... --purpose verdict                   # required for a tier run: development, or verdict for the
+                                            # reserved EVAL tasks of the tier in full (sec. 9.6)
     ... --selftest --selftest-frames 1000   # in-memory recordings at known bleaching rates
-    ... --dry-run                           # resolve settings; read and compute nothing
+    ... --dry-run                           # resolve settings and apply every refusal; read nothing
 
 Outputs (analysis results are data and live in the Data_Bank, never the codebase):
-    <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_Fluorescence_Loss/
-        report.md, direct_fluorescence_loss.npz, summary.json, figures/
+    <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_Fluorescence_Loss_<DEV|VERDICT>[_<suffix>]/
+        report.md, direct_fluorescence_loss.npz, summary.json, provenance.json, figures/
+    A run never reuses a folder: an existing one is refused before anything is read.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -85,6 +91,7 @@ sys.path.insert(0, REPO_ROOT)
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_imaging_estimates as die  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import provenance as prov  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import information_budget as ib  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
@@ -190,12 +197,13 @@ _STORE_CACHE: dict = {}
 
 
 def _worker(job):
-    video_path, index, scope, lam, opts = job
+    video_path, task, index, scope, lam, opts = job
     handle = _STORE_CACHE.get(video_path)
     if handle is None:
         handle = sio.load_data(video_path)
         _STORE_CACHE[video_path] = handle
     out = estimate_one(np.asarray(handle[index]), scope, lambda_rate=lam, **opts)
+    out["task"] = int(task)
     out["index"] = int(index)
     return out
 
@@ -276,10 +284,28 @@ def main(argv=None):
                     help="the acceptance threshold is stated at 1000 frames.")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--purpose", default=None, choices=list(da.PURPOSES),
+                    help="required for a tier run: why it reads its tasks (DETECTOR_WORKFLOW.md "
+                         "sec. 9.6). 'development' reads development tasks only; 'verdict' reads "
+                         "exactly the reserved EVAL tasks of the tier, in full, once per estimator. "
+                         "Checked before any recording is read; the folder name carries DEV or "
+                         "VERDICT. Not accepted by a run that reads no EVAL task.")
+    ap.add_argument("--run-suffix", default=None,
+                    help="token appended to the run folder name after the purpose token, e.g. the "
+                         "commit (-> _DEV_<commit>); letters, digits and underscores.")
     args = ap.parse_args(argv)
 
     if not args.selftest and (args.condition is None or args.total_time_seconds is None):
         ap.error("--condition and --total-time-seconds are required (or use --selftest)")
+    if args.run_suffix is not None and not re.fullmatch(r"[A-Za-z0-9_]+", args.run_suffix):
+        ap.error(f"--run-suffix {args.run_suffix!r}: use letters, digits and underscores only")
+    if args.run_suffix is not None and re.match(r"(?i)(DEV|VERDICT|SELFTEST)(_|$)", args.run_suffix):
+        ap.error(f"--run-suffix {args.run_suffix!r}: the purpose token (DEV, VERDICT, SELFTEST) is added "
+                 f"automatically; pass only what follows it, e.g. the commit")
+    if not args.selftest and args.purpose is None:
+        ap.error("--purpose is required for a tier run: development or verdict (DETECTOR_WORKFLOW.md sec. 9.6)")
+    if args.selftest and args.purpose is not None:
+        ap.error("--purpose applies to a tier run; a selftest reads no EVAL task")
 
     data_bank_root = PARAMETERS.machine.data_bank_root
     dt = PARAMETERS.simulation.timing.frame_time_seconds
@@ -303,16 +329,48 @@ def main(argv=None):
                                                  timing_label, True, args.split))
                        for t in args.tasks]
 
-    descriptor = f"{STAGE}_SELFTEST" if args.selftest else STAGE
-    out_dir = args.out_dir or os.path.join(str(data_bank_root), "Posit",
-                                           f"{run_alias}_{descriptor}")
+    # ---- purpose: held to the declared split before any recording is read ------------------
+    purpose_record = dict(purpose="selftest")
+    if not args.selftest:
+        try:
+            purpose_record = da.check_run_purpose(
+                args.purpose, estimator=STAGE, condition=args.condition, n_frames=n_frames,
+                split=args.split, tasks=args.tasks, max_videos=args.max_videos,
+                expect_videos_per_task=args.expect_videos_per_task)
+        except ValueError as exc:
+            ap.error(str(exc))
+
+    descriptor = (f"{STAGE}_SELFTEST" if args.selftest
+                  else f"{STAGE}_{da.PURPOSE_TOKENS[args.purpose]}")
+    if args.run_suffix:
+        descriptor += f"_{args.run_suffix}"
+    posit_dir = os.path.join(str(data_bank_root), "Posit")
+    out_dir = args.out_dir or os.path.join(posit_dir, f"{run_alias}_{descriptor}")
+    if not args.selftest and args.purpose == "verdict":
+        # The reserved tasks are judged once per estimator (sec. 9.6): a verdict run writes to its
+        # fixed Posit location, where an earlier verdict folder of the same estimator and tier is seen.
+        if args.out_dir:
+            ap.error("a verdict run writes to its fixed Posit folder; --out-dir is for development runs")
+        earlier = sorted(glob.glob(os.path.join(posit_dir, f"{run_alias}_{STAGE}_VERDICT*")))
+        if earlier:
+            ap.error(f"a verdict folder of {STAGE} on this tier exists already ({earlier[0]}); the "
+                     f"reserved tasks are judged once (DETECTOR_WORKFLOW.md sec. 9.6)")
+    if os.path.exists(out_dir):
+        ap.error(f"the run folder exists already: {out_dir}. A run never reuses a folder: pass another "
+                 f"--run-suffix, or move the earlier run aside deliberately.")
 
     if args.dry_run:
         print(f"[{STAGE}] DRY RUN -- nothing is read and nothing is written.")
         print(f"  machine profile : {os.environ.get('MACHINE_PROFILE', '(unset)')}")
         print(f"  mode            : {'selftest' if args.selftest else args.split}")
         print(f"  run alias       : {run_alias}")
-        print(f"  out dir         : {out_dir}")
+        print(f"  out dir         : {out_dir}   (new; created at the start of the run)")
+        if not args.selftest:
+            pr = purpose_record
+            print(f"  purpose         : {pr['purpose']} -- tasks {pr['tasks']}; "
+                  + (f"declared split: development {pr['development_tasks'][0]}-{pr['development_tasks'][-1]}, "
+                     f"reserved {pr['reserved_tasks'][0]}-{pr['reserved_tasks'][-1]}"
+                     if pr["split_declared"] else "no declared split for this tier (no reserved task)"))
         print(f"  frames          : {n_frames}   (acceptance stated at "
               f"{ACCEPTANCE['acceptance_frames']})")
         print(f"  observable      : {args.observable}")
@@ -329,7 +387,11 @@ def main(argv=None):
         print(f"  acceptance      : {ACCEPTANCE}")
         return 0
 
-    os.makedirs(out_dir, exist_ok=True)
+    startup_code = prov.code_provenance(files=prov.DIRECT_ESTIMATOR_FILES)
+    try:
+        prov.reserve_run_folder(out_dir)
+    except FileExistsError:
+        ap.error(f"the run folder appeared after the check (a concurrent run?): {out_dir}")
     reporter = DiagnosticReporter(
         stage=STAGE, enabled=True, dump=True, dump_dir=out_dir, run_label=run_alias,
         run_note=("Direct, non-neural estimate of the photobleaching probability. The "
@@ -343,7 +405,15 @@ def main(argv=None):
         res = run_selftest(args.selftest_subunits, n_frames, args.n_sigma,
                            args.detect_frames, observable=args.observable)
         truth, estimate, out, theta_all = res["truth"], res["estimate"], res["out"], res["theta"]
+        ids = dict(scene=np.arange(np.asarray(truth).shape[0]))
     else:
+        reporter.stat("run purpose", args.purpose,
+                      note=(f"tasks {purpose_record['tasks']}; " + (
+                          f"declared split: development {purpose_record['development_tasks'][0]}-"
+                          f"{purpose_record['development_tasks'][-1]}, reserved "
+                          f"{purpose_record['reserved_tasks'][0]}-{purpose_record['reserved_tasks'][-1]} "
+                          f"(DETECTOR_WORKFLOW.md sec. 9.6)" if purpose_record["split_declared"]
+                          else "no declared split for this tier, so no reserved task")))
         truth_rows, jobs = [], []
         opts = dict(n_sigma=args.n_sigma, detect_frames=args.detect_frames,
                     observable=args.observable)
@@ -370,7 +440,7 @@ def main(argv=None):
             for i in range(n_here):
                 scope_row = {k: float(scope_arr[i, j])
                              for j, k in enumerate(det.DETECTOR_SCOPE_KEYS)}
-                jobs.append((str(vpath), i, scope_row, args.lambda_rate, opts))
+                jobs.append((str(vpath), t, i, scope_row, args.lambda_rate, opts))
                 truth_rows.append(theta[i, :len(det.DETECTOR_FIND)])
             if len(jobs) >= args.max_videos:
                 break
@@ -392,6 +462,8 @@ def main(argv=None):
         theta_all = np.asarray(truth_rows, dtype=float)          # PHYSICAL units, all six columns
         truth = theta_all[:, det.DETECTOR_FIND["prob_photo_bleach"]]
         estimate = np.asarray([o["prob_photo_bleach"] for o in out], dtype=float)
+        ids = dict(task=np.array([o["task"] for o in out], dtype=np.int64),
+                   index=np.array([o["index"] for o in out], dtype=np.int64))
 
     extra = dict(n_apertures=np.array([o["n_apertures"] for o in out]),
                  n_eff=np.array([o["n_eff"] for o in out]),
@@ -431,6 +503,10 @@ def main(argv=None):
             result["verdicts"][k] = (f"NOT APPLICABLE ({n_frames} frames is below the "
                                      f"{ACCEPTANCE['acceptance_frames']}-frame length the threshold is stated at)")
         result["exit_code"] = 0
+    # The implementation hash is compared once every estimate exists and before anything is
+    # written: a run whose code changed while it executed is invalid for acceptance (exit 3).
+    code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
+    da.apply_code_provenance(result, code)
     da.render(reporter, result, estimator=STAGE, target_key="prob_photo_bleach")
     reporter.table(
         "Bleaching outcomes against all attempted recordings", ["outcome", "count", "share of attempted", "rule"],
@@ -456,10 +532,23 @@ def main(argv=None):
 
     np.savez_compressed(os.path.join(out_dir, "direct_fluorescence_loss.npz"),
                         truth=truth, estimate=estimate, theta=theta_all, valid=valid, usable=usable,
-                        outcome=outcome, reasons=np.asarray([r or "" for r in reasons]), **extra)
+                        outcome=outcome, reasons=np.asarray([r or "" for r in reasons]), **extra, **ids)
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
-        json.dump(dict(acceptance=ACCEPTANCE, eligibility=ELIGIBILITY, evaluation=result),
-                  fh, indent=2, default=float)
+        json.dump(dict(acceptance=ACCEPTANCE, eligibility=ELIGIBILITY, purpose=purpose_record,
+                       evaluation=result), fh, indent=2, default=float)
+    record = prov.analysis_run_record(
+        startup_code, argv=sys.argv, code=code,
+        extra=dict(stage=STAGE, mode="selftest" if args.selftest else args.split,
+                   purpose=purpose_record, tasks=None if args.selftest else list(args.tasks),
+                   recordings=int(np.asarray(truth).shape[0]), run_suffix=args.run_suffix,
+                   out_dir=str(out_dir), observable=args.observable, lambda_rate=args.lambda_rate))
+    with open(os.path.join(out_dir, "provenance.json"), "w") as fh:
+        json.dump(record, fh, indent=2, default=str)
+    reporter.check("implementation unchanged during the run", not code["changed_during_run"],
+                   "implementation hash identical at startup and at write", fatal=False,
+                   note="A file edited while the run executed leaves results that describe no single "
+                        "implementation: the run is INVALID for acceptance, exits with status 3, and "
+                        "provenance.json records both hashes. The arrays are kept as diagnostics.")
 
     reporter.summary()
     path = reporter.write_report()

@@ -5,6 +5,107 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.19 - 2026-09-24
+
+Development tooling for the direct imaging estimators, the declared split of the EVAL tiers into
+development and reserved tasks, and the guards that hold every run to it. No canonical stage, parameter
+role, preprocessing step, or estimate changes; the direct estimators return the same numbers as before,
+with more recorded beside them.
+
+### Added
+
+- `DETECTOR_WORKFLOW.md` §9.6 — the declared split, fixed before any further direct-estimator run. Two-second
+  MET-FAB tier: tasks 0 to 19 are development data, tasks 20 to 24 (5,000 recordings) the reserved set for
+  the verdicts of the two-second estimators. Twenty-second tier: tasks 0 to 9 development, tasks 10 to 19
+  (1,000 attempted recordings) reserved for the fluorescence-loss verdict at 1000 frames; its usable-recording
+  minima are judged separately. A reserved task scored by a direct estimator outside its verdict run, or used
+  in tuning, leaves the reserved set. The direct-estimator runs on record had read two-second EVAL tasks 0
+  and 1 and no other EVAL task (their run folders on the PC, rcl01 and JUWELS).
+- **The split is enforced before any recording is read.** A tier run must declare `--purpose development` or
+  `--purpose verdict`; there is no default (`direct_acceptance.check_run_purpose` over `DECLARED_SPLIT`). A development
+  run on a declared tier refuses every task outside its development set. A verdict run requires exactly the
+  reserved tasks of its tier, every recording of them, an estimator the set is kept for, and no earlier
+  verdict folder of that estimator on the tier. TRAIN and TEST tasks and undeclared tiers hold no reserved
+  task. The purpose record goes into `summary.json`, `provenance.json` and the report, and a dry run applies
+  the same refusals.
+- **Run folders are never reused.** A tier run's folder carries its purpose (`_DEV` or `_VERDICT`), then
+  `--run-suffix`, for example `_DEV_<commit>`; a suffix that repeats a purpose token is refused. An existing
+  folder is refused before anything is read, and the folder is created in one atomic step
+  (`provenance.reserve_run_folder`). The flicker harness names its labeling and bleaching setting in the
+  folder name, so its documented variants never share a folder.
+- **A changed implementation invalidates the run.** Every utility compares the implementation hash at startup
+  with the one taken after the computation, before it writes. When they differ, the verdict table marks the
+  run `INVALID` in its step 0, the arrays are kept as diagnostics, and the exit status is 3
+  (`direct_acceptance.apply_code_provenance`), whatever the other verdicts were.
+- **Traceable runs** in all three direct estimators: `task` and `index` arrays identifying every recording,
+  and a `provenance.json` in every run folder, the PSF experiment mode's included
+  (`provenance.analysis_run_record` over `provenance.DIRECT_ESTIMATOR_FILES`: command, host, Slurm job,
+  versions, declared commit, purpose, implementation hash at startup and at write).
+- **`Direct_PSF_Width` observable per-recording quantities**, candidate predictors for a correction of the
+  estimates or their ranges (§9.6 permits only quantities an experimental recording provides as well):
+  median spot signal in photons, median spot signal over the background noise, spot fits per frame, the
+  median length of the tracks the population estimate keeps (counted in fits that pass its relative-error
+  filter; `direct_imaging_estimates.psf_width_population` now also returns those lengths), and the tracks
+  kept over the mean number of fits per frame. The last one is not a fragmentation measure: partial
+  visibility, bleaching and turnover raise it as much as broken tracks do. The planned bootstrap over
+  tracks is not implemented: tracks of one subunit need not be independent units, and resampling them
+  cannot see a brightness-dependent offset.
+- **`Direct_PSF_Width` selftest diagnostics**: `--selftest-grid brightness` (`mu_pc` on the five edges of its
+  prior quarters at three spreads), `--selftest-labeling FAB` (the bare FAB dye-count law at probe occupancy
+  1, not the tier's occupancy model), and an accounting of every scene's `mu_r` error against the truth in
+  five terms that sum to the total, all five shown: finite population, detection selection, duplication of
+  subunits whose detections formed several tracks, fitting, and a remainder. The accounting is conditional
+  on nearest-subunit matching and on the order of the terms; it is not a causal decomposition. The true
+  widths come from the renderer's own seeded draw.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Mismatch.py` and companion note:
+  renders scenes with known truth, reproduces every dye's photons from the renderer's seed, and applies the
+  flicker estimator's shape match to seven versions of the traces: multiplicity, span selection, detection
+  gaps, photometry noise, linking alone (the same matched detections grouped by the production linker), and
+  then the detections outside the matched set. Every level records why it produced no estimate, and every
+  mean and paired contrast carries its scene count. A contrast suggests a contribution under those scenes
+  and that ordering. Scenes use the bare dye-count law at probe occupancy 1. It reads no EVAL task.
+- `Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh`: the direct estimators and
+  the mismatch study on one whole CPU node, submitted directly with `sbatch` (HPC README §6). `PURPOSE=`
+  declares a tier run's purpose and is required; the log states that exit statuses 1 and 2 also cover an uncaught exception
+  and an argument error or refusal.
+- `tests/test_direct_estimator_guards.py`: the required purpose and its checks against the declared split, the
+  folder refusal in every utility, the harness's variant folders, linking contrast and failure records, the
+  retained-track observable, the decomposition table, and the invalidation of a changed implementation.
+
+### Changed
+
+- The section headings of the three direct-estimator companion notes no longer carry package versions
+  (`Acceptance mechanics`, not `Acceptance mechanics (0.1.13)`): the workspace document rules keep version
+  labels out of body text, and this log records when each section arrived. Headings that identify the code
+  behind a recorded result, such as `Development outcome (2026-09-21, code 2b9c32e, EVAL tasks 0-1)`, stay.
+
+### Verification
+
+- The PSF estimates are bit-identical to 0.1.18: the committed 0.1.18 tree and this one, run in separate
+  processes on three rendered FAB scenes (dim and broad, dim, bright and broad), agree in every returned
+  number (`mu_r`, `sigma_r`, the uncorrected spread, both standard errors, the track and spot counts).
+  The default selftest returns exactly the estimates of its earlier run on the same machine, and the
+  recorded selftest estimates to 1.4e-7, the size of cross-machine differences in the spot fits; the five
+  terms of its accounting table sum to the total in every scene.
+- The flicker harness reproduces the renderer's photons exactly. A one-scene run completes all seven levels,
+  and the six levels it shares with the earlier one-scene run reproduce that run's estimates.
+- The tier path of all three estimators, checked on the local development task 0 (two recordings on the
+  PC), writes the identifiers, the purpose record and `provenance.json`, and exits 2 (PSF width, flicker
+  rate: insufficient evidence) and 0 (fluorescence loss at 2 s: not applicable), as the rules require. With
+  the write-time hash forced to differ, a loss selftest exits 3 with step 0 `INVALID` in its report and
+  summary.
+- All 72 existing tests and the 19 new ones pass; the wrapper passes `bash -n`.
+
+### Development diagnostics
+
+- PSF brightness selftest under the FAB law (15 scenes, about 120 visible subunits each, 2 s; informational,
+  no verdict). The fitting term of the `mu_r` error rises with brightness, from −0.009 dex at 100 photons
+  per dye to +0.009 dex at 562 (mean over three spreads), the direction of the brightness dependence on the
+  development tier: a preliminary lead. Detection selection matters only for broad spreads when dim,
+  −0.038 dex at 100 photons and a spread of 0.5. The duplication term ranges up to 0.03 dex across the
+  scenes; fifteen different scenes do not establish it as a variance component the standard error omits.
+  These scenes calibrate nothing; the development tasks are to carry any correction.
+
 ## 0.1.18 - 2026-09-24
 
 Regenerates the first analyses downstream of the 0.1.17 optimizer and records what the corrected MAP

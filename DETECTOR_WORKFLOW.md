@@ -1152,7 +1152,32 @@ untouched, because the neural calibration of §6.9 has already examined every EV
 outputs are preserved rather than overwritten, under the run folder suffixed `_DEV_<commit>`, together
 with the exact commands, settings, recording identifiers, script and kernel hashes, and any
 uncommitted change in the executing tree — the commit identifier alone does not capture the executed
-version.
+version. A run never reuses a folder: an existing one is refused before anything is read. A run whose
+implementation changed while it executed describes no single version and is invalid for acceptance:
+its arrays are kept as diagnostics, its report marks it `INVALID`, and it exits with status 3.
+
+**Declared split (2026-09-24).** The rule above is applied to the two MET-FAB EVAL tiers as follows,
+fixed before any further direct-estimator run. Two-second tier (25 tasks of 1,000 recordings): tasks 0
+and 1 are development data already; tasks 2 to 19 are development data as well, for diagnosis and for
+calibrating any correction or range construction; tasks 20 to 24, 5,000 recordings, are the reserved
+validation set for the verdicts of the two-second estimators (PSF width and flicker rate). Twenty-second
+tier (20 tasks of 100 recordings, 1000 frames each): tasks 0 to 9 are development data; tasks 10 to 19,
+1,000 recordings, are reserved for the fluorescence-loss verdict at 1000 frames, which meets the run
+evidence of step 1 with no recording to spare; the usable-recording minima of the bleaching step are
+judged separately, on the recordings the eligibility diagnostic accepts. A reserved task is scored only
+by the frozen version of an estimator in its verdict run. A reserved task scored by a direct estimator
+for any other purpose, a diagnostic included, or used in tuning, leaves the reserved set, and the
+verdict report names the tasks it used. When the split was declared, the direct-estimator runs on
+record had read EVAL tasks 0 and 1 of the two-second tier and no other EVAL task.
+
+The utilities enforce the split before they read a recording. A tier run must declare its purpose
+(`--purpose development` or `--purpose verdict`; there is no default), and the run folder carries it
+(`_DEV` or `_VERDICT`, then any suffix). A development run on a tier with a declared split refuses every task
+outside its development set. A verdict run requires exactly the reserved tasks of its tier, in full,
+an estimator the set is kept for, and no earlier verdict folder of the same estimator on that tier.
+TRAIN and TEST tasks, and EVAL tiers without a declared split, hold no reserved task: development runs
+may read them, and verdict runs may not. The purpose, the tasks, and the declared split of the tier
+are recorded in `summary.json` and `provenance.json`.
 
 **Verdict vocabulary.** `PASS`, `FAIL (operational)`, `FAIL (protocol)`, `FAIL (accuracy)`,
 `FAIL (uncertainty)`, and `INSUFFICIENT EVIDENCE (run | accuracy)`. A report states all applicable

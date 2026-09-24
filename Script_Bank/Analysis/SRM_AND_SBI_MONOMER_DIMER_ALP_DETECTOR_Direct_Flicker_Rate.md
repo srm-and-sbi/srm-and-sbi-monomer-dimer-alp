@@ -144,7 +144,8 @@ user reads the estimate as running fast by roughly 0.06 dex rather than as scatt
 ```
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Rate.py \
-    --condition FAB --total-time-seconds 2.0 --tasks 0 --max-videos 100 --workers 16
+    --condition FAB --total-time-seconds 2.0 --tasks 0 --max-videos 100 --workers 16 \
+    --purpose development --run-suffix <commit>
 ```
 
 `--min-track-length` sets the shortest usable trace, defaulting to the 40 frames the derivation
@@ -167,15 +168,18 @@ width — together with the multiplicity systematic as a band. That band sits in
 at the center of the `sigma_pc` prior and consumes most of it at the top corner, which the
 report says explicitly rather than leaving it to be inferred.
 
-## Acceptance mechanics (0.1.13)
+## Acceptance mechanics
 
 The utility evaluates the frozen rules of `DETECTOR_WORKFLOW.md` §9.6 through the shared kernel
 `srm_and_sbi_monomer_dimer_alp.direct_acceptance`, which every direct estimator uses so that a rule
 cannot drift between them. The report carries the five verdicts side by side (evidence adequacy of
 the run, operational success, evidence adequacy for accuracy, accuracy, uncertainty coverage), the
 prior-fixed quartile table, and the dropped recordings by reason code. The exit status is 0 when
-nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence. A
-`--selftest` reaches no verdict: its few scenes are reported as `SELFTEST (informational)`.
+nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence, and 3 when
+the implementation changed during the run, which makes the run invalid for acceptance. Python also
+exits 1 on an uncaught exception and the argument parser 2 on an argument error or a refusal, so 1 and
+2 are not verdicts alone; the log says which. A `--selftest` reaches no verdict: its few scenes are
+reported as `SELFTEST (informational)`.
 
 **Reason codes.** Every attempted recording that returns no valid estimate carries one of the codes
 listed below; a dropped recording without a code fails the run itself. The saved arrays hold the
@@ -231,6 +235,36 @@ comparison against estimation over the full experimental recording with one rate
 propagated to the windows, contingent on validating that the rate is constant over a recording at that
 duration. The comparator is the multiple-dye neural posterior estimator on the same recordings (bias, MAE,
 uncertainty, and correlation together), not the one-dye estimator.
+
+## Development runs and the mismatch study
+
+**Every run is kept, and a tier run is held to its purpose.** A tier run must declare why it reads its
+tasks: `--purpose development` or `--purpose verdict`; there is no default. Before it reads a recording,
+a development run on a tier with a declared split refuses every task outside the development set, and a
+verdict run requires exactly the reserved tasks of the tier, in full, and no earlier verdict folder of
+this estimator on that tier (`DETECTOR_WORKFLOW.md` §9.6, declared split). The run folder carries the
+purpose, `_DEV` or `_VERDICT`, and `--run-suffix` appends to it, for example the commit:
+`..._Direct_Flicker_Rate_DEV_<commit>`. A run never reuses a folder; an existing one is refused before
+anything is read, so an earlier run is never overwritten. Every run folder holds `provenance.json`: the
+command line, host, Slurm job, package and library versions, the declared commit, the purpose record,
+and the implementation hash of the direct-estimator files at startup and at write. When the two hashes
+differ, the run is invalid for acceptance: its arrays are kept as diagnostics, the verdict table marks
+it `INVALID`, and it exits with status 3. The arrays carry `task` and `index` for every recording. On
+JUWELS, `Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh` runs the
+utility on one whole CPU node (`ESTIMATOR=`, `TASKS=`, `PURPOSE=`, `RUN_SUFFIX=`, `CODE_COMMIT=`).
+
+**Where along the observation chain the bias arises.**
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Mismatch.py` (companion note beside it) renders
+scenes with known truth and applies this estimator's shape match to seven versions of the traces: each
+dye's true photons over the whole recording, each spot's summed true photons, those over the detected
+span, those at the detected frames only, the fitted amplitudes of the matched detections grouped by
+true identity, the same detections grouped by the production linker, and the production traces with
+every accepted detection. Each version changes one thing against the one before it; the two fitted
+groupings read the same detections, so their contrast isolates linking, and the last contrast isolates
+the detections outside the matched set. A contrast suggests a contribution of that step under these
+scenes and this ordering, not a causal decomposition; every level reports how many scenes produced an
+estimate and why the others did not. The harness reads no EVAL task; the development tasks confirm what
+it finds.
 
 ## Essential notes
 

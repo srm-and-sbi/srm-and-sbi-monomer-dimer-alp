@@ -149,15 +149,18 @@ the estimate, or a mis-stated bound — before it is read as an unusually good e
 benchmark constrains an unbiased estimator, and a fit with bounded parameters that shrinks toward
 the middle of its range can legitimately beat it, so the check prompts rather than fails.
 
-## Acceptance mechanics (0.1.13)
+## Acceptance mechanics
 
 The utility evaluates the frozen rules of `DETECTOR_WORKFLOW.md` §9.6 through the shared kernel
 `srm_and_sbi_monomer_dimer_alp.direct_acceptance`, which every direct estimator uses so that a rule
 cannot drift between them. The report carries the five verdicts side by side (evidence adequacy of
 the run, operational success, evidence adequacy for accuracy, accuracy, uncertainty coverage), the
 prior-fixed quartile table, and the dropped recordings by reason code. The exit status is 0 when
-nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence. A
-`--selftest` reaches no verdict: its few scenes are reported as `SELFTEST (informational)`.
+nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence, and 3 when
+the implementation changed during the run, which makes the run invalid for acceptance. Python also
+exits 1 on an uncaught exception and the argument parser 2 on an argument error or a refusal, so 1 and
+2 are not verdicts alone; the log says which. A `--selftest` reaches no verdict: its few scenes are
+reported as `SELFTEST (informational)`.
 
 **Reason codes.** Every attempted recording that returns no valid estimate carries one of the codes
 listed below; a dropped recording without a code fails the run itself. The saved arrays hold the
@@ -200,6 +203,40 @@ times `10^(± 1.645 · se_log10)`, with `se_log10 = prob_se / (p · ln 10)` and 
 flicker-corrected standard error propagated from the rate. Its coverage against the truth, overall
 and in the operating subgroup, is what validates it; its median width is reported against the
 1.5 dex prior width.
+
+## Development runs on the 20 s tier
+
+**Every run is kept, and a tier run is held to its purpose.** A tier run must declare why it reads its
+tasks: `--purpose development` or `--purpose verdict`; there is no default. Before it reads a recording,
+a development run on a tier with a declared split refuses every task outside the development set, and a
+verdict run requires exactly the reserved tasks of the tier, in full, and no earlier verdict folder of
+this estimator on that tier (`DETECTOR_WORKFLOW.md` §9.6, declared split). The run folder carries the
+purpose, `_DEV` or `_VERDICT`, and `--run-suffix` appends to it, for example the commit:
+`..._Direct_Fluorescence_Loss_DEV_<commit>`. A run never reuses a folder; an existing one is refused
+before anything is read, so an earlier run is never overwritten. Every run folder holds
+`provenance.json`: the command line, host, Slurm job, package and library versions, the declared commit,
+the purpose record, and the implementation hash of the direct-estimator files at startup and at write.
+When the two hashes differ, the run is invalid for acceptance: its arrays are kept as diagnostics, the
+verdict table marks it `INVALID`, and it exits with status 3. The arrays carry `task` and `index` for
+every recording. On JUWELS,
+`Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh` runs the utility on one
+whole CPU node (`ESTIMATOR=`, `TASKS=`, `PURPOSE=`, `RUN_SUFFIX=`, `CODE_COMMIT=`).
+
+**The 20 s tier and its split.** The MET-FAB 20 s EVAL tier holds 20 tasks of 100 recordings at 1000
+frames. Tasks 0 to 9 are development data; tasks 10 to 19 are reserved for this estimator's verdict at
+1000 frames (§9.6, declared split). The tier holds 100 recordings per task, so a run passes
+`--expect-videos-per-task 100` (the default of 1000 matches the 2 s tier):
+
+```
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
+    Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Fluorescence_Loss.py \
+    --condition FAB --total-time-seconds 20.0 --tasks 0 1 2 3 4 5 6 7 8 9 \
+    --expect-videos-per-task 100 --workers 48 --purpose development --run-suffix <commit>
+```
+
+The threshold and the eligibility diagnostic stay frozen. A development run shows how the estimator
+behaves on full-length multiple-dye recordings; any change it motivates is made on the development
+tasks and judged once on the reserved ones.
 
 ## Essential notes
 

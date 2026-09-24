@@ -509,7 +509,7 @@ ad-hoc utilities sit outside it — the post-hoc analyses and calibration builde
 `Script_Bank/Analysis/` (for example the pooled `Nuisance_DLI` construction, the
 embedding-space distance, and the flicker-rate derivation). They stay out of the
 `Submit.sh` dispatchers by design, so the standard dispatcher surface stays exactly
-the four stages — but three of them have dedicated standalone wrappers in this
+the four stages — but four of them have dedicated standalone wrappers in this
 directory, submitted directly with `sbatch`:
 
 - `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Posterior_Calibration.sh` — the posterior-calibration
@@ -526,6 +526,19 @@ directory, submitted directly with `sbatch`:
   (`WORKFLOW=biology|detector`). Its engine is single-GPU by design (no sharding,
   no merge) on a whole-node allocation; do not read the allocated GPUs as data
   parallelism.
+- `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh` — the direct imaging
+  estimators (PSF width, flicker rate, fluorescence loss) and the flicker mismatch study on
+  one whole CPU node: one process with a pool of workers, one thread each. `ESTIMATOR=`
+  selects the utility, `TASKS=` the EVAL tasks, `EXPECT=100` suits the 20 s tier,
+  `PURPOSE=development` or `verdict` (required for a tier run) declares why it reads its tasks,
+  `RUN_SUFFIX=<commit>` follows the purpose token in the folder name (`_DEV_<commit>`), and
+  `CODE_COMMIT=` is recorded in the run folder's `provenance.json`. Which EVAL tasks are
+  development and which are reserved is fixed in `DETECTOR_WORKFLOW.md` §9.6, and the
+  utility refuses, before it reads a recording, the tasks its purpose may not read; it also
+  refuses an existing run folder. Exit status: 0 no FAIL verdict, 1 a FAIL verdict, 2
+  insufficient evidence only, 3 the implementation changed during the run (invalid for
+  acceptance). Python also exits 1 on an uncaught exception and argparse 2 on an argument
+  error or a refusal, so 1 and 2 are not verdicts alone; the job log says which.
 
 - `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Bulk_Delete.sh` — parallel bulk deletion that empties a
   data tier (its contents, never the directory) on a GPFS/Lustre filesystem; dry-run by
@@ -678,6 +691,7 @@ needs no RDS submission of its own.
 | `..._DETECTOR_HPC_Submit.sh` | the Detector dispatcher — dry-run-first single-job submit builder | — |
 | `..._DETECTOR_HPC_Nuisance_DLI.sh` | pooled `Nuisance_DLI` spec-template build (`--emit-template`): posterior-sample pool over the real recordings, sharded across all ranks (>1 GPU/node) + a separate no-GPU `--merge` step; submitted directly with `sbatch`, not via `Submit.sh` | GPU |
 | `..._DETECTOR_HPC_Generate_Controller.sh` | rolling submit-and-gate controller for a full Detector generation campaign — QOS caps, EVAL hard-gated on TRAIN+TEST completion; dry-run by default | — |
+| `..._DETECTOR_HPC_Direct_Estimator.sh` | the direct imaging estimators and the flicker mismatch study on one CPU node (a worker pool); an analysis utility submitted directly with `sbatch`, not via `Submit.sh` | CPU |
 
 (Posterior calibration and the embedding-space distance are covered for the
 Detector by the standalone analysis wrappers in §6 —

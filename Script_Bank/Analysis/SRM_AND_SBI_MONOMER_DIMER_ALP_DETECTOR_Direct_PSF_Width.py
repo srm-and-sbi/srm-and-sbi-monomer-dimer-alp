@@ -58,25 +58,35 @@ Prespecified acceptance (fixed before the first run; see ACCEPTANCE below)
 Usage (from the repo root):
     MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \\
         Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_PSF_Width.py \\
-        --condition FAB --total-time-seconds 2.0 --tasks 0 1 --max-videos 200
+        --condition FAB --total-time-seconds 2.0 --tasks 2 3 --max-videos 200 \\
+        --purpose development --run-suffix <commit>
 
-    ... --selftest     # in-memory scenes rendered at known widths; needs no data tier
-    ... --dry-run      # resolve profile, paths and settings; read and compute nothing
+    ... --purpose verdict   # required for a tier run: development, or verdict for the reserved EVAL
+                            # tasks of the tier in full (sec. 9.6)
+    ... --selftest          # in-memory scenes rendered at known widths; needs no data tier
+    ... --dry-run           # resolve profile, paths and settings, apply every refusal; read nothing
 
 Outputs (analysis results are data and live in the Data_Bank, never the codebase):
-    <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_PSF_Width/
+    <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_PSF_Width_<DEV|VERDICT>[_<suffix>]/
         report.md                       (the diagnostic report)
-        direct_psf_width.npz            (per-video estimates and truths)
-        summary.json                    (every number the report quotes)
+        direct_psf_width.npz            (per-video estimates, truths, recording identifiers and
+                                         the observable per-recording quantities)
+        summary.json                    (every number the report quotes, the purpose record)
+        provenance.json                 (command, host, versions, implementation hash)
         figures/
+    A tier run's folder carries its purpose (DEV for development, VERDICT for a verdict run), and
+    --run-suffix appends to it, e.g. the commit: _DEV_<commit>. A run never reuses a folder: an
+    existing one is refused before anything is read, so an earlier run is never overwritten.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -90,6 +100,7 @@ sys.path.insert(0, REPO_ROOT)
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_imaging_estimates as die  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import provenance as prov  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
@@ -143,8 +154,50 @@ def _scope_center() -> dict:
 # One video -> one (mu_r, sigma_r) estimate
 # ==========================================================================================
 
+OBSERVABLE_KEYS = ("spot_photons_median", "spot_snr_median", "spots_per_frame",
+                   "track_length_median", "tracks_per_spot")
+
+
+def recording_observables(m: dict, scope: dict, *, track_lengths, n_tracks: int) -> dict:
+    """Per-recording quantities that an experimental recording provides as well.
+
+    ``DETECTOR_WORKFLOW.md`` sec. 9.6 allows a correction of the PSF estimates, or of their
+    ranges, only through quantities available on experimental recordings, calibrated on
+    development data and validated on the reserved EVAL tasks. These are candidate predictors for
+    that, and none of them reads a true parameter:
+
+      spot_photons_median   median fitted total signal of the accepted spot fits, in incident photons
+      spot_snr_median       median fitted total signal over the per-pixel background noise
+      spots_per_frame       accepted spot fits per used frame
+      track_length_median   median length of the tracks the population estimate keeps, counted in
+                            fits that pass its relative-error filter (``track_lengths``, as
+                            `psf_width_population` returns them)
+      tracks_per_spot       tracks kept (``n_tracks``) over the mean number of accepted fits per used
+                            frame. Not a measure of fragmentation: it rises when tracks break, but
+                            equally when emitters are visible for only part of the recording, bleach
+                            or turn over -- two emitters each seen, perfectly linked, in a different
+                            half of a recording give 2.
+    """
+    n_spots = int(np.asarray(m["sqrt2sigma"]).size)
+    nan = float("nan")
+    if n_spots == 0:
+        return dict(spot_photons_median=nan, spot_snr_median=nan, spots_per_frame=0.0,
+                    track_length_median=nan, tracks_per_spot=nan)
+    noise = die.background_sigma_adu(scope["gamma"], scope["kappa_q"], scope["kappa_o"],
+                                     scope["kappa_s"])
+    amplitude = np.asarray(m["amplitude"], dtype=float)
+    photons = die.adu_to_photons(amplitude, scope["gamma"], scope["kappa_q"])
+    kept = np.asarray(track_lengths if track_lengths is not None else [], dtype=float)
+    spots_per_frame = n_spots / max(int(m["n_frames_used"]), 1)
+    return dict(spot_photons_median=float(np.median(photons)),
+                spot_snr_median=float(np.median(amplitude) / noise),
+                spots_per_frame=float(spots_per_frame),
+                track_length_median=float(np.median(kept)) if kept.size else nan,
+                tracks_per_spot=float(n_tracks / spots_per_frame) if n_tracks > 0 else nan)
+
+
 def estimate_one(video_levels, scope: dict, *, frame_stride: int, min_track_length: int,
-                 n_sigma: float, half_px: int) -> dict:
+                 n_sigma: float, half_px: int, return_measurements: bool = False) -> dict:
     """Estimate ``(mu_r, sigma_r)`` from one stored video.
 
     Args:
@@ -154,27 +207,41 @@ def estimate_one(video_levels, scope: dict, *, frame_stride: int, min_track_leng
         min_track_length: minimum linked-track length kept.
         n_sigma: spot-detection threshold.
         half_px: fit patch half-width.
+        return_measurements: also return the per-spot measurements and track labels (the
+            selftest's decomposition against the truth needs them; a tier run does not).
 
     Returns:
         ``dict`` with ``mu_r``, ``sigma_r``, ``sigma_r_raw``, ``log_mean_se`` (standard error of
-        ``ln mu_r``), ``sigma_r_se``, ``n_tracks``, ``n_spots``, and ``reason`` -- ``None`` for a
-        valid estimate, else the code for why none was produced (``no_spots``,
-        ``too_few_tracks``).
+        ``ln mu_r``), ``sigma_r_se``, ``noise_variance`` (the subtracted per-fit term),
+        ``n_tracks``, ``n_spots``, the observable quantities of `recording_observables`, and
+        ``reason`` -- ``None`` for a valid estimate, else the code for why none was produced
+        (``no_spots``, ``too_few_tracks``).
     """
     m = die.measure_spot_widths(video_levels, scope, frame_stride=frame_stride,
                                 n_sigma=n_sigma, half_px=half_px)
     if m["sqrt2sigma"].size == 0:
-        return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan, log_mean_se=np.nan,
-                    sigma_r_se=np.nan, n_tracks=0, n_spots=0, reason="no_spots")
-    tid = die.link_spot_tracks(m["frame_index"], m["x"], m["y"],
-                               frame_stride=frame_stride)
-    r = die.psf_width_population(m["sqrt2sigma"], m["sqrt2sigma_se"],
-                                 track_id=tid, min_track_length=min_track_length)
-    valid = bool(np.isfinite(r["mu_r"]) and np.isfinite(r["sigma_r"]))
-    return dict(mu_r=r["mu_r"], sigma_r=r["sigma_r"], sigma_r_raw=r["sigma_r_raw"],
-                log_mean_se=r["log_mean_se"], sigma_r_se=r["sigma_r_se"],
-                n_tracks=int(r.get("n_tracks", 0)), n_spots=int(m["sqrt2sigma"].size),
-                reason=None if valid else "too_few_tracks")
+        tid = np.zeros(0, dtype=np.int64)
+        out = dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan, log_mean_se=np.nan,
+                   sigma_r_se=np.nan, noise_variance=np.nan, n_tracks=0, n_spots=0,
+                   reason="no_spots",
+                   **recording_observables(m, scope, track_lengths=None, n_tracks=0))
+    else:
+        tid = die.link_spot_tracks(m["frame_index"], m["x"], m["y"],
+                                   frame_stride=frame_stride)
+        r = die.psf_width_population(m["sqrt2sigma"], m["sqrt2sigma_se"],
+                                     track_id=tid, min_track_length=min_track_length)
+        valid = bool(np.isfinite(r["mu_r"]) and np.isfinite(r["sigma_r"]))
+        n_tracks = int(r.get("n_tracks", 0))
+        out = dict(mu_r=r["mu_r"], sigma_r=r["sigma_r"], sigma_r_raw=r["sigma_r_raw"],
+                   log_mean_se=r["log_mean_se"], sigma_r_se=r["sigma_r_se"],
+                   noise_variance=float(r["noise_variance"]), n_tracks=n_tracks,
+                   n_spots=int(m["sqrt2sigma"].size),
+                   reason=None if valid else "too_few_tracks",
+                   **recording_observables(m, scope, track_lengths=r.get("track_lengths"),
+                                           n_tracks=n_tracks))
+    if return_measurements:
+        out.update(measurements=m, track_id=tid)
+    return out
 
 
 # -- worker-side lazy handle, so a pool process opens each store once ----------------------
@@ -183,13 +250,14 @@ _STORE_CACHE: dict = {}
 
 def _worker(job):
     """Pool worker: open (once) and measure one video. Must be top-level to pickle."""
-    video_path, index, scope, opts = job
+    video_path, task, index, scope, opts = job
     handle = _STORE_CACHE.get(video_path)
     if handle is None:
         handle = sio.load_data(video_path)
         _STORE_CACHE[video_path] = handle
     video = np.asarray(handle[index])
     out = estimate_one(video, scope, **opts)
+    out["task"] = int(task)
     out["index"] = int(index)
     return out
 
@@ -204,7 +272,8 @@ def _worker_array(job):
 # Experimental recordings: one estimate per (cell, window), no ground truth
 # ==========================================================================================
 
-def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, opts):
+def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, opts,
+                        startup_code):
     """Estimate ``(mu_r, sigma_r)`` in every model-length window of every experimental recording.
 
     Mirrors the Experiment stage's windowing exactly (``read_cell_chunks``: 16-bit raw -> 8-bit,
@@ -338,42 +407,205 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
                         kind_index=kind_index, kinds=np.asarray([args.condition]),
                         camera=np.asarray([scope[k] for k in det.DETECTOR_SCOPE_KEYS]),
                         camera_keys=np.asarray(list(det.DETECTOR_SCOPE_KEYS)))
+    code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
+    changed = bool(code["changed_during_run"])
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
         json.dump(dict(mode="experiment", condition=args.condition, span_seconds=span,
                        window_seconds=timing.total_time_seconds, step_seconds=step_seconds,
                        cells=[int(c) for c in cells], n_windows=int(len(meta)),
                        n_valid=int(valid.sum()), camera=scope,
+                       implementation=("INVALID (implementation changed during the run)" if changed
+                                       else "unchanged during the run"),
                        note="no ground truth; no acceptance verdict"), fh, indent=2, default=float)
+    record = prov.analysis_run_record(
+        startup_code, argv=sys.argv, code=code,
+        extra=dict(stage=STAGE, mode="experiment", condition=args.condition, cells=[int(c) for c in cells],
+                   span_seconds=span, step_seconds=step_seconds, windows=int(len(meta)),
+                   run_suffix=args.run_suffix, out_dir=str(out_dir), settings=opts))
+    with open(os.path.join(out_dir, "provenance.json"), "w") as fh:
+        json.dump(record, fh, indent=2, default=str)
+    reporter.check("implementation unchanged during the run", not changed,
+                   "implementation hash identical at startup and at write", fatal=False,
+                   note="A file edited while the run executed leaves estimates that describe no single "
+                        "implementation; the run exits with status 3 and provenance.json records both hashes.")
     reporter.summary()
     path = reporter.write_report()
     print(f"\n[{STAGE}] experiment report -> {path}")
-    return 0
+    return da.EXIT_IMPLEMENTATION_CHANGED if changed else 0
 
 
 # ==========================================================================================
 # Selftest: in-memory scenes rendered at known widths
 # ==========================================================================================
 
+SELFTEST_GRIDS = ("widths", "brightness")
+SELFTEST_LABELINGS = ("single", "FAB")
+MATCH_RADIUS_PX = 1.5          # a spot fit within this distance of a true emitter is that emitter
+
+
+def selftest_scenes(grid: str) -> list:
+    """The selftest's scenes: the imaging values each one moves away from the prior center.
+
+    ``widths`` (the default) is the 3 x 3 grid of ``mu_r`` and ``sigma_r``. ``brightness`` puts
+    ``mu_pc`` on the five edges of its prior quarters (100 to 562 photons per dye), each at three
+    PSF spreads with ``mu_r`` at its prior center: the dim-subgroup bias of
+    ``DETECTOR_WORKFLOW.md`` sec. 9.6 runs with the true brightness, and this grid is where the
+    decomposition against the truth can say why.
+    """
+    if grid == "widths":
+        return [dict(mu_r=mu_r, sigma_r=sigma_r)
+                for mu_r in (1.10, 1.41, 1.85) for sigma_r in (0.10, 0.237, 0.50)]
+    if grid == "brightness":
+        return [dict(mu_pc=float(10 ** q), sigma_r=sigma_r)
+                for q in da.prior_quarters("mu_pc") for sigma_r in (0.10, 0.237, 0.50)]
+    raise ValueError(f"unknown selftest grid {grid!r}; use one of {SELFTEST_GRIDS}")
+
+
+def truth_decomposition(m: dict, track_id, true_sqrt2sigma, true_xy, visible, mu_r_true: float,
+                        mu_r_estimate: float, *, min_track_length: int,
+                        max_relative_se: float = 0.5) -> dict:
+    """Account for one selftest scene's ``mu_r`` error against the truth, term by term.
+
+    Each accepted spot fit is matched to the nearest visible subunit in its frame (within
+    ``MATCH_RADIUS_PX``), and each track kept by the population step (same relative-error filter,
+    same length floor) to the subunit most of its fits matched. The five terms below sum to the
+    total by construction, because ``other`` is the remainder. It is diagnostic accounting,
+    conditional on that matching and on the order in which the terms are taken, not a uniquely
+    established causal decomposition: another matching rule or another order would split the same
+    total differently. In log10 units:
+
+      sample       mean true log width of all visible subunits, minus log10 of the true mu_r:
+                   the finite population the scene happened to draw
+      selection    mean true log width of the subunits the kept tracks found, minus that of all
+                   visible subunits: which subunits detection and the length floor let through
+      duplication  mean true log width over tracks, minus that over the distinct subunits found:
+                   a subunit split into several tracks counts several times
+      fitting      mean over matched tracks of the fitted minus the true log width
+      other        the remainder of the total error: the tail trim, unmatched tracks, and the
+                   difference between these track means and the population step's own
+
+    ``detected_share`` is the fraction of visible subunits found, ``tracks_per_subunit`` how many
+    kept tracks each found subunit produced, and ``spread_ratio`` the standard deviation of the
+    true log widths of the found subunits over that of all visible ones (below one, selection
+    compresses the spread that ``sigma_r`` measures).
+    """
+    nan = float("nan")
+    true_lw = np.log10(np.asarray(true_sqrt2sigma, dtype=float))
+    vis_idx = np.nonzero(np.asarray(visible, dtype=bool))[0]
+    frames = np.asarray(m["frame_index"])
+    xs, ys = np.asarray(m["x"], dtype=float), np.asarray(m["y"], dtype=float)
+    matched = np.full(frames.size, -1, dtype=np.int64)
+    for t in np.unique(frames):
+        sel = np.nonzero(frames == t)[0]
+        pos = np.asarray(true_xy)[t][vis_idx]
+        good = np.isfinite(pos).all(axis=1)
+        if not good.any():
+            continue
+        cand, pos = vis_idx[good], pos[good]
+        d = np.hypot(xs[sel, None] - pos[None, :, 0], ys[sel, None] - pos[None, :, 1])
+        j = np.argmin(d, axis=1)
+        close = d[np.arange(sel.size), j] <= MATCH_RADIUS_PX
+        matched[sel[close]] = cand[j[close]]
+
+    w = np.asarray(m["sqrt2sigma"], dtype=float)
+    se = np.asarray(m["sqrt2sigma_se"], dtype=float)
+    ok = np.isfinite(w) & np.isfinite(se) & (w > 0) & (se > 0)
+    ok &= (se / np.maximum(w, 1e-12)) <= float(max_relative_se)
+    tid = np.asarray(track_id, dtype=np.int64)
+    track_lw, track_sub = [], []
+    for k in np.unique(tid[ok]):
+        sel = ok & (tid == k)
+        if sel.sum() < int(min_track_length):
+            continue
+        weight = 1.0 / np.maximum((se[sel] / w[sel]) ** 2, 1e-12)
+        track_lw.append(float(np.sum(weight * np.log10(w[sel])) / np.sum(weight)))
+        ids = matched[sel]
+        ids = ids[ids >= 0]
+        track_sub.append(int(np.bincount(ids).argmax()) if ids.size else -1)
+    track_lw, track_sub = np.asarray(track_lw), np.asarray(track_sub, dtype=np.int64)
+    has = track_sub >= 0
+    found = np.unique(track_sub[has])
+
+    total = (float(np.log10(mu_r_estimate) - np.log10(mu_r_true))
+             if np.isfinite(mu_r_estimate) and mu_r_estimate > 0 else nan)
+    lw_vis = float(true_lw[vis_idx].mean()) if vis_idx.size else nan
+    sample = lw_vis - float(np.log10(mu_r_true))
+    if found.size:
+        selection = float(true_lw[found].mean()) - lw_vis
+        duplication = float(true_lw[track_sub[has]].mean() - true_lw[found].mean())
+        fitting = float(np.mean(track_lw[has] - true_lw[track_sub[has]]))
+        sd_vis = float(np.std(true_lw[vis_idx], ddof=1)) if vis_idx.size > 1 else nan
+        spread_ratio = (float(np.std(true_lw[found], ddof=1)) / sd_vis
+                        if found.size > 1 and sd_vis > 0 else nan)
+    else:
+        selection = duplication = fitting = spread_ratio = nan
+    parts = (sample, selection, duplication, fitting)
+    other = (total - sum(parts)) if all(np.isfinite(v) for v in (total, *parts)) else nan
+    return dict(total=total, sample=sample, selection=selection, duplication=duplication,
+                fitting=fitting, other=other,
+                detected_share=float(found.size / vis_idx.size) if vis_idx.size else nan,
+                tracks_per_subunit=float(has.sum() / found.size) if found.size else nan,
+                unmatched_track_share=float((~has).mean()) if track_sub.size else nan,
+                spread_ratio=spread_ratio, n_visible=int(vis_idx.size),
+                n_found=int(found.size), n_tracks=int(track_sub.size))
+
+
+DECOMPOSITION_KEYS = ("total", "sample", "selection", "duplication", "fitting", "other",
+                      "detected_share", "tracks_per_subunit", "unmatched_track_share",
+                      "spread_ratio")
+# The additive terms of `truth_decomposition`: total = sample + selection + duplication + fitting + other.
+DECOMPOSITION_TERMS = ("sample", "selection", "duplication", "fitting", "other")
+
+
+def decomposition_table(dec: np.ndarray, scenes: list) -> tuple:
+    """Headers and rows of the selftest's decomposition table: per scene and as a mean over scenes,
+    the total, every additive term (so the displayed terms sum to the displayed total, up to
+    rounding), and the matching diagnostics."""
+    col = {k: j for j, k in enumerate(DECOMPOSITION_KEYS)}
+    headers = (["scene", "total"] + list(DECOMPOSITION_TERMS)
+               + ["subunits found", "tracks per subunit", "spread ratio"])
+
+    def cells(v):
+        return ([f"{v[col['total']]:+.4f}"] + [f"{v[col[k]]:+.4f}" for k in DECOMPOSITION_TERMS]
+                + [f"{v[col['detected_share']]:.0%}", f"{v[col['tracks_per_subunit']]:.2f}",
+                   f"{v[col['spread_ratio']]:.2f}"])
+
+    rows = [[", ".join(f"{k} {v:.4g}" for k, v in sc.items())] + cells(dec[i])
+            for i, sc in enumerate(scenes)]
+    with np.errstate(invalid="ignore"):
+        rows.append(["mean over scenes"] + cells(np.nanmean(dec, axis=0)))
+    return headers, rows
+
+
 def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int,
                  frame_stride: int, min_track_length: int, n_sigma: float,
-                 half_px: int) -> dict:
-    """Render diffusing single-dye scenes at a grid of known widths and recover them.
+                 half_px: int, grid: str = "widths", labeling: str = "single") -> dict:
+    """Render diffusing scenes at known imaging values and recover the PSF parameters.
 
-    Single-dye subunits on Brownian paths, rendered through the production renderer at
-    the center of every other imaging parameter, so the only thing varying is the PSF
-    width population. This isolates the estimator from the labeling law and from the
-    reaction-diffusion tier: a failure here is the estimator's, not the model's.
+    Subunits on Brownian paths, rendered through the production renderer with every imaging
+    parameter at its prior center except the ones the grid moves (`selftest_scenes`) and with
+    bleaching off. ``labeling="single"`` gives every subunit one dye, which isolates the
+    estimator from the labeling law; ``"FAB"`` draws dye counts from the bare FAB dye-count law at
+    probe occupancy 1 (about 81 % of subunits carry a dye). A tier also applies the condition's
+    probe occupancy (0.155 for MET-FAB), which thins the visible subunits without changing a
+    visible one's dye count; here the density of visible spots is set by ``n_subunits`` instead.
+    Every scene is also decomposed against its truth (`truth_decomposition`): the widths are
+    reproduced from the renderer's own seeded draw and the positions are the scene's.
     """
-    from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
+    from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import (
+        render_dli_video, sample_psf_width,
+    )
 
     stem = PARAMETERS.simulation.stem
     npx, px_nm = stem.root_size_px, stem.pixel_size_nm
     dt = PARAMETERS.simulation.timing.frame_time_seconds
     scope = _scope_center()
-
-    grid = [(mu_r, sigma_r)
-            for mu_r in (1.10, 1.41, 1.85)
-            for sigma_r in (0.10, 0.237, 0.50)]
+    scenes = selftest_scenes(grid)
+    if labeling not in SELFTEST_LABELINGS:
+        raise ValueError(f"unknown selftest labeling {labeling!r}; use one of {SELFTEST_LABELINGS}")
+    law = lab.resolve_labeling_law("FAB")[1] if labeling == "FAB" else None
+    center = {e["KEY"]: 10 ** (0.5 * (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]))
+              for e in det.DETECTOR_IMAGING}
 
     def scene(seed):
         rng = np.random.default_rng(seed)
@@ -387,32 +619,46 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
                           0.02 * box, 0.98 * box)
         return poses, np.tile(np.arange(n_subunits)[None, :], (n_frames, 1))
 
-    truths, ests, ses, reasons, thetas = [], [], [], [], []
-    for i, (mu_r, sigma_r) in enumerate(grid):
-        img = {e["KEY"]: 10 ** (0.5 * (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]))
-               for e in det.DETECTOR_IMAGING}
-        img.update(mu_r=mu_r, sigma_r=sigma_r, prob_photo_bleach=1e-12)
+    truths, ests, ses, reasons, thetas, decomp, observables = [], [], [], [], [], [], []
+    for i, overrides in enumerate(scenes):
+        seed = SELFTEST_SEED + i
+        img = dict(center)
+        img.update(prob_photo_bleach=1e-12, **overrides)
         thetas.append([img[k] for k in det.DETECTOR_FIND])
         vec = np.array([img[k] for k in det.DETECTOR_IMAGING_KEYS])
-        poses, host = scene(SELFTEST_SEED + i)
-        frames = render_dli_video(poses, host, np.ones(n_subunits, dtype=np.int64), vec,
-                                  seed=SELFTEST_SEED + i)
+        poses, host = scene(seed)
+        dye_counts = (np.ones(n_subunits, dtype=np.int64) if law is None
+                      else lab.draw_dye_counts(law, n_subunits, np.random.default_rng(seed + 1000)))
+        frames = render_dli_video(poses, host, dye_counts, vec, seed=seed)
         video = sio.convert_video_dtype(np.moveaxis(frames, 2, 0), bits_from=16, bits_to=8)
         r = estimate_one(video, scope, frame_stride=frame_stride,
                          min_track_length=min_track_length, n_sigma=n_sigma,
-                         half_px=half_px)
-        truths.append((mu_r, sigma_r))
+                         half_px=half_px, return_measurements=True)
+        true_w = sample_psf_width(n_subunits, PARAMETERS.simulation.dli.sqrt_2sigma_dist_label,
+                                  keyword_args={"mu_r": img["mu_r"], "sigma_r": img["sigma_r"]},
+                                  seed=seed)
+        dec = truth_decomposition(r["measurements"], r["track_id"], true_w,
+                                  poses[:, :, :2] / px_nm, dye_counts > 0, img["mu_r"],
+                                  r["mu_r"], min_track_length=min_track_length)
+        truths.append((img["mu_r"], img["sigma_r"]))
         ests.append((r["mu_r"], r["sigma_r"]))
         ses.append((r["log_mean_se"], r["sigma_r_se"]))
         reasons.append(r["reason"])
-        print(f"  [{i + 1}/{len(grid)}] mu_r {mu_r:.3f} -> {r['mu_r']:.4f}   "
-              f"sigma_r {sigma_r:.3f} -> {r['sigma_r']:.4f}   "
-              f"({r['n_tracks']} tracks, {r['n_spots']} spot-frames)", flush=True)
+        decomp.append([dec[k] for k in DECOMPOSITION_KEYS])
+        observables.append([r[k] for k in OBSERVABLE_KEYS])
+        label = ", ".join(f"{k} {v:.4g}" for k, v in overrides.items())
+        print(f"  [{i + 1}/{len(scenes)}] {label}: mu_r {img['mu_r']:.3f} -> {r['mu_r']:.4f} "
+              f"(total {dec['total']:+.4f} dex = " + " + ".join(
+                  f"{k} {dec[k]:+.4f}" for k in DECOMPOSITION_TERMS)
+              + f"), sigma_r {img['sigma_r']:.3f} -> {r['sigma_r']:.4f}; "
+              f"found {dec['detected_share']:.0%} of {dec['n_visible']} visible, "
+              f"{dec['tracks_per_subunit']:.2f} tracks each", flush=True)
 
-    truths = np.asarray(truths, dtype=float)
-    ests = np.asarray(ests, dtype=float)
-    return dict(truth=truths, estimate=ests, se=np.asarray(ses, dtype=float), reasons=reasons,
-                theta=np.asarray(thetas, dtype=float), grid=grid)
+    return dict(truth=np.asarray(truths, dtype=float), estimate=np.asarray(ests, dtype=float),
+                se=np.asarray(ses, dtype=float), reasons=reasons,
+                theta=np.asarray(thetas, dtype=float), scenes=scenes,
+                decomposition=np.asarray(decomp, dtype=float),
+                observables=np.asarray(observables, dtype=float))
 
 
 # ==========================================================================================
@@ -508,10 +754,34 @@ def main(argv=None):
     ap.add_argument("--experiment-dir", default=None,
                     help="override the recordings directory for --experiment (default: "
                          "<data_bank_root>/<experiment_subdir>, where the Experiment stage reads).")
+    ap.add_argument("--selftest-grid", default="widths", choices=SELFTEST_GRIDS,
+                    help="selftest scenes: 'widths' (3 x 3 in mu_r and sigma_r) or 'brightness' "
+                         "(mu_pc on its prior-quarter edges x 3 sigma_r).")
+    ap.add_argument("--selftest-labeling", default="single", choices=SELFTEST_LABELINGS,
+                    help="selftest dye counts: one dye per subunit, or drawn from the FAB law.")
+    ap.add_argument("--purpose", default=None, choices=list(da.PURPOSES),
+                    help="required for a tier run: why it reads its tasks (DETECTOR_WORKFLOW.md "
+                         "sec. 9.6). 'development' reads development tasks only; 'verdict' reads "
+                         "exactly the reserved EVAL tasks of the tier, in full, once per estimator. "
+                         "Checked before any recording is read; the folder name carries DEV or "
+                         "VERDICT. Not accepted by a run that reads no EVAL task.")
+    ap.add_argument("--run-suffix", default=None,
+                    help="token appended to the run folder name after the purpose token, e.g. the "
+                         "commit (-> _DEV_<commit>); letters, digits and underscores.")
     args = ap.parse_args(argv)
 
     if not args.selftest and (args.condition is None or args.total_time_seconds is None):
         ap.error("--condition and --total-time-seconds are required (or use --selftest)")
+    if args.run_suffix is not None and not re.fullmatch(r"[A-Za-z0-9_]+", args.run_suffix):
+        ap.error(f"--run-suffix {args.run_suffix!r}: use letters, digits and underscores only")
+    if args.run_suffix is not None and re.match(r"(?i)(DEV|VERDICT|SELFTEST)(_|$)", args.run_suffix):
+        ap.error(f"--run-suffix {args.run_suffix!r}: the purpose token (DEV, VERDICT, SELFTEST) is added "
+                 f"automatically; pass only what follows it, e.g. the commit")
+    tier_run = not (args.selftest or args.experiment)
+    if tier_run and args.purpose is None:
+        ap.error("--purpose is required for a tier run: development or verdict (DETECTOR_WORKFLOW.md sec. 9.6)")
+    if not tier_run and args.purpose is not None:
+        ap.error("--purpose applies to a tier run; a selftest or an experimental run reads no EVAL task")
 
     # ---- resolve identity and paths ------------------------------------------------------
     data_bank_root = PARAMETERS.machine.data_bank_root
@@ -542,10 +812,40 @@ def main(argv=None):
                                                  timing_label, True, args.split))
                        for t in args.tasks]
 
+    # ---- purpose: held to the declared split before any recording is read ------------------
+    purpose_record = dict(purpose="selftest" if args.selftest else "experiment")
+    if tier_run:
+        try:
+            purpose_record = da.check_run_purpose(
+                args.purpose, estimator=STAGE, condition=args.condition, n_frames=timing.frame_count,
+                split=args.split, tasks=args.tasks, max_videos=args.max_videos,
+                expect_videos_per_task=args.expect_videos_per_task)
+        except ValueError as exc:
+            ap.error(str(exc))
+
     descriptor = (f"{STAGE}_SELFTEST" if args.selftest
-                  else f"{STAGE}_Experiment" if args.experiment else STAGE)
-    out_dir = args.out_dir or os.path.join(str(data_bank_root), "Posit",
-                                           f"{run_alias}_{descriptor}")
+                  else f"{STAGE}_Experiment" if args.experiment
+                  else f"{STAGE}_{da.PURPOSE_TOKENS[args.purpose]}")
+    if args.selftest and args.selftest_grid != "widths":
+        descriptor += f"_{args.selftest_grid.upper()}"
+    if args.selftest and args.selftest_labeling != "single":
+        descriptor += f"_{args.selftest_labeling}_LAW"
+    if args.run_suffix:
+        descriptor += f"_{args.run_suffix}"
+    posit_dir = os.path.join(str(data_bank_root), "Posit")
+    out_dir = args.out_dir or os.path.join(posit_dir, f"{run_alias}_{descriptor}")
+    if tier_run and args.purpose == "verdict":
+        # The reserved tasks are judged once per estimator (sec. 9.6): a verdict run writes to its
+        # fixed Posit location, where an earlier verdict folder of the same estimator and tier is seen.
+        if args.out_dir:
+            ap.error("a verdict run writes to its fixed Posit folder; --out-dir is for development runs")
+        earlier = sorted(glob.glob(os.path.join(posit_dir, f"{run_alias}_{STAGE}_VERDICT*")))
+        if earlier:
+            ap.error(f"a verdict folder of {STAGE} on this tier exists already ({earlier[0]}); the "
+                     f"reserved tasks are judged once (DETECTOR_WORKFLOW.md sec. 9.6)")
+    if os.path.exists(out_dir):
+        ap.error(f"the run folder exists already: {out_dir}. A run never reuses a folder: pass another "
+                 f"--run-suffix, or move the earlier run aside deliberately.")
 
     # ---- dry run -------------------------------------------------------------------------
     if args.dry_run:
@@ -555,12 +855,19 @@ def main(argv=None):
         print(f"  mode              : "
               f"{'selftest' if args.selftest else 'experiment' if args.experiment else args.split}")
         print(f"  run alias         : {run_alias}")
-        print(f"  out dir           : {out_dir}")
+        print(f"  out dir           : {out_dir}   (new; created at the start of the run)")
+        if tier_run:
+            pr = purpose_record
+            print(f"  purpose           : {pr['purpose']} -- tasks {pr['tasks']}; "
+                  + (f"declared split: development {pr['development_tasks'][0]}-{pr['development_tasks'][-1]}, "
+                     f"reserved {pr['reserved_tasks'][0]}-{pr['reserved_tasks'][-1]}"
+                     if pr["split_declared"] else "no declared split for this tier (no reserved task)"))
         print(f"  frame stride      : {args.frame_stride}   min track {args.min_track_length}"
               f"   n_sigma {args.n_sigma}   half_px {args.half_px}")
         print(f"  workers           : {args.workers}")
         if args.selftest:
-            print(f"  selftest scenes   : 9 (3 mu_r x 3 sigma_r), "
+            print(f"  selftest scenes   : {len(selftest_scenes(args.selftest_grid))} "
+                  f"({args.selftest_grid} grid, {args.selftest_labeling} labeling), "
                   f"{args.selftest_subunits} subunits x {args.selftest_frames} frames")
         elif args.experiment:
             exp_dir = (pathlib.Path(args.experiment_dir) if args.experiment_dir
@@ -586,7 +893,11 @@ def main(argv=None):
         print("  acceptance        : " + ", ".join(f"{k}={v}" for k, v in ACCEPTANCE.items()))
         return 0
 
-    os.makedirs(out_dir, exist_ok=True)
+    startup_code = prov.code_provenance(files=prov.DIRECT_ESTIMATOR_FILES)
+    try:
+        prov.reserve_run_folder(out_dir)
+    except FileExistsError:
+        ap.error(f"the run folder appeared after the check (a concurrent run?): {out_dir}")
     reporter = DiagnosticReporter(
         stage=STAGE, enabled=True, dump=True, dump_dir=out_dir, run_label=run_alias,
         run_note=("Direct, non-neural estimate of the PSF-width population parameters. "
@@ -596,17 +907,46 @@ def main(argv=None):
     opts = dict(frame_stride=args.frame_stride, min_track_length=args.min_track_length,
                 n_sigma=args.n_sigma, half_px=args.half_px)
     if args.experiment:
-        return run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, opts)
+        return run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, opts,
+                                   startup_code)
+    if tier_run:
+        reporter.stat("run purpose", args.purpose,
+                      note=(f"tasks {purpose_record['tasks']}; " + (
+                          f"declared split: development {purpose_record['development_tasks'][0]}-"
+                          f"{purpose_record['development_tasks'][-1]}, reserved "
+                          f"{purpose_record['reserved_tasks'][0]}-{purpose_record['reserved_tasks'][-1]} "
+                          f"(DETECTOR_WORKFLOW.md sec. 9.6)" if purpose_record["split_declared"]
+                          else "no declared split for this tier, so no reserved task")))
 
     # ---- measure -------------------------------------------------------------------------
     if args.selftest:
         reporter.checkpoint("selftest", subunits=args.selftest_subunits,
-                            frames=args.selftest_frames, scenes=9)
+                            frames=args.selftest_frames, grid=args.selftest_grid,
+                            labeling=args.selftest_labeling,
+                            scenes=len(selftest_scenes(args.selftest_grid)))
         res = run_selftest(reporter, n_subunits=args.selftest_subunits,
-                           n_frames=args.selftest_frames, **opts)
+                           n_frames=args.selftest_frames, grid=args.selftest_grid,
+                           labeling=args.selftest_labeling, **opts)
         truth, estimate, se, reasons, theta_all = (res["truth"], res["estimate"], res["se"],
                                                    res["reasons"], res["theta"])
-        per_video = dict(n_tracks=np.array([]), n_spots=np.array([]))
+        per_video = dict(n_tracks=np.array([]), n_spots=np.array([]),
+                         scene=np.arange(truth.shape[0]),
+                         decomposition=res["decomposition"],
+                         decomposition_keys=np.asarray(DECOMPOSITION_KEYS),
+                         **{k: res["observables"][:, j] for j, k in enumerate(OBSERVABLE_KEYS)})
+        headers, rows = decomposition_table(res["decomposition"], res["scenes"])
+        reporter.table(
+            "mu_r error accounted against the truth (log10 units)", headers, rows,
+            note="total = sample + selection + duplication + fitting + other. sample: the finite "
+                 "population the scene drew (part of the total, not a property of the estimator); "
+                 "selection: the found subunits' true widths against all visible subunits'; "
+                 "duplication: a subunit whose detections formed several tracks counts several "
+                 "times; fitting: fitted against true width within matched tracks; other: the "
+                 "remainder (tail trim, unmatched tracks, the population step's own averaging). "
+                 "Diagnostic accounting conditional on nearest-subunit matching within "
+                 f"{MATCH_RADIUS_PX} px and on this order of terms, not a uniquely established causal "
+                 "decomposition. A spread ratio below one means the found subunits span a narrower "
+                 "range of true widths than all visible ones.")
     else:
         truth_rows, jobs = [], []
         for (t, vpath), (_, tpath), (_, spath) in zip(video_paths, theta_paths, scope_paths):
@@ -627,7 +967,7 @@ def main(argv=None):
             for i in range(n_here):
                 scope_row = {k: float(scope_arr[i, j])
                              for j, k in enumerate(det.DETECTOR_SCOPE_KEYS)}
-                jobs.append((str(vpath), i, scope_row, opts))
+                jobs.append((str(vpath), t, i, scope_row, opts))
                 truth_rows.append(theta[i, :len(det.DETECTOR_FIND)])
             if len(jobs) >= args.max_videos:
                 break
@@ -653,7 +993,13 @@ def main(argv=None):
         se = np.asarray([[o["log_mean_se"], o["sigma_r_se"]] for o in out], dtype=float)
         reasons = [o["reason"] for o in out]
         per_video = dict(n_tracks=np.array([o["n_tracks"] for o in out]),
-                         n_spots=np.array([o["n_spots"] for o in out]))
+                         n_spots=np.array([o["n_spots"] for o in out]),
+                         task=np.array([o["task"] for o in out], dtype=np.int64),
+                         index=np.array([o["index"] for o in out], dtype=np.int64),
+                         sigma_r_raw=np.array([o["sigma_r_raw"] for o in out], dtype=float),
+                         noise_variance=np.array([o["noise_variance"] for o in out], dtype=float),
+                         **{k: np.array([o[k] for o in out], dtype=float)
+                            for k in OBSERVABLE_KEYS})
 
     # ---- score ---------------------------------------------------------------------------
     # Not `truth.shape == estimate.shape`: those are built in the same loop and always agree,
@@ -702,12 +1048,25 @@ def main(argv=None):
 
     result = da.evaluate(theta_all, valid, reasons, accuracy, target_key="mu_r",
                          ranges=ranges, selftest=bool(args.selftest))
+    # The implementation hash is compared once every estimate exists and before anything is
+    # written: a run whose code changed while it executed is invalid for acceptance (exit 3).
+    code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
+    da.apply_code_provenance(result, code)
     da.render(reporter, result, estimator=STAGE, target_key="mu_r")
     if per_video["n_tracks"].size:
         reporter.stat("median tracks per video", float(np.median(per_video["n_tracks"])),
                       note="linked spot tracks entering the population estimate")
         reporter.stat("median spot-frames per video", float(np.median(per_video["n_spots"])),
                       note="individual spot fits before linking")
+    if per_video.get("spot_photons_median") is not None and per_video["spot_photons_median"].size:
+        with np.errstate(invalid="ignore"):
+            reporter.table(
+                "Observable per-recording quantities (medians over recordings)",
+                ["quantity", "median"],
+                [[k, f"{np.nanmedian(per_video[k]):.4g}"] for k in OBSERVABLE_KEYS],
+                note="Candidates for a correction or a range construction calibrated on development "
+                     "data (DETECTOR_WORKFLOW.md sec. 9.6); every one is available on an experimental "
+                     "recording, and none reads a true parameter. Per recording in the arrays.")
 
     make_figure(truth, estimate, "direct_psf_width_truth_vs_estimate", reporter)
 
@@ -717,13 +1076,30 @@ def main(argv=None):
                         range_mu_r_log10=np.column_stack([mu_lo, mu_hi]),
                         range_sigma_r=np.column_stack([sg_lo, sg_hi]), **per_video)
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
-        json.dump(dict(acceptance=ACCEPTANCE, evaluation=result), fh, indent=2, default=float)
+        json.dump(dict(acceptance=ACCEPTANCE, purpose=purpose_record, evaluation=result), fh,
+                  indent=2, default=float)
+    record = prov.analysis_run_record(
+        startup_code, argv=sys.argv, code=code,
+        extra=dict(stage=STAGE, mode="selftest" if args.selftest else args.split,
+                   purpose=purpose_record, tasks=None if args.selftest else list(args.tasks),
+                   selftest_grid=args.selftest_grid if args.selftest else None,
+                   selftest_labeling=args.selftest_labeling if args.selftest else None,
+                   recordings=int(truth.shape[0]), run_suffix=args.run_suffix,
+                   out_dir=str(out_dir), settings=opts))
+    with open(os.path.join(out_dir, "provenance.json"), "w") as fh:
+        json.dump(record, fh, indent=2, default=str)
+    reporter.check("implementation unchanged during the run", not code["changed_during_run"],
+                   "implementation hash identical at startup and at write", fatal=False,
+                   note="A file edited while the run executed leaves results that describe no single "
+                        "implementation: the run is INVALID for acceptance, exits with status 3, and "
+                        "provenance.json records both hashes. The arrays are kept as diagnostics.")
 
     reporter.summary()
     path = reporter.write_report()
     print(f"\n[{STAGE}] report -> {path}")
     # The verdicts of sec. 9.6 must reach a caller that reads the exit status, not only a reader
-    # of report.md: 0 = nothing failed, 1 = a FAIL verdict, 2 = insufficient evidence only.
+    # of report.md: 0 = nothing failed, 1 = a FAIL verdict, 2 = insufficient evidence only,
+    # 3 = the implementation changed during the run (invalid for acceptance).
     print(f"[{STAGE}] verdicts: " + "; ".join(f"{k}: {v}" for k, v in result["verdicts"].items()))
     return int(result["exit_code"])
 

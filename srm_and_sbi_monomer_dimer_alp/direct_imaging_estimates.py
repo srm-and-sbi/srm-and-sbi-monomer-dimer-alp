@@ -671,7 +671,10 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
     Returns:
         ``dict`` with ``mu_r``, ``sigma_r``, ``sigma_r_raw`` (uncorrected),
         ``noise_variance`` (the subtracted term), ``n`` (spots used), and
-        ``log_mean_se`` (standard error of ``ln mu_r``).
+        ``log_mean_se`` (standard error of ``ln mu_r``). With ``track_id``, also ``n_tracks``
+        and ``track_lengths``: the number of tracks kept and each one's count of fits that
+        passed the relative-error filter, both after that filter and the length floor and
+        before the tail trim.
     """
     w = np.asarray(sqrt2sigma, dtype=np.float64)
     se = np.asarray(sqrt2sigma_se, dtype=np.float64)
@@ -686,6 +689,7 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
     log_se = se / w                      # delta method: sd(ln w) = sd(w) / w
 
     n_tracks = 0
+    track_lengths = None
     if track_id is not None:
         tid = np.asarray(track_id)[ok]
         uniq, inv = np.unique(tid, return_inverse=True)
@@ -698,10 +702,12 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
         if keep.sum() < 8:
             return dict(mu_r=np.nan, sigma_r=np.nan, sigma_r_raw=np.nan, sigma_r_se=np.nan,
                         noise_variance=np.nan, n=int(keep.sum()),
-                        n_tracks=int(keep.sum()), log_mean_se=np.nan)
+                        n_tracks=int(keep.sum()), track_lengths=counts[keep],
+                        log_mean_se=np.nan)
         log_w = (swx / sw)[keep]
         log_se = np.sqrt(1.0 / sw[keep])
         n_tracks = int(keep.sum())
+        track_lengths = counts[keep]
 
     # Trimming removes the tails of a roughly normal sample, so the retained values have a
     # SMALLER variance than the population they came from -- by the truncated-normal factor,
@@ -743,6 +749,7 @@ def psf_width_population(sqrt2sigma: np.ndarray, sqrt2sigma_se: np.ndarray,
         noise_variance=var_noise,
         n=n_units,
         n_tracks=n_tracks,
+        track_lengths=track_lengths,
         log_mean_se=float(np.sqrt(var_raw / log_w.size)),
     )
 

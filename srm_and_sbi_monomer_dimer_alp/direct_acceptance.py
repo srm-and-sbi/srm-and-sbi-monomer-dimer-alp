@@ -14,6 +14,11 @@ measurement failure), ``FAIL (accuracy)``, ``FAIL (uncertainty)``, ``INSUFFICIEN
 ``INSUFFICIENT EVIDENCE (accuracy)``. One does not absorb another. A selftest of a few in-memory
 scenes never reaches a verdict; its accuracy numbers are reported as ``SELFTEST (informational)``.
 
+Two guards surround the steps. Before any recording is read, `check_run_purpose` holds a tier run
+to the declared split of the EVAL tiers: a development run reads development tasks only, a verdict
+run exactly the reserved ones. After the steps, `apply_code_provenance` makes a run whose
+implementation changed while it executed invalid for acceptance, whatever its verdicts.
+
 The module is a pure kernel: no file access, no machine profile, no printing except through the
 ``DiagnosticReporter`` handed to `render`. Subgroup boundaries come from the detector prior and are
 fixed here, never recomputed from the recordings that happened to succeed.
@@ -51,6 +56,80 @@ STRATIFY_KEYS: Tuple[str, ...] = ("mu_pc", "mu_r", "sigma_r")
 
 _Z90 = 1.6448536269514722   # two-sided 90 % normal quantile, for the nominal ranges
 _Z95 = 1.959963984540054    # for the Wilson interval on a measured coverage
+
+# The declared split of the MET-FAB EVAL tiers (DETECTOR_WORKFLOW.md sec. 9.6, "Declared split
+# (2026-09-24)"). Per (condition, frames per recording): the development tasks, the tasks reserved
+# for a verdict, and the estimators whose verdict the reserved tasks are kept for. A tier not listed
+# has no reserved task yet. Changing an entry is a documented, versioned decision, like RULES.
+DECLARED_SPLIT: Dict[Tuple[str, int], dict] = {
+    ("FAB", 100): dict(development=tuple(range(0, 20)), reserved=tuple(range(20, 25)),
+                       verdict_estimators=("Direct_PSF_Width", "Direct_Flicker_Rate")),
+    ("FAB", 1000): dict(development=tuple(range(0, 10)), reserved=tuple(range(10, 20)),
+                        verdict_estimators=("Direct_Fluorescence_Loss",)),
+}
+PURPOSES: Tuple[str, ...] = ("development", "verdict")
+# The token a tier run's folder name carries after the utility name: <...>_Direct_PSF_Width_DEV_<commit>.
+PURPOSE_TOKENS: Dict[str, str] = {"development": "DEV", "verdict": "VERDICT"}
+
+# Exit status of the utilities: 0 nothing failed, 1 a FAIL verdict, 2 insufficient evidence only,
+# 3 the implementation changed during the run. Python itself exits 1 on an uncaught exception and
+# argparse exits 2 on an argument error or a refusal, so 1 and 2 are not verdicts alone: the log says which.
+EXIT_IMPLEMENTATION_CHANGED = 3
+
+
+# ------------------------------------------------------------------------------------------
+# The purpose of a tier run, checked before any recording is read
+# ------------------------------------------------------------------------------------------
+def check_run_purpose(purpose: str, *, estimator: str, condition: str, n_frames: int, split: str,
+                      tasks: Sequence[int], max_videos: int, expect_videos_per_task: int) -> dict:
+    """Hold a tier run's tasks to its declared purpose; a pure check, run before any read.
+
+    A development run reads development tasks only: on a tier with a declared split every task must
+    be one of its development tasks, because a reserved task read for any other purpose leaves the
+    reserved set. A verdict run reads exactly the reserved EVAL tasks of its tier, every recording of
+    them, with an estimator the set is kept for. TRAIN and TEST tasks, and EVAL tiers without a
+    declared split, hold no reserved task: development runs may read them and verdict runs may not.
+
+    Returns the record the run folder stores (purpose, tier, tasks, and the declared development and
+    reserved tasks of the tier); raises ``ValueError`` naming the reason for a refusal.
+    """
+    if purpose not in PURPOSES:
+        raise ValueError(f"purpose {purpose!r}: use one of {', '.join(PURPOSES)}")
+    tasks = [int(t) for t in tasks]
+    if len(set(tasks)) != len(tasks):
+        raise ValueError(f"tasks {tasks}: each task is read once")
+    declared = DECLARED_SPLIT.get((str(condition), int(n_frames))) if split == "EVAL" else None
+    tier = f"the {condition} {split} tier at {int(n_frames)} frames"
+    record = dict(purpose=purpose, estimator=estimator, condition=condition, n_frames=int(n_frames),
+                  split=split, tasks=sorted(tasks), split_declared=declared is not None,
+                  development_tasks=list(declared["development"]) if declared else None,
+                  reserved_tasks=list(declared["reserved"]) if declared else None)
+    if purpose == "development":
+        if declared:
+            outside = sorted(set(tasks) - set(declared["development"]))
+            if outside:
+                reserved = sorted(set(outside) & set(declared["reserved"]))
+                raise ValueError(
+                    f"a development run reads development tasks only; tasks {outside} of {tier} are not "
+                    f"development tasks" + (f" ({reserved} are reserved for a verdict)" if reserved else "")
+                    + f". Development tasks: {declared['development'][0]} to {declared['development'][-1]} "
+                    f"(DETECTOR_WORKFLOW.md sec. 9.6, declared split).")
+        return record
+    if split != "EVAL":
+        raise ValueError(f"a verdict run reads the reserved EVAL tasks; split {split} holds none")
+    if not declared:
+        raise ValueError(f"no reserved set is declared for {tier} (DETECTOR_WORKFLOW.md sec. 9.6)")
+    if estimator not in declared["verdict_estimators"]:
+        raise ValueError(f"the reserved tasks of {tier} are kept for the verdict of "
+                         f"{', '.join(declared['verdict_estimators'])}, not of {estimator}")
+    if sorted(tasks) != list(declared["reserved"]):
+        raise ValueError(f"a verdict run reads exactly the reserved tasks of {tier}, "
+                         f"{list(declared['reserved'])}; got {sorted(tasks)}")
+    need = len(declared["reserved"]) * int(expect_videos_per_task)
+    if int(max_videos) < need:
+        raise ValueError(f"--max-videos {max_videos} would cut the verdict short: the reserved tasks hold "
+                         f"{need} recordings at {expect_videos_per_task} per task")
+    return record
 
 
 # ------------------------------------------------------------------------------------------
@@ -300,6 +379,7 @@ def evaluate(theta: np.ndarray,
             res["verdicts"]["uncertainty"] = "PASS" if all_ok else "FAIL (uncertainty)"
 
     # -- exit status: 0 PASS / nothing failed; 1 any FAIL; 2 insufficient evidence only ----
+    # (3, the implementation changed during the run, is set by `apply_code_provenance`.)
     v = list(res["verdicts"].values())
     if any(s.startswith("FAIL") for s in v):
         res["exit_code"] = 1
@@ -307,6 +387,25 @@ def evaluate(theta: np.ndarray,
         res["exit_code"] = 2 if not selftest else 0
     else:
         res["exit_code"] = 0
+    return res
+
+
+def apply_code_provenance(res: dict, code: dict) -> dict:
+    """Make a run whose implementation changed while it executed invalid for acceptance.
+
+    ``code`` is the block `provenance.finalize_code_provenance` returns: the implementation hash at
+    startup and at write. When they differ, part of the run may have executed one version and part
+    another, so its results describe no single implementation. The verdicts stay in ``res`` as
+    diagnostics, but the ``implementation`` verdict reads ``INVALID`` and the exit status becomes 3
+    whatever the other verdicts were. Called after every other change to the verdicts.
+    """
+    changed = bool(code["changed_during_run"])
+    res["verdicts"]["implementation"] = (
+        "INVALID (implementation changed during the run; no verdict of this run may be used)" if changed
+        else "PASS (implementation unchanged during the run)")
+    res["valid_for_acceptance"] = not changed
+    if changed:
+        res["exit_code"] = EXIT_IMPLEMENTATION_CHANGED
     return res
 
 
@@ -337,14 +436,17 @@ def render(reporter, res: dict, *, estimator: str, target_key: str) -> None:
     R = res["rules"]
     reporter.table(
         "Verdicts (DETECTOR_WORKFLOW.md §9.6)", ["step", "verdict"],
-        [["1. evidence adequacy of the run", res["verdicts"]["run_evidence"]],
+        [["0. implementation unchanged during the run", res["verdicts"].get("implementation", "NOT CHECKED")],
+         ["1. evidence adequacy of the run", res["verdicts"]["run_evidence"]],
          ["2. operational success", res["verdicts"]["operational"]],
          ["2'. reporting protocol (reason code on every drop)", res["verdicts"]["reporting"]],
          ["3. evidence adequacy for accuracy and coverage", res["verdicts"]["accuracy_evidence"]],
          ["4a. accuracy (overall AND operating subgroup)", res["verdicts"]["accuracy"]],
          ["4b. uncertainty coverage (overall AND operating subgroup)", res["verdicts"]["uncertainty"]]],
         note="Verdicts are separate and none absorbs another: a large run with many failed estimates is an "
-             "operational FAIL even when its accuracy step is also INSUFFICIENT EVIDENCE. The operating "
+             "operational FAIL even when its accuracy step is also INSUFFICIENT EVIDENCE. Step 0 is the "
+             "exception: a run whose implementation changed while it executed is INVALID, and none of its "
+             "verdicts may be used. The operating "
              f"subgroup is true log10 {res['operating']['key']} in [{res['operating']['range'][0]}, "
              f"{res['operating']['range'][1]}), about 100-237 photons per dye; quartile boundaries are the "
              "prior's own quarters, fixed, never recomputed from the successful recordings.")

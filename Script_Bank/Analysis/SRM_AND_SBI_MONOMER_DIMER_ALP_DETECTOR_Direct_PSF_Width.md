@@ -97,7 +97,8 @@ looks more careful.
 ```
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_PSF_Width.py \
-    --condition FAB --total-time-seconds 2.0 --tasks 0 1 --max-videos 200 --workers 16
+    --condition FAB --total-time-seconds 2.0 --tasks 0 1 --max-videos 200 --workers 16 \
+    --purpose development --run-suffix <commit>
 ```
 
 `--selftest` renders nine in-memory scenes on a 3 × 3 grid of `mu_r` and `sigma_r` and needs
@@ -134,15 +135,18 @@ instruction to remove it. §9.4 requires more than accuracy: the quantity must a
 downstream stage as a nuisance with an explicit range rather than a point value, so that
 uncertainty is retained rather than discarded.
 
-## Acceptance mechanics (0.1.13)
+## Acceptance mechanics
 
 The utility evaluates the frozen rules of `DETECTOR_WORKFLOW.md` §9.6 through the shared kernel
 `srm_and_sbi_monomer_dimer_alp.direct_acceptance`, which every direct estimator uses so that a rule
 cannot drift between them. The report carries the five verdicts side by side (evidence adequacy of
 the run, operational success, evidence adequacy for accuracy, accuracy, uncertainty coverage), the
 prior-fixed quartile table, and the dropped recordings by reason code. The exit status is 0 when
-nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence. A
-`--selftest` reaches no verdict: its few scenes are reported as `SELFTEST (informational)`.
+nothing failed, 1 on any `FAIL` verdict, 2 when the only shortfall is insufficient evidence, and 3 when
+the implementation changed during the run, which makes the run invalid for acceptance. Python also
+exits 1 on an uncaught exception and the argument parser 2 on an argument error or a refusal, so 1 and
+2 are not verdicts alone; the log says which. A `--selftest` reaches no verdict: its few scenes are
+reported as `SELFTEST (informational)`.
 
 **Reason codes.** Every attempted recording that returns no valid estimate carries one of the codes
 listed below; a dropped recording without a code fails the run itself. The saved arrays hold the
@@ -219,6 +223,67 @@ nearly constant; for `mu_r` both methods recover the parameter well and the dire
 answer different questions: this comparison establishes point accuracy, and the coverage failure above does
 not reverse it. It changes no parameter role by itself; experimental deployment and the fixed-versus-sampled
 imaging-input choice are separate decisions (`DETECTOR_WORKFLOW.md` §9.6 conclusion of record, §7.2).
+
+## Development runs and diagnostics
+
+**Every run is kept, and a tier run is held to its purpose.** A tier run must declare why it reads its
+tasks: `--purpose development` or `--purpose verdict`; there is no default. Before it reads a recording,
+a development run on a tier with a declared split refuses every task outside the development set, and a
+verdict run requires exactly the reserved tasks of the tier, in full, and no earlier verdict folder of
+this estimator on that tier (`DETECTOR_WORKFLOW.md` §9.6, declared split). The run folder carries the
+purpose, `_DEV` or `_VERDICT`, and `--run-suffix` appends to it, for example the commit:
+`..._Direct_PSF_Width_DEV_<commit>`. A run never reuses a folder; an existing one is refused before
+anything is read, so an earlier run is never overwritten. Every run folder holds `provenance.json`: the
+command line, host, Slurm job, package and library versions, the declared commit, the purpose record,
+and the implementation hash of the direct-estimator files at startup and at write. When the two hashes
+differ, the run is invalid for acceptance: its arrays are kept as diagnostics, the verdict table marks
+it `INVALID`, and it exits with status 3. The arrays carry `task` and `index` for every recording. On
+JUWELS, `Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh` runs the
+utility on one whole CPU node (`ESTIMATOR=`, `TASKS=`, `PURPOSE=`, `RUN_SUFFIX=`, `CODE_COMMIT=`).
+
+**Observable quantities for a correction.** §9.6 allows a correction of the PSF estimates, or of their
+ranges, only through quantities an experimental recording provides as well, calibrated on development
+tasks and validated on the reserved ones. Every recording carries five candidate predictors, and none of
+them reads a true parameter:
+
+| quantity | meaning |
+|---|---|
+| `spot_photons_median` | median fitted total spot signal, in incident photons |
+| `spot_snr_median` | median fitted total spot signal over the per-pixel background noise |
+| `spots_per_frame` | accepted spot fits per used frame |
+| `track_length_median` | median length of the tracks the population estimate keeps, counted in fits that pass its relative-error filter |
+| `tracks_per_spot` | tracks kept, over the mean number of accepted fits per used frame |
+
+`tracks_per_spot` is not a measure of fragmentation. It rises when tracks break, but equally when
+emitters are visible for only part of the recording, bleach, or turn over: two emitters, each seen and
+perfectly linked in a different half of a recording, give 2. It stays a candidate predictor, and whether
+it predicts the error of the estimate or of its range is for the development tasks to show.
+
+**The selftest accounts for its error against the truth.** Each selftest scene reproduces its true
+per-subunit widths from the renderer's own seeded draw and matches every accepted fit to the nearest
+visible subunit within 1.5 px. The `mu_r` error is then written, in log10 units, as the sum of five
+terms: the finite population the scene drew (`sample`), detection selection (the true widths of the
+subunits found against those of all visible subunits), duplication (a subunit whose detections formed
+several tracks counts several times), fitting (fitted against true width within matched tracks) and a
+remainder (tail trim, unmatched tracks, the population step's own averaging). The table shows all five,
+so the displayed terms sum to the displayed total. It is diagnostic accounting, conditional on the
+nearest-subunit matching and on the order of the terms, not a uniquely established causal
+decomposition. The spread ratio compares the true spread of the subunits found with that of all visible
+ones; below one, the found subunits span a narrower range of true widths. `--selftest-grid brightness`
+puts `mu_pc` on the five edges of its prior quarters at three spreads, which is where the dim-subgroup
+bias lives, and `--selftest-labeling FAB` draws dye counts from the bare FAB dye-count law at probe
+occupancy 1 instead of one dye per subunit. A tier also applies the condition's probe occupancy (0.155
+for MET-FAB), which thins the visible subunits without changing a visible one's dye count; the selftest
+sets the density of visible spots through `--selftest-subunits` instead:
+
+```
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
+    Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_PSF_Width.py \
+    --selftest --selftest-grid brightness --selftest-labeling FAB
+```
+
+A selftest reaches no verdict, and fifteen scenes calibrate nothing. The accounting points to mechanisms
+a correction may have to address; the development tasks carry the calibration.
 
 ## Essential notes
 
