@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Documentation only: the regenerated Evaluation is read into the workflow document and the working imaging
+vector is recorded as a decision. No code, stage, parameter role or estimate changes.
+
+### Changed
+
+- `DETECTOR_WORKFLOW.md`: the MAP columns of §6.9 and §9.7 and the multiple-dye columns of §6.11 are the
+  regenerated ones (Evaluation JUPITER 1995540 and 1995541, Experiment 1972300 and 1972333; records
+  `..._CAP256_vs_Baseline_Evaluation` and `..._CAP256_vs_Baseline_Experiment`); the "under recomputation"
+  banners are replaced by regenerated or superseded notes; the one-dye MAP figures of §6.10 and §6.11 are
+  marked superseded and not regenerated; §9.8 gains the regenerated-Evaluation paragraph (all 50,000 ascents
+  stopped on patience, the 0.128 dex bands gone, the baseline MAP at its median, `CAP256`'s `sigma_r` and
+  bleaching MAP departures persisting as features of its learned density); the three-way PSF comparison of
+  §9.7 is the 8,000-recording one, which supersedes the neural rows of the 2,000-recording head-to-head of
+  §9.6 and of the `..._PSF_Direct_vs_Neural` record (its README carries the note).
+  §8 carries a historical banner pointing to §6.11 and §7.6. `prob_photo_bleach` is labeled as a probability
+  over the fixed 100-frame reference interval, not per frame; the aggregation rules are stated in full.
+- The photobleaching estimator's note records the state of the 20 s tier (nine of twenty tasks rendered),
+  the located cause of the lost renders (the trajectory reader's dense tensor over distinct particle ids,
+  66 GiB for the tier's largest scene, measured locally without running a stage), the three completion
+  options weighed, and the decision to park the tier; no rendering code changes.
+- §6.2 and §7.6 record the public swift `p_bleach` of Rahm et al. 2021 for the same MET data set as a related
+  tracking reference for the bleaching row, with the internal 2023 value attributed separately, and state why it is
+  not a transferable per-dye calibration.
+- The photobleaching estimator's note records the agreed plan to anchor the bleaching row on a field-fluorescence
+  measurement of the raw recordings: one development characterization on the rendered tasks 5 and 8, the
+  experimental input path with unchanged arithmetic, per-recording reporting, and rendering checks.
+
+### Decisions
+
+- The biology reference run conditions on one fixed, user-selected imaging vector assembled from documented
+  sources, recorded in the new `DETECTOR_WORKFLOW.md` §7.6 with the source, aggregation, provisional value
+  and carried limitation of each coordinate: `mu_r`, `mu_pc`, `sigma_pc` and `lambda_rate` from the
+  `capacity256` posterior medians (median over the 600 experimental windows; the SGM is the cross-check),
+  `sigma_r` from the direct PSF-width estimator (its point value on the recordings still to be measured),
+  `prob_photo_bleach` from the baseline posterior median as a provisional anchor with its within-recording
+  fall stated. The vector carries no calibrated joint uncertainty; `capacity256`'s joint calibration does not
+  transfer to it; the pooled representations are retained; the camera stays the separate SCOPE nuisance.
+  It is to be minted by a `selection_user` choice of the `Nuisance_DLI` construction, selected by a tag of
+  its own that every consumer honors and records; a value outside the detector prior box is refused unless
+  acknowledged explicitly, the acknowledgement flagging extrapolation beyond the tested domain. Order of the
+  remaining steps: direct PSF-width measurement on the recordings, `selection_user`, a small predictive
+  check of rendered against experimental clips, then biology. The MAP-ascent constraint question stays
+  parked. `VALIDATION.md` §2.5b points to §7.6.
+
 ## 0.1.20 - 2026-09-24
 
 The flicker mismatch harness keeps the pooled autocorrelation shape of every observation level, and the

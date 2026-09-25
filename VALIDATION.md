@@ -442,9 +442,12 @@ FAB detector calibration produces the FAB artifact, which the FAB biology DLI co
 
 The construction (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py`)
 reads a value-based spec whose `posterior_sample_pool_choice` sets how the calibration
-becomes the samplable artifact. **Production** uses `raw` — the faithful calibration,
-resampled from the detector estimator's posterior over the real recordings; it is a GPU
-step and needs the estimator trained in the detector Inference stage. For a **smoke** the
+becomes the samplable artifact. The **biology reference run** conditions on one fixed,
+user-selected imaging vector assembled from documented sources (`DETECTOR_WORKFLOW.md` §7.6),
+minted by the `selection_user` choice, which needs no estimator and no GPU; `raw` — the
+faithful calibration, resampled from the detector estimator's posterior over the real
+recordings, a GPU step that needs the estimator trained in the detector Inference stage —
+remains the marginalizing form. For a **smoke** the
 imaging values need only be valid, so use `box_user` with each parameter's range set to its
 imaging prior box — the six learnable imaging parameters' `PRIOR_RANGE` values defined in
 `srm_and_sbi_monomer_dimer_alp/detector_parameterization.py` (the `DETECTOR_PARAMETERIZATION` table).

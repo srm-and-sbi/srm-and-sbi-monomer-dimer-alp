@@ -245,6 +245,57 @@ The threshold and the eligibility diagnostic stay frozen. A development run show
 behaves on full-length multiple-dye recordings; any change it motivates is made on the development
 tasks and judged once on the reserved ones.
 
+**State of the tier and why it is parked (2026-09-25).** Nine of the twenty tasks are rendered (5, 8, 10,
+12, 13, 14, 15, 17, 19; 900 recordings, two of them in the development set); the render of tasks 9 to 18 lost
+four tasks when their processes were killed, each while rendering one of the tier's largest trajectories.
+The cause was located on the PC by replaying the runner's loop on two of those trajectories, without running
+any stage: the trajectory reader (`extract_trajectory_poses`) allocates one dense slot per *distinct particle
+id* over the whole recording, frames × ids × 3 × species ranks, filled with NaN where a particle is absent,
+and ReaDDy assigns a fresh id at every reaction and mode switch, so the id count grows with duration,
+receptor count and reaction rates. The tier's largest scene (task 9, simulation 5; about 3,000 particles per
+frame) holds 491,645 distinct ids over 1,001 frames, a 66 GiB tensor before the 11 GiB collapsed copy and the
+render's own temporaries; a small scene (491 subunits, 6,961 ids) peaks at 4.6 GiB. Reading the file itself
+costs under 0.2 GiB. Nothing in the rendered videos is affected; the limitation is memory alone, and it is
+quadratic in the duration. Three ways to complete the tier were weighed: one task per 180 GB node with no code
+change (about 80 GiB per worst-case render); a lean per-frame gather of subunit positions in place of the
+dense tensor, a change to one function that can be tested for exact equality against the current one; and
+segmenting the simulation with ReaDDy checkpoints, which would still need the reader, the id-keyed lineage
+and the photophysics state to be carried across segments and is the larger change. The tier is parked: at the
+working bleaching value of 0.034 per 100-frame interval the benchmark above gives about 0.5 dex even at 20 s,
+so the completed tier could confirm the order of magnitude of that value and little more, and the working
+imaging vector (`DETECTOR_WORKFLOW.md` §7.6) carries the value as a provisional anchor. If the biology step
+turns out to depend on the value, the large-memory-node completion needs no code change; the development
+tasks already rendered (5 and 8) allow a development run of this estimator on 200 full-length recordings at
+any time. The partial stores of tasks 9, 11, 16 and 18 remain on JUWELS until a decision to complete or
+remove them.
+
+**Planned experimental measurement (agreed 2026-09-25; each step separately approved).** The working
+imaging vector's bleaching row (`DETECTOR_WORKFLOW.md` §7.6) is to be anchored on a measurement made on
+the raw recordings rather than on either neural estimator, as a bounded measurement task and not an
+estimator-development programme. (1) Observable: background-subtracted total fluorescence over time in a
+fixed region of each recording, with no per-frame normalization, reported as the early-to-late fractional
+loss between averaging-window centers and as this estimator's fitted effective loss parameter with its fit
+diagnostics; the full curve is shown, no initial transient is assumed or discarded beforehand, and any
+excluded interval is disclosed. The parameter so chosen approximates the observed fluorescence decline
+under the renderer; it is not an independently identified molecular photobleaching probability, and
+bleaching is not assumed to be the only contributor to a rendered field-flux change (finite sampling,
+flicker, motion and the observation region also enter), so the match is checked by rendering, never
+assumed. (2) One development characterization on the rendered development tasks 5 and 8 (200 recordings,
+no new rendering): bias, scatter, usable fraction and rejection reasons, including the dim subgroup; a
+major failure is reported as a limitation and starts no correction cycle. (3) The experimental input path,
+with unchanged estimator arithmetic: the sixty FAB recordings, the externally anchored camera values, an
+explicitly recorded background treatment, saved curves, early/late measurements, fit results and
+eligibility reasons, and no experimental accuracy verdict; detected-spot counts accompany the result only
+if already available, as an optional diagnostic. (4) Per-recording results and their distribution are
+reported without silently pooling successful fits or assuming one shared rate; a representative effective
+value is chosen only if the curves and diagnostics support one, with the aggregation rule and the plausible
+variation recorded; the current 0.034 is a comparison value, not an expected answer or an acceptance
+target; if background uncertainty prevents a useful measurement, that is the result. (5) `selection_user`
+is built before or alongside this work, the bleaching row stays provisional until the measurement is read,
+and the rendered vector is then checked for field-fluorescence decline and apparent spot persistence before
+the reference vector is frozen. No new 20 s tier, reserved-set campaign or estimator refinement is part of
+this scope.
+
 ## Essential notes
 
 - **A passing estimator is a candidate, not a decision.** `DETECTOR_WORKFLOW.md` §9.4 gates
