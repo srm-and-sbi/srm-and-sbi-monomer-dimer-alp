@@ -493,6 +493,22 @@ python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.
 
 **Expected**: `<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Nuisance_DLI.npz`
 plus a `..._Nuisance_DLI_Analysis/` directory (a `report.md` and a 1-D marginals figure).
+**Reference vector (`selection_user`, the biology reference run).** Emit the skeleton, type the six values with
+their sources and limitations (physical units), build under a nuisance tag, and pass that tag to the biology
+DLI stage (`--nuisance-tag REF`; dispatcher knob `NUISANCE_TAG=REF`), which records the artifact's identity in
+every `Nuisance_DLI_Theta_Set` it writes:
+
+```bash
+python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --emit-selection-user
+#   fill <data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_REF_Nuisance_DLI_Spec.toml
+python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --build --dry-run
+python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --build
+```
+
+**Expected**: `<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_REF_Nuisance_DLI.npz` plus its
+`..._Analysis/` report carrying the vector, its sources and limitations. The values are recorded in
+`DETECTOR_WORKFLOW.md` §7.6.
+
 The biology DLI (§2.2) then loads it; with `box_user` over the prior box every drawn imaging
 vector lies inside the prior (the report's "frac outside prior" is 0). The full set of
 representations and the calibration rationale are in the companion note

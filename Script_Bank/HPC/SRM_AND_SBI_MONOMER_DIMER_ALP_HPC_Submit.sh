@@ -23,6 +23,7 @@
 #   KEY=VALUE pairs are the stage's --export knobs (see each stage script header);
 #   anything not passed falls back to that stage script's own default:
 #     simulation  : SPLIT SIM_STAGE CONDITION TASK_OFFSET TASK_COUNT TASK_SIMS TOTAL_TIME SKIN_FACTOR
+#                   NUISANCE_TAG (biology DLI only: select a tagged Nuisance_DLI artifact, e.g. REF)
 #                   (SIM_STAGE = both|rds|dli; rds generates CONDITION's trajectory tier alone --
 #                   one tier per condition, since the association setting is per condition; it
 #                   carries the condition token and no workflow qualifier, and both workflows
@@ -159,6 +160,7 @@ case "$STAGE" in
     split_uc="$(echo "$SPLIT" | tr '[:lower:]' '[:upper:]')"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}_Simulation_${split_uc}"
     _add SPLIT; _add CONDITION; _add SIM_STAGE; _add TASK_OFFSET; _add TASK_COUNT; _add TASK_SIMS; _add TOTAL_TIME; _add SKIN_FACTOR
+    _add NUISANCE_TAG
     SB+=( --array="${ARRAY:-0-0}" )   # always array-submit so %a is a clean node number
     [ -n "${NTPN:-}" ] && SB+=( --ntasks-per-node="$NTPN" )
     [ -n "${CPT:-}" ]  && SB+=( --cpus-per-task="$CPT" )

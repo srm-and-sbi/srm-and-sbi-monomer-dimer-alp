@@ -38,6 +38,7 @@ One user choice, `posterior_sample_pool_choice`, decides how that pool becomes t
 | **`box`** | a per-parameter uniform over quantiles of the pool | none (independent per dimension) |
 | **`box_user`** | a per-parameter uniform over user-set ranges | none |
 | **`sgm_percentiles`** | whole real vectors at signed distance-to-SGM percentiles — an SGM of window MAPs (`"experiment"`) or of window posterior SGMs (`"window-sgm"`); one frozen vector or a small pool | whole vectors: a multi-member pool keeps its members' co-occurring coordinates; a single frozen vector carries none |
+| **`selection_user`** | ONE explicitly chosen, fixed imaging vector assembled from documented sources (six named physical values, each with its source and limitation); no estimator, Experiment product, GPU or pool | none: a single fixed vector; no calibrated joint uncertainty |
 
 **Why `raw` is the faithful default.** Each entry in the pool is a complete parameter vector whose
 components were drawn jointly, so resampling *whole vectors* preserves the joint structure exactly —
@@ -68,6 +69,26 @@ governs how the pool is drawn, so it shapes `raw`, `gaussian`, and `box` (and th
 under `unrestricted` the pool forms can legitimately place mass outside the prior box, matching
 Evaluation and Experiment, and `sgm_percentiles` returns real acquisitions as-is. Only `box`/`box_user`
 are constrained to the prior box, clamped at build.
+
+**`selection_user` — one fixed vector you chose.** The seventh choice is not a representation of the pool at
+all: it is one explicitly chosen imaging vector, assembled from documented sources (for the working vector of
+`DETECTOR_WORKFLOW.md` §7.6: neural posterior medians for four coordinates, a direct estimator for one, a
+provisional anchor for one), typed into the spec in physical units with a `source` and a `limitation` per
+coordinate. The build converts to log10, refuses a value outside the detector prior box unless its key is
+listed under `allow_outside_prior` with a non-empty `outside_prior_justification` (which acknowledges
+extrapolation beyond the tested imaging domain and certifies nothing), clips nothing, needs no estimator and
+no GPU, and stores the vector as user-selected and fixed: every biology simulation receives it unchanged,
+and the biology inference is conditional on these six values. It carries no calibrated joint uncertainty;
+the estimators behind its values are provenance, not the artifact's identity. Mint it under a nuisance tag
+(below) so it lives beside the canonical artifact and any sensitivity variant.
+
+**The nuisance tag.** `--nuisance-tag <TAG>` (a SCREAMING_SNAKE token, `[A-Z0-9]+`) names the spec and the
+artifact `<alias>_<timing>_<TAG>_Nuisance_DLI_Spec.toml` / `..._Nuisance_DLI.npz`. It names the NUISANCE
+artifact, never an estimator. Every consumer selects an artifact by the same tag and records which one it
+used: the biology DLI stage (`--nuisance-tag`; dispatcher knob `NUISANCE_TAG`) writes the artifact's identity
+into every `Nuisance_DLI_Theta_Set` record's schema, the posterior-predictive render into its clip file and
+figure provenance, the horizon audit into every generated file, and the SGM analysis into its report. No tag
+means the canonical artifact.
 
 **The range rule.** A user supplies per-parameter `[imaging.<KEY>]` ranges only for `box_user`. `box`
 derives its ranges from pool quantiles (the 5th/95th percentiles by default) clamped to the prior box;
@@ -156,6 +177,20 @@ Arguments:
   (`map_estimate`, read through the artifact schema), after
   verifying the two share a window ordering. It backs up the original and preserves the pool's cache key
   (so `--build` still reuses it without a GPU). A pool that already carries labels is left unchanged.
+- `--emit-selection-user` — write the spec skeleton of a `selection_user` Nuisance_DLI (every value line
+  commented out, so it cannot be built before each `value`, `source` and `limitation` is typed); CPU only,
+  no estimator, no recordings. Then `--build` with the same `--nuisance-tag`:
+
+      MACHINE_PROFILE=<profile> python \
+        Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
+        --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --emit-selection-user
+      (fill every [selection.<KEY>] table of ..._2S_50FPS_REF_Nuisance_DLI_Spec.toml)
+      MACHINE_PROFILE=<profile> python \
+        Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
+        --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --build [--dry-run]
+
+- `--nuisance-tag` — SCREAMING_SNAKE token naming the spec and artifact beside the canonical ones (a
+  reference vector, a sensitivity variant); consumers select the artifact by the same tag.
 - `--dry-run` — resolve the paths and report what would be read and written; load nothing, compute
   nothing.
 
@@ -229,6 +264,11 @@ does not rebuild: the build is this step's job.
   point estimates but discards the within-window posterior width. MAP-derived: its cache is keyed on
   the MAP computation contract (see Caching).
 
+- **`selection_user`** — when the biology run is to condition on one explicitly chosen vector from documented
+  sources rather than on a calibrated pool: the reference biology configuration of `DETECTOR_WORKFLOW.md`
+  §7.6, and its sensitivity variants under their own tags. The pooled choices stay available for a
+  marginalizing run.
+
 ## Caveats
 
 - **Only `raw` preserves the joint distribution.** Every other choice trades correlation fidelity for
@@ -246,6 +286,10 @@ does not rebuild: the build is this step's job.
   data with known values, in the Detector Evaluation stage.
 - **Prior-box clamping is logged, not silent.** For `box`/`box_user`, any parameter range the prior-box
   clamp reduces is reported and counted at build.
+- **A `selection_user` vector fixes the imaging.** Recording-to-recording imaging variation is not
+  marginalized in a run that consumes it, the SCOPE camera nuisance stays separate, and the values carry
+  no calibrated joint uncertainty; an acknowledged outside-prior coordinate lies beyond the detector's
+  tested imaging domain and the acknowledgement records that fact rather than validating the value.
 
 ## Reference
 

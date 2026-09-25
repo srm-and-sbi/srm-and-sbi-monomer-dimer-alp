@@ -206,7 +206,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         det_paths = det.detector_paths(PARAMETERS.paths).with_condition(args.condition)
         posit_dir = PARAMETERS.machine.root_for("EVAL") / PARAMETERS.paths.posit_subdir
         nuisance_artifact = nuisance_dli_artifact_path(
-            posit_dir, det_paths.project_alias, timing_label)
+            posit_dir, det_paths.project_alias, timing_label, nuisance_tag=args.nuisance_tag)
     else:
         # detector: the six imaging are the learnable inference target, drawn from the box.
         ilow = np.array(det.theta_lower_bound())
@@ -398,14 +398,20 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             dli_ok = nuisance_artifact.exists()
             dli_sample = None
             if dli_ok:
-                nuisance_dli = require_nuisance_dli(posit_dir, det_paths.project_alias, timing_label)
+                nuisance_dli = require_nuisance_dli(posit_dir, det_paths.project_alias, timing_label,
+                                                    nuisance_tag=args.nuisance_tag)
                 if list(nuisance_dli.parameter_keys) != dli_keys:
                     raise ValueError(
                         f"Nuisance_DLI schema mismatch: artifact parameter_keys "
                         f"{list(nuisance_dli.parameter_keys)} != expected {dli_keys}.")
                 dli_sample = np.power(10, nuisance_dli.sample(1))[0]
             print(f"  reads Nuisance_DLI   : {nuisance_artifact}  "
-                  f"[{'OK' if dli_ok else 'MISSING'}]")
+                  f"[{'OK' if dli_ok else 'MISSING'}]"
+                  + (f"  (tag {args.nuisance_tag})" if args.nuisance_tag else "  (canonical)"))
+            if dli_ok:
+                ident = nuisance_dli.identity(nuisance_artifact)
+                print(f"  Nuisance_DLI identity: choice={ident['posterior_sample_pool_choice']} "
+                      f"fixed={ident['fixed']} n_samples={ident['n_samples']}")
             print(f"[DRY RUN] imaging draw: photophysics from Nuisance_DLI (6) "
                   f"+ SCOPE box {scope_sets.shape} (5).")
             missing = 0 if dli_ok else 1
@@ -483,13 +489,23 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     # ---- Load + schema-guard the required Nuisance_DLI artifact once (biology only;
     # fails loud naming the analysis if absent; never rebuilds).
+    nuisance_identity = None
     if artifact:
-        nuisance_dli = require_nuisance_dli(posit_dir, det_paths.project_alias, timing_label)
+        nuisance_dli = require_nuisance_dli(posit_dir, det_paths.project_alias, timing_label,
+                                            nuisance_tag=args.nuisance_tag)
         if list(nuisance_dli.parameter_keys) != dli_keys:
             raise ValueError(
                 f"Nuisance_DLI schema mismatch: artifact parameter_keys "
                 f"{list(nuisance_dli.parameter_keys)} != expected {dli_keys} "
                 f"(the six photophysics in DETECTOR_PARAMETER_KEYS order).")
+        # The selected artifact's identity travels into every Nuisance_DLI_Theta_Set record this
+        # run writes, so a reference run and a sensitivity variant can never be confused.
+        nuisance_identity = nuisance_dli.identity(nuisance_artifact)
+        nuisance_identity["nuisance_tag"] = args.nuisance_tag
+        print(f"Nuisance_DLI selected: {nuisance_artifact.name} "
+              f"(choice {nuisance_identity['posterior_sample_pool_choice']}, "
+              f"{'fixed vector' if nuisance_identity['fixed'] else 'pool'}"
+              + (f", tag {args.nuisance_tag}" if args.nuisance_tag else ", canonical") + ")")
 
     for loop_i, task in enumerate(task_indices):
         task_alias = task
@@ -535,9 +551,12 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         # The imaging set carries the six-row imaging schema: the detector's Theta_Set is a
         # training label and is schema-checked by its readers; the biology Nuisance_DLI record
         # carries the same schema for provenance only.
-        write_theta_set(imaging_set_path, imaging_draw, theta_set_schema(
+        imaging_schema = theta_set_schema(
             det.DETECTOR_PARAMETERIZATION, condition=condition, timing_label=timing_label,
-            generator="dli_nuisance" if artifact else "dli_detector"))
+            generator="dli_nuisance" if artifact else "dli_detector")
+        if nuisance_identity is not None:
+            imaging_schema["nuisance_dli"] = nuisance_identity      # the selected artifact, recorded
+        write_theta_set(imaging_set_path, imaging_draw, imaging_schema)
         if compress:
             theta_compressor = numcodecs.Blosc(
                 cname="zstd", clevel=9, shuffle=numcodecs.Blosc.BITSHUFFLE,
@@ -839,6 +858,13 @@ def build_dli_parser() -> argparse.ArgumentParser:
              "are not a selection axis). A subunit not occupied by a probe carries no dye. Default: "
              "the condition's declared (INLB 0.5) or derived (FAB 0.155) value from "
              "parameterization.ConditionSetting; the value used is recorded in the Labeling_Set.",
+    )
+    parser.add_argument(
+        "--nuisance-tag", type=str, default=None,
+        help="Biology only: SCREAMING_SNAKE token ([A-Z0-9]+) selecting a tagged Nuisance_DLI artifact "
+             "(<alias>_<timing>_<TAG>_Nuisance_DLI.npz: a reference vector or a sensitivity variant) "
+             "instead of the canonical one; the selected artifact's identity is recorded in every "
+             "Nuisance_DLI_Theta_Set this run writes. Ignored by the detector workflow.",
     )
     parser.add_argument(
         "--video-dtype-bits", type=int, default=8, choices=[8, 16],

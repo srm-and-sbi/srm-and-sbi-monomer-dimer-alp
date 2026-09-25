@@ -25,6 +25,23 @@ user choice, `posterior_sample_pool_choice`, turns that pool into the samplable 
                             the imaging prior box. Independent per dimension: no correlation.
   - ``box_user``          — a per-parameter uniform over user-set ranges, clamped to the
                             prior box. No correlation.
+  - ``selection_user``    — ONE explicitly chosen, fixed imaging vector assembled from documented
+                            sources (six named physical values, each with its source and
+                            limitation), returned unchanged to every simulation. Not a posterior
+                            sample, not an automatically selected SGM; needs no estimator, no
+                            Experiment product, no GPU and no pool. It carries no calibrated joint
+                            uncertainty. A value outside the detector prior box is refused unless
+                            the spec acknowledges it explicitly with a recorded justification; the
+                            acknowledgement flags extrapolation beyond the tested imaging domain and
+                            certifies nothing; nothing is clipped.
+
+Selecting an artifact. The canonical artifact carries the plain timing label. A ``nuisance_tag``
+(a SCREAMING_SNAKE token, the grammar of the estimator's artifact tag) names a further artifact
+beside it -- a reference vector, a sensitivity variant -- and every consumer (the biology
+generation, the posterior-predictive render, the horizon audit, the SGM analysis) selects it by
+that tag and records the selected artifact's identity in its outputs, so a reference run and a
+variant cannot be confused. The tag names the nuisance artifact, never the estimator that informed
+it: for ``selection_user`` the estimators behind the values belong to the spec's provenance.
 
 `pool_mode` (``bounded`` default / ``unrestricted``) is identical to the Evaluation and
 Experiment convention: bounded rejection-samples the pool within the imaging prior box;
@@ -46,6 +63,7 @@ is a user decision, never an automatic fabrication.
 """
 import json
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -64,10 +82,12 @@ ARTIFACT_SUFFIX = "_Nuisance_DLI.npz"        # the built, samplable Nuisance_DLI
 ARTIFACT_FORMAT_VERSION = 2                  # v2: posterior_sample_pool_choice scheme
 POOL_FORMAT_VERSION = 1                      # v1: pool cache carries per-row kind_index/cell/chunk labels
 
-POOL_CHOICES = ("raw", "map_estimate_pool", "gaussian", "box", "box_user", "sgm_percentiles")
+POOL_CHOICES = ("raw", "map_estimate_pool", "gaussian", "box", "box_user", "sgm_percentiles",
+                "selection_user")
 POOL_MODES = ("bounded", "unrestricted")
 DEFAULT_BOX_QUANTILES = (0.05, 0.95)
-_EMPIRICAL = ("raw", "map_estimate_pool", "sgm_percentiles")  # stored as a sample matrix, resampled per-vector
+_EMPIRICAL = ("raw", "map_estimate_pool", "sgm_percentiles",
+              "selection_user")            # stored as a sample matrix, resampled per-vector (one row: fixed)
 _BOX = ("box", "box_user")                   # stored as low/high, drawn as a per-param uniform
 
 # The sgm_percentiles selection (whole vectors at signed distance-to-SGM percentiles; p50 = the SGM).
@@ -80,19 +100,37 @@ SGM_CONDITIONS = ("FAB", "INLB")
 # already-computed data -- the Experiment product's map_estimate (window MAPs), or the labeled
 # posterior pool's per-window SGMs -- with no GPU).
 POOL_KINDS = {"raw": "PosteriorSample", "gaussian": "PosteriorSample", "box": "PosteriorSample",
-              "map_estimate_pool": "MapEstimate", "box_user": None, "sgm_percentiles": None}
+              "map_estimate_pool": "MapEstimate", "box_user": None, "sgm_percentiles": None,
+              "selection_user": None}
 
 _ANALYSIS = "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py"
 
 
-def spec_path(posit_dir, project_alias, timing_label):
+def nuisance_label(timing_label, nuisance_tag=None):
+    """The label a Nuisance_DLI artifact and its spec are named under: the timing label,
+    optionally followed by the nuisance tag (``2S_50FPS`` -> ``2S_50FPS_REF``).
+
+    The tag is a SCREAMING_SNAKE token (``[A-Z0-9]+``, the grammar of ``Paths.product_label``),
+    and it names the NUISANCE artifact, never an estimator: a reference vector or a sensitivity
+    variant lives beside the canonical artifact instead of overwriting it, and every consumer
+    selects an artifact by this tag and records it. No tag returns the timing label unchanged.
+    """
+    if nuisance_tag is None or nuisance_tag == "":
+        return timing_label
+    if not re.fullmatch(r"[A-Z0-9]+", str(nuisance_tag)):
+        raise ValueError(f"nuisance_tag {nuisance_tag!r} must be a SCREAMING_SNAKE token without "
+                         f"underscores ([A-Z0-9]+), e.g. 'REF' or 'BLEACHLOW'.")
+    return f"{timing_label}_{nuisance_tag}"
+
+
+def spec_path(posit_dir, project_alias, timing_label, nuisance_tag=None):
     """Path of the user-authored Nuisance_DLI spec (in the Posit subdir)."""
-    return Path(posit_dir) / f"{project_alias}_{timing_label}{SPEC_SUFFIX}"
+    return Path(posit_dir) / f"{project_alias}_{nuisance_label(timing_label, nuisance_tag)}{SPEC_SUFFIX}"
 
 
-def artifact_path(posit_dir, project_alias, timing_label):
+def artifact_path(posit_dir, project_alias, timing_label, nuisance_tag=None):
     """Path of the built, samplable Nuisance_DLI artifact."""
-    return Path(posit_dir) / f"{project_alias}_{timing_label}{ARTIFACT_SUFFIX}"
+    return Path(posit_dir) / f"{project_alias}_{nuisance_label(timing_label, nuisance_tag)}{ARTIFACT_SUFFIX}"
 
 
 # =============================================================================
@@ -113,10 +151,13 @@ class NuisanceDLI:
 
     def __init__(self, parameter_keys, posterior_sample_pool_choice, pool_mode,
                  prior_low, prior_high, *, low=None, high=None, samples=None,
-                 mean=None, cov=None, space="log10"):
+                 mean=None, cov=None, space="log10", selection=None):
         self.parameter_keys = list(parameter_keys)
         self.posterior_sample_pool_choice = posterior_sample_pool_choice
         self.pool_mode = pool_mode
+        # selection_user only: the values, their sources and limitations, and any acknowledged
+        # outside-prior coordinates -- the decision record travels with the artifact.
+        self.selection = None if selection is None else dict(selection)
         self.prior_low = np.asarray(prior_low, dtype=float)
         self.prior_high = np.asarray(prior_high, dtype=float)
         self.space = space
@@ -145,6 +186,14 @@ class NuisanceDLI:
                     or self.samples.shape[1] != d):
                 raise ValueError(f"choice {choice!r} needs a (n, {d}) sample matrix; got "
                                  f"{None if self.samples is None else self.samples.shape}.")
+            if choice == "selection_user":
+                if self.samples.shape[0] != 1:
+                    raise ValueError("choice 'selection_user' holds exactly one fixed vector; got "
+                                     f"{self.samples.shape[0]} rows.")
+                if not self.selection or self.selection.get("kind") != "user":
+                    raise ValueError("choice 'selection_user' needs its selection record (values, "
+                                     "sources, limitations); build it through load_spec + "
+                                     "build_nuisance_dli.")
         else:  # gaussian
             if (self.mean is None or self.cov is None
                     or self.mean.shape != (d,) or self.cov.shape != (d, d)):
@@ -161,11 +210,19 @@ class NuisanceDLI:
 
     @classmethod
     def from_samples(cls, parameter_keys, samples, *, choice="raw", pool_mode="bounded",
-                     prior_low=None, prior_high=None, space="log10"):
+                     prior_low=None, prior_high=None, space="log10", selection=None):
         """A stored sample matrix (``raw`` posterior draws or ``map_estimate_pool`` MAP
         vectors), resampled per whole vector at draw time to preserve correlations."""
         return cls(parameter_keys, choice, pool_mode, prior_low, prior_high,
-                   samples=samples, space=space)
+                   samples=samples, space=space, selection=selection)
+
+    @classmethod
+    def from_selection(cls, parameter_keys, vector_log10, selection, *, prior_low, prior_high,
+                       pool_mode="bounded"):
+        """ONE fixed, user-selected vector (log10) with its decision record; every draw returns it."""
+        vec = np.asarray(vector_log10, dtype=float).reshape(1, -1)
+        return cls(parameter_keys, "selection_user", pool_mode, prior_low, prior_high,
+                   samples=vec, selection=selection)
 
     @classmethod
     def from_gaussian(cls, parameter_keys, mean, cov, *, pool_mode="bounded",
@@ -204,7 +261,27 @@ class NuisanceDLI:
             "space": self.space,
             "n_samples": (int(self.samples.shape[0]) if self.posterior_sample_pool_choice
                           in _EMPIRICAL else None),
+            "selection": self.selection,
         }
+
+    @property
+    def fixed_vector_log10(self):
+        """The one vector a ``selection_user`` artifact returns (log10), else ``None``."""
+        if self.posterior_sample_pool_choice != "selection_user":
+            return None
+        return np.asarray(self.samples[0], dtype=float)
+
+    def identity(self, path=None):
+        """A compact, JSON-ready identity for consumers to record: the artifact file, the choice,
+        the pool mode, the sample count and (for selection_user) the selection record."""
+        m = self.manifest()
+        out = {"artifact": None if path is None else str(Path(path).name),
+               "posterior_sample_pool_choice": m["posterior_sample_pool_choice"],
+               "pool_mode": m["pool_mode"], "n_samples": m["n_samples"],
+               "fixed": self.posterior_sample_pool_choice == "selection_user"}
+        if self.selection is not None:
+            out["selection"] = self.selection
+        return out
 
     def flush(self, path):
         """Write the self-contained artifact to ``path`` as a compressed ``.npz`` (the
@@ -233,7 +310,7 @@ class NuisanceDLI:
                        if k in data.files}
             return cls(m["parameter_keys"], m["posterior_sample_pool_choice"],
                        m["pool_mode"], data["prior_low"], data["prior_high"],
-                       space=m.get("space", "log10"), **payload)
+                       space=m.get("space", "log10"), selection=m.get("selection"), **payload)
 
 
 # =============================================================================
@@ -668,6 +745,8 @@ def emit_spec_template(path, imaging_keys, suggestions, *, pool_mode="bounded", 
         "#   gaussian          -> full-covariance Gaussian fit to the pool (linear correlations).",
         "#   box               -> per-parameter uniform over `box_quantiles` of the pool, clamped.",
         "#   box_user          -> per-parameter uniform over the [imaging.<KEY>] ranges below, clamped.",
+        "#   selection_user    -> ONE fixed, user-selected vector from documented sources; write its spec",
+        "#                        with --emit-selection-user (no estimator, no GPU), not from this template.",
         "#   sgm_percentiles   -> whole real vectors at SIGNED distance-to-SGM percentiles. REUSES the",
         "#                        Detector Experiment MAPs (or the labeled posterior pool); NO GPU. In",
         "#                        prior-range-normalized absolute space: magnitude = distance to the",
@@ -708,10 +787,131 @@ def emit_spec_template(path, imaging_keys, suggestions, *, pool_mode="bounded", 
     return Path(path)
 
 
+def emit_selection_user_template(path, table, *, provenance=None, comparison=None):
+    """Write the spec skeleton of a ``selection_user`` Nuisance_DLI (CPU; no estimator).
+
+    ``table`` is the six-row detector parameter table (``KEY``, ``PRIOR_RANGE`` in log10). Every
+    value line is written COMMENTED OUT, so the file cannot be built before the user has typed each
+    value, its source and its limitation; ``comparison`` (``{key: physical}``) is printed beside
+    each row as a reference only. Physical units: the values are typed in physical units and stored
+    in log10 by the build.
+    """
+    out = [
+        "# ============================================================================",
+        "# Nuisance_DLI spec -- selection_user: ONE explicitly chosen, fixed imaging vector.",
+        "# ============================================================================",
+        "# Fill every [selection.<KEY>] table: `value` in PHYSICAL units, `source` (where the value",
+        "# comes from: which estimator, product and aggregation, or which measurement) and",
+        "# `limitation` (what the value does not establish). The build converts to log10, refuses a",
+        "# value outside the detector prior box unless its key is listed in allow_outside_prior with",
+        "# a non-empty outside_prior_justification (an acknowledgement of extrapolation beyond the",
+        "# tested imaging domain, not a certification), never clips, needs no estimator and no GPU,",
+        "# and records the vector as user-selected and fixed, with no calibrated joint uncertainty.",
+        f"# provenance (auto-filled, do not edit): {json.dumps(provenance or {}, sort_keys=True)}",
+        "",
+        "[block]",
+        'posterior_sample_pool_choice = "selection_user"',
+        "allow_outside_prior = []                 # keys whose value may sit outside the prior box",
+        'outside_prior_justification = ""         # required (non-empty) when allow_outside_prior is not empty',
+        "",
+    ]
+    for e in table:
+        k = e["KEY"]
+        lo, hi = e["PRIOR_RANGE"]
+        cmp = "" if not comparison or k not in comparison else f"   (comparison value: {comparison[k]:.6g})"
+        out += [
+            f"[selection.{k}]",
+            f"# prior box (physical): [{10 ** lo:.6g}, {10 ** hi:.6g}]{cmp}",
+            "# value = <physical value>",
+            '# source = "<estimator or measurement, product, aggregation rule>"',
+            '# limitation = "<what this value does not establish>"',
+            "",
+        ]
+    Path(path).write_text("\n".join(out))
+    return Path(path)
+
+
+def selection_from_spec(spec, table, prior_low, prior_high):
+    """Validate a ``selection_user`` spec against the table; return ``(vector_log10, record)``.
+
+    Every key needs ``value`` (physical, finite, inside its physical domain), ``source`` and
+    ``limitation`` (non-empty strings). The value is converted to the storage space of its row
+    (log10 for a ranged row). A coordinate outside the prior box is refused unless its key appears
+    in ``[block].allow_outside_prior`` and ``[block].outside_prior_justification`` is non-empty;
+    nothing is clipped. Raises ``ValueError`` with the offending key, value and box.
+    """
+    block = spec.get("block", {})
+    allow = block.get("allow_outside_prior", []) or []
+    just = str(block.get("outside_prior_justification", "") or "").strip()
+    if not isinstance(allow, (list, tuple)) or not all(isinstance(a, str) for a in allow):
+        raise ValueError("[block].allow_outside_prior must be a list of parameter keys.")
+    keys = [e["KEY"] for e in table]
+    unknown = [a for a in allow if a not in keys]
+    if unknown:
+        raise ValueError(f"[block].allow_outside_prior names unknown keys {unknown}; keys are {keys}.")
+    if allow and not just:
+        raise ValueError("[block].outside_prior_justification must be non-empty when "
+                         "allow_outside_prior lists a key.")
+    sel = spec.get("selection", {})
+    missing = [k for k in keys if k not in sel]
+    if missing:
+        raise ValueError(f"choice 'selection_user' needs a [selection.<KEY>] table for every "
+                         f"parameter; missing {missing}.")
+    vec, physical, sources, outside = [], {}, {}, []
+    tol = 1e-9
+    for i, e in enumerate(table):
+        k = e["KEY"]
+        row = sel[k]
+        if not isinstance(row, dict) or "value" not in row:
+            raise ValueError(f"[selection.{k}] needs `value` (physical units).")
+        try:
+            v = float(row["value"])
+        except (TypeError, ValueError):
+            raise ValueError(f"[selection.{k}].value = {row['value']!r} is not a number.")
+        if not np.isfinite(v):
+            raise ValueError(f"[selection.{k}].value must be finite; got {v!r}.")
+        src = str(row.get("source", "") or "").strip()
+        lim = str(row.get("limitation", "") or "").strip()
+        if not src or not lim:
+            raise ValueError(f"[selection.{k}] needs non-empty `source` and `limitation` strings.")
+        if e.get("PRIOR_RANGE") is None:
+            stored = v
+        else:
+            if v <= 0:
+                raise ValueError(f"[selection.{k}].value = {v} must be positive (a log10-ranged row).")
+            if k == "prob_photo_bleach" and v >= 1.0:
+                raise ValueError(f"[selection.{k}].value = {v} must be a probability below 1.")
+            stored = float(np.log10(v)) if e.get("LOG_BASE", 10) == 10 else float(
+                np.log(v) / np.log(e["LOG_BASE"]))
+        lo, hi = float(prior_low[i]), float(prior_high[i])
+        if stored < lo - tol or stored > hi + tol:
+            if k not in allow:
+                raise ValueError(
+                    f"[selection.{k}].value = {v} (stored {stored:+.4f}) lies outside the detector "
+                    f"prior box [{lo:+.4f}, {hi:+.4f}] (physical [{10 ** lo:.6g}, {10 ** hi:.6g}]). "
+                    f"A value outside the tested imaging domain is accepted only when the spec "
+                    f"acknowledges it: list '{k}' in [block].allow_outside_prior and give a "
+                    f"non-empty outside_prior_justification. Nothing is clipped.")
+            outside.append(k)
+            logger.warning("Nuisance_DLI[selection_user]: %s = %s lies outside the prior box "
+                           "[%s, %s]; accepted by explicit acknowledgement (extrapolation beyond the "
+                           "tested imaging domain, not certified).", k, v, lo, hi)
+        vec.append(stored)
+        physical[k] = v
+        sources[k] = {"source": src, "limitation": lim}
+    record = {"kind": "user", "fixed": True, "input_units": "physical",
+              "values_physical": physical,
+              "values_log10": {k: float(x) for k, x in zip(keys, vec)},
+              "sources": sources, "outside_prior": outside,
+              "outside_prior_justification": just if outside else "",
+              "joint_uncertainty": "none (a user-selected, fixed vector; no calibrated joint uncertainty)"}
+    return np.asarray(vec, dtype=float), record
+
+
 # =============================================================================
 # Load + validate the (user-finalized) spec
 # =============================================================================
-def load_spec(path, imaging_keys, prior_low, prior_high):
+def load_spec(path, imaging_keys, prior_low, prior_high, table=None):
     """Parse and FULLY validate the user-authored spec.
 
     Validates: ``posterior_sample_pool_choice`` in ``POOL_CHOICES``; ``pool_mode`` in
@@ -757,6 +957,13 @@ def load_spec(path, imaging_keys, prior_low, prior_high):
                 raise ValueError(
                     f"{path}: [imaging.{k}] range [{lo}, {hi}] exceeds the imaging prior box "
                     f"[{bl[k]}, {bh[k]}] (log10); a Nuisance_DLI range must lie within it.")
+    if choice == "selection_user":
+        if table is None:
+            raise ValueError(f"{path}: choice 'selection_user' needs the parameter table (pass table=).")
+        try:
+            selection_from_spec(spec, table, prior_low, prior_high)
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from exc
     if choice == "sgm_percentiles":
         pct = block.get("percentiles", list(SGM_DEFAULT_PERCENTILES))
         if (not isinstance(pct, (list, tuple)) or len(pct) == 0
@@ -776,7 +983,7 @@ def load_spec(path, imaging_keys, prior_low, prior_high):
 # =============================================================================
 # Build the Nuisance_DLI from the finalized spec (+ pool, for the derived choices)
 # =============================================================================
-def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None):
+def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None, table=None):
     """Construct the `NuisanceDLI` for the spec's choice, from an already-computed pool.
 
     CPU-only: the expensive pool is built and cached by the caller (see the pool cache and
@@ -788,6 +995,16 @@ def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None):
     block = spec["block"]
     choice = block["posterior_sample_pool_choice"]
     pool_mode = block.get("pool_mode", "bounded")
+
+    if choice == "selection_user":
+        if table is None:
+            raise ValueError("choice 'selection_user' needs the parameter table (pass table=).")
+        vec, record = selection_from_spec(spec, table, prior_low, prior_high)
+        # pool_mode records whether the vector sits inside the prior box (bounded) or was
+        # acknowledged outside it (unrestricted); it governs no sampling here.
+        mode = "unrestricted" if record["outside_prior"] else "bounded"
+        return NuisanceDLI.from_selection(imaging_keys, vec, record, prior_low=prior_low,
+                                          prior_high=prior_high, pool_mode=mode)
 
     if choice == "box_user":
         low = [float(spec["imaging"][k]["low"]) for k in imaging_keys]
@@ -819,17 +1036,20 @@ def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None):
 # =============================================================================
 # The enforcement gate — downstream generation LOADS the built artifact
 # =============================================================================
-def require_nuisance_dli(posit_dir, project_alias, timing_label):
+def require_nuisance_dli(posit_dir, project_alias, timing_label, nuisance_tag=None):
     """LOAD the built Nuisance_DLI artifact, or FAIL CLEARLY (naming the analysis).
+
+    ``nuisance_tag`` selects a tagged artifact (a reference vector or a sensitivity variant)
+    beside the canonical one; the consumer records the selected artifact's identity.
 
     Generation consumes the persisted, self-contained artifact; it does not rebuild
     (rebuilding needs the estimator and a GPU — the analysis step's job). If the artifact is
     absent, the analysis has not been run: this raises a clear, actionable error rather than
     fabricating a nuisance. The `Nuisance_DLI` is a user decision, never an automatic output.
     """
-    ap = artifact_path(posit_dir, project_alias, timing_label)
+    ap = artifact_path(posit_dir, project_alias, timing_label, nuisance_tag)
     if not ap.exists():
-        sp = spec_path(posit_dir, project_alias, timing_label)
+        sp = spec_path(posit_dir, project_alias, timing_label, nuisance_tag)
         raise FileNotFoundError(
             f"Nuisance_DLI artifact not found:\n    {ap}\n\n"
             f"The Nuisance_DLI is a user decision built by the analysis step, not an "

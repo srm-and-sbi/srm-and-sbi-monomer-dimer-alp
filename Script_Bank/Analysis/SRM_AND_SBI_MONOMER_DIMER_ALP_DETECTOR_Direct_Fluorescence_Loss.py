@@ -65,11 +65,27 @@ Usage (from the repo root):
     ... --purpose verdict                   # required for a tier run: development, or verdict for the
                                             # reserved EVAL tasks of the tier in full (sec. 9.6)
     ... --selftest --selftest-frames 1000   # in-memory recordings at known bleaching rates
+    ... --experiment --condition FAB --total-time-seconds 20.0   # the EXPERIMENTAL recordings (below)
     ... --dry-run                           # resolve settings and apply every refusal; read nothing
+
+The experimental input path (--experiment) applies the same arithmetic to the raw MET recordings
+of a condition: every recording is read as the Experiment stage reads it (16-bit raw to the stored
+8-bit domain), cut into windows of --total-time-seconds (one window per recording at 20 s), the
+camera taken from the section 6.3 acquisition values, and the flux curve formed over the WHOLE
+field with the per-frame median as the background level (recorded in the outputs; no per-frame
+normalization). The recordings have no ground truth, so no acceptance verdict is reached and no
+purpose token applies. Per recording it saves the flux and background curves, the early-to-late
+fractional loss between the centers of the opening and closing averaging windows, the fitted
+effective loss parameter with its diagnostics, and the eligibility outcome; the report shows the
+distribution over recordings and the full curves, discarding no interval. The fitted parameter is
+chosen to approximate the observed fluorescence decline under the renderer; it is not an
+independently identified molecular photobleaching probability (DETECTOR_WORKFLOW.md sec. 7.6).
 
 Outputs (analysis results are data and live in the Data_Bank, never the codebase):
     <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_Fluorescence_Loss_<DEV|VERDICT>[_<suffix>]/
         report.md, direct_fluorescence_loss.npz, summary.json, provenance.json, figures/
+    <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_Fluorescence_Loss_Experiment[_<suffix>]/
+        report.md, direct_fluorescence_loss_experiment.npz, summary.json, provenance.json, figures/
     A run never reuses a folder: an existing one is refused before anything is read.
 """
 
@@ -79,6 +95,7 @@ import argparse
 import glob
 import json
 import os
+import pathlib
 import re
 import sys
 import time
@@ -98,6 +115,9 @@ from srm_and_sbi_monomer_dimer_alp import information_budget as ib  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import io as sio  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp.experiment_support import (  # noqa: E402
+    discover_cells, read_cell_chunks,
+)
 from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
     PARAMETERS, RunTiming,
 )
@@ -258,6 +278,241 @@ def run_selftest(n_subunits: int, n_frames: int, n_sigma: float, detect_frames: 
                 out=outs, theta=np.asarray(thetas, float))
 
 
+# ==========================================================================================
+# Experimental input path: the raw recordings, same arithmetic, no verdict
+# ==========================================================================================
+
+BACKGROUND_QUANTILE = 0.5      # the kernel's per-frame background level (frame_flux_curve default)
+EARLY_LATE_WINDOW_FRAMES = 50  # opening and closing averaging windows of the fractional-loss measure
+
+
+def _worker_video(job):
+    """One in-memory window: the estimate, the flux and background curves, the early/late measure."""
+    video, cell, chunk, scope, lam, opts, w = job
+    video = np.asarray(video)
+    out = estimate_one(video, scope, lambda_rate=lam, **opts)
+    curve = die.frame_flux_curve(video, background_quantile=BACKGROUND_QUANTILE)
+    flux = np.asarray(curve["flux"], dtype=float)
+    fit = die.fit_fluorescence_loss(
+        flux, lambda_rate=(LAMBDA_RATE_DEFAULT if lam is None else float(lam)),
+        frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)
+    n = flux.shape[0]
+    w = int(min(max(w, 1), n // 2))
+    early, late = float(flux[:w].mean()), float(flux[-w:].mean())
+    out.update(cell=int(cell), chunk=int(chunk), flux=flux,
+               background=np.asarray(curve["background"], dtype=float),
+               n_pixels=int(curve["n_pixels"]), early_mean=early, late_mean=late,
+               fractional_loss=(1.0 - late / early) if early > 0 else np.nan,
+               center_separation_frames=float(n - w), window_frames=w,
+               amplitude=float(fit["amplitude"]), offset=float(fit["offset"]),
+               rate_per_frame=float(fit["rate_per_frame"]), resid_sd=float(fit["resid_sd"]))
+    return out
+
+
+def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, startup_code):
+    """Apply the estimator to the experimental recordings of ``--condition``.
+
+    Reads every recording the way the Experiment stage does (``read_cell_chunks``: 16-bit raw to
+    the stored 8-bit domain, windows of the model length stepped by ``--chunk-step-seconds``, one
+    window per recording when the window is the recording), takes the camera from the section 6.3
+    acquisition values, forms the flux curve over the whole field with the per-frame median as the
+    background level, and fits the same model as the tier runs. No ground truth, so no acceptance
+    verdict; the outputs carry every curve, the early-to-late fractional loss, the fit and its
+    diagnostics, and the eligibility outcome per recording. Nothing is pooled by the estimator.
+    """
+    from matplotlib.figure import Figure
+
+    span = args.experiment_span_seconds
+    experiment_dir = (pathlib.Path(args.experiment_dir) if args.experiment_dir
+                      else data_bank_root / paths.experiment_subdir)
+    n_frames = timing.frame_count
+    step_seconds = args.chunk_step_seconds if args.chunk_step_seconds else timing.total_time_seconds
+    step_frames = int(round(step_seconds / timing.frame_time_seconds))
+    cells = ([int(c) for c in args.cells.split(",")] if args.cells
+             else discover_cells(experiment_dir, args.condition, span))
+    if args.max_cells > 0:
+        cells = cells[:args.max_cells]
+    scope = _scope_center()
+    opts = dict(n_sigma=args.n_sigma, detect_frames=args.detect_frames, observable=args.observable)
+    w = int(args.early_late_window_frames)
+    reporter.checkpoint("experiment", condition=args.condition, cells=len(cells), span_s=span,
+                        window_s=timing.total_time_seconds, step_s=step_seconds,
+                        observable=args.observable)
+    reporter.check("experimental recordings found", len(cells) > 0,
+                   f"{len(cells)} recordings under {experiment_dir}")
+    for k, v in scope.items():
+        reporter.stat(f"camera {k}", float(v),
+                      note="section 6.3 acquisition value (box center), supplied, not fitted")
+    reporter.stat("background treatment", BACKGROUND_QUANTILE,
+                  note="per-frame quantile of the frame's own pixels over the WHOLE field (a fixed "
+                       "region: every pixel of every frame), subtracted per frame; no per-frame "
+                       "normalization of the flux")
+    reporter.stat("early/late averaging window (frames)", w,
+                  note="the fractional loss is 1 - mean(last window) / mean(first window); the "
+                       "separation between the two window centers is recorded per recording")
+
+    jobs, meta = [], []
+    for cell in cells:
+        tif = experiment_dir / f"Experiment_{args.condition}_Cell_{cell}_{span}S_RAW.tif"
+        if not tif.exists():
+            reporter.check(f"recording cell {cell}", False, f"missing: {tif.name}", fatal=False)
+            continue
+        for ci, win in enumerate(read_cell_chunks(tif, n_frames, step_frames)):
+            jobs.append((win, cell, ci, scope, args.lambda_rate, opts, w))
+            meta.append((cell, ci))
+    reporter.stat("windows queued", len(jobs), note="(cell, window) pairs the estimator reads")
+    if not jobs:
+        reporter.summary()
+        reporter.write_report()
+        return 1
+    if args.workers and args.workers > 1:
+        out, every, t0 = [], max(1, len(jobs) // 20), time.time()
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            for i, o in enumerate(pool.map(_worker_video, jobs, chunksize=1), 1):
+                out.append(o)
+                if i % every == 0 or i == len(jobs):
+                    el = time.time() - t0
+                    print(f"  [progress] {i}/{len(jobs)} windows  elapsed {el/60:.1f} min  "
+                          f"ETA {el/i*(len(jobs)-i)/60:.1f} min", flush=True)
+    else:
+        out = [_worker_video(j) for j in jobs]
+
+    def col(k, dtype=float):
+        return np.asarray([o[k] for o in out], dtype=dtype)
+
+    estimate = col("prob_photo_bleach")
+    outcome = np.asarray([o["outcome"] for o in out])
+    reasons = np.asarray([o["reason"] or "" for o in out])
+    valid = np.isfinite(estimate) & (estimate > 0) & (outcome != "failed")
+    usable = valid & (outcome == "usable")
+    cell_arr, chunk_arr = col("cell", np.int64), col("chunk", np.int64)
+    flux = np.stack([o["flux"] for o in out])
+    background = np.stack([o["background"] for o in out])
+    frac = col("fractional_loss")
+    lo_p, hi_p = da.prior_range("prob_photo_bleach")
+
+    reporter.table(
+        "Outcomes over all (cell, window) pairs", ["outcome", "count", "share", "reasons"],
+        [["failed measurement", str(int((outcome == "failed").sum())),
+          f"{100 * (outcome == 'failed').mean():.1f} %",
+          ", ".join(f"{r}={int((reasons == r).sum())}" for r in sorted(set(reasons[reasons != ""]))) or "none"],
+         ["valid but uninformative", str(int((outcome == "uninformative").sum())),
+          f"{100 * (outcome == 'uninformative').mean():.1f} %", "fit converged; decay below the eligibility rule"],
+         ["usable", str(int(usable.sum())), f"{100 * usable.mean():.1f} %",
+          f"decay >= {ELIGIBILITY['min_decay_snr']:.0f}x residual scatter and SE(log10 p) <= {ELIGIBILITY['max_se_log10']} dex"]],
+        note="Eligibility is observable and reads no true value. No ground truth on experimental "
+             "recordings: no acceptance verdict.")
+
+    def dist_rows(mask, label):
+        if not mask.any():
+            return [[label, "0", "--", "--", "--", "--"]]
+        v = np.log10(estimate[mask])
+        q05, q25, q50, q75, q95 = np.percentile(v, [5, 25, 50, 75, 95])
+        return [[label, str(int(mask.sum())), f"{q50:+.3f} ({10 ** q50:.4f})",
+                 f"[{q25:+.3f}, {q75:+.3f}]", f"[{q05:+.3f}, {q95:+.3f}]",
+                 f"{100 * np.mean((v < lo_p) | (v > hi_p)):.1f} %"]]
+    reporter.table(
+        "Fitted effective loss parameter over recordings (log10 prob_photo_bleach per 100-frame interval)",
+        ["subset", "n", "median (physical)", "IQR", "central 90 %", "outside prior"],
+        dist_rows(valid, "valid (usable + uninformative)") + dist_rows(usable, "usable only"),
+        note="Per-recording values; no pooled fit and no shared-rate assumption. The parameter "
+             "approximates the observed field-fluorescence decline under the renderer and is not an "
+             "independently identified molecular photobleaching probability. Read beside the "
+             "fractional-loss table and the curves; a comparison value (not a target) is the working "
+             "vector's provisional 0.034 (DETECTOR_WORKFLOW.md sec. 7.6).")
+    fin = np.isfinite(frac)
+    if fin.any():
+        q05, q25, q50, q75, q95 = np.percentile(frac[fin], [5, 25, 50, 75, 95])
+        sep = np.median(col("center_separation_frames")[fin])
+        reporter.table(
+            "Early-to-late fractional fluorescence loss over recordings",
+            ["n", "median", "IQR", "central 90 %", "window (frames)", "center separation (frames)"],
+            [[str(int(fin.sum())), f"{q50:.3f}", f"[{q25:.3f}, {q75:.3f}]", f"[{q05:.3f}, {q95:.3f}]",
+              str(w), f"{sep:.0f} ({sep * timing.frame_time_seconds:.1f} s)"]],
+            note="1 - mean flux over the closing window / mean flux over the opening window, per "
+                 "recording, background-subtracted per frame over the whole field. A model-free "
+                 "reading of the same curves the fit uses; positive = decline.")
+
+    # ---- figure: every curve, normalized to its opening mean for display only ----------------
+    fig = Figure(figsize=(9, 4.2), layout="constrained")
+    ax = fig.add_subplot(1, 2, 1)
+    t = np.arange(flux.shape[1]) * timing.frame_time_seconds
+    e = np.asarray([o["early_mean"] for o in out])
+    ok = np.isfinite(e) & (e > 0)
+    norm = flux[ok] / e[ok][:, None]
+    for row in norm:
+        ax.plot(t, row, color="#4C72B0", alpha=0.15, linewidth=0.6)
+    if ok.any():
+        ax.plot(t, np.median(norm, axis=0), color="#C44E52", linewidth=1.8, label="median over recordings")
+    ax.axhline(1.0, color="grey", linewidth=0.6, linestyle="--")
+    ax.set_xlabel("time (s)"); ax.set_ylabel("field flux / opening-window mean (display only)")
+    ax.set_title(f"MET-{args.condition}: background-subtracted field flux, {int(ok.sum())} windows", fontsize=9)
+    ax.legend(fontsize=7)
+    ax2 = fig.add_subplot(1, 2, 2)
+    if valid.any():
+        ax2.hist(np.log10(estimate[valid]), bins=30, color="#4C72B0", alpha=0.85, label="valid")
+    if usable.any():
+        ax2.hist(np.log10(estimate[usable]), bins=30, color="#55A868", alpha=0.85, label="usable")
+    ax2.axvline(lo_p, color="#C44E52", linestyle="--", linewidth=0.8)
+    ax2.axvline(hi_p, color="#C44E52", linestyle="--", linewidth=0.8)
+    ax2.set_xlabel("log10 fitted effective loss parameter"); ax2.set_ylabel("recordings")
+    ax2.set_title("fitted values (red dashes = prior box)", fontsize=9)
+    ax2.legend(fontsize=7)
+    reporter.save_figure(
+        f"field_flux_curves_{args.condition}", fig,
+        caption="Left: every recording's whole-field, background-subtracted flux curve divided by "
+                "its opening-window mean (display normalization only; the fit and the fractional "
+                "loss use the raw curves saved in the arrays), with the median over recordings. "
+                "Right: the distribution of the fitted effective loss parameter.")
+
+    np.savez_compressed(
+        os.path.join(out_dir, "direct_fluorescence_loss_experiment.npz"),
+        estimate=estimate, prob_se=col("prob_se"), se_log10=col("se_log10"),
+        decay_snr=col("decay_snr"), n_eff=col("n_eff"), outcome=outcome, reasons=reasons,
+        valid=valid, usable=usable, range_low=col("low"), range_high=col("high"),
+        amplitude=col("amplitude"), offset=col("offset"), rate_per_frame=col("rate_per_frame"),
+        resid_sd=col("resid_sd"), flux=flux, background=background,
+        n_pixels=col("n_pixels", np.int64), early_mean=e, late_mean=col("late_mean"),
+        fractional_loss=frac, center_separation_frames=col("center_separation_frames"),
+        window_frames=col("window_frames", np.int64), cell=cell_arr, chunk=chunk_arr,
+        kind_index=np.zeros(len(out), dtype=np.int64), kinds=np.asarray([args.condition]),
+        camera=np.asarray([scope[k] for k in det.DETECTOR_SCOPE_KEYS]),
+        camera_keys=np.asarray(list(det.DETECTOR_SCOPE_KEYS)),
+        frame_time_seconds=float(timing.frame_time_seconds))
+    code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
+    changed = bool(code["changed_during_run"])
+    with open(os.path.join(out_dir, "summary.json"), "w") as fh:
+        json.dump(dict(mode="experiment", condition=args.condition, span_seconds=span,
+                       window_seconds=timing.total_time_seconds, step_seconds=step_seconds,
+                       cells=[int(c) for c in cells], n_windows=int(len(meta)),
+                       n_valid=int(valid.sum()), n_usable=int(usable.sum()),
+                       observable=args.observable, background_quantile=BACKGROUND_QUANTILE,
+                       region="whole field", early_late_window_frames=w,
+                       lambda_rate_for_se=(LAMBDA_RATE_DEFAULT if args.lambda_rate is None else args.lambda_rate),
+                       eligibility=ELIGIBILITY, camera=scope,
+                       implementation=("INVALID (implementation changed during the run)" if changed
+                                       else "unchanged during the run"),
+                       note="no ground truth; no acceptance verdict; per-recording values, nothing pooled"),
+                  fh, indent=2, default=float)
+    record = prov.analysis_run_record(
+        startup_code, argv=sys.argv, code=code,
+        extra=dict(stage=STAGE, mode="experiment", condition=args.condition,
+                   cells=[int(c) for c in cells], span_seconds=span, step_seconds=step_seconds,
+                   windows=int(len(meta)), run_suffix=args.run_suffix, out_dir=str(out_dir),
+                   observable=args.observable, background_quantile=BACKGROUND_QUANTILE,
+                   early_late_window_frames=w, lambda_rate=args.lambda_rate))
+    with open(os.path.join(out_dir, "provenance.json"), "w") as fh:
+        json.dump(record, fh, indent=2, default=str)
+    reporter.check("implementation unchanged during the run", not changed,
+                   "implementation hash identical at startup and at write", fatal=False,
+                   note="A file edited while the run executed leaves results that describe no single "
+                        "implementation; the run exits with status 3 and provenance.json records both hashes.")
+    reporter.summary()
+    path = reporter.write_report()
+    print(f"\n[{STAGE}] experiment report -> {path}")
+    return da.EXIT_IMPLEMENTATION_CHANGED if changed else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Direct (non-neural) estimate of prob_photo_bleach from fluorescence loss.")
@@ -296,6 +551,27 @@ def main(argv=None):
     ap.add_argument("--run-suffix", default=None,
                     help="token appended to the run folder name after the purpose token, e.g. the "
                          "commit (-> _DEV_<commit>); letters, digits and underscores.")
+    ap.add_argument("--experiment", action="store_true",
+                    help="estimate on the EXPERIMENTAL recordings of --condition instead of a "
+                         "synthetic tier: every recording windowed as the Experiment stage windows "
+                         "them (one window per recording when --total-time-seconds is the recording "
+                         "length), camera from the section 6.3 acquisition values, background = the "
+                         "per-frame median over the whole field. No ground truth, so no verdict and "
+                         "no --purpose.")
+    ap.add_argument("--experiment-span-seconds", type=int, default=20,
+                    help="length of the experimental recordings (selects the RAW .tif files).")
+    ap.add_argument("--chunk-step-seconds", type=float, default=None,
+                    help="window step for --experiment; default = the window length.")
+    ap.add_argument("--cells", type=str, default=None,
+                    help="comma-separated recording indices for --experiment; default: all.")
+    ap.add_argument("--max-cells", type=int, default=0,
+                    help="cap on the number of recordings for --experiment (0 = all).")
+    ap.add_argument("--experiment-dir", default=None,
+                    help="override the recordings directory for --experiment (default: "
+                         "<data_bank_root>/<experiment_subdir>, where the Experiment stage reads).")
+    ap.add_argument("--early-late-window-frames", type=int, default=EARLY_LATE_WINDOW_FRAMES,
+                    help="frames averaged at the opening and at the closing of each window for the "
+                         "model-free early-to-late fractional loss (--experiment).")
     args = ap.parse_args(argv)
 
     if not args.selftest and (args.condition is None or args.total_time_seconds is None):
@@ -305,10 +581,13 @@ def main(argv=None):
     if args.run_suffix is not None and re.match(r"(?i)(DEV|VERDICT|SELFTEST)(_|$)", args.run_suffix):
         ap.error(f"--run-suffix {args.run_suffix!r}: the purpose token (DEV, VERDICT, SELFTEST) is added "
                  f"automatically; pass only what follows it, e.g. the commit")
-    if not args.selftest and args.purpose is None:
+    if args.selftest and args.experiment:
+        ap.error("--selftest and --experiment are exclusive")
+    tier_run = not (args.selftest or args.experiment)
+    if tier_run and args.purpose is None:
         ap.error("--purpose is required for a tier run: development or verdict (DETECTOR_WORKFLOW.md sec. 9.6)")
-    if args.selftest and args.purpose is not None:
-        ap.error("--purpose applies to a tier run; a selftest reads no EVAL task")
+    if not tier_run and args.purpose is not None:
+        ap.error("--purpose applies to a tier run; a selftest or an experimental run reads no EVAL task")
 
     data_bank_root = PARAMETERS.machine.data_bank_root
     dt = PARAMETERS.simulation.timing.frame_time_seconds
@@ -318,6 +597,13 @@ def main(argv=None):
         # the slot before the timing label is reserved for FAB/INLB.
         run_alias = f"{det.detector_paths(PARAMETERS.paths).project_alias}_{timing_label}"
         n_frames = args.selftest_frames
+    elif args.experiment:
+        timing = RunTiming(total_time_seconds=args.total_time_seconds)
+        timing_label = timing.label
+        n_frames = timing.frame_count
+        paths = det.detector_paths(PARAMETERS.paths).with_condition(args.condition)
+        run_alias = f"{paths.project_alias}_{timing_label}"
+        video_paths, theta_paths, scope_paths = [], [], []
     else:
         timing = RunTiming(total_time_seconds=args.total_time_seconds)
         timing_label = timing.label
@@ -333,8 +619,8 @@ def main(argv=None):
                        for t in args.tasks]
 
     # ---- purpose: held to the declared split before any recording is read ------------------
-    purpose_record = dict(purpose="selftest")
-    if not args.selftest:
+    purpose_record = dict(purpose="selftest" if args.selftest else "experiment")
+    if tier_run:
         try:
             purpose_record = da.check_run_purpose(
                 args.purpose, estimator=STAGE, condition=args.condition, n_frames=n_frames,
@@ -344,12 +630,13 @@ def main(argv=None):
             ap.error(str(exc))
 
     descriptor = (f"{STAGE}_SELFTEST" if args.selftest
+                  else f"{STAGE}_Experiment" if args.experiment
                   else f"{STAGE}_{da.PURPOSE_TOKENS[args.purpose]}")
     if args.run_suffix:
         descriptor += f"_{args.run_suffix}"
     posit_dir = os.path.join(str(data_bank_root), "Posit")
     out_dir = args.out_dir or os.path.join(posit_dir, f"{run_alias}_{descriptor}")
-    if not args.selftest and args.purpose == "verdict":
+    if tier_run and args.purpose == "verdict":
         # The reserved tasks are judged once per estimator (sec. 9.6): a verdict run writes to its
         # fixed Posit location, where an earlier verdict folder of the same estimator and tier is seen.
         if args.out_dir:
@@ -365,10 +652,10 @@ def main(argv=None):
     if args.dry_run:
         print(f"[{STAGE}] DRY RUN -- nothing is read and nothing is written.")
         print(f"  machine profile : {os.environ.get('MACHINE_PROFILE', '(unset)')}")
-        print(f"  mode            : {'selftest' if args.selftest else args.split}")
+        print(f"  mode            : {'selftest' if args.selftest else 'experiment' if args.experiment else args.split}")
         print(f"  run alias       : {run_alias}")
         print(f"  out dir         : {out_dir}   (new; created at the start of the run)")
-        if not args.selftest:
+        if tier_run:
             pr = purpose_record
             print(f"  purpose         : {pr['purpose']} -- tasks {pr['tasks']}; "
                   + (f"declared split: development {pr['development_tasks'][0]}-{pr['development_tasks'][-1]}, "
@@ -377,7 +664,24 @@ def main(argv=None):
         print(f"  frames          : {n_frames}   (acceptance stated at "
               f"{ACCEPTANCE['acceptance_frames']})")
         print(f"  observable      : {args.observable}")
-        if not args.selftest:
+        if args.experiment:
+            exp_dir = (pathlib.Path(args.experiment_dir) if args.experiment_dir
+                       else data_bank_root / paths.experiment_subdir)
+            span = args.experiment_span_seconds
+            cells = ([int(c) for c in args.cells.split(",")] if args.cells
+                     else discover_cells(exp_dir, args.condition, span))
+            if args.max_cells > 0:
+                cells = cells[:args.max_cells]
+            step = args.chunk_step_seconds or args.total_time_seconds
+            n_win = int((span - args.total_time_seconds) // step) + 1
+            print(f"  recordings dir  : {exp_dir}   exists={exp_dir.exists()}")
+            print(f"  recordings      : {len(cells)} x {span} s -> {n_win} window(s) of "
+                  f"{args.total_time_seconds:g} s each (step {step:g} s)")
+            print("  camera (sec. 6.3): " + ", ".join(f"{k}={v:.4g}" for k, v in _scope_center().items()))
+            print(f"  background      : per-frame quantile {BACKGROUND_QUANTILE} over the whole field; "
+                  f"early/late window {args.early_late_window_frames} frames")
+            print("  ground truth    : none -- no acceptance verdict; per-recording curves, fits, outcomes")
+        elif tier_run:
             for t, p in video_paths:
                 print(f"  reads video T{t:<3d}: {p}   exists={os.path.exists(p)}")
             for t, p in theta_paths:
@@ -402,6 +706,9 @@ def main(argv=None):
                   "reported for information only, because the information bound there "
                   "already exceeds the threshold."))
 
+    if args.experiment:
+        return run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root,
+                                   startup_code)
     if args.selftest:
         reporter.checkpoint("selftest", subunits=args.selftest_subunits, frames=n_frames,
                             recordings=4)

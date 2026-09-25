@@ -643,6 +643,7 @@ One user choice, **`posterior_sample_pool_choice`**, turns the pool into the art
 | `box` | a per-parameter uniform over pool quantiles | none (independent per dimension) |
 | `box_user` | a per-parameter uniform over user-set ranges | none |
 | `sgm_percentiles` | whole actual vectors at signed distance-to-SGM percentiles -- an SGM of window MAPs under `selection_source = "experiment"`, of window posterior SGMs under `"window-sgm"`; one frozen vector (`[50]`) or a small pool | whole vectors: a multi-member pool keeps its members' co-occurring coordinates; a single frozen vector carries none |
+| `selection_user` | one explicitly chosen, fixed imaging vector assembled from documented sources: six named physical values, each with its source and limitation, typed into the spec; needs no estimator, Experiment product, GPU or pool; returned unchanged to every simulation | none: a single fixed vector carries no joint structure and no calibrated joint uncertainty |
 
 `raw` is the faithful form: resampling whole vectors preserves the joint structure exactly, including the ridges
 the calibration constrains — the ADU floor depends on the product `gamma·kappa_o`, so those two ride a joint
@@ -662,13 +663,24 @@ calibration-faithful forms (`raw`, `map_estimate_pool`, `gaussian`, `sgm_percent
 `box`/`box_user` are clamped to the prior box, at build, logged and counted. The artifact stores the numeric
 parameters of its representation — a `[low, high]` box, a sample matrix, or a Gaussian mean and covariance — so
 generation samples it standalone, needing neither the estimator nor the recordings. Per-parameter
-`[imaging.<KEY>]` ranges are supplied if and only if the choice is `box_user`.
+`[imaging.<KEY>]` ranges are supplied if and only if the choice is `box_user`; `[selection.<KEY>]` tables
+(`value` in physical units, `source`, `limitation`) if and only if it is `selection_user`, whose build converts
+the values to the log10 storage space, refuses a value outside the detector prior box unless the spec lists
+the key under `allow_outside_prior` with a non-empty `outside_prior_justification` (an acknowledgement that
+the value lies beyond the tested imaging domain, not a certification), clips nothing, and records the vector as
+user-selected and fixed. **Selecting an artifact.** The canonical artifact carries the plain timing label; a
+*nuisance tag* (`--nuisance-tag`, a SCREAMING_SNAKE token with the grammar of the estimator's artifact tag)
+names a further artifact beside it, `<alias>_<timing>_<TAG>_Nuisance_DLI.npz`, for a reference vector or a
+sensitivity variant. The tag names the nuisance artifact, never the estimator that informed it. Every consumer
+selects an artifact by that tag and records the selected artifact's identity in its outputs: the biology DLI
+stage (`--nuisance-tag`, dispatcher knob `NUISANCE_TAG`) writes it into every `Nuisance_DLI_Theta_Set` record's
+schema, the posterior-predictive render into its clip file and figure provenance, the horizon audit into every
+generated file's imaging description, and the SGM analysis into its report.
 
 **Status and the decision.** No `Nuisance_DLI` has been built for this project; smokes use `box_user` over the
 full prior box as a stand-in that needs no estimator. The decision on what the biology reference run conditions
 on is made and recorded in §7.6: one explicitly chosen, fixed imaging vector assembled from documented sources,
-to be minted by a `selection_user` choice that the six choices above do not provide (none can hold a typed
-value, mix sources, or be selected under a tag of its own by every consumer). For the pooled choices the
+minted by the `selection_user` choice under a nuisance tag of its own. For the pooled choices the
 construction resolves the estimator from the product namespace it is run under (`…_DETECTOR_…` or
 `…_ONEDYE_DETECTOR_…`) and writes that estimator's weights SHA-256 into the spec's provenance comment and the
 cached pool (`pool_provenance`), so the estimator behind an artifact is visible and never implicit in a
@@ -705,7 +717,7 @@ the analyst decides how it feeds production. Three properties govern it.
    provenance comment. The per-simulation `Nuisance_DLI_Theta_Set` record is written later, at generation, when
    production marginalizes the imaging (§9.2 Phase D) — not by this build.
 
-Arguments, the six choices, and how to choose among them are in the companion
+Arguments, the seven choices, and how to choose among them are in the companion
 `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md`; this section records the design, not the usage.
 
 ### 7.4 Persisted nuisance records
@@ -778,16 +790,17 @@ variation is not marginalized in that run, and the camera block remains the sepa
 (§9.3). The pooled representations of §7.2 are retained for a marginalizing run. The within-recording falls of
 brightness and bleaching stay in this record as the stated limitation of a time-invariant imaging model (§8).
 
-**Construction and consumers (planned; not yet implemented).** The vector will be constructed as a
-`Nuisance_DLI` under a `selection_user` choice: six
+**Construction and consumers.** The vector is constructed as a `Nuisance_DLI` under the `selection_user`
+choice of §7.2 (`--emit-selection-user` writes the spec skeleton, `--build` mints the artifact, both CPU only):
+six
 named physical values with a source and a limitation each, validated on their keys and physical domains,
 converted to the log10 storage convention, stored as one vector that every biology simulation receives
 unchanged, requiring no estimator, Experiment product, GPU or pool, and recorded as user-selected and fixed. The
 identity of the neural source belongs to the provenance, not to the artifact's name. The artifact is selected
-by a tag of its own, distinct from an estimator's tag, and that selection will reach every consumer, the biology
-generation, the posterior-predictive render and the horizon audit, each of which will record the selected
+by a tag of its own, distinct from an estimator's tag, and that selection reaches every consumer, the biology
+generation, the posterior-predictive render and the horizon audit, each of which records the selected
 artifact's identity in its outputs so that a reference run and a sensitivity variant cannot be confused. A value
-outside the detector prior box will be refused unless the spec acknowledges it explicitly with a recorded
+outside the detector prior box is refused unless the spec acknowledges it explicitly with a recorded
 justification; the acknowledgement flags extrapolation beyond the tested imaging domain and does not certify
 it, physical validity is enforced, and nothing is clipped. The present values are all inside the box.
 

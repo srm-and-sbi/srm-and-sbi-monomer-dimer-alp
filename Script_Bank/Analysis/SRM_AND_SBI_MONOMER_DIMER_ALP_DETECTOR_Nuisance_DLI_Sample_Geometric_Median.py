@@ -99,6 +99,9 @@ def parse_args(argv):
                         "(never a silent stand-in). 'window-sgm' the per-window Sample Geometric Median "
                         "(the medoid of each window's posterior draws, physical coordinates) from the "
                         "posterior-sample pool -- the summary is then an SGM of window posterior SGMs.")
+    p.add_argument("--nuisance-tag", type=str, default=None,
+                   help="SCREAMING_SNAKE token selecting a tagged Nuisance_DLI artifact instead of the "
+                        "canonical one (with --pool-source artifact).")
     p.add_argument("--condition", required=True, choices=LABELING_CONDITIONS,
                    help="experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
                         "condition-specific Nuisance_DLI namespace, and the collection is restricted to "
@@ -119,7 +122,7 @@ def parse_args(argv):
     return p.parse_args(argv)
 
 
-def _resolve(total_time_seconds, condition):
+def _resolve(total_time_seconds, condition, nuisance_tag=None):
     """Detector-namespaced, condition-specific paths + timing for this run."""
     timing = RunTiming(total_time_seconds=total_time_seconds, frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
@@ -129,7 +132,8 @@ def _resolve(total_time_seconds, condition):
     exp_stem = paths.experiment_recovery_pattern.format(project_alias=alias, timing_label=timing.label)
     return dict(timing=timing, timing_label=timing.label, data_bank_root=data_bank_root,
                 paths=paths, posit_dir=posit_dir, alias=alias,
-                artifact_path=ndli.artifact_path(posit_dir, alias, timing.label),
+                artifact_path=ndli.artifact_path(posit_dir, alias, timing.label, nuisance_tag),
+                nuisance_tag=nuisance_tag,
                 pool_cache_path=ndli.pool_cache_path(posit_dir, alias, timing.label, "PosteriorSample"),
                 map_cache_path=ndli.pool_cache_path(posit_dir, alias, timing.label, "MapEstimate"),
                 experiment_map_path=(posit_dir / exp_stem / f"{exp_stem}.npz"))
@@ -233,7 +237,8 @@ def _load_posterior_collection(args, R):
         pool = np.asarray(np.load(str(cache), allow_pickle=False)["pool"], dtype=float)
         return (pool, det.DETECTOR_PARAMETER_KEYS, ndli.load_pool_labels(cache),
                 "cache:PosteriorSample", "unrestricted", "posterior-samples (posterior-sample cache)")
-    nu = ndli.require_nuisance_dli(R["posit_dir"], R["alias"], R["timing_label"])
+    nu = ndli.require_nuisance_dli(R["posit_dir"], R["alias"], R["timing_label"],
+                                   nuisance_tag=R.get("nuisance_tag"))
     if nu.posterior_sample_pool_choice in ("raw", "map_estimate_pool"):
         pool = np.asarray(nu.samples, dtype=float)
     else:
@@ -509,7 +514,7 @@ def _run(args, R):
 
 
 def main(args):
-    _run(args, _resolve(args.total_time_seconds, args.condition))
+    _run(args, _resolve(args.total_time_seconds, args.condition, args.nuisance_tag))
 
 
 if __name__ == "__main__":

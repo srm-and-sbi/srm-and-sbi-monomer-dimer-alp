@@ -536,7 +536,8 @@ def run_posterior_predictive_video(cfg, args):
         kind=args.kind, cell=args.cell,
         chunk=(-1 if args.chunk is None else args.chunk), map_source=args.map_source,
         seed=(-1 if args.seed is None else args.seed),
-        frame_time_seconds=frame_time, n_frames=n_frames, experimental_tif=str(experimental_tif))
+        frame_time_seconds=frame_time, n_frames=n_frames, experimental_tif=str(experimental_tif),
+        imaging_desc=str(imaging_desc), nuisance_tag=("" if args.nuisance_tag is None else args.nuisance_tag))
     if S["map_block"] == "rds":
         imaging_label = "FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)"
         rds_label = "INFERRED reaction-diffusion (MAP theta, absolute)"
@@ -596,6 +597,10 @@ def build_parser(description):
     p.add_argument("--fixed-nuisance-RDS", dest="fixed_nuisance_rds", action="append", default=None,
                    metavar="KEY=VALUE",
                    help="detector only: pin the RDS nuisance instead of drawing it; repeatable.")
+    p.add_argument("--nuisance-tag", type=str, default=None,
+                   help="biology only: SCREAMING_SNAKE token selecting a tagged Nuisance_DLI artifact "
+                        "(a reference vector or a sensitivity variant) instead of the canonical one; "
+                        "recorded in the clip file and the figure provenance.")
     p.add_argument("--run-label", default=None, help="optional token appended to the output stem.")
     p.add_argument("--seed", type=int, default=None, help="RNG seed for the simulation and render.")
     p.add_argument("--verbose", action="store_true", help="verbose simulation/render output.")
@@ -611,7 +616,7 @@ def _scope_met():
     return np.array([MET_CAMERA_PHYSICAL[k] for k in det.DETECTOR_SCOPE_KEYS], dtype=float)
 
 
-def biology_fixed_imaging(data_bank_root, map_label, condition):
+def biology_fixed_imaging(data_bank_root, map_label, condition, nuisance_tag=None):
     """The biology render's fixed 11-key imaging vector, resolved from the artifacts.
 
     Biology holds imaging FIXED at the calibrated vector the training videos were generated
@@ -631,7 +636,7 @@ def biology_fixed_imaging(data_bank_root, map_label, condition):
     # One Nuisance_DLI per condition: the detector calibrated on that condition's recordings.
     det_paths = det.detector_paths(PARAMETERS.paths).with_condition(condition)
     nu = require_nuisance_dli(data_bank_root / det_paths.posit_subdir,
-                              det_paths.project_alias, map_label)
+                              det_paths.project_alias, map_label, nuisance_tag=nuisance_tag)
     emitter_log10 = np.asarray(nu.samples, dtype=float)
     # Nuisance_DLI samples are in the detector table's estimator space (all-log rows); the same
     # table-bound conversion applies.
@@ -646,9 +651,12 @@ def biology_fixed_imaging(data_bank_root, map_label, condition):
     emitter = emitter_abs[0]
     vec = np.concatenate([emitter, _scope_met()])
     n_pool = int(np.asarray(nu.samples).shape[0])
-    desc = (f"calibrated Nuisance_DLI vector "
-            f"({artifact_path(data_bank_root / det_paths.posit_subdir, det_paths.project_alias, map_label).name}"
+    art = artifact_path(data_bank_root / det_paths.posit_subdir, det_paths.project_alias, map_label,
+                        nuisance_tag=nuisance_tag)
+    desc = (f"{'user-selected fixed' if nu.posterior_sample_pool_choice == 'selection_user' else 'calibrated'} "
+            f"Nuisance_DLI vector ({art.name}"
             + ("" if n_pool == 1 else f", SGM of {n_pool} vectors")
+            + (f", tag {nuisance_tag}" if nuisance_tag else ", canonical")
             + ") + MET SCOPE camera")
     return vec, desc
 
@@ -715,7 +723,8 @@ def _ppv_spec(cfg, args):
             # Biology holds imaging FIXED at the calibrated Nuisance_DLI + MET SCOPE vector,
             # resolved by the shared module-level helper (one definition, also used by the
             # horizon audit), with any --set-imaging overrides applied on top.
-            vec, desc = biology_fixed_imaging(data_bank_root, map_label, kind_token)
+            vec, desc = biology_fixed_imaging(data_bank_root, map_label, kind_token,
+                                              nuisance_tag=a.nuisance_tag)
             overrides = _parse_kv(a.set_imaging, "--set-imaging")
             if overrides:
                 find = {k: i for i, k in enumerate(det.DETECTOR_IMAGING_KEYS)}

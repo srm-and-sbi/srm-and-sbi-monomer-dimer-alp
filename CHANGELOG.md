@@ -5,10 +5,47 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.21 - 2026-09-25
 
-Documentation only: the regenerated Evaluation is read into the workflow document and the working imaging
-vector is recorded as a decision. No code, stage, parameter role or estimate changes.
+The working imaging vector can be minted as a `Nuisance_DLI` and selected by every consumer, and the direct
+photobleaching estimator reads the experimental recordings. No canonical stage's arithmetic, parameter role,
+preprocessing step or estimate changes; the regenerated Evaluation is read into the workflow document.
+
+### Added
+
+- `posterior_sample_pool_choice = "selection_user"`: one explicitly chosen, fixed imaging vector assembled from
+  documented sources. The spec carries six `[selection.<KEY>]` tables (`value` in physical units, `source`,
+  `limitation`); the build converts to log10, refuses a value outside the detector prior box unless its key is
+  listed under `allow_outside_prior` with a non-empty `outside_prior_justification` (an acknowledgement of
+  extrapolation beyond the tested imaging domain, not a certification), clips nothing, needs no estimator,
+  Experiment product, GPU or pool, and stores the vector with its decision record in the artifact manifest;
+  every draw returns the same vector. `--emit-selection-user` writes the skeleton (values commented out, so an
+  unfilled spec cannot build); the build report tabulates the vector, its sources and limitations.
+- The nuisance tag: `--nuisance-tag <TAG>` on the construction, the biology DLI stage (dispatcher knob
+  `NUISANCE_TAG`), the posterior-predictive render, the horizon audit, the SGM analysis and the dataset
+  orchestrator names a `Nuisance_DLI` artifact beside the canonical one (`<alias>_<timing>_<TAG>_Nuisance_DLI.npz`)
+  and selects it; the biology DLI stage records the selected artifact's identity in every
+  `Nuisance_DLI_Theta_Set` schema, the render in its clip file, the audit in every generated file. The tag names
+  the nuisance artifact, never an estimator.
+- `Direct_Fluorescence_Loss --experiment`: the estimator's experimental input path, with unchanged arithmetic:
+  the recordings of a condition read as the Experiment stage reads them, the camera from the section 6.3
+  acquisition values, the flux over the whole field with the per-frame median as the background level, per
+  recording the flux and background curves, the early-to-late fractional loss between the centers of the
+  opening and closing averaging windows, the fitted effective loss parameter with its diagnostics and the
+  eligibility outcome; a distribution over recordings, nothing pooled, no verdict. Smoked on two rendered
+  recordings written in the experimental layout; the smoke was deleted.
+- `tests/test_selection_user.py` (8 tests): tag grammar and paths, physical-to-log10 conversion in table order,
+  refusal outside the prior without acknowledgement and acceptance without clipping with it, refusal of missing
+  sources and invalid values, the fixed-vector artifact round trip with its record and identity, the tagged
+  consumer gate, the spec-file round trip, and the unfilled template's refusal.
+
+### Verification
+
+- All 101 tests pass on this tree by direct invocation (the eleven test files, plus the two tests of
+  `test_temporal_dynamics_drift.py` run explicitly). The construction's `--emit-selection-user`, `--build --dry-run`
+  and `--build` were exercised on the PC under a throwaway tag, the biology DLI stage and the biology render
+  resolved the tagged artifact in dry runs, and the photobleaching experimental path ran end to end on two
+  rendered recordings in the experimental layout; every smoke product was deleted afterwards.
 
 ### Changed
 

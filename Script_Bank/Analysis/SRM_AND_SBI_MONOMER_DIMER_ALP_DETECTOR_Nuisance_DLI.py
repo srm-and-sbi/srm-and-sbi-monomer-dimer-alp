@@ -345,7 +345,8 @@ def _emit_template_dry_run(args, R, topo, spec, out_dir):
 
 
 def _emit_template(args, R):
-    spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"])
+    spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"],
+                          nuisance_tag=args.nuisance_tag)
     n_frames, step_frames = _chunk_geometry(R["timing"], args.experiment_span_seconds,
                                              args.chunk_step_seconds)
     topo = resolve_topology()
@@ -437,8 +438,10 @@ def _build_sgm_percentiles(args, R, block, spec_dict, art):
 
 
 def _build(args, R):
-    spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"])
-    art = ndli.artifact_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"])
+    spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"],
+                          nuisance_tag=args.nuisance_tag)
+    art = ndli.artifact_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"],
+                             nuisance_tag=args.nuisance_tag)
     n_frames, step_frames = _chunk_geometry(R["timing"], args.experiment_span_seconds,
                                             args.chunk_step_seconds)
 
@@ -449,7 +452,8 @@ def _build(args, R):
             return
         raise FileNotFoundError(
             f"Nuisance_DLI spec not found:\n    {spec}\nRun --emit-template first, then edit the spec.")
-    spec_dict = ndli.load_spec(spec, R["imaging_keys"], R["plo"], R["phi"])   # structure + prior-box
+    spec_dict = ndli.load_spec(spec, R["imaging_keys"], R["plo"], R["phi"],
+                               table=det.DETECTOR_PARAMETERIZATION)   # structure + prior-box
     block = spec_dict["block"]
     choice = block["posterior_sample_pool_choice"]
     pool_mode = block.get("pool_mode", "bounded")
@@ -462,7 +466,17 @@ def _build(args, R):
 
     if args.dry_run:
         print(f"[DRY RUN] spec valid; posterior_sample_pool_choice={choice}, pool_mode={pool_mode}.")
-        if pool_kind is None:
+        if choice == "selection_user":
+            vec, rec = ndli.selection_from_spec(spec_dict, det.DETECTOR_PARAMETERIZATION, R["plo"], R["phi"])
+            print("    selection_user: ONE fixed vector from the spec (no pool, no GPU):")
+            for k in R["imaging_keys"]:
+                print(f"      {k:<20} {rec['values_physical'][k]:>12.6g}  (log10 {rec['values_log10'][k]:+.4f})  "
+                      f"source: {rec['sources'][k]['source']}")
+            if rec["outside_prior"]:
+                print(f"    outside the prior box by acknowledgement: {rec['outside_prior']} "
+                      f"-- {rec['outside_prior_justification']}")
+            print(f"    would write:\n    {art}  (+ report)")
+        elif pool_kind is None:
             print(f"    box_user: builds from the spec ranges alone (no pool, no GPU). Would write:\n    {art}")
         else:
             cache = ndli.pool_cache_path(R["posit_dir"], R["paths"].project_alias,
@@ -476,7 +490,8 @@ def _build(args, R):
         return
 
     if pool_kind is None:
-        nu = ndli.build_nuisance_dli(spec_dict, R["imaging_keys"], R["plo"], R["phi"])
+        nu = ndli.build_nuisance_dli(spec_dict, R["imaging_keys"], R["plo"], R["phi"],
+                                     table=det.DETECTOR_PARAMETERIZATION)
     else:
         pool, source = _get_pool(R, args, pool_kind, pool_mode, n_frames, step_frames, n_per)
         print(f"pool [{pool_kind}]: {source}")
@@ -544,6 +559,19 @@ def _write_nuisance_report(nu, R, art, n_draws=10000):
          ["parameters", str(len(nu.parameter_keys))],
          ["marginal draws", str(n_draws)]],
         note="How the calibrated imaging is represented for production marginalization.")
+    if nu.selection is not None:
+        sel = nu.selection
+        reporter.table(
+            "selection_user: the fixed vector, its sources and limitations",
+            ["parameter", "value (physical)", "log10", "in prior box", "source", "limitation"],
+            [[k, f"{sel['values_physical'][k]:.6g}", f"{sel['values_log10'][k]:+.4f}",
+              "no (acknowledged)" if k in sel["outside_prior"] else "yes",
+              sel["sources"][k]["source"], sel["sources"][k]["limitation"]]
+             for k in nu.parameter_keys],
+            note="A user-selected, fixed vector: every biology simulation receives it unchanged. It "
+                 "carries no calibrated joint uncertainty; the biology inference is conditional on "
+                 "these values. " + (f"Outside-prior justification: {sel['outside_prior_justification']}"
+                                     if sel["outside_prior"] else ""))
     rows = []
     for i, k in enumerate(nu.parameter_keys):
         col = draws[:, i]
@@ -660,10 +688,32 @@ def _migrate_pool_labels(args, R):
     print(f"    rows: {pool.shape[0]}  windows: {n_win}  n_per_chunk: {n_per}  ALP rows: {n_alp}")
 
 
+def _emit_selection_user(args, R):
+    """Write the selection_user spec skeleton (CPU; no estimator, no recordings, no pool)."""
+    spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"],
+                          nuisance_tag=args.nuisance_tag)
+    if spec.exists():
+        raise SystemExit(f"Spec exists already; refusing to overwrite it:\n    {spec}\n"
+                         f"Edit it, or pass another --nuisance-tag.")
+    if args.dry_run:
+        print(f"[DRY RUN] --emit-selection-user would write the spec skeleton:\n    {spec}")
+        return
+    ndli.emit_selection_user_template(
+        spec, det.DETECTOR_PARAMETERIZATION,
+        provenance={"timing_label": R["timing_label"], "condition": args.condition,
+                    "nuisance_tag": args.nuisance_tag, "choice": "selection_user"})
+    print(f"Emitted selection_user spec skeleton:\n    {spec}\n"
+          "NEXT: fill every [selection.<KEY>] table (value in physical units, source, limitation), "
+          "then run --build with the same --nuisance-tag.")
+
+
 def main(args):
     R = _resolve(args.total_time_seconds, args.condition)
     if args.migrate_pool_labels:
         _migrate_pool_labels(args, R)
+        return
+    if args.emit_selection_user:
+        _emit_selection_user(args, R)
         return
     (_build if args.build else _emit_template)(args, R)
 
@@ -682,6 +732,15 @@ def parse_args(argv):
     mode.add_argument("--build", dest="build", action="store_true",
                       help="build the Nuisance_DLI from the finalized spec.")
     p.set_defaults(build=False)
+    p.add_argument("--emit-selection-user", action="store_true",
+                   help="write the spec skeleton of a selection_user Nuisance_DLI (one explicitly "
+                        "chosen, fixed imaging vector from documented sources); CPU only, no "
+                        "estimator, no recordings. Fill it, then --build with the same --nuisance-tag.")
+    p.add_argument("--nuisance-tag", type=str, default=None,
+                   help="SCREAMING_SNAKE token ([A-Z0-9]+) naming the Nuisance_DLI artifact and its "
+                        "spec beside the canonical ones (<alias>_<timing>_<TAG>_Nuisance_DLI.npz), e.g. a "
+                        "reference vector or a sensitivity variant; consumers select it by the same tag. "
+                        "Unset = the canonical artifact.")
     p.add_argument("--experiment-span-seconds", type=int, default=20,
                    help="duration (s) of the real recordings to read (default 20).")
     p.add_argument("--kinds", type=str, default=None,

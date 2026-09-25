@@ -118,6 +118,7 @@ SIM_FLAGS=""
 [ "${VERBOSE:-0}" = 1 ]    && SIM_FLAGS="$SIM_FLAGS --verbose"
 [ "${DEBUG_DUMP:-0}" = 1 ] && SIM_FLAGS="$SIM_FLAGS --debug-dump"
 [ -n "${SEED:-}" ]         && SIM_FLAGS="$SIM_FLAGS --seed ${SEED}"
+[ -n "${NUISANCE_TAG:-}" ] && SIM_FLAGS="$SIM_FLAGS --nuisance-tag ${NUISANCE_TAG}"   # biology DLI: a tagged Nuisance_DLI
 
 # SKIN_FACTOR (RDS-only): ReaDDy neighbor-list (Verlet) skin as a MULTIPLE of the
 # particle diameter -- a performance knob (coarsens the cell-linked-list grid; does

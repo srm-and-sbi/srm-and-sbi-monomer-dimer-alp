@@ -477,7 +477,8 @@ def _phase_generate(spec, args):
               f"{n_resets} resets/theta and generation follows the cohort.")
     start, stop = _index_range(args, theta_log10.shape[0])
     imaging_physical, imaging_desc = biology_fixed_imaging(
-        spec["data_bank_root"], spec["window"].label, args.condition)
+        spec["data_bank_root"], spec["window"].label, args.condition,
+        nuisance_tag=getattr(args, "nuisance_tag", None))
     print(f"Imaging pinned for every render (a MET-conditioned, training-supported imaging "
           f"slice): {imaging_desc}")
     law_name, law = resolve_labeling_law(args.condition, args.labeling_law)
@@ -1569,6 +1570,10 @@ def build_parser(description):
                         "critical logic (no simulation, no GPU).")
     p.add_argument("--n-theta", type=int, default=200,
                    help="prepare: cohort size (default 200).")
+    p.add_argument("--nuisance-tag", type=str, default=None,
+                   help="SCREAMING_SNAKE token selecting a tagged Nuisance_DLI artifact (a reference "
+                        "vector or a sensitivity variant) for every render instead of the canonical "
+                        "one; the selected artifact is named in each generated file's imaging_desc.")
     p.add_argument("--n-resets", type=int, default=None,
                    help="prepare: independently initialized model-window simulations per theta "
                         "(default 10). Later phases follow the cohort; a differing value passed "

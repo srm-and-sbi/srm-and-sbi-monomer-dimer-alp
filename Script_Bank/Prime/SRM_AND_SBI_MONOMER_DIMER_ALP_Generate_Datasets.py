@@ -114,6 +114,8 @@ def _run(script: Path, label: str, split: str, tasks: int, seed: Optional[int],
     # labeling law (DLI); every stage pass takes it.
     if condition is not None:
         cmd += ["--condition", condition]
+        if script.name == "SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py" and getattr(args, "nuisance_tag", None):
+            cmd += ["--nuisance-tag", args.nuisance_tag]
 
     line = f"{label:<20} {split:<5} (--tasks {tasks}, --seed {seed})"
     if args.dry_run:
@@ -202,7 +204,7 @@ def _biology_artifacts(args: argparse.Namespace) -> Dict[str, Path]:
     return {
         condition: nuisance_dli_artifact_path(
             posit_dir, det.detector_paths(PARAMETERS.paths).with_condition(condition).project_alias,
-            timing_label)
+            timing_label, nuisance_tag=getattr(args, "nuisance_tag", None))
         for condition in args.conditions
     }
 
@@ -322,6 +324,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--core-tasks", type=int, required=True,
         help="Number of TRAIN+TEST (CORE) task files; split 0.8/0.2 into train/test.",
     )
+    parser.add_argument(
+        "--nuisance-tag", type=str, default=None,
+        help="Biology pass: SCREAMING_SNAKE token selecting a tagged Nuisance_DLI artifact instead of "
+             "the canonical one (passed through to the biology DLI stage).")
     parser.add_argument(
         "--task-simulations", type=int, default=10,
         help="Simulations per task (default: 10).",
