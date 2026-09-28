@@ -25,6 +25,11 @@ is removed. No estimator, estimate, prior or production default changes.
   time. The figure's `--display-norm`, the notebook's `NORM_MODE` and the player script's `--norm-mode`
   accept `full` and `percentile` only.
 
+### Documentation
+
+- The check's note states that the figure's two max projections share their own joint `[min, max]` and that
+  `--display-norm` governs the frame panels only.
+
 ## 0.1.23 - 2026-09-28
 
 The posterior-predictive check becomes a plain visual inspection: one declared configuration for every

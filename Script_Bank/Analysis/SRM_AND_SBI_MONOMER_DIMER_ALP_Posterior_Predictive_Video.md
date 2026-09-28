@@ -246,7 +246,9 @@ subunits and their dyes, and the visible monomers and dimers at frame 0.
 - The **frame panels** show single-frame appearance — point-spread size, brightness, and
   per-frame noise. Read them for whether a synthetic frame looks like an experimental one.
 - The **max projections** summarize the whole clip; they differ by design, because the
-  synthetic motion is a fresh draw, not the experimental track.
+  synthetic motion is a fresh draw, not the experimental track. The two projections share their own
+  joint `[min, max]`; `--display-norm` governs the frame panels only, since a projection is one image,
+  not a sequence.
 - The **histograms** (ADU) show the pixel-intensity distributions; a close overlap is the
   evidence the imaging model matches. Both series are the stored, non-negative frames.
 - The **ratio-per-quantile plot** is the direct "do they match?" read — the synthetic/experimental
