@@ -180,6 +180,8 @@ def render_scene(lambda_rate: float, mu_pc: float, seed: int, *, n_subunits: int
         dye_counts = np.ones(n_subunits, dtype=np.int64)
     else:
         law = lab.resolve_labeling_law(labeling)[1]
+        # The bare law at probe occupancy 1 BY DESIGN (module docstring): a diagnostic scene, not a
+        # production-matched render (production labels through labeling.label_trajectory).
         dye_counts = lab.draw_dye_counts(law, n_subunits, np.random.default_rng(seed + 1000))
 
     img = _imaging_center()

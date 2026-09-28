@@ -135,14 +135,12 @@ def preflight_recordings(tif_paths):
     return shapes
 
 
-def read_cell_chunks(tif_path, n_frames, step_frames):
-    """Read one recording and cut it into model-length windows.
+def read_recording(tif_path):
+    """The stored frames ``(n_frames, H, W)`` of one recording (uint16 for the MET recordings).
 
-    Interprets the layout through :func:`inspect_recording`, loads that one series, converts the
-    16-bit raw frames to 8-bit (the model's input domain), and returns the list of
-    ``(n_frames, H, W)`` uint8 windows stepped by ``step_frames`` (``1 s`` step -> maximal
-    overlap; a step equal to the window -> non-overlapping tiling). The number of windows equals
-    :func:`chunk_count` of the inspected frame count. Identical windowing in every stage.
+    Interprets the layout through :func:`inspect_recording` and loads that one series, checking
+    the loaded array against the inspected shape; every reader of the raw recordings goes through
+    here, so none can misread a page count or a channel axis as frames.
     """
     expected_shape = inspect_recording(tif_path)
     with tifffile.TiffFile(str(tif_path)) as tif:
@@ -150,6 +148,19 @@ def read_cell_chunks(tif_path, n_frames, step_frames):
     if tuple(raw.shape) != expected_shape:
         raise RecordingLayoutError(f"{tif_path}: loaded array shape {raw.shape} differs from the "
                                    f"series metadata {expected_shape}.")
+    return raw
+
+
+def read_cell_chunks(tif_path, n_frames, step_frames):
+    """Read one recording and cut it into model-length windows.
+
+    Reads the frames through :func:`read_recording`, converts the 16-bit raw frames to 8-bit (the
+    model's input domain), and returns the list of ``(n_frames, H, W)`` uint8 windows stepped by
+    ``step_frames`` (``1 s`` step -> maximal overlap; a step equal to the window -> non-overlapping
+    tiling). The number of windows equals :func:`chunk_count` of the inspected frame count.
+    Identical windowing in every stage.
+    """
+    raw = read_recording(tif_path)
     video8 = convert_video_dtype(raw, bits_from=16, bits_to=8)
     chunks = [video8[start:start + n_frames]
               for start in range(0, video8.shape[0] - n_frames + 1, step_frames)]

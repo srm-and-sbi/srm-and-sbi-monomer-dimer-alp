@@ -288,7 +288,8 @@ decision about the imaging values. Development is closed here: the harness keeps
 pooled sums for the record, and no correction-and-validation cycle follows. The working value of
 `lambda_rate` comes from the calibration results and the derivation of record, with this estimator's
 readings and their known bias recorded beside it. The classification is specific to this estimator: the
-direct PSF recovery, `sigma_r` above all, remains a candidate source for the working imaging vector. An
+direct PSF recovery, `sigma_r` above all, remains a cross-check and fallback for the working imaging vector, whose
+values default to the neural references (`DETECTOR_WORKFLOW.md` §7.6). An
 imaging parameter is reopened only if its plausible
 uncertainty changes a biological conclusion materially, not because another diagnostic can be imagined.
 

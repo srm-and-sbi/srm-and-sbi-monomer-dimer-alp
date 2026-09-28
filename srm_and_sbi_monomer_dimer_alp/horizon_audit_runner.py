@@ -76,6 +76,7 @@ from __future__ import annotations
 import argparse
 import gc
 import hashlib
+import json
 import shutil
 import time
 from datetime import datetime, timezone
@@ -87,7 +88,7 @@ from . import horizon_audit as ha
 from . import population_composition as pc
 from .diagnostics import DiagnosticReporter
 from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical, ratio_to_receptor_fraction
-from .labeling import LABELING_CONDITIONS, resolve_labeling_law
+from .labeling import LABELING_CONDITIONS, LABELING_SET_COLUMNS, label_trajectory, resolve_labeling
 from .simulation_rds_support import (
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
     extract_trajectory_poses, rank_to_species,
@@ -406,22 +407,23 @@ def _phase_extend(spec, args):
 # =============================================================================
 
 def _simulate_and_render(theta_physical, condition, timing, imaging_physical, traj_path,
-                         placement_seed, render_seed, labeling_seed, law, verbose):
+                         placement_seed, render_seed, labeling_seed, plan, verbose):
     """One simulation at ``theta_physical`` under ``condition`` for ``timing``, rendered and
     converted to uint8. The condition selects the reaction network (its declared association
     setting), exactly as the condition's RDS tier is generated.
 
     ``placement_seed`` seeds the initial particle placement, ``render_seed`` the imaging noise
-    stream, and ``labeling_seed`` the static per-subunit dye draw under the labeling ``law``
-    -- all distinct per (theta, arm, replicate), so replicates are independently randomized.
-    ReaDDy's internal dynamics RNG is not seedable through this interface and stays OS-seeded.
-    Returns ``(video_uint8, counts)`` with ``counts`` the ``(n_frames, 2)`` per-frame SPECIES
-    populations ``[A, B]`` (particle-type counts summed over the mobility modes); the trajectory
+    stream, and ``labeling_seed`` the static per-subunit dye draw under the labeling ``plan``
+    (``labeling.resolve_labeling``: the condition's law and declared or derived occupancy, as at the
+    DLI stage) -- all distinct per (theta, arm, replicate), so replicates are independently
+    randomized. ReaDDy's internal dynamics RNG is not seedable through this interface and stays
+    OS-seeded. Returns ``(video_uint8, counts, labeling_row)`` with ``counts`` the ``(n_frames, 2)``
+    per-frame SPECIES populations ``[A, B]`` (particle-type counts summed over the mobility modes)
+    and ``labeling_row`` the ``labeling.LABELING_SET_COLUMNS`` record of the draw; the trajectory
     file is the caller's to keep or delete.
     """
     import readdy
     from .io import convert_video_dtype
-    from .labeling import draw_dye_counts
     from .simulation_dli_support import render_dli_video
 
     stem = build_system(theta_physical, condition, verbose=verbose)
@@ -444,9 +446,11 @@ def _simulate_and_render(theta_physical, condition, timing, imaging_physical, tr
     counts = ha.species_counts_from_type_counts(
         ha.species_counts_per_frame(tray_poses), rank_to_species(tray), _SPECIES_ORDER)
     soul_poses = collapse_species_axis(tray_poses)
-    # Static labeling draw (the DOL-explicit observation layer): one dye count per subunit,
-    # carried through the reactions by the lineage; only dyes render.
-    dye_counts = draw_dye_counts(law, lineage.n_subunits, np.random.default_rng(labeling_seed))
+    # Static labeling draw through the production path (labeling.label_trajectory): one dye count
+    # per subunit under the plan's law and occupancy, applied by initial molecular species, carried
+    # through the reactions by the lineage; only dyes render.
+    dye_counts, labeling_row = label_trajectory(plan, tray, lineage,
+                                                np.random.default_rng(labeling_seed))
     # Release the ReaDDy CPU kernel (its worker-thread pool and the observable/output handles) and
     # reclaim memory, exactly as the canonical Simulation_RDS stage does between simulations: each
     # ReaDDy run otherwise leaves its thread pool behind, and this function is called
@@ -462,7 +466,7 @@ def _simulate_and_render(theta_physical, condition, timing, imaging_physical, tr
                               seed=render_seed, verbose=verbose)
     video = np.moveaxis(frames, 2, 0)                     # (H, W, frames) -> (frames, H, W)
     video = convert_video_dtype(video, bits_from=16, bits_to=8)
-    return video, counts
+    return video, counts, labeling_row
 
 
 def _phase_generate(spec, args):
@@ -481,8 +485,8 @@ def _phase_generate(spec, args):
         nuisance_tag=getattr(args, "nuisance_tag", None))
     print(f"Imaging pinned for every render (a MET-conditioned, training-supported imaging "
           f"slice): {imaging_desc}")
-    law_name, law = resolve_labeling_law(args.condition, args.labeling_law)
-    print(f"Labeling law for every render: {args.condition} {law_name} = {law.describe()} "
+    plan = resolve_labeling(args.condition, args.labeling_law, args.occupancy)
+    print(f"Labeling for every render: {plan.describe()} "
           f"(static per-subunit dye counts; seeded per arm and replicate).")
     print(f"Cohort {cohort['cohort_id']} | master seed {cohort['master_seed']} | "
           f"per-arm seeds spawned via SeedSequence (ReaDDy dynamics OS-seeded).")
@@ -503,24 +507,25 @@ def _phase_generate(spec, args):
         seeds = _spawn_seeds(cohort["master_seed"], index, n_resets)
         t0 = time.time()
         traj_path = traj_dir / f"theta_{index:04d}_continuous.h5"
-        cont_video, cont_counts = _simulate_and_render(
+        cont_video, cont_counts, cont_labeling = _simulate_and_render(
             theta_physical, args.condition, spec["continuous"], imaging_physical, traj_path,
-            seeds["cont"][0], seeds["cont"][1], seeds["cont"][2], law, args.verbose)
+            seeds["cont"][0], seeds["cont"][1], seeds["cont"][2], plan, args.verbose)
         if not args.keep_trajectories:
             traj_path.unlink(missing_ok=True)
         t_cont = time.time() - t0
 
-        reset_videos, reset_counts = [], []
+        reset_videos, reset_counts, labeling_rows = [], [], [cont_labeling]
         for r in range(n_resets):
             traj_path = traj_dir / f"theta_{index:04d}_reset_{r}.h5"
-            video, counts = _simulate_and_render(
+            video, counts, labeling_row = _simulate_and_render(
                 theta_physical, args.condition, spec["window"], imaging_physical, traj_path,
-                seeds["resets"][r][0], seeds["resets"][r][1], seeds["resets"][r][2], law,
+                seeds["resets"][r][0], seeds["resets"][r][1], seeds["resets"][r][2], plan,
                 args.verbose)
             if not args.keep_trajectories:
                 traj_path.unlink(missing_ok=True)
             reset_videos.append(video)
             reset_counts.append(counts)
+            labeling_rows.append(labeling_row)
         t_all = time.time() - t0
 
         seed_table = np.array([seeds["cont"]] + seeds["resets"], dtype=np.uint32)
@@ -534,7 +539,13 @@ def _phase_generate(spec, args):
             imaging_physical=imaging_physical,
             imaging_desc=str(imaging_desc),
             condition=args.condition,
-            labeling_law=law_name,
+            labeling_law=plan.law_name,
+            labeling_columns=np.array(LABELING_SET_COLUMNS),
+            labeling_rows=np.stack(labeling_rows),                  # (1+R, 10): continuous, then resets
+            occupancy_source=plan.occupancy_source,
+            occupancy_monomer=float(plan.occupancy_pair[0]),
+            occupancy_dimer=float(plan.occupancy_pair[1]),
+            labeling_record_json=json.dumps(plan.record()),
             seeds=seed_table,                                       # (1+R, 3) placement, render, labeling
             cohort_id=cohort["cohort_id"],
             n_resets=n_resets,
@@ -1557,6 +1568,11 @@ def build_parser(description):
     p.add_argument("--labeling-law", type=str, default=None,
                    help="override the condition's baseline labeling law (registry key or "
                         "'family:mean[:shape]'); default: the condition's baseline.")
+    p.add_argument("--occupancy", type=str, default=None,
+                   help="override the condition's probe occupancy for a sensitivity audit, exactly as "
+                        "at the DLI stage: one value, or per initial MOLECULAR species 'A=0.5,B=1.0'. "
+                        "Default: the condition's declared (MET-INLB 0.5) or derived (MET-FAB 0.155) "
+                        "value; recorded in every generated file.")
     p.add_argument("--continuous-seconds", type=float, default=20.0,
                    help="continuous-simulation length (default 20, matching the experimental "
                         "recordings); must tile into whole model windows and match the cohort.")

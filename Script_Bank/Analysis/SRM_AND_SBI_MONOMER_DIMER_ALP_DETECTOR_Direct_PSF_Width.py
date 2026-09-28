@@ -627,6 +627,9 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
         thetas.append([img[k] for k in det.DETECTOR_FIND])
         vec = np.array([img[k] for k in det.DETECTOR_IMAGING_KEYS])
         poses, host = scene(seed)
+        # The bare law at probe occupancy 1 BY DESIGN: a diagnostic scene whose visible density is set
+        # by n_subunits, not a production-matched render (production labels through
+        # labeling.label_trajectory at the condition's declared occupancy).
         dye_counts = (np.ones(n_subunits, dtype=np.int64) if law is None
                       else lab.draw_dye_counts(law, n_subunits, np.random.default_rng(seed + 1000)))
         frames = render_dli_video(poses, host, dye_counts, vec, seed=seed)

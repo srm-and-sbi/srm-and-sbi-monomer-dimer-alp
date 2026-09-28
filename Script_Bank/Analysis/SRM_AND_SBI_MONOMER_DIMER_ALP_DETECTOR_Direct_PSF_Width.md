@@ -310,6 +310,40 @@ a correction may have to address; the development tasks carry the calibration.
 - **Reads only.** No pipeline input is modified; the utility writes its report, arrays and
   figures to the Data_Bank `Posit` tier.
 
+## Experimental measurement on the MET-FAB recordings (2026-09-25)
+
+Run on rcl01 (record `..._2S_50FPS_Direct_PSF_Width_Experiment` on the PC Posit tier; code 45177cb, the 0.1.20
+estimator; sixteen workers, 32 minutes): the sixty 20 s recordings in ten non-overlapping 2 s windows each,
+camera from the section 6.3 acquisition values, every one of the 600 windows valid (median 318 tracks and
+7,720 spot-frames per window). No ground truth, so no verdict. Aggregated as the median of the log10 window
+estimates:
+
+| parameter | median (physical) | IQR over windows | central 90 % | outside prior | between-recording sd of per-recording medians | within-recording sd | first-to-last change |
+|---|---|---|---|---|---|---|---|
+| `mu_r` | +0.200 (1.585) | [+0.163, +0.258] | [+0.118, +0.340] | 12 % above +0.3 | 0.063 dex | 0.026 dex | −0.076 dex (100 % of recordings fall) |
+| `sigma_r` | −0.679 (0.210) | [−0.807, −0.583] | [−0.981, −0.485] | 4 % below −1.0 | 0.140 dex | 0.048 dex | −0.050 linear (97 % fall) |
+
+Read beside the neural estimators on the same windows (`DETECTOR_WORKFLOW.md` §6.11, §7.6), where the neural
+values are the references the working vector selects by default and these direct values are cross-checks:
+`sigma_r` agrees with the `capacity256` posterior median (0.22) and not with the baseline's (0.165) or the
+fit-corrected localization reference (about 0.15). Because `capacity256`'s `sigma_r` median sits 0.03 dex from
+the prior center and its synthetic recovery of that coordinate is poor (slope at most 0.10), the weight of the
+agreement comes from this measurement; the working vector keeps the neural value 0.22, which this measurement
+supports. The recordings differ from one another far more than the windows within a recording do.
+`mu_r` sits 0.04 dex below the `capacity256` median (1.74), a gap larger than either method's synthetic error
+(direct MAE 0.016 dex, bias −0.003; `capacity256` median MAE 0.018, bias −0.001), and the direct estimate falls
+along a recording three times more than the neural one. The two methods therefore do not agree on the PSF
+median on these recordings within their demonstrated synthetic accuracy, and no ground truth decides which is
+closer. The working vector selects the direct point estimate 1.585, retained as produced: a working selection
+and a documented departure from the neural reference. This estimator recovered `mu_r` well on the synthetic
+development recordings, it gives 1.585 on the recordings, and the user selected it, keeping 1.74 recorded as the
+neural reference and as the rendered variant. That does not establish that the estimator transfers to these
+recordings without bias, nor that 1.585 improves on 1.74 experimentally; the renders of 2026-09-25 that compared
+the two widths used occupancy 1 and prior-center reaction-diffusion settings and are withdrawn as support
+(`DETECTOR_WORKFLOW.md` §7.6). Neither value explains the narrowing of the fitted width along a recording. The nominal ranges are drawn as reported and not as validated (they under-cover on
+synthetic recordings). The figure `figures/window_drift_direct_FAB.png` shows both estimates against window
+position.
+
 ## References
 
 - `DETECTOR_WORKFLOW.md` §6.2 (the inferred imaging block and its priors), §6.7 (the

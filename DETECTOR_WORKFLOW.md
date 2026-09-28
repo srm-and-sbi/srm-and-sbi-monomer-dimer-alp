@@ -538,7 +538,7 @@ choice between an improved neural estimator and a hybrid.
 > window; record `..._2S_50FPS_CAP256_vs_Baseline_Experiment`), and its three views below are from that
 > run. The one-dye Experiment was not re-run: its MAP column is superseded and kept for the record only,
 > while its posterior-median and SGM columns stand. The larger-capacity estimator's values on the same
-> recordings, and the working imaging vector chosen from these sources, are in §7.6.
+> recordings, and the working imaging vector selected from these sources, are in §7.6.
 
 
 From the two Experiment reports (60 MET-FAB recordings, 600 windows, `--pool-mode unrestricted`); the three
@@ -751,66 +751,109 @@ embeds `torch._dynamo` internals whose private layouts change between releases. 
 estimator format; both workflows write and read it, and the run-identity table of §6.8 quotes its
 `weights_sha256`.
 
-### 7.6 The working imaging vector: sources, provisional values and limitations
+### 7.6 The working imaging vector: sources, selected values and limitations
 
 The biology reference run conditions on one fixed imaging vector, chosen explicitly from the sources that the
 synthetic benchmarks of §6.9, §9.6 and §9.7 rank, and applied to the experimental recordings, which have no
-ground truth. This subsection is the decision record: the source of each of the six values, how the per-window
-estimates were aggregated, the provisional value, and the limitation the value carries into the biology
-inference. Nothing here is a demonstrated experimental accuracy. The synthetic recovery supports choosing a
-source among the methods tested, and each experimental value remains model-dependent.
+ground truth. This subsection is the decision record: for each of the six values, the neural reference, the
+cross-checks, the selected simulation value, and the limitation the value carries into the biology inference.
+Nothing here is a demonstrated experimental accuracy. The synthetic recovery supports choosing a source among
+the methods tested, and each experimental value remains model-dependent.
 
-**Sources.** Three sources, one per parameter. The neural entries are posterior medians of the `capacity256`
-estimator (§9.7) on the sixty MET-FAB recordings in ten windows each, aggregated as the median over the 600
-log10 per-window posterior medians (each from 10,000 draws), then transformed to physical units (record
-`..._CAP256_vs_Baseline_Experiment`); the same aggregate of the SGM of the same draws agrees with it within
+**Source hierarchy.** The neural posterior estimates are the primary source and are always recorded. The direct
+estimators and the raw-domain diagnostics are cross-checks, read as supporting or conflicting evidence, and
+fallbacks. The selected simulation value is the neural reference by default; another value replaces it only with
+an explicit justification specific to that parameter, recorded in its row. The hierarchy governs reporting and
+selection. It does not claim that the neural estimate is the more accurate one for every parameter, and where
+stronger evidence favors another source, the row records why the selection departs from the neural reference.
+
+**Reference estimates and selected values are kept apart.** Every estimate is recorded as its estimator
+produced it. The selected simulation value is a separate column and a modeling choice: by default it retains the
+selected point estimate as produced, digits included, which does not imply that its precision is established;
+where a parameter is poorly constrained, the selected value may instead be a rounded nominal, with the rounding
+and its reason stated in the row.
+
+**Neural reference and aggregation.** The neural reference is the `capacity256` estimator (§9.7), the neural
+source chosen for its calibration, on the sixty MET-FAB recordings in ten windows each: the median over the 600
+log10 per-window posterior medians (each from 10,000 draws), transformed to physical units (record
+`..._CAP256_vs_Baseline_Experiment`). The same aggregate of the SGM of the same draws agrees with it within
 0.01 dex on every parameter, an aggregate-level check rather than a per-window one, and the SGM is the
-cross-check, not the value. `sigma_r` comes from
-the direct PSF-width estimator (§9.6), the only method tested whose recovery tracks the truth (slope 0.90 against
-at most 0.10 for any neural estimate); its point value on the recordings is still to be measured.
-`prob_photo_bleach` is anchored on the baseline estimator's posterior median, aggregated in the same way, because
-that estimator carries synthetic bleaching information (correlation 0.79 with the truth) that `capacity256` loses
-(0.16, its median at the prior center whatever the truth). The MAP supplies no value: on `capacity256` it is the
-mode of a skewed `sigma_r` density and switches between two bleaching solutions (§9.8).
+cross-check, not the value. The MAP supplies no value: on `capacity256` it is the mode of a skewed `sigma_r`
+density and switches between two bleaching solutions (§9.8). A neural median that sits near its prior center, on
+a coordinate whose synthetic recovery is poor, says little about the recordings, and agreement or disagreement
+with it is weighed accordingly. That applies to `sigma_r` (0.03 dex from the prior center, 4 % of the prior
+width, synthetic slope at most 0.10) and to `prob_photo_bleach` (at the prior center, synthetic correlation
+0.16). The baseline estimator's median, aggregated in the same way, is the second neural value.
 
-| parameter | source and aggregation | provisional value, log10 (physical) | limitation carried |
-|---|---|---|---|
-| `mu_r` | `capacity256` posterior median, median over 600 windows; the direct PSF-width estimate on the recordings is read alongside | +0.241 (1.74, √2·σ in pixels) | synthetic MAE 0.018 dex, bias −0.001 (+0.001 in the operating subgroup); the direct estimator is comparably accurate (MAE 0.016), so the two are read together and neither is claimed superior; falls 0.028 dex from the first window to the last; the baseline's value sits at the prior's upper edge (+0.302, outside in 53 % of windows) and is not used |
-| `sigma_r` | direct PSF-width estimator on the recordings: median of the valid log10 estimates over the matching 2 s windows of the sixty recordings, with the attempted and valid window counts reported; no pooling of tracks across recordings | to be measured; the neural medians disagree (`capacity256` −0.651, 0.22; baseline −0.783, 0.165) and the fit-corrected localization reference is about 0.15 (§6.7) | poor neural recovery (correlation at most 0.27, slope at most 0.10); direct recovery has slope 0.90, MAE 0.046 dex and bias −0.011 (−0.023 in the operating subgroup), and its nominal ranges are uncalibrated (65 % coverage at nominal 90 %, §9.6) |
-| `mu_pc` | `capacity256` posterior median, median over 600 windows | +2.143 (139 photons per dye) | synthetic bias −0.009 dex, +0.003 in the operating subgroup where the baseline carries +0.055; falls 0.11 dex along a recording on every estimate, so the fixed value is a median across windows; a per-dye value, not the per-detection reference of §6.7 |
-| `sigma_pc` | `capacity256` posterior median, median over 600 windows | −0.193 (0.64) | comparable synthetic recovery in both estimators (correlation 0.89); experimental accuracy remains model-dependent; the fit-corrected localization reference is about 0.5 |
-| `prob_photo_bleach` | baseline posterior median, median over 600 windows, a provisional anchor | −1.472 (0.034 over the fixed 100-frame reference interval, 2 s at 50 fps; the renderer converts it to a per-frame probability of about 0.00035) | synthetic correlation 0.79, MAE 0.21 dex; on the recordings the estimate falls by about 0.5 dex from the first window to the last in 92 % of recordings, so one fixed value is a qualified approximation of a changing inferred distribution; `capacity256`'s −1.257 is the prior center and is excluded; a direct estimate on the full-length recordings may inform the value without establishing its accuracy; the public swift `p_bleach` of Rahm et al. 2021 (0.010 per frame for Fab; §6.2) is a track-termination reference under the tracker's rules, not a transferable per-dye calibration |
-| `lambda_rate` | `capacity256` posterior median, median over 600 windows; the baseline's value and the localization anchor are read alongside | +0.631 (4.3 per second) | neither estimator has a decisive synthetic advantage (correlation 0.55 against 0.54, MAE 0.20 dex), so this is consistency with the other neural entries, not demonstrated superiority; the baseline gives +0.704 (5.1) and the localization-autocorrelation anchor about +0.70 (§6.5); rises 0.09 dex along a recording; the direct flicker estimator is a biased cross-check, not a source |
+| parameter | neural reference (physical; log10) | cross-checks on the recordings | selected simulation value | justification and limitation carried |
+|---|---|---|---|---|
+| `mu_r` | `capacity256` 1.74 (+0.241; √2·σ in pixels); baseline 2.00 (+0.302), at the prior's upper edge and outside it in 53 % of windows, not used | direct PSF-width estimator 1.585 (+0.200; median over the 600 2 s windows, IQR 0.10 dex, 12 % of windows above the prior ceiling; record `..._2S_50FPS_Direct_PSF_Width_Experiment`) | **1.585**, the direct point estimate retained as produced — a working selection and a documented departure from the neural reference | the justification is specific to this parameter: the direct estimator recovered `mu_r` well on the synthetic development recordings (bias −0.003 dex, MAE 0.016 dex), applied to the sixty recordings it gives 1.585, and the user selected it, keeping the neural value 1.74 as the rendered sensitivity variant `VAR_MU_R`. That suffices for a provisional choice; it does not establish that the direct estimator transfers to these recordings without bias, nor that 1.585 improves on 1.74 experimentally. The two estimators disagree by 0.04 dex, more than either's synthetic error, and no ground truth resolves it; neither value explains the narrowing of the recorded spots along a recording (the direct estimate falls 0.076 dex first-to-last, the neural one 0.028). The corrected predictive renders are the next check |
+| `sigma_r` | `capacity256` 0.22 (−0.658); baseline 0.165 | direct PSF-width estimator 0.21 (−0.679; 600 of 600 windows valid); fit-corrected localization reference about 0.15 | **0.22**, the neural point estimate retained as produced, supported by the direct cross-check | the neural median lies 0.03 dex from the prior center and its synthetic recovery is poor (correlation at most 0.27, slope at most 0.10), so on its own it says little about the recordings, and its proximity to the prior center is not evidence of recovery; the selection rests on the direct estimate 0.21, whose synthetic recovery tracks the truth (slope 0.90, MAE 0.046 dex, bias −0.011; nominal ranges uncalibrated, 65 % coverage at nominal 90 %, §9.6) and which lands 0.02 dex away, far inside the between-recording spread (0.14 dex, standard deviation of the per-recording medians, against 0.05 within); the direct window values spread over an IQR of 0.22 dex, fall by 0.05 in linear units first-to-last, and 4 % lie below the prior floor |
+| `mu_pc` | `capacity256` 139 photons per dye (+2.143) | none independent of the neural estimate on the recordings (the diagnostic renders of 2026-09-25 are not used; below) | **139**, the neural point estimate retained as produced | synthetic bias −0.009 dex, +0.003 in the operating subgroup where the baseline carries +0.055; brightness falls 0.11 dex along a recording on every estimate, so the fixed value is a median across windows; a per-dye value, not the per-detection reference of §6.7 |
+| `sigma_pc` | `capacity256` 0.64 (−0.193) | fit-corrected localization reference about 0.5 (the diagnostic renders of 2026-09-25 are not used; below) | **0.64**, the neural point estimate retained as produced | comparable synthetic recovery in both estimators (correlation 0.89); experimental accuracy remains model-dependent |
+| `prob_photo_bleach` | `capacity256` 0.055 (−1.257, the prior center); baseline 0.034 (−1.47, median over windows 2 to 9) | raw-domain field decline of the same recordings (photobleaching note): the per-window rate slows from about 0.12 per interval in the first 2 s to about 0.03 in the last, late-phase rate 0.034 to 0.036, whole-recording single rate about 0.055, and the decline is stronger in brighter recordings (Spearman −0.85); the photobleaching estimator's own field observable yields no usable value on the recordings (stored-domain quantization); the public swift `p_bleach` of Rahm et al. 2021 (0.010 per frame for Fab; §6.2) is a track-termination reference under the tracker's rules, not a transferable per-dye calibration | **0.03** over the fixed 100-frame reference interval (2 s at 50 fps; per frame about 0.0003), a rounded working value taken from the baseline's 0.034, 26 % dye loss over 20 s; variant `VAR_PB` = **0.05**, the rounded whole-recording rate, 40 % dye loss over 20 s, a stronger-loss scenario | poorly constrained, so rounded: the neural estimates carry MAE 0.21 dex on synthetic data, `capacity256` does not learn the parameter at all (correlation 0.16; its value is not evidence about the recordings), and the recorded decline is not single-exponential, so no one value describes a whole recording. 0.03 is taken as the late-time effective value (the late-phase raw-domain rate, 0.034 to 0.036), 0.05 as the whole-recording single rate (0.054 to 0.057); they are working scenarios, not an uncertainty bracket. For identical independent dyes of stationary mean brightness the expected emitted signal follows E[F(t)]/E[F(0)] = (1 − p)^(t/100), t in frames, whatever the grouping of the dyes into monomers and dimers: over the 19 s between the opening and closing windows 0.03 leaves 0.75 of it and 0.05 leaves 0.61, against 0.57 measured in a typical recording (median over the sixty) and 0.50 in the brightest third. The measured quantity is not that ideal expectation but a finite-field, camera-rendered, background-subtracted statistic, which particles entering or leaving the field, composition-dependent motion and overlap, the median background estimate, quantization and clipping, and finite-sample fluctuation can all move, and part of it is not emitter loss (the background falls 9 %). How it relates to the per-dye probability in a render, and so its reading as a bleaching proxy, is checked again under the corrected rendering configuration; the opening transient and the brightness coupling are unrepresented by one per-interval probability |
+| `lambda_rate` | `capacity256` 4.3 per second (+0.631); baseline 5.1 (+0.704) | localization-autocorrelation anchor about 5.0 (§6.5; the same evidence chain as the derivation of record, not an independent source); the direct flicker estimator is a biased cross-check, not a source; the diagnostic render comparison of 2026-09-25 is not used (below) | **5**, an explicitly chosen approximate nominal value — a documented departure from `capacity256`'s 4.3 | `lambda_rate` = 5 per second is an explicitly chosen approximate nominal value given weak recovery and inconclusive predictive comparisons; it is not a uniquely measured rate. Neither estimator has a synthetic advantage (correlation 0.55 against 0.54, MAE 0.20 dex, no average bias), the two neural values differ by 0.07 dex, well inside that error, and nothing on the recordings validates 4.3 or justifies a specific replacement; 5 corresponds to a log-brightness correlation time of 0.20 s against 0.23 s at 4.3; rises 0.09 dex along a recording |
+
+**Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
+full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the
+recordings under the direct estimators' rules. The renders predate the posterior-predictive renderer's use of
+the production observation layer: every subunit was labeled at occupancy 1 (about 81 % visible, against the
+declared MET-FAB visibility of 0.125 per subunit), the reaction-diffusion block was held at prior-center values
+with the receptor total tuned to the detected density, and the imaging was passed as numbers rather than read
+from the `REF` artifact. The clips and their reports are kept unchanged in
+`..._DETECTOR_FAB_2S_50FPS_Posterior_Predictive_Video/Diagnostic_Occupancy_1_Prior_Center_RDS/`, labeled
+*Diagnostic renders using occupancy 1 and prior-center reaction-diffusion settings. Not validation of the
+selected production configuration.*, and they are no part of the justification above. The corrected checks render
+through the production labeling path, read the imaging from the tagged `REF` artifact through the biology input
+path, and take the reaction-diffusion block from one declared configuration that the user confirms
+(`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`).
+
+**Two separate decisions.** The vector above is selected for generation. The recordings show temporal features
+that the selection does not represent, and they stay in this record as the observation-model limitations every
+biological conclusion carries until their impact is assessed: (i) the detected spot count of a recording falls
+over 20 s almost in proportion to its signal (last-to-first 0.62 to 0.66 on cells 0, 26 and 16); whether spots
+rendered under the declared labeling persist longer, as the superseded renders suggested, is measured on the
+corrected renders, and if it is confirmed it is a potential confounder for the biology that points at the
+labeling law or at emitters leaving the field or detaching, which no bleaching value can fix; (ii) the decline of
+the bright recordings exceeds what either bleaching scenario implies for ideal emission; (iii) the recorded spot
+width narrows along a recording; (iv) the recorded background falls 5 to 12 % over 20 s where the renderer's is
+constant. For generation, the reference and each variant are identified by their tags,
+the other settings are kept matched, and the PSF width and the bleaching value are never changed together when
+an effect is attributed.
 
 **What the vector is and is not.** It is a user-selected, fixed vector with a documented source per coordinate.
 It carries no calibrated joint uncertainty: `capacity256`'s joint coverage (0.87 at nominal 0.90) supports
-considering that estimator as a source and does not transfer to a vector whose coordinates come from three
-methods. The biology reference inference is conditional on these six values; recording-to-recording imaging
+considering that estimator as the neural reference and does not transfer to a vector assembled coordinate by
+coordinate. The biology reference inference is conditional on these six values; recording-to-recording imaging
 variation is not marginalized in that run, and the camera block remains the separately sampled SCOPE nuisance
 (§9.3). The pooled representations of §7.2 are retained for a marginalizing run. The within-recording falls of
-brightness and bleaching stay in this record as the stated limitation of a time-invariant imaging model (§8).
+brightness, width and bleaching, and the between-recording coupling of brightness and decline, stay in this
+record as the stated limitations of a time-invariant imaging model (§8).
 
 **Construction and consumers.** The vector is constructed as a `Nuisance_DLI` under the `selection_user`
 choice of §7.2 (`--emit-selection-user` writes the spec skeleton, `--build` mints the artifact, both CPU only):
-six
-named physical values with a source and a limitation each, validated on their keys and physical domains,
+six named physical values with a source and a limitation each, validated on their keys and physical domains,
 converted to the log10 storage convention, stored as one vector that every biology simulation receives
 unchanged, requiring no estimator, Experiment product, GPU or pool, and recorded as user-selected and fixed. The
 identity of the neural source belongs to the provenance, not to the artifact's name. The artifact is selected
-by a tag of its own, distinct from an estimator's tag, and that selection reaches every consumer, the biology
-generation, the posterior-predictive render and the horizon audit, each of which records the selected
-artifact's identity in its outputs so that a reference run and a sensitivity variant cannot be confused. A value
-outside the detector prior box is refused unless the spec acknowledges it explicitly with a recorded
-justification; the acknowledgement flags extrapolation beyond the tested imaging domain and does not certify
-it, physical validity is enforced, and nothing is clipped. The present values are all inside the box.
+by a tag of its own, distinct from an estimator's tag (`REF` for the vector above, `VAR_MU_R` and `VAR_PB` for
+the variants), and that selection reaches every consumer, the biology generation, the posterior-predictive
+render and the horizon audit, each of which records the selected artifact's identity in its outputs so that a
+reference run and a sensitivity variant cannot be confused. A value outside the detector prior box is refused
+unless the spec acknowledges it explicitly with a recorded justification; the acknowledgement flags
+extrapolation beyond the tested imaging domain and does not certify it, physical validity is enforced, and
+nothing is clipped. The present values are all inside the box.
 
-**Order of the remaining steps.** The direct PSF-width measurement on the recordings; the `selection_user`
-construction; a small predictive check of rendered against experimental clips (temporal behavior, spot width
-and brightness, background, flicker; pixel histograms alone cannot establish temporal or biological realism);
-then the biology run. The vector is frozen after the predictive check is judged adequate, not when the renders
-complete. No new embedding-distance machinery, no further flicker work, no repeat `capacity256` training and no
-constraint of the MAP ascent is a prerequisite; a coordinate is reopened only where its plausible uncertainty
-materially changes the biological conclusion.
+**Order of the remaining steps.** The `REF` artifact is built from the selected column (its source record
+rebuilt without the withdrawn render justification, the original kept). A small set of corrected
+posterior-predictive renders is then made under a reaction-diffusion configuration the user has confirmed, their
+pixel histograms compared and the clips viewed beside the recordings at 50 fps; parameters change, and the
+biology generation starts, only on the user's decision after that inspection. The variants are built and used
+one coordinate at a time. No new embedding-distance
+machinery, no further flicker work, no repeat `capacity256` training and no constraint of the MAP ascent is a
+prerequisite; a coordinate is reopened only where its plausible uncertainty materially changes the biological
+conclusion, and the spot-persistence discrepancy is assessed against the biology posterior before any biological
+claim is made.
 
 ---
 
@@ -1613,8 +1656,9 @@ the median coincide within 0.01 dex.
 development run evaluated (§9.6; the regenerated record's table I, which supersedes the neural rows of the
 2,000-recording head-to-head of §9.6), the direct estimator recovers `sigma_r` with slope 0.90, correlation
 0.962, MAE 0.046 dex and bias −0.011 (−0.023 in the operating subgroup) against a slope of at most 0.10 and an
-MAE of at least 0.180 dex for any neural point estimate of either run; the direct estimator stays the source of
-that value, and its nominal ranges are uncalibrated (65 % coverage at nominal 90 %, §9.6). For `mu_r` the
+MAE of at least 0.180 dex for any neural point estimate of either run; the direct estimator's measurement on the
+recordings is therefore the cross-check that weighs most for that value in §7.6, and its nominal ranges are
+uncalibrated (65 % coverage at nominal 90 %, §9.6). For `mu_r` the
 capacity run's median reaches the direct estimator's accuracy (MAE 0.018 against 0.016 dex, bias −0.001
 against −0.003) and removes the baseline's +0.021 dex offset; in the operating subgroup the capacity median
 has the smaller bias (+0.001 against −0.012) and the direct estimate the smaller MAE (0.017 against 0.019).
@@ -1631,9 +1675,12 @@ from one training run of one configuration; a repeat training of `capacity256` u
 test whether the bleaching collapse repeats, and the 20 s tier, where the bleaching information budget is far
 larger (§9.5), would say whether either estimator's bleaching posterior narrows with duration, and neither is a
 prerequisite for the working vector. Neither estimator is adopted whole by this comparison. The working
-imaging vector of §7.6 takes `mu_r`, `mu_pc`, `sigma_pc` and `lambda_rate` from `capacity256`'s posterior
-medians, `sigma_r` from the direct PSF-width estimator and `prob_photo_bleach` from the baseline's posterior
-median, each with its source and limitation recorded; `capacity256`'s better joint calibration supports
+imaging vector of §7.6 takes `sigma_r`, `mu_pc` and `sigma_pc` from `capacity256`'s posterior medians, the
+neural references (the direct PSF-width measurement on the recordings supports the `sigma_r` value), and departs
+from them on `mu_r` (the direct estimator's value, a working selection on the direct measurement), on
+`prob_photo_bleach` (a rounded working value from the baseline, `capacity256` having lost the
+bleaching information) and on `lambda_rate` (an explicitly chosen approximate nominal value, 5, given weak recovery), each
+with its source and limitation recorded; `capacity256`'s better joint calibration supports
 considering it as a source and does not transfer to that assembled vector. The result concerns the detector
 benchmark; the biology estimator needs its own capacity test (§2).
 

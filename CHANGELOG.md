@@ -5,6 +5,125 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.22 - 2026-09-28
+
+The posterior-predictive video and the horizon audit label their renders as the training data are labeled, a
+render's reaction-diffusion block can be a declared configuration, and the working imaging vector is recorded
+without the render comparisons that preceded this fix. The DLI stage's labeling moves onto the shared path with
+its output unchanged. No estimator, estimate, prior or production default changes.
+
+### Fixed
+
+- The posterior-predictive video (`posterior_predictive_video_runner.py`) and the horizon audit
+  (`horizon_audit_runner.py`) drew the bare labeling law at probe occupancy 1 since 0.1.1. The DLI stage's
+  occupancy default had been removed in 0.1.4, so their renders did not carry the training data's observation
+  model: MET-FAB about 81 % of subunits visible against the declared 12.5 %, MET-INLB 50 % against 25 %. Both
+  now resolve and draw the labeling through the production path (below), accept the DLI stage's `--occupancy`
+  override, and record the labeling row, the applied occupancy and its source in every clip or generated file.
+  No horizon-audit output existed.
+- Posterior-predictive video:
+  - the detector's drawn reaction-diffusion nuisance is seeded from `--seed`, as the RDS stage seeds its
+    theta draw;
+  - the comparison figure lists all eleven imaging values, including the five camera values, with
+    out-of-box marks;
+  - the recording is read through the layout guard of the other readers (`experiment_support.read_recording`);
+  - the biology imaging is read as the biology DLI stage reads it: the same loader and tag resolution, the key
+    order check, and the fixed-vector accessor, and the artifact's identity is recorded in the clip;
+  - a render refuses, before any work, to write over an existing clip, figure or trajectory, and
+    `simulate_and_render` refuses an existing trajectory instead of deleting it. The stem carries neither the
+    nuisance tag nor the declared configuration, so another attempt or a variant needs its own `--run-label`;
+  - the comparison figure names the synthetic source in its title and synthetic panel with the clip file's
+    `synth_label`, and names a MAP selection only when a MAP was read. It had named a MAP for every render
+    without fixed imaging.
+
+### Added
+
+- `labeling.LabelingPlan`, `resolve_labeling`, `labeling_rng`, `label_subunits`, `label_trajectory`: the one
+  labeling path of the DLI stage of both workflows, the posterior-predictive video and the horizon audit.
+- `--declared-rds TOML` and `--set-rds KEY=VALUE` for both posterior-predictive workflows. A declared
+  reaction-diffusion configuration states each of the eleven values with its basis and source; on the biology
+  path it replaces the MAP, and no MAP is read. Values outside the biology prior box are flagged, never
+  clipped. The file's path, SHA-256 and text are recorded in every clip, with each value's origin.
+  `simulate_and_render` is the one clip chain; the stem token is `Declared_RDS`.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB.toml`: the
+  MET-FAB configuration awaiting the user's confirmation, with the receptor total as the only per-recording
+  value.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` with its note. It
+  chooses a receptor total that approximates a recording's opening spot density through the production chain;
+  it is a rendering setting, not an estimate. Every failure path is explicit (no detections, no visible host,
+  non-finite update, detector saturation, count ceiling, iteration budget) and carries no count. Every render,
+  the first and the check renders included, passes one count test before it is made: none exceeds
+  `--max-count`, and none lies outside the prior box of the receptor total unless `--allow-outside-prior`
+  records the user's decision. Without that decision the match stops as `user_decision_outside_prior`.
+  Results go to attempt folders and are never overwritten.
+- Labeling audit level 3b: the declared occupancy through the production labeling path. Level 3 keeps testing
+  the bare law at occupancy 1.
+- Tests: `tests/test_labeling_compliance.py` and `tests/test_posterior_predictive_video.py`. They cover:
+  - bit-identity of the shared path with the DLI stage's former inline block;
+  - identical plans from the three command lines;
+  - the task-0 stream convention;
+  - the absence of direct dye draws outside six named diagnostics;
+  - the posterior-predictive engine's refusal of existing outputs, and its figure labels;
+  - every path of the count match, including the count ceiling from the first render and the user's
+    decision outside the prior box.
+
+### Changed
+
+- `simulation_dli_runner.py` labels through `resolve_labeling` and `label_trajectory`; the RNG construction and
+  the draws are unchanged.
+- `experiment_support.read_cell_chunks` reads through `read_recording`, with identical behavior.
+- The direct PSF-width and flicker-mismatch harnesses state at the call site that their scenes use the bare law
+  at occupancy 1 by design (comment only).
+- Code fingerprints change from this version on. `experiment_support.py` is an implementation file
+  (`provenance.IMPLEMENTATION_FILES`) and `labeling.py` a direct-estimator file
+  (`provenance.DIRECT_ESTIMATOR_FILES`). Both hashes are compared within a run, at startup against at write.
+  The implementation hash is also compared across the shards of one Evaluation or Experiment computation
+  (shards whose code records differ are not merged) and against a cached MapEstimate pool of the
+  `Nuisance_DLI` construction (a pool cached under earlier code is stale and is recomputed; the
+  PosteriorSample pool and the `selection_user` build are unaffected). A completed product is not invalidated
+  by a change of the installed code: its manifest keeps the hash of the code that produced it.
+
+### Retained
+
+- The production seed convention. numpy's `SeedSequence` pads missing entropy words with zeros, so the DLI
+  stage's labeling stream for task 0, simulation 0 (`[seed, 0, 0]`) coincides with the bare-seed stream that
+  seeds placement and render. The separation of those streams is not established; a test pins the convention.
+  ReaDDy's dynamics stay OS-seeded.
+
+### Documentation
+
+- `DETECTOR_WORKFLOW.md` §7.6 is structured around the source hierarchy:
+  - the neural reference is always recorded;
+  - direct estimators and raw-domain diagnostics are cross-checks and fallbacks;
+  - the selected simulation value is a separate column. It retains the selected point estimate as produced,
+    or a documented rounded nominal where the parameter is poorly constrained.
+- Selected vector:
+  - `mu_r` 1.585, a working selection on the direct measurement;
+  - `sigma_r` 0.22, supported by the direct 0.21;
+  - `mu_pc` 139;
+  - `sigma_pc` 0.64;
+  - `prob_photo_bleach` 0.03, with the variant 0.05;
+  - `lambda_rate` 5, an explicitly chosen approximate nominal value given weak recovery and inconclusive
+    predictive comparisons.
+- The render comparisons of 2026-09-25 (occupancy 1, prior-center reaction-diffusion settings, imaging passed
+  as numbers) are withdrawn from every justification. They are kept, unchanged and labeled, as *Diagnostic
+  renders using occupancy 1 and prior-center reaction-diffusion settings. Not validation of the selected
+  production configuration.*
+- The raw-domain decline is distinguished from the ideal emitted fluorescence of identical independent dyes;
+  its reading as a bleaching proxy is to be checked again under the corrected rendering.
+- The persistence discrepancy is re-measured on the corrected renders. The next steps are corrected renders
+  under a user-confirmed configuration, then inspection, then the user's decision.
+- The PSF-width, photobleaching and flicker notes follow the same hierarchy and withdrawals. The
+  posterior-predictive note documents the production observation layer, the declared configuration and the
+  clip's provenance fields. The labeling-audit note folds its amendment into the body. The viewer notebook
+  names each clip's synthetic source.
+- Data bank:
+  - the `REF` `Nuisance_DLI` is rebuilt with the same vector and corrected source strings; the original is kept
+    in `..._REF_Nuisance_DLI_Superseded_20260925/`;
+  - the occupancy-1 renders are moved, unchanged, into
+    `..._DETECTOR_FAB_2S_50FPS_Posterior_Predictive_Video/Diagnostic_Occupancy_1_Prior_Center_RDS/` with a
+    README.
+
 ## 0.1.21 - 2026-09-25
 
 The working imaging vector can be minted as a `Nuisance_DLI` and selected by every consumer, and the direct

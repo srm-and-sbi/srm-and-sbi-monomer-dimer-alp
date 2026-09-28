@@ -11,7 +11,10 @@ simulation or an inference.
   `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.py` (detector
   workflow) or `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.py`
   (biology workflow). A pure viewer — it needs only `numpy`, `matplotlib`, and `ipywidgets`; no project
-  package and no `MACHINE_PROFILE`.
+  package and no `MACHINE_PROFILE`. The check's documentation, the full list of its files (the engine, both
+  entry points, the declared configuration `..._Posterior_Predictive_Video_Declared_RDS_FAB.toml`, the
+  receptor-total script `..._Posterior_Predictive_Video_Count_Match.py` and their notes) and the order of a
+  check are in `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`.
 - **`Video_Scrubber.ipynb`** — frame-by-frame viewer and player for DLI video **sets**. Loads a
   generated video set through the project package, so it needs the package importable and a
   `MACHINE_PROFILE` pointing at the machine that holds the data.

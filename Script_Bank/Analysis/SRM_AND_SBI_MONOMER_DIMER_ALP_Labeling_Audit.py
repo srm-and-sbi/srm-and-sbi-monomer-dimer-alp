@@ -12,9 +12,17 @@ implementation realizes the labeling model it documents (`labeling`,
                         subunit exactly once per frame, agrees with the particles observable
                         (host present, particle type matches, multiplicity matches), and shows the
                         particle-id churn the design relies on (a subunit visits several ids).
-    Level 3 (draw)      Repeated static draws on that lineage reproduce the visible fractions
-                        and, for the MET-INLB law, the two-thirds one-dye share among visible
-                        dimers -- the arithmetic the documents derive from the draw.
+    Level 3 (draw)      Repeated static draws of the BARE labeling law (probe occupancy 1) on
+                        that lineage reproduce the law's visible fractions and, for the MET-INLB
+                        law, the two-thirds one-dye share among visible dimers -- the arithmetic
+                        the documents derive from the law itself.
+    Level 3b (occupancy) Repeated draws through the production labeling path
+                        (`labeling.resolve_labeling` + `labeling.label_subunits`, the call every
+                        renderer of simulated trajectories makes) at each condition's DECLARED
+                        occupancy reproduce the visibility chain of the training data: visible
+                        monomers a, visible dimers 1 - (1 - a)^2, both-labeled share a / (2 - a),
+                        dyes per subunit p_occ x E[dye], and the recorded occupancy equals the
+                        declared one. Level 3 is not changed by it: it tests the law alone.
     Level 4 (render)    Static scenes rendered through the production renderer: a zero-dye
                         subunit contributes nothing above background; a two-dye spot carries
                         twice the photons of a one-dye spot (in expectation); and at a
@@ -55,7 +63,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (  # noqa: E402
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
-    extract_trajectory_poses, monomer_ranks,
+    extract_trajectory_poses, monomer_ranks, rank_to_species,
 )
 
 assert os.path.abspath(lab.__file__).startswith(REPO_ROOT), (
@@ -156,13 +164,14 @@ def reactive_lineage(workdir: str) -> dict:
     _, recs = tray.read_observable_reactions()
     n_records = int(sum(len(r) for r in recs))
     mono_ranks = monomer_ranks(tray)          # every single-subunit type (all monomer modes)
+    species_of_rank = rank_to_species(tray)   # particle-type rank -> molecular species (Level 3b)
     del tray, smut, stem
     return dict(
         n_subunits=lineage.n_subunits, n_particle_ids=int(lineage.soul_ids.shape[0]),
         n_frames=lineage.n_frames, n_records=n_records,
         cover_consistent=bool(consistent), host_positions_finite=bool(finite),
         max_ids_per_subunit=int(visits.max()), mean_ids_per_subunit=float(visits.mean()),
-        monomer_ranks=mono_ranks, theta_center=theta.tolist(),
+        monomer_ranks=mono_ranks, species_of_rank=species_of_rank, theta_center=theta.tolist(),
         _lineage=lineage,
     )
 
@@ -193,6 +202,49 @@ def draws(lineage, monomer_ranks_list: list) -> dict:
             visible_dimer_emp=float(dim_vis), visible_dimer=law.visible_fraction(2),
             two_labeled_share_emp=float(two_share), two_labeled_share=float(two_share_expected),
             dyes_per_subunit_emp=float(dyes_per_subunit), dyes_per_subunit=law.mean,
+        )
+    return out
+
+
+# ----------------------------------------------------------------------------------------------
+# Level 3b: the declared occupancy through the production labeling path
+# ----------------------------------------------------------------------------------------------
+
+def occupancy_draws(lineage, monomer_ranks_list: list, species_of_rank: dict) -> dict:
+    """Level 3b: the declared occupancy composed with each condition's law, drawn through the one
+    labeling call every renderer of simulated trajectories makes (the DLI stage, the
+    posterior-predictive video, the horizon audit). Level 3 keeps the bare law (occupancy 1)."""
+    rng = np.random.default_rng(SEED + 2)
+    col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
+    out = {}
+    for condition in lab.LABELING_CONDITIONS:
+        plan = lab.resolve_labeling(condition)                  # declared (INLB) / derived (FAB)
+        rows = np.stack([
+            lab.label_subunits(plan, lineage.host_index[0], lineage.host_rank[0], species_of_rank,
+                               list(monomer_ranks_list), rng)[1]
+            for _ in range(N_DRAWS)])
+        a_mono, a_dim = plan.visible_per_subunit                 # (monomer, dimer) subunit visibility
+        n_mono, n_dim = rows[0, col["monomers_0"]], rows[0, col["dimers_0"]]
+        out[condition] = dict(
+            law=plan.law_name, occupancy=plan.occupancy, occupancy_source=plan.occupancy_source,
+            occupancy_recorded=[float(rows[:, col["occupancy_monomer"]].max()),
+                                float(rows[:, col["occupancy_dimer"]].max())],
+            occupancy_recorded_ok=bool(
+                np.all(rows[:, col["occupancy_monomer"]] == plan.occupancy_pair[0])
+                and np.all(rows[:, col["occupancy_dimer"]] == plan.occupancy_pair[1])),
+            monomers_0=int(n_mono), dimers_0=int(n_dim),
+            visible_monomer_emp=float(rows[:, col["monomers_visible_0"]].sum()
+                                      / max(rows[:, col["monomers_0"]].sum(), 1)),
+            visible_monomer=float(a_mono),
+            visible_dimer_emp=float(rows[:, col["dimers_visible_0"]].sum()
+                                    / max(rows[:, col["dimers_0"]].sum(), 1)),
+            visible_dimer=float(1 - (1 - a_dim) ** 2),
+            both_labeled_share_emp=float(rows[:, col["dimers_two_labeled_0"]].sum()
+                                         / max(rows[:, col["dimers_visible_0"]].sum(), 1)),
+            both_labeled_share=float(a_dim / (2 - a_dim)),
+            dyes_per_subunit_emp=float(rows[:, col["n_dyes"]].sum() / (N_DRAWS * lineage.n_subunits)),
+            dyes_per_subunit=float((n_mono * plan.occupancy_pair[0] + 2 * n_dim * plan.occupancy_pair[1])
+                                   * plan.law.mean / lineage.n_subunits),
         )
     return out
 
@@ -265,7 +317,7 @@ def renders() -> dict:
 # Report
 # ----------------------------------------------------------------------------------------------
 
-def write_report(law_out, lin, drw, ren, verdicts) -> None:
+def write_report(law_out, lin, drw, occ, ren, verdicts) -> None:
     commit = subprocess.run(["git", "-C", REPO_ROOT, "rev-parse", "--short", "HEAD"],
                             capture_output=True, text=True).stdout.strip()
     L = []
@@ -294,9 +346,18 @@ def write_report(law_out, lin, drw, ren, verdicts) -> None:
         "needed: ReaDDy mints a new id at every reaction, conversions included.")
     add("")
     add(f"**Level 3 (draw).** {N_DRAWS} independent labelings of that lineage under each condition's "
-        f"baseline law; the pooled visible fractions must match the law within {TOL_FRACTION:.0%} "
-        f"absolute and the two-labeled share among visible dimers within {TOL_SHARE:.0%} absolute of "
-        "(1 - P0)^2 / (1 - P0^2) (one third for MET-INLB).")
+        f"baseline law alone, at probe occupancy 1; the pooled visible fractions must match the law within "
+        f"{TOL_FRACTION:.0%} absolute and the two-labeled share among visible dimers within {TOL_SHARE:.0%} "
+        "absolute of (1 - P0)^2 / (1 - P0^2) (one third for MET-INLB).")
+    add("")
+    add(f"**Level 3b (declared occupancy).** {N_DRAWS} labelings per condition through the production "
+        "labeling path (`labeling.resolve_labeling`, `labeling.label_subunits`: the call of the DLI stage, "
+        "the posterior-predictive video and the horizon audit) at the condition's declared (MET-INLB) or "
+        "derived (MET-FAB) occupancy; with the per-subunit visibility a = p_occ x P(dye >= 1), the visible "
+        f"monomer fraction must match a and the visible dimer fraction 1 - (1 - a)^2 within {TOL_FRACTION:.0%} "
+        f"absolute, the share of visible dimers with both subunits labeled a / (2 - a) within {TOL_SHARE:.0%} "
+        f"absolute, the dyes per subunit p_occ x E[dye] within {TOL_FRACTION:.0%} absolute, and every "
+        "recorded occupancy must equal the applied one exactly.")
     add("")
     add(f"**Level 4 (render).** Static scenes of {T_RENDER} frames at the imaging prior center with "
         "bleaching off, through the production renderer, read out by 9x9 aperture photometry at the "
@@ -326,6 +387,14 @@ def write_report(law_out, lin, drw, ren, verdicts) -> None:
             f"{verdicts['fractions_' + cond]} |")
         add(f"| 3 | {cond} two-labeled share among visible dimers | abs err < {TOL_SHARE:.0%} | "
             f"{d['two_labeled_share_emp']:.3f}/{d['two_labeled_share']:.3f} | {verdicts['share_' + cond]} |")
+    for cond, d in occ.items():
+        add(f"| 3b | {cond} visibility at occupancy {d['occupancy']:.4g} ({d['occupancy_source']}, {d['law']}) | "
+            f"abs err < {TOL_FRACTION:.0%} | monomer {d['visible_monomer_emp']:.4f}/{d['visible_monomer']:.4f}, "
+            f"dimer {d['visible_dimer_emp']:.4f}/{d['visible_dimer']:.4f}, dyes per subunit "
+            f"{d['dyes_per_subunit_emp']:.4f}/{d['dyes_per_subunit']:.4f} | {verdicts['occupancy_fractions_' + cond]} |")
+        add(f"| 3b | {cond} both-labeled share among visible dimers; recorded occupancy | abs err < "
+            f"{TOL_SHARE:.0%}; exact | {d['both_labeled_share_emp']:.4f}/{d['both_labeled_share']:.4f}; recorded "
+            f"{d['occupancy_recorded']} | {verdicts['occupancy_share_' + cond]} |")
     add(f"| 4 | zero-dye subunit renders nothing | within {NULL_SIGMAS:g} SE of 0 | "
         f"{ren['zero_dye_mean_adu']:+.0f} +/- {ren['zero_dye_se_adu']:.0f} ADU (one-dye monomer "
         f"{ren['one_dye_monomer_adu']:.0f}) | {verdicts['zero_dye']} |")
@@ -374,6 +443,8 @@ def main() -> None:
     lineage = lin.pop("_lineage")
     print("Level 3: repeated draws ...")
     drw = draws(lineage, lin["monomer_ranks"])
+    print("Level 3b: draws at the declared occupancy through the production labeling path ...")
+    occ = occupancy_draws(lineage, lin["monomer_ranks"], lin["species_of_rank"])
     print("Level 4: renders ...")
     ren = renders()
 
@@ -387,6 +458,14 @@ def main() -> None:
             abs(d["visible_monomer_emp"] - d["visible_monomer"]) < TOL_FRACTION
             and abs(d["visible_dimer_emp"] - d["visible_dimer"]) < TOL_FRACTION)
         verdicts["share_" + cond] = passed(abs(d["two_labeled_share_emp"] - d["two_labeled_share"]) < TOL_SHARE)
+    for cond, d in occ.items():
+        verdicts["occupancy_fractions_" + cond] = passed(
+            abs(d["visible_monomer_emp"] - d["visible_monomer"]) < TOL_FRACTION
+            and abs(d["visible_dimer_emp"] - d["visible_dimer"]) < TOL_FRACTION
+            and abs(d["dyes_per_subunit_emp"] - d["dyes_per_subunit"]) < TOL_FRACTION)
+        verdicts["occupancy_share_" + cond] = passed(
+            abs(d["both_labeled_share_emp"] - d["both_labeled_share"]) < TOL_SHARE
+            and d["occupancy_recorded_ok"])
     verdicts["zero_dye"] = passed(ren["zero_dye_ok"])
     verdicts["ratio"] = passed(RATIO_BAND[0] <= ren["two_dye_ratio"] <= RATIO_BAND[1])
     verdicts["dissociation"] = passed(ren["dissociation_site_after_ok"] and ren["invisible_daughter_ok"]
@@ -396,9 +475,9 @@ def main() -> None:
     verdicts["overall"] = passed(all(v == "PASS" for v in verdicts.values()))
 
     with open(os.path.join(OUT_DIR, "audit_summary.json"), "w") as handle:
-        json.dump(dict(laws=law_out, lineage=lin, draws=drw, renders=ren, verdicts=verdicts),
-                  handle, indent=1, default=str)
-    write_report(law_out, lin, drw, ren, verdicts)
+        json.dump(dict(laws=law_out, lineage=lin, draws=drw, occupancy_draws=occ, renders=ren,
+                       verdicts=verdicts), handle, indent=1, default=str)
+    write_report(law_out, lin, drw, occ, ren, verdicts)
     print("verdicts:", verdicts)
     print("report:", REPORT)
 

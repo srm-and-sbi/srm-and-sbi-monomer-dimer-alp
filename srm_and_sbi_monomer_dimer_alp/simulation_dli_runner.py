@@ -68,18 +68,13 @@ from srm_and_sbi_monomer_dimer_alp.io import (
     theta_set_schema, theta_set_status, write_theta_set,
 )
 from srm_and_sbi_monomer_dimer_alp.labeling import (
-    occupancy_by_species,
     LABELING_CONDITIONS,
     LABELING_SET_COLUMNS,
-    draw_dye_counts,
-    labeling_summary,
-    occupancy_per_subunit,
-    parse_occupancy,
-    resolve_labeling_law,
+    label_trajectory,
+    labeling_rng,
+    resolve_labeling,
 )
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
-    occupancy_of,
-    occupancy_source_of,
     PARAMETER_RAW_FIND,
     PARAMETERIZATION,
     PARAMETERIZATION_RAW,
@@ -88,8 +83,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
-    collapse_species_axis, extract_subunit_lineage, extract_trajectory_poses, monomer_ranks,
-    rank_to_species,
+    collapse_species_axis, extract_subunit_lineage, extract_trajectory_poses,
 )
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
@@ -176,18 +170,16 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     div = "=" * 72
     timing_label = timing.label
 
-    # ---- Labeling law: the DLI-side condition axis. Resolved once per run, applied per
-    # simulation as a static per-subunit dye draw (labeling.draw_dye_counts).
+    # ---- Labeling: the DLI-side condition axis. Resolved once per run, applied per simulation
+    # as a static per-subunit dye draw. The law is the condition's baseline and the occupancy its
+    # DECLARED (MET-INLB) or DERIVED (MET-FAB) probability from the parameterization's condition
+    # settings, unless --labeling-law / --occupancy override them for a sensitivity run. The same
+    # resolution and draw serve every renderer of simulated trajectories (labeling.resolve_labeling,
+    # labeling.label_trajectory), so a check render carries the training data's observation model.
     condition = args.condition
-    law_name, law = resolve_labeling_law(condition, args.labeling_law)
-    # Occupancy: the condition's DECLARED (MET-INLB) or DERIVED (MET-FAB) probability from the
-    # parameterization's condition settings, unless --occupancy overrides it for a sensitivity run.
-    if args.occupancy is None:
-        occupancy = occupancy_of(condition)
-        occupancy_source = occupancy_source_of(condition)
-    else:
-        occupancy = parse_occupancy(args.occupancy)
-        occupancy_source = "override"
+    labeling_plan = resolve_labeling(condition, args.labeling_law, args.occupancy)
+    law_name, law = labeling_plan.law_name, labeling_plan.law
+    occupancy, occupancy_source = labeling_plan.occupancy, labeling_plan.occupancy_source
 
     # ---- Imaging block setup (the six photophysics/imaging + five SCOPE camera).
     # Both share the SCOPE box (drawn from det.scope_*_bound) and the six imaging keys
@@ -270,7 +262,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  condition               : {condition}   ({CONDITION_DISPLAY[condition]})")
     print(f"  labeling law            : {law_name} = {law.describe()}   "
           f"(per-subunit dye count, drawn once per recording; fixed, never inferred)")
-    occ_pair = occupancy_by_species(occupancy, rds_cfg.molecular_species_names)   # (monomer, dimer)
+    occ_pair = labeling_plan.occupancy_pair   # (monomer, dimer), rds_cfg.molecular_species_names order
     a_mono, a_dim = (p * law.visible_probability for p in occ_pair)
     print(f"  occupancy               : {occupancy}   ({occupancy_source}; probe-occupancy probability per "
           f"subunit, by molecular species {rds_cfg.molecular_species_names} = "
@@ -632,22 +624,14 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             soul_poses = collapse_species_axis(tray_poses)
 
             # Static labeling draw: one dye count per SUBUNIT, once per recording, from the
-            # condition's law composed with the probe occupancy (per initial species). The
-            # lineage carries each subunit -- and so its dyes -- through the reactions; only
-            # dyes render. Seeded per (seed, task, sim) when --seed is given so a task index
-            # draws the same labeling under --task-id fan-out; None stays non-deterministic.
-            # Ranks are PARTICLE TYPES (species x mode); occupancy and the monomer/dimer
-            # bookkeeping act on the MOLECULAR SPECIES, so map through rank_to_species.
-            species_of_rank = rank_to_species(tray)
-            initial_species = [species_of_rank[int(rank)] for rank in lineage.host_rank[0]]
-            labeling_rng = np.random.default_rng(
-                None if args.seed is None else [args.seed, task_alias, sim])
-            dye_counts = draw_dye_counts(
-                law, lineage.n_subunits, labeling_rng,
-                occupancy=occupancy_per_subunit(occupancy, initial_species))
-            labeling_rows[sim] = labeling_summary(
-                dye_counts, lineage.host_index[0], lineage.host_rank[0], monomer_ranks(tray),
-                occupancy_by_species_values=occ_pair)
+            # condition's law composed with the probe occupancy (per initial molecular species;
+            # ranks are PARTICLE TYPES, species x mode, mapped through rank_to_species inside
+            # label_trajectory). The lineage carries each subunit -- and so its dyes -- through
+            # the reactions; only dyes render. Seeded per (seed, task, sim) when --seed is given
+            # so a task index draws the same labeling under --task-id fan-out; None stays
+            # non-deterministic.
+            dye_counts, labeling_rows[sim] = label_trajectory(
+                labeling_plan, tray, lineage, labeling_rng(args.seed, task_alias, sim))
 
             # Assemble the full eleven-key imaging vector (det.DETECTOR_IMAGING order): the six
             # photophysics/imaging followed by the five SCOPE camera-nuisance draws.

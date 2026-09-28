@@ -1707,7 +1707,11 @@ Useful diagnostics to compute when analyzing a trained posterior:
 - Posterior-predictive check — implemented as the `Posterior_Predictive_Video`
   analysis (biology and detector Analysis shims over
   `posterior_predictive_video_runner`): render a synthetic video at the
-  parameters inferred from one real recording and compare the two side by side.
+  parameters inferred from one real recording, or at a declared reaction-diffusion
+  configuration, and compare the two side by side. The files of the check (the
+  entry points, the declared MET-FAB configuration, the receptor-total script and
+  their notes) are listed in
+  `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`.
 
 ---
 

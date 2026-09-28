@@ -47,9 +47,14 @@ during acquisition), which labels a sparse subset of receptors by design, so ful
 is not a defensible baseline. The values live on the condition settings of
 ``parameterization.py`` (``ConditionSetting``; MET-INLB 0.5 declared, MET-FAB 0.155 derived
 from a declared Fab/InlB visibility ratio of 0.5 and the InlB anchor; both provisional until
-the collaborators answer the questions of 2026-09-11); the DLI stage reads them through
-``parameterization.occupancy_of`` and ``--occupancy`` overrides them for sensitivity runs.
-The effective visibility per subunit is ``a = p_occ * P(kappa >= 1)`` (INLB 0.25, FAB 0.125),
+the collaborators answer the questions of 2026-09-11). Every renderer of simulated
+trajectories -- the DLI stage of both workflows, the posterior-predictive video and the horizon
+audit -- resolves them through ``resolve_labeling`` (``parameterization.occupancy_of``;
+``--occupancy`` overrides them for a sensitivity run) and labels each trajectory through
+``label_trajectory``, so no renderer can apply a law, an occupancy or a species mapping other
+than the training data's. Only the diagnostics that test the bare law on purpose (the labeling
+audit's law and draw levels, the direct estimators' synthetic scenes) call ``draw_dye_counts``
+directly, and each states its occupancy. The effective visibility per subunit is ``a = p_occ * P(kappa >= 1)`` (INLB 0.25, FAB 0.125),
 and the share of visible dimers with BOTH subunits labeled is ``a / (2 - a)`` when the two subunits
 are occupied independently -- what brightness can report about stoichiometry.
 
@@ -343,3 +348,128 @@ def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank
         float(occupancy_by_species_values[0]),
         float(occupancy_by_species_values[1]),
     ], dtype=np.float64)
+
+
+# ---- The one labeling path of every renderer of simulated trajectories ---------------------
+# The DLI stage of both workflows, the posterior-predictive video and the horizon audit resolve
+# a run's labeling with `resolve_labeling` and label each trajectory with `label_trajectory`, so
+# the renders a check compares against a recording carry the observation model of the training
+# data: the condition's law, its declared (or derived) probe occupancy applied by initial
+# molecular species, and the same record. An override (`--labeling-law`, `--occupancy`) enters
+# through the same call and is recorded as such.
+
+@dataclass(frozen=True)
+class LabelingPlan:
+    """The resolved static labeling of one run.
+
+    Attributes:
+        condition: stored condition token (``FAB`` or ``INLB``).
+        law_name, law: the resolved labeling law (``resolve_labeling_law``).
+        occupancy: the probe occupancy as applied: one probability, or a mapping by
+            molecular species.
+        occupancy_source: ``declared`` or ``derived`` (the condition setting), or
+            ``override`` (``--occupancy``).
+        species_names: the molecular species, in configuration order (monomer, dimer).
+        occupancy_pair: the occupancy applied to each molecular species, in
+            ``species_names`` order (the ``occupancy_monomer`` / ``occupancy_dimer`` columns).
+    """
+    condition: str
+    law_name: str
+    law: LabelingLaw
+    occupancy: Occupancy
+    occupancy_source: str
+    species_names: Tuple[str, ...]
+    occupancy_pair: Tuple[float, ...]
+
+    @property
+    def visible_per_subunit(self) -> Tuple[float, ...]:
+        """Per-subunit visibility ``a = p_occ * P(kappa >= 1)`` of each molecular species."""
+        return tuple(p * self.law.visible_probability for p in self.occupancy_pair)
+
+    def describe(self) -> str:
+        a = ", ".join(f"{s} {v:.4f}" for s, v in zip(self.species_names, self.visible_per_subunit))
+        return (f"{self.condition} {self.law_name} = {self.law.describe()}, occupancy "
+                f"{self.occupancy} ({self.occupancy_source}); visible per subunit {a}")
+
+    def record(self) -> dict:
+        """JSON-ready provenance of the plan, for the files a render writes."""
+        occupancy = (dict(self.occupancy) if isinstance(self.occupancy, dict)
+                     else float(self.occupancy))
+        return {"condition": self.condition, "law_name": self.law_name,
+                "law": {"family": self.law.family, "mean": self.law.mean, "shape": self.law.shape,
+                        "description": self.law.describe()},
+                "occupancy": occupancy, "occupancy_source": self.occupancy_source,
+                "occupancy_by_species": dict(zip(self.species_names, self.occupancy_pair)),
+                "visible_per_subunit": dict(zip(self.species_names, self.visible_per_subunit))}
+
+
+def resolve_labeling(condition: str, law_spec: Optional[str] = None,
+                     occupancy_spec: Optional[str] = None) -> LabelingPlan:
+    """Resolve a run's static labeling, exactly as the DLI stage does.
+
+    Args:
+        condition: stored condition token (``FAB`` or ``INLB``).
+        law_spec: ``--labeling-law``: None for the condition's baseline law, else a registry key
+            or ``family:mean[:shape]`` (``resolve_labeling_law``).
+        occupancy_spec: ``--occupancy``: None for the condition's declared (MET-INLB) or derived
+            (MET-FAB) occupancy from ``parameterization.ConditionSetting``, else an override in the
+            ``parse_occupancy`` grammar, recorded as ``override``.
+    """
+    # Local import: parameterization imports this module lazily, for the laws' dye probabilities.
+    from .parameterization import PARAMETERS, occupancy_of, occupancy_source_of
+    law_name, law = resolve_labeling_law(condition, law_spec)
+    if occupancy_spec is None:
+        occupancy: Occupancy = occupancy_of(condition)
+        source = occupancy_source_of(condition)
+    else:
+        occupancy = parse_occupancy(str(occupancy_spec))
+        source = "override"
+    species_names = tuple(PARAMETERS.simulation.rds.molecular_species_names)
+    return LabelingPlan(condition, law_name, law, occupancy, source, species_names,
+                        occupancy_by_species(occupancy, species_names))
+
+
+def labeling_rng(seed: Optional[int], task: int = 0, sim: int = 0) -> np.random.Generator:
+    """The labeling stream of simulation ``sim`` of task ``task``, the DLI stage's convention:
+    ``default_rng([seed, task, sim])`` when a seed is given, so a task index draws the same labeling
+    under ``--task-id`` fan-out; None stays non-deterministic. A single render uses
+    ``task = sim = 0``.
+
+    numpy's ``SeedSequence`` fills missing entropy words with zeros, so ``[seed, 0, 0]`` yields the
+    same stream as the bare ``seed``: for task 0, simulation 0 the labeling stream coincides with
+    the placement and render streams, which are seeded with the bare seed. That is the production
+    convention, retained here unchanged; the independence of those streams is not established. It
+    matters only for seeded runs (production generation is seedless), and ReaDDy's dynamics stay
+    OS-seeded, so a seed does not reproduce a trajectory."""
+    return np.random.default_rng(None if seed is None else [seed, task, sim])
+
+
+def label_subunits(plan: LabelingPlan, host_index_0: np.ndarray, host_rank_0: np.ndarray,
+                   species_of_rank: Dict[int, str], monomer_rank_list: Sequence[int],
+                   rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray]:
+    """Draw the static dye counts of every subunit under ``plan`` and summarize them.
+
+    The occupancy applies by each subunit's MOLECULAR species at frame 0 (``species_of_rank``
+    maps a particle-type rank to its species; mobility modes are not a selection axis).
+
+    Returns:
+        ``(dye_counts, row)``: the ``int64`` dye count per subunit and the
+        ``LABELING_SET_COLUMNS`` row, with the applied occupancy recorded.
+    """
+    host_rank_0 = np.asarray(host_rank_0)
+    initial_species = [species_of_rank[int(rank)] for rank in host_rank_0]
+    dye_counts = draw_dye_counts(plan.law, host_rank_0.shape[0], rng,
+                                 occupancy=occupancy_per_subunit(plan.occupancy, initial_species))
+    row = labeling_summary(dye_counts, np.asarray(host_index_0), host_rank_0, monomer_rank_list,
+                           occupancy_by_species_values=plan.occupancy_pair)
+    return dye_counts, row
+
+
+def label_trajectory(plan: LabelingPlan, tray, lineage, rng: np.random.Generator
+                     ) -> Tuple[np.ndarray, np.ndarray]:
+    """``label_subunits`` for one simulated trajectory: ``tray`` is the ``readdy.Trajectory`` and
+    ``lineage`` its ``SubunitLineage`` (``simulation_rds_support.extract_subunit_lineage``)."""
+    # Local import: keeps this module free of ReaDDy at import time.
+    from .simulation_rds_support import monomer_ranks, rank_to_species
+    return label_subunits(plan, lineage.host_index[0], lineage.host_rank[0],
+                          rank_to_species(tray), monomer_ranks(tray), rng)
