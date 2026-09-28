@@ -1,11 +1,13 @@
 # Posterior-predictive video — usage and interpretation
 
-Authoritative companion for both workflows' posterior-predictive video analyses and its viewer
-notebook `notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb`. The
-script renders a synthetic video from the MAP imaging estimate of one experimental recording and
-persists it beside a static comparison figure; the notebook views the persisted clip. This
-note explains how to run the script and how to read its outputs, so the check can be used
-and understood without reverse-engineering the code.
+Authoritative companion for both workflows' posterior-predictive video analyses and their viewer
+notebook `notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb`. One
+engine renders a synthetic video beside one experimental recording and persists both in a clip, with
+a static comparison figure; the synthetic video's motion comes from a declared reaction-diffusion
+configuration or from the recording's MAP estimate (biology), or its imaging from the recording's
+MAP imaging estimate (detector). The notebook views the persisted clip. This note explains how to
+run the check and how to read its outputs, so it can be used and understood without
+reverse-engineering the code.
 
 ## The files of the posterior-predictive video check
 
@@ -19,16 +21,16 @@ beside this note in `Script_Bank/Analysis/`, except the engine module, the viewe
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.py` | detector entry point (thin shim) | detector renders |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md` | this note: how to run and read the check (authoritative for both workflows and the notebook) | reading |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.md` | the detector shim's pointer to this note | reading |
-| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB.toml` | the declared reaction-diffusion configuration for the MET-FAB check renders: each of the eleven values with its basis and source, and the receptor total per recording. It is an input of this analysis, specific to the MET-FAB recordings compared, confirmed by the user before rendering; it is not a generic model setting (section *A declared reaction-diffusion configuration*) | MET-FAB renders at a declared configuration (`--declared-rds`) |
-| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` | chooses each recording's receptor total for the declared configuration: the rendering setting that approximates the recording's opening spot density | filling the configuration's `per_cell` table |
+| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB.toml` | the declared reaction-diffusion configuration for the MET-FAB check renders: each of the eleven values with its basis and source, the receptor total one declared value for every recording. It is an input of this analysis, specific to the MET-FAB recordings compared, confirmed by the user before rendering; it is not a generic model setting (section *A declared reaction-diffusion configuration*) | MET-FAB renders at a declared configuration (`--declared-rds`) |
+| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` | optional: chooses a recording's receptor total so that a render approximates the recording's opening spot density (a density-matched render); the visual check does not use it, since its receptor total is declared | only for a density-matched render |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.md` | that script's method, statuses and outputs | reading |
-| `notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb` | the viewer: experimental and synthetic clip side by side, scrubber and real-time player at the recording's frame rate (50 fps) | viewing a clip |
+| `notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb` | the viewer: the clip's provenance, experimental and synthetic clip side by side, scrubber and real-time player at the recording's frame rate (50 fps) | viewing a clip |
+| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py` | executes the viewer notebook headlessly for each clip and writes its provenance and real-time player, every frame embedded losslessly, to `<stem>_Player.html` beside the clip (plays in any browser without a kernel); never overwrites | keeping the players of a check as files |
 | `tests/test_posterior_predictive_video.py` | regression tests of the engine's output refusal and figure labels and of every path of the count match (no simulation) | after a change to the engine or the count-match script |
 
-The order of a check at a declared configuration: confirm the configuration with the user; choose the
-receptor total of each recording (the count-match script); render each clip (the biology entry point with
-`--declared-rds` and `--nuisance-tag REF`); compare the pixel histograms in the static figure; view the clip
-in the notebook.
+The order of a check at a declared configuration: confirm the configuration with the user; render each clip
+(the biology entry point with `--declared-rds` and `--nuisance-tag REF`); compare the pixel histograms in the
+static figure; view the clip in the notebook.
 
 ## One engine, two workflows — which block the MAP supplies
 
@@ -90,11 +92,12 @@ biology prior box is flagged in the console, the clip and the figure, never clip
 
 **On the biology path, the configuration is presented to the user and confirmed before any render.**
 Prior centers, literature values and inferred values are not interchangeable, and none is selected
-silently. The receptor total is the only per-recording adjustment: a rendering setting that approximates
-the recording's opening spot density, chosen through the forward model by
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` (companion note beside it), not a
-biological estimate. The match renders nothing outside the prior box without the user's decision, and a
-value outside it, or no value under detector saturation, goes back to the user. The MET-FAB configuration is
+silently. The check is a visual inspection, so the receptor total is declared like the other values, one
+value for every recording (the prior center); the rendered spot density can then differ from a
+recording's, and inferring the receptor total is the biology workflow's task. A density-matched render,
+when one is wanted, takes its receptor total from
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` (companion note beside it), which
+renders nothing outside the prior box without the user's decision. The MET-FAB configuration is
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB.toml`.
 
 The imaging of a declared-configuration render comes from the tagged `Nuisance_DLI` artifact
@@ -173,13 +176,13 @@ Arguments:
   vector* above.
 - `--experiment-span-seconds` — recording length used only to locate the `.tif` (default
   `20`); the render length is read from the `.tif`'s own frame count.
-- `--display-norm` — color scaling for the comparison figure's frame panels: `full`
-  (default; a shared full-range `[min, max]` window over both the experimental and synthetic
-  pixels, so identical intensities map to identical colors and nothing is clipped), `autoscale`
-  (each displayed frame stretched to its own min/max, per-frame), or `percentile` (a fixed
-  whole-clip `[min, p99.99]` window). The notebook uses the identical convention, so a given
-  frame renders the same in the static figure and the notebook. It does not change the stored
-  pixels.
+- `--display-norm` — color scaling for the comparison figure's frame panels, always one window
+  shared by the experimental and synthetic panel, so identical intensities map to identical colors:
+  `autoscale` (default; the min/max of the two displayed frames together), `full` (the whole-clip
+  `[min, max]` of both clips; nothing is clipped, but the frames look dim, because one bright pixel
+  anywhere in either clip sets the top), or `percentile` (the whole-clip `[min, p99.99]`). The
+  notebook uses the identical convention, so a given frame renders the same in the static figure and
+  the notebook. It does not change the stored pixels.
 - `--seed` — RNG seed, used as production uses it (above); each run otherwise draws a fresh motion
   realization (the check reads statistical appearance, not the specific track).
 - `--labeling-law`, `--occupancy` — sensitivity overrides of the condition's labeling, with the DLI
@@ -234,7 +237,9 @@ imaging values and the eleven reaction-diffusion values in absolute units, each 
 plays in the run (INFERRED, FIXED, NUISANCE or DECLARED), with out-of-prior values flagged. The title
 and the synthetic panel name the synthetic source in the words the clip file stores (`synth_label`,
 e.g. *SYNTH (declared reaction-diffusion)*), which the notebook also shows. The synthetic panel names a
-MAP selection only when a MAP was read.
+MAP selection only when a MAP was read. The provenance also states the receptors the render actually
+started with, from its labeling record: the subunit total split into monomers and dimers, the labeled
+subunits and their dyes, and the visible monomers and dimers at frame 0.
 
 - The **frame panels** show single-frame appearance — point-spread size, brightness, and
   per-frame noise. Read them for whether a synthetic frame looks like an experimental one.
@@ -261,25 +266,57 @@ machine, not just the one that rendered the clip. Step by step:
 3. **Run the cells top to bottom.** The first code cell imports the viewer; the second is
    the only one you normally edit.
 4. **Point it at your clip.** In the second code cell, set `CLIP_PATH` to the absolute path
-   of your `.npz`. `NORM_MODE` there defaults to `full` (a shared full-range `[min, max]` window
-   over both panels); optionally set it to `autoscale` (each displayed frame to its own min/max,
-   per-frame) or `percentile` (a fixed whole-clip `[min, p99.99]` window). Run the cell; it
-   prints the frame count, frame rate, selection, and the display window.
+   of your `.npz`. `NORM_MODE` there defaults to `autoscale` (the shared min/max of the displayed
+   frame pair, recomputed per frame, the window the static figure uses); `full` (the shared
+   whole-clip `[min, max]`) and `percentile` (the shared whole-clip `[min, p99.99]`) are the
+   alternatives, and every mode shares one window between the two panels (no per-panel scaling).
+   Run the cell; it prints the clip's identity (entry point, recording, frame count and rate, seed,
+   engine version) and its provenance as the static figure states it: the synthetic source, the
+   imaging tag and its eleven values, the reaction-diffusion source and its eleven values (for a
+   declared configuration, its name and SHA-256), the labeling, the receptors the render started
+   with, and the display window.
 5. **Scrub and zoom.** Run the scrubber cell. Drag `frame` to step through the recording;
    use `center x`, `center y`, and `zoom` to zoom the same region-of-interest into both the
    experimental and synthetic panels at once.
-6. **Play.** Run the playback cell for a real-time, side-by-side player, using the same
-   per-frame color scaling as the scrubber. Set `PLAY_ZOOM` (and the center) to play a cropped
-   region and check whether experimental and synthetic coincide locally. If a long clip builds
-   a heavy player, raise `PLAY_EVERY` (2, 5, …) to subsample frames; it stays real-time.
+6. **Play.** Run the playback cell for a real-time, side-by-side player at the recording's frame
+   rate, using the same shared color scaling as the scrubber. Set `PLAY_ZOOM` (and the center) to
+   play a cropped region and check whether experimental and synthetic coincide locally. The player
+   embeds every frame losslessly (PNG frames) and reports its size and the number of frames it
+   embedded; a 1000-frame clip builds roughly 390 MB (PNG frames of camera noise barely compress,
+   about 290 KB per frame at any panel size, plus a third for the base64 embedding; the embed limit
+   is 512 MB). If it reports a truncation, raise `animation.embed_limit` or `PLAY_EVERY` (2, 5, …,
+   subsampling frames; it stays real-time).
 
 To change the display, edit `NORM_MODE` and re-run from the second code cell down. To view a
 different clip, change `CLIP_PATH` and re-run.
 
+To keep the players of a check as files, `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py`
+executes the notebook headlessly for each clip given and writes `<stem>_Player.html` beside it (or
+under `--out-dir`): the provenance the notebook prints and the real-time player, every frame embedded
+losslessly; the HTML plays in any browser without a kernel. The copy it executes differs from the
+notebook only in `CLIP_PATH` (and `--norm-mode`, `--play-every` when given) and in dropping the
+scrubber's widget call, which needs a live kernel (a headless execution never returns from the cell
+that displays it). It fails when the player is truncated at the embed limit and never overwrites an
+existing player. It needs the notebook environment (`nbformat`, `nbclient`, `nbconvert` and the
+notebook's imports), no project package and no `MACHINE_PROFILE`:
+
+```bash
+python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py \
+    <data_bank>/Posit/<alias>_<timing>_Posterior_Predictive_Video/<stem>_Synthetic_Video.npz [...]
+```
+
+The players of the current MET-FAB check (seven recordings, 1000 frames each) are kept beside their
+clips; each is about 390 MB.
+
 ## What it shows — and what it does not
 
-- It reads **imaging appearance**, not motion. The synthetic track is a fresh
-  reaction-diffusion draw, so the max projections and any track-level feature will differ.
+- It is a **visual check**, not an estimate. A detector render reads **imaging appearance**: its
+  synthetic track is a fresh reaction-diffusion draw, so the max projections and any track-level
+  feature differ by design. A biology render at a declared configuration reads whether the declared
+  **dynamics** under the tagged imaging vector look like the recording at the frame rate; nothing in
+  it is fitted to the recording, and inferring the parameters is the biology workflow's task.
+- The synthetic track never reproduces the experimental track: at best the two look alike, spot by
+  spot they never coincide.
 - The stored synthetic is clipped to the non-negative range (a physical camera cannot record
   negative counts); the clip's negative-excursion count (`n_under`) is printed on every run.
   See `REFERENCE_EMCCD_NOISE_MODEL.md` for the corrected noise model and what the clip removes.

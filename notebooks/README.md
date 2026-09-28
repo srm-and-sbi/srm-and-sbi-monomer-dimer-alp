@@ -5,13 +5,16 @@ part of the production pipeline: they render an already-produced artifact and ne
 simulation or an inference.
 
 - **`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb`** — the posterior-predictive
-  check. Views one persisted clip (`*_Synthetic_Video.npz`) as an experimental-vs-synthetic pair:
-  a scrubber (frame / center / zoom sliders) and a real-time player. The clip format is shared by
-  both posterior-predictive engines, so the notebook serves clips written by either
+  check. Views one persisted clip (`*_Synthetic_Video.npz`) as an experimental-versus-synthetic pair:
+  the clip's provenance as the static figure states it (synthetic source, imaging tag and values,
+  reaction-diffusion values, labeling and the receptors the render started with), a scrubber
+  (frame / center / zoom sliders) and a real-time player at the recording's frame rate. One engine
+  (`srm_and_sbi_monomer_dimer_alp/posterior_predictive_video_runner.py`) writes the clips through two
+  entry points, `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.py`
+  (biology workflow; the visual check at a declared configuration) and
   `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.py` (detector
-  workflow) or `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.py`
-  (biology workflow). A pure viewer — it needs only `numpy`, `matplotlib`, and `ipywidgets`; no project
-  package and no `MACHINE_PROFILE`. The check's documentation, the full list of its files (the engine, both
+  workflow), so the notebook serves either. A pure viewer — it needs only `numpy`, `matplotlib`, and
+  `ipywidgets`; no project package and no `MACHINE_PROFILE`. The check's documentation, the full list of its files (the engine, both
   entry points, the declared configuration `..._Posterior_Predictive_Video_Declared_RDS_FAB.toml`, the
   receptor-total script `..._Posterior_Predictive_Video_Count_Match.py` and their notes) and the order of a
   check are in `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`.
@@ -102,11 +105,21 @@ natively, so the server-versus-kernel distinction does not arise.
 
 **Posterior-Predictive-Video** (pure viewer, no `MACHINE_PROFILE`):
 - Set `CLIP_PATH` to the absolute path of a `*_Synthetic_Video.npz`.
-- Leave `NORM_MODE = "full"` (a shared full-range window over both panels; `autoscale` and
-  `percentile` are alternatives).
+- Leave `NORM_MODE = "autoscale"` (the shared min/max of the displayed frame pair, recomputed per
+  frame, the same window the static figure uses; `full` and `percentile` are alternatives). The two
+  panels always share one window; there is no per-panel scaling.
 - To compare two clips, load one, run all, then change `CLIP_PATH` and run all again.
-- For a long clip, set `PLAY_EVERY = 2` in the player cell to keep the embedded player light; it
-  stays real-time.
+- The player cell prints its size and how many frames it embedded. Every frame must be embedded: a
+  1000-frame 50 fps clip builds a player of roughly 390 MB, because lossless PNG frames of camera noise
+  barely compress (about 290 KB per frame at any panel size, plus a third for the base64 embedding), and the embed limit is set to 512 MB
+  for it. If the cell reports a truncation, raise `animation.embed_limit`, or set `PLAY_EVERY = 2` to
+  subsample frames (playback stays real-time).
+- To keep a rendered player as a file, run
+  `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py` on the clip
+  (from `SRM_AND_SBI_ENVY_V0`): it executes the notebook headlessly and writes `<stem>_Player.html`
+  beside the clip, which plays in any browser without a kernel. Do not run a plain
+  `jupyter nbconvert --execute` on the notebook: the scrubber's widget needs a live kernel, and a
+  headless execution never returns from that cell; the script drops the widget call in its copy.
 
 **Video_Scrubber** (needs the package + a profile):
 - Set `MACHINE_PROFILE` (in the shell before launching, or in the first code cell) to the machine

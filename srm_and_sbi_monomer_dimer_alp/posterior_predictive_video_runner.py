@@ -383,14 +383,29 @@ def imaging_provenance(imaging_physical):
     return out
 
 
+def initial_receptor_lines(labeling_row):
+    """The receptors one render actually started with (frame 0), from its labeling row: the
+    subunit total split into monomers and dimers, the labeled subunits and their dyes, and the
+    visible monomers and dimers."""
+    r = {k: int(round(v)) for k, v in zip(LABELING_SET_COLUMNS, np.asarray(labeling_row, dtype=float).ravel())}
+    mono, dim = r["monomers_0"], r["dimers_0"]
+    vis_m, vis_d = r["monomers_visible_0"], r["dimers_visible_0"]
+    return [f"  {r['n_subunits']} subunits = {mono} monomers + {dim} dimers ({mono + dim} receptors)",
+            f"  labeled: {r['n_labeled_subunits']} subunits carrying {r['n_dyes']} dyes",
+            f"  visible: {vis_m} of {mono} monomers + {vis_d} of {dim} dimers "
+            f"({r['dimers_two_labeled_0']} with both subunits labeled) = {vis_m + vis_d} spots"]
+
+
 def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, display_norm,
-                         nuisance, imaging_physical, *, synth_label, fixed_imaging=False,
+                         nuisance, imaging_physical, *, synth_label, labeling_row, fixed_imaging=False,
                          fixed_nuisance=False, imaging_label="imaging",
                          rds_label="reaction-diffusion", motion_desc=None, rds_table=None,
                          labeling_desc=None, rds_outside=()):
     """Static experimental-vs-synthetic panel. ``synth_label`` (``synthetic_source_label``) names
     the synthetic source in the synthetic panel and the title, as the clip file does; ``sel_desc``
-    names the MAP selection and is None when no MAP was read.
+    names the MAP selection and is None when no MAP was read. ``labeling_row`` is the render's
+    labeling record, from which the provenance states the receptors the render actually started
+    with (``initial_receptor_lines``).
 
     Col 0 = EXPERIMENTAL and col 1 = SYNTH, each
     showing the mid frame over its max projection; col 2 holds the shared pixel-intensity
@@ -407,9 +422,10 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     ALWAYS share ONE color limit, in every ``display_norm`` mode -- the max-projection row shares the
     full ``[min, max]`` range, and the mid-frame row shares a window the mode selects -- so identical
     intensities map to identical colors and the exp-vs-synth comparison is fair; the mode only sets WHAT
-    the shared mid-frame window is. ``full`` (default): the full whole-clip ``[min, max]`` (nothing
-    clipped). ``percentile``: the whole-clip ``[min, p99.99]``, dropping the top-0.01% hot-pixel sliver
-    for contrast. ``autoscale``: the two displayed frames' shared min/max, the most contrast. The
+    the shared mid-frame window is. ``autoscale`` (default): the two displayed frames' shared
+    min/max. ``full``: the whole-clip ``[min, max]`` of both clips (nothing clipped, but dim: one bright
+    pixel anywhere in either clip sets the top). ``percentile``: the whole-clip ``[min, p99.99]``,
+    dropping the top-0.01% hot-pixel sliver. The
     histogram is in ADU in every mode."""
     import matplotlib
     matplotlib.use("Agg")
@@ -541,6 +557,7 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
         + f"{rds_label}:\n{nuis_lines}\n"
         + ("  (* outside the biology prior)\n" if rds_outside else "")
         + (f"labeling: {labeling_desc}\n" if labeling_desc else "")
+        + "initial receptors (frame 0, this render):\n" + "\n".join(initial_receptor_lines(labeling_row)) + "\n"
         + f"motion: {motion_desc or ('fixed nuisance (pinned)' if fixed_nuisance else 'fresh draw')}"
         f"; norm {display_norm}",
         fontsize=6.5, va="top", family="monospace")
@@ -754,7 +771,7 @@ def run_posterior_predictive_video(cfg, args):
     _save_comparison_png(outputs["figure"], experimental, synth_u16,
                          args.kind, args.cell, args.map_source if needs_map else None,
                          args.display_norm, rds_provenance, imaging_physical,
-                         synth_label=synth_label,
+                         synth_label=synth_label, labeling_row=labeling_row,
                          imaging_label=imaging_label, rds_label=rds_label,
                          motion_desc=motion_desc, rds_table=rds_table,
                          fixed_imaging=args.fixed_imaging_parameters,
@@ -851,9 +868,11 @@ def build_parser(description):
                         "at the DLI stage: one value, or per initial MOLECULAR species 'A=0.5,B=1.0' "
                         "(monomer A, dimer B). Default: the condition's declared (MET-INLB 0.5) or "
                         "derived (MET-FAB 0.155) value; the value used is recorded in the clip.")
-    p.add_argument("--display-norm", default="full", choices=("full", "autoscale", "percentile"),
-                   help="display normalization for the comparison figure: 'full' (default; "
-                        "shared full-range window), 'autoscale' (per-image), or 'percentile'. "
+    p.add_argument("--display-norm", default="autoscale", choices=("autoscale", "full", "percentile"),
+                   help="color window of the comparison figure's image panels, always shared by the "
+                        "experimental and synthetic panel: 'autoscale' (default; the min/max of the two "
+                        "displayed frames), 'full' (the whole-clip [min, max] of both clips; dim, since one "
+                        "bright pixel anywhere sets the top) or 'percentile' (the whole-clip [min, p99.99]). "
                         "Display-only -- never enters the quantitative comparison.")
     p.add_argument("--fixed-imaging-parameters", action="store_true",
                    help="detector only: skip the MAP database and pin imaging to MET values.")

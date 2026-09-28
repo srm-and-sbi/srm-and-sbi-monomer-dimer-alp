@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.23 - 2026-09-28
+
+The posterior-predictive check becomes a plain visual inspection: one declared configuration for every
+recording, brighter shared image panels, and the receptors each render started with stated in the figure and
+the viewer notebook. No estimator, estimate, prior or production default changes.
+
+### Changed
+
+- The comparison figure and the viewer notebook default to the shared per-frame window
+  (`--display-norm autoscale`, `NORM_MODE = "autoscale"`): both panels share the min/max of the two
+  displayed frames. The whole-clip window (`full`, the former default) stays available; one bright pixel
+  anywhere in either clip set its top, so single frames looked dim.
+- The declared MET-FAB configuration states the receptor total as one declared value for every recording,
+  the prior center 1000. The check is a visual inspection; inferring the receptor total is the biology
+  workflow's task.
+- The receptor-total count match stays in `Script_Bank/Analysis` as an optional companion for a
+  density-matched render; the order of the check no longer includes it.
+
+- The viewer notebook is written for this codebase: one engine with two entry points, the visual check at
+  a declared configuration with the tagged imaging vector and the production labeling. It prints the clip's
+  provenance as the static figure states it (the synthetic source, the imaging tag and its eleven values,
+  the reaction-diffusion source and its eleven values with the configuration's name and SHA-256, the
+  labeling and the engine version) in place of the former `MAP source` line, and it requires the clip
+  fields the engine writes (no fallbacks for clips of an older engine).
+
+### Added
+
+- The comparison figure and the viewer notebook state the receptors each render actually started with
+  (frame 0), from its labeling record: the subunit total split into monomers and dimers, the labeled
+  subunits and their dyes, and the visible monomers and dimers.
+- The notebook's player cell reports the player's size and the number of embedded frames, so a truncation
+  at the embed limit is visible instead of silent. The embed limit is 512 MB: a 1000-frame player of the
+  production tier is about 390 MB (lossless PNG frames of camera noise barely compress, and the base64
+  embedding adds a third), and the former
+  256 MB limit silently dropped the last 222 frames.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py` executes the
+  viewer notebook headlessly for each clip and writes `<stem>_Player.html` beside it (provenance and the
+  real-time player with every frame embedded; plays in any browser without a kernel). Its copy drops the
+  scrubber's widget call, which a headless execution never returns from; it fails on a truncated player
+  and never overwrites. The players of the MET-FAB check were rendered with it.
+
+### Documentation
+
+- `DETECTOR_WORKFLOW.md` §7.6 records that the superseded diagnostic renders of 2026-09-25 were deleted.
+- The posterior-predictive note, the count-match note and the notebook README follow the changes above; the
+  note no longer describes `autoscale` as a per-panel scaling (it has been shared since the engine was ported).
+
 ## 0.1.22 - 2026-09-28
 
 The posterior-predictive video and the horizon audit label their renders as the training data are labeled, a

@@ -12,8 +12,9 @@ The engine (``posterior_predictive_video_runner``):
    another attempt or a variant needs its own run label, which gives it a distinct stem;
 2. ``simulate_and_render`` refuses an existing trajectory instead of deleting it, and the engine
    deletes no file;
-3. the comparison figure names the synthetic source in the clip file's words: a declared-configuration
-   render shows no "MAP", and a MAP selection appears only when a MAP was read.
+3. the comparison figure names the synthetic source in the clip file's words (a declared-configuration
+   render shows no "MAP", and a MAP selection appears only when a MAP was read) and states the receptors
+   the render actually started with.
 
 The receptor-total match
 (``Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py``).
@@ -31,6 +32,12 @@ responses, with no simulation:
    an update, not the converged value. Under that decision a count outside it is accepted, flagged,
    not clipped. The render guard, which also covers the check renders, refuses before rendering;
 9. an existing result is refused before any computation; an attempt label gives a distinct folder.
+
+The player render (``Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py``):
+
+10. the headless copy of the viewer notebook differs from it only in the clip path (and the settings
+    given) and in dropping the scrubber's widget call, whose helpers stay for the player; the player
+    file is named after the clip; a truncated player is detected from the notebook's report.
 
 Runnable with ``python -m pytest`` or directly:
 ``MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python tests/test_posterior_predictive_video.py``.
@@ -53,6 +60,10 @@ TOML = REPO / "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Pred
 _spec = importlib.util.spec_from_file_location("count_match", SCRIPT)
 cm = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cm)
+PLAYER = REPO / "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py"
+_spec = importlib.util.spec_from_file_location("player", PLAYER)
+pl = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(pl)
 
 
 # ==========================================================================================
@@ -121,9 +132,13 @@ def test_the_figure_names_the_synthetic_source():
     assert ppv.synthetic_source_label("rds") == "SYNTH (MAP reaction-diffusion)"
     assert ppv.synthetic_source_label("imaging", fixed_imaging=True) == "SYNTH (fixed imaging)"
     assert ppv.synthetic_source_label("imaging") == "SYNTH (MAP imaging)"
-    # The run hands the clip file's label to the figure, where it is a required argument.
+    # The run hands the clip file's label and the render's labeling row to the figure, where both are
+    # required arguments.
     figure_call = next(c for c in _run_calls() if _call_name(c.func) == "_save_comparison_png")
-    assert "synth_label" in {k.arg for k in figure_call.keywords}
+    assert {"synth_label", "labeling_row"} <= {k.arg for k in figure_call.keywords}
+    # n_subunits, n_dyes, n_labeled_subunits, monomers_0, monomers_visible_0, dimers_0, dimers_visible_0,
+    # dimers_two_labeled_0, occupancy_monomer, occupancy_dimer (labeling.LABELING_SET_COLUMNS)
+    row = np.array([1000, 261, 136, 860, 124, 70, 10, 2, 0.155, 0.155])
     # A declared-configuration biology render: the figure names its source and shows no MAP.
     import matplotlib
     matplotlib.use("Agg")
@@ -135,7 +150,7 @@ def test_the_figure_names_the_synthetic_source():
         path = Path(tmp) / "Comparison.svg"                 # text kept as text, so it can be read back
         ppv._save_comparison_png(
             path, experimental, synth, "FAB", 0, None, "full", rds, ppv._fixed_imaging_theta(),
-            synth_label=ppv.synthetic_source_label("rds", declared_biology=True),
+            synth_label=ppv.synthetic_source_label("rds", declared_biology=True), labeling_row=row,
             imaging_label="FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)",
             rds_label="DECLARED reaction-diffusion (FAB_DECLARED_RDS, absolute)",
             motion_desc="from the declared reaction-diffusion configuration (not a draw)",
@@ -144,6 +159,10 @@ def test_the_figure_names_the_synthetic_source():
     assert "SYNTH (declared reaction-diffusion) FAB c0" in text
     assert "Posterior-predictive video check: experimental vs SYNTH (declared reaction-diffusion)" in text
     assert not re.search(r"\bMAP\b", text), re.findall(r".{0,40}\bMAP\b.{0,40}", text)
+    # The receptors the render started with, stated explicitly.
+    assert "1000 subunits = 860 monomers + 70 dimers (930 receptors)" in text
+    assert "labeled: 136 subunits carrying 261 dyes" in text
+    assert "visible: 124 of 860 monomers + 10 of 70 dimers (2 with both subunits labeled) = 134 spots" in text
 
 
 # ==========================================================================================
@@ -277,6 +296,51 @@ def test_existing_results_are_refused_before_any_work():
             raise AssertionError("an existing result must be refused")
     assert cm.attempt_folder_name("FAB_DECLARED_RDS", "REF") == "FAB_DECLARED_RDS_REF"
     assert cm.attempt_folder_name("FAB_DECLARED_RDS", None, "check 2") == "FAB_DECLARED_RDS_CANONICAL_check_2"
+
+
+# ==========================================================================================
+# The player render
+# ==========================================================================================
+
+def test_the_headless_copy_drops_only_the_scrubber_widget():
+    import nbformat
+    original = nbformat.read(pl.NOTEBOOK, as_version=4)
+    copy = pl.prepare_notebook(nbformat.read(pl.NOTEBOOK, as_version=4), "/data/X_Synthetic_Video.npz",
+                               norm_mode="full", play_every=2)
+    assert len(copy.cells) == len(original.cells)
+    code_o = [c for c in original.cells if c.cell_type == "code"]
+    code_c = [c for c in copy.cells if c.cell_type == "code"]
+    # Configuration: the clip path and the settings given, nothing else.
+    cfg = pl._source(code_c[1])
+    assert 'CLIP_PATH = "/data/X_Synthetic_Video.npz"' in cfg and 'NORM_MODE = "full"' in cfg
+    assert pl.CLIP_PLACEHOLDER not in cfg
+    assert (pl._source(code_o[1]).replace(pl.CLIP_PLACEHOLDER, 'CLIP_PATH = "/data/X_Synthetic_Video.npz"')
+            .replace('NORM_MODE = "autoscale"', 'NORM_MODE = "full"') == cfg)
+    # Scrubber: the helpers the player uses stay, the widget call goes.
+    scrub = pl._source(code_c[2])
+    assert "def _roi(" in scrub and "H, W = " in scrub and "interact(" not in scrub
+    assert pl._source(code_o[2]).startswith(scrub.split("\n# Headless render")[0])
+    # Player: the stride given, and the report the script reads.
+    player = pl._source(code_c[3])
+    assert "PLAY_EVERY = 2" in player and 'mpl.rcParams["animation.embed_limit"]' in player
+    assert "frames embedded" in player
+    # Unchanged cells stay byte-identical.
+    assert pl._source(code_c[0]) == pl._source(code_o[0])
+    for a, b in zip(original.cells, copy.cells):
+        if a.cell_type == "markdown":
+            assert pl._source(a) == pl._source(b)
+    # The player file is named after the clip; the truncation report is read from the outputs.
+    assert pl.player_path("/data/X_Synthetic_Video.npz").name == "X_Player.html"
+    assert pl.player_path("/data/X_Synthetic_Video.npz", "/out") == Path("/out/X_Player.html")
+    try:
+        pl.player_path("/data/X_Comparison.png")
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("only a clip names a player")
+    copy.cells[-1]["outputs"] = [nbformat.v4.new_output(
+        "stream", name="stdout", text="player: 271.9 MB, 778 of 1000 frames embedded  <-- TRUNCATED: raise\n")]
+    assert pl.player_report(copy) == (271.9, 778, 1000, "<-- TRUNCATED: raise")
 
 
 if __name__ == "__main__":

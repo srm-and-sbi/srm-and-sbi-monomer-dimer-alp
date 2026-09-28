@@ -800,10 +800,8 @@ recordings under the direct estimators' rules. The renders predate the posterior
 the production observation layer: every subunit was labeled at occupancy 1 (about 81 % visible, against the
 declared MET-FAB visibility of 0.125 per subunit), the reaction-diffusion block was held at prior-center values
 with the receptor total tuned to the detected density, and the imaging was passed as numbers rather than read
-from the `REF` artifact. The clips and their reports are kept unchanged in
-`..._DETECTOR_FAB_2S_50FPS_Posterior_Predictive_Video/Diagnostic_Occupancy_1_Prior_Center_RDS/`, labeled
-*Diagnostic renders using occupancy 1 and prior-center reaction-diffusion settings. Not validation of the
-selected production configuration.*, and they are no part of the justification above. The corrected checks render
+from the `REF` artifact. They are no part of the justification above, and the clips and their reports were
+deleted on 2026-09-28. The corrected checks render
 through the production labeling path, read the imaging from the tagged `REF` artifact through the biology input
 path, and take the reaction-diffusion block from one declared configuration that the user confirms
 (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`).

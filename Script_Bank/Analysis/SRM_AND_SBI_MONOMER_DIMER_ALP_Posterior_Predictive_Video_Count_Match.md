@@ -7,8 +7,9 @@ of a check at a declared configuration are listed in `SRM_AND_SBI_MONOMER_DIMER_
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` chooses the receptor total `N_R` of a
 posterior-predictive render at a declared reaction-diffusion configuration
 (`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`, *A declared reaction-diffusion
-configuration*). The receptor total is the only per-recording adjustment of such a render, and the value
-chosen is a **rendering setting** that approximates the recording's opening spot density. It is not a
+configuration*) when a density-matched render is wanted. It is **optional**: the visual check declares the
+receptor total like the other values, one value for every recording, and does not use this script. The
+value chosen is a **rendering setting** that approximates the recording's opening spot density. It is not a
 biological estimate. It is a post-hoc analysis, never wired into the stage dispatcher.
 
 ## Method

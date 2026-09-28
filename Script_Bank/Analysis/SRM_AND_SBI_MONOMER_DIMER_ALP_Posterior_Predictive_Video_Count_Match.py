@@ -2,7 +2,9 @@
 
 Part of the posterior-predictive video check; the files of the check and their order are listed in
 ``SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`` ("The files of the posterior-predictive video
-check"). The value chosen approximates one recording's opening spot density.
+check"). The value chosen approximates one recording's opening spot density. OPTIONAL: the visual check
+declares the receptor total (one value for every recording) and does not use this script; it serves a
+density-matched render when one is wanted.
 
 ROLE. A posterior-predictive render at a declared reaction-diffusion configuration
 (``--declared-rds``) needs a receptor total ``N_R``, and the recordings do not state one. The value

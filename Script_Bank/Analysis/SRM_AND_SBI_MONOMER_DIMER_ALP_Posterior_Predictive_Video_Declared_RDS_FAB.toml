@@ -8,8 +8,9 @@
 #
 # Read by posterior_predictive_video_runner.load_declared_rds (--declared-rds); the SHA-256 of this
 # file and the origin of every value are recorded in each clip rendered from it. Every value below
-# is an explicit ASSUMPTION or a value matched to one recording, stated with its basis and source;
-# none is an estimate of the biology of these recordings, and none is evidence about it.
+# is an explicit ASSUMPTION, stated with its basis and source; none is an estimate of the biology of
+# these recordings, and none is evidence about it. The check is a visual inspection of the renders
+# beside the recordings; inferring the parameters from the recordings is the biology workflow's task.
 #
 # Not set here, because the production path sets it: the imaging block is read from the tagged
 # Nuisance_DLI artifact (--nuisance-tag REF), and the labeling is the condition's production
@@ -23,28 +24,18 @@
 name = "FAB_DECLARED_RDS"
 condition = "FAB"
 status = "declared assumptions for posterior-predictive checks; not estimates"
-description = """One reaction-diffusion configuration for MET-FAB renders compared with the \
-experimental recordings. The receptor total is matched per recording (see count_total); the \
-initial composition and the diffusion scale follow stated external references; every other value \
-is the center of its prior, declared as a default where no MET-FAB evidence fixes it."""
+description = """One reaction-diffusion configuration for every MET-FAB render compared with the \
+experimental recordings. The initial composition and the diffusion scale follow stated external \
+references; every other value, the receptor total included, is the center of its prior, declared as a \
+default where no MET-FAB evidence fixes it."""
 
 [parameters.count_total]
-basis = "rendering setting chosen per recording (the only per-recording adjustment; not a biological estimate)"
-source = """A receptor-subunit total that approximates the recording's opening spot density: the \
-render's detected spots per frame over the first 2 s are brought to the recording's under the \
-production chain (the declared occupancy, labeling law and composition, the REF imaging vector) and \
-the direct estimators' detection on both (8-bit stored levels, 4 sigma, fit half-width 14 px, SCOPE \
-box center), by SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py. The dimers, the \
-finite field, missed detections and counting saturation enter through the forward model rather than \
-a division by the visibility. Normalizing by each render's realized initial visibility reduces the \
-labeling-count variability; the remaining simulation variability and the density dependence of the \
-detection efficiency are not removed, and the 3 % convergence is an iteration criterion, not an \
-uncertainty. The density at the opening is therefore matched by construction and is not evidence of \
-realism; later-window densities remain checks. N_R counts subunits in the whole simulated field \
-(256 x 256 px, 40.4 um square, open lateral boundary), not in the cell footprint. No value outside \
-the prior box 316-3162 is rendered or entered without the user's decision; under detector saturation \
-no value is entered."""
-per_cell = {}
+value = 1000.0
+basis = "prior center (declared default)"
+source = """Center of the decided prior 316-3162 receptor subunits, one value for every recording. It is \
+not matched to a recording: the rendered spot density can differ from a recording's, and inferring the \
+receptor total is the biology workflow's task. N_R counts subunits in the whole simulated field \
+(256 x 256 px, 40.4 um square, open lateral boundary), not in the cell footprint."""
 
 [parameters.ratio_dimer_monomer_initial]
 value = 0.08108
