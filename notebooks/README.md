@@ -105,12 +105,13 @@ natively, so the server-versus-kernel distinction does not arise.
 
 **Posterior-Predictive-Video** (pure viewer, no `MACHINE_PROFILE`):
 - Set `CLIP_PATH` to the absolute path of a `*_Synthetic_Video.npz`.
-- Leave `NORM_MODE = "autoscale"` (the shared min/max of the displayed frame pair, recomputed per
-  frame, the same window the static figure uses; `full` and `percentile` are alternatives). The two
-  panels always share one window; there is no per-panel scaling.
+- Leave `NORM_MODE = "full"` (the shared min/max of both clips over all their frames, one fixed
+  window, the same the static figure uses; `percentile`, the whole-clip `[min, p99.99]`, is the
+  alternative, also fixed). The two panels always share one window, fixed over all frames; there is
+  no per-panel scaling and no per-frame window (it made the brightness jump between frames).
 - To compare two clips, load one, run all, then change `CLIP_PATH` and run all again.
 - The player cell prints its size and how many frames it embedded. Every frame must be embedded: a
-  1000-frame 50 fps clip builds a player of roughly 390 MB, because lossless PNG frames of camera noise
+  1000-frame 50 fps clip builds a player of roughly 260 to 330 MB under `full`, because lossless PNG frames of camera noise
   barely compress (about 290 KB per frame at any panel size, plus a third for the base64 embedding), and the embed limit is set to 512 MB
   for it. If the cell reports a truncation, raise `animation.embed_limit`, or set `PLAY_EVERY = 2` to
   subsample frames (playback stays real-time).

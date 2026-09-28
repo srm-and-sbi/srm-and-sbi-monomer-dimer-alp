@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.24 - 2026-09-28
+
+The display window of the posterior-predictive check is fixed over all frames again, and the per-frame window
+is removed. No estimator, estimate, prior or production default changes.
+
+### Changed
+
+- The comparison figure and the viewer notebook default to `full` again (`--display-norm full`,
+  `NORM_MODE = "full"`): both panels share the min/max of both clips over all their frames, one fixed
+  window, so the brightness never changes between frames at playback. `percentile` (the whole-clip
+  `[min, p99.99]`, also fixed) stays. The seven MET-FAB figures were redrawn from their stored clips and
+  the seven players re-rendered with `full`.
+
+### Removed
+
+- The per-frame window (`autoscale`, the 0.1.23 default), which recomputed the shared window for every
+  displayed frame pair: the brightness jumped from frame to frame, which is useless for a comparison over
+  time. The figure's `--display-norm`, the notebook's `NORM_MODE` and the player script's `--norm-mode`
+  accept `full` and `percentile` only.
+
 ## 0.1.23 - 2026-09-28
 
 The posterior-predictive check becomes a plain visual inspection: one declared configuration for every

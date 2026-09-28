@@ -177,12 +177,14 @@ Arguments:
 - `--experiment-span-seconds` — recording length used only to locate the `.tif` (default
   `20`); the render length is read from the `.tif`'s own frame count.
 - `--display-norm` — color scaling for the comparison figure's frame panels, always one window
-  shared by the experimental and synthetic panel, so identical intensities map to identical colors:
-  `autoscale` (default; the min/max of the two displayed frames together), `full` (the whole-clip
-  `[min, max]` of both clips; nothing is clipped, but the frames look dim, because one bright pixel
-  anywhere in either clip sets the top), or `percentile` (the whole-clip `[min, p99.99]`). The
-  notebook uses the identical convention, so a given frame renders the same in the static figure and
-  the notebook. It does not change the stored pixels.
+  shared by the experimental and synthetic panel, so identical intensities map to identical colors,
+  and fixed over all frames of both clips, so the brightness never changes from frame to frame:
+  `full` (default; the whole-clip `[min, max]` of both clips: nothing is clipped, and single frames
+  look dim because the brightest pixel anywhere in either clip sets the top) or `percentile` (the
+  whole-clip `[min, p99.99]`, cutting the top-0.01 % hot-pixel sliver for contrast). A per-frame
+  window is not offered: it made the brightness jump between frames, which is useless for a
+  comparison over time. The notebook uses the identical convention, so a given frame renders the
+  same in the static figure and the notebook. It does not change the stored pixels.
 - `--seed` — RNG seed, used as production uses it (above); each run otherwise draws a fresh motion
   realization (the check reads statistical appearance, not the specific track).
 - `--labeling-law`, `--occupancy` — sensitivity overrides of the condition's labeling, with the DLI
@@ -266,10 +268,10 @@ machine, not just the one that rendered the clip. Step by step:
 3. **Run the cells top to bottom.** The first code cell imports the viewer; the second is
    the only one you normally edit.
 4. **Point it at your clip.** In the second code cell, set `CLIP_PATH` to the absolute path
-   of your `.npz`. `NORM_MODE` there defaults to `autoscale` (the shared min/max of the displayed
-   frame pair, recomputed per frame, the window the static figure uses); `full` (the shared
-   whole-clip `[min, max]`) and `percentile` (the shared whole-clip `[min, p99.99]`) are the
-   alternatives, and every mode shares one window between the two panels (no per-panel scaling).
+   of your `.npz`. `NORM_MODE` there defaults to `full` (the shared whole-clip `[min, max]` of both
+   clips over all frames, one fixed window, the one the static figure uses); `percentile` (the shared
+   whole-clip `[min, p99.99]`, also fixed) is the alternative. Every mode shares one window between
+   the two panels and fixes it over all frames (no per-panel scaling, no per-frame window).
    Run the cell; it prints the clip's identity (entry point, recording, frame count and rate, seed,
    engine version) and its provenance as the static figure states it: the synthetic source, the
    imaging tag and its eleven values, the reaction-diffusion source and its eleven values (for a
@@ -282,7 +284,7 @@ machine, not just the one that rendered the clip. Step by step:
    rate, using the same shared color scaling as the scrubber. Set `PLAY_ZOOM` (and the center) to
    play a cropped region and check whether experimental and synthetic coincide locally. The player
    embeds every frame losslessly (PNG frames) and reports its size and the number of frames it
-   embedded; a 1000-frame clip builds roughly 390 MB (PNG frames of camera noise barely compress,
+   embedded; a 1000-frame clip builds roughly 260 to 330 MB under `full` (PNG frames of camera noise barely compress,
    about 290 KB per frame at any panel size, plus a third for the base64 embedding; the embed limit
    is 512 MB). If it reports a truncation, raise `animation.embed_limit` or `PLAY_EVERY` (2, 5, …,
    subsampling frames; it stays real-time).
@@ -306,7 +308,7 @@ python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_V
 ```
 
 The players of the current MET-FAB check (seven recordings, 1000 frames each) are kept beside their
-clips; each is about 390 MB.
+clips; each is 260 to 330 MB.
 
 ## What it shows — and what it does not
 

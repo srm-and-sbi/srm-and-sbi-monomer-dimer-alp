@@ -306,16 +306,17 @@ def test_the_headless_copy_drops_only_the_scrubber_widget():
     import nbformat
     original = nbformat.read(pl.NOTEBOOK, as_version=4)
     copy = pl.prepare_notebook(nbformat.read(pl.NOTEBOOK, as_version=4), "/data/X_Synthetic_Video.npz",
-                               norm_mode="full", play_every=2)
+                               norm_mode="percentile", play_every=2)
     assert len(copy.cells) == len(original.cells)
     code_o = [c for c in original.cells if c.cell_type == "code"]
     code_c = [c for c in copy.cells if c.cell_type == "code"]
     # Configuration: the clip path and the settings given, nothing else.
     cfg = pl._source(code_c[1])
-    assert 'CLIP_PATH = "/data/X_Synthetic_Video.npz"' in cfg and 'NORM_MODE = "full"' in cfg
+    assert 'CLIP_PATH = "/data/X_Synthetic_Video.npz"' in cfg and 'NORM_MODE = "percentile"' in cfg
     assert pl.CLIP_PLACEHOLDER not in cfg
+    assert 'NORM_MODE = "full"' in pl._source(code_o[1])        # the notebook's default: fixed over all frames
     assert (pl._source(code_o[1]).replace(pl.CLIP_PLACEHOLDER, 'CLIP_PATH = "/data/X_Synthetic_Video.npz"')
-            .replace('NORM_MODE = "autoscale"', 'NORM_MODE = "full"') == cfg)
+            .replace('NORM_MODE = "full"', 'NORM_MODE = "percentile"') == cfg)
     # Scrubber: the helpers the player uses stay, the widget call goes.
     scrub = pl._source(code_c[2])
     assert "def _roi(" in scrub and "H, W = " in scrub and "interact(" not in scrub

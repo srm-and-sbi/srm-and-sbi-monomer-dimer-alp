@@ -117,7 +117,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("clips", nargs="+", help=f"*{CLIP_SUFFIX} files written by the engine")
     ap.add_argument("--out-dir", default=None, help="write the players here instead of beside the clips")
-    ap.add_argument("--norm-mode", default=None, choices=("autoscale", "full", "percentile"),
+    ap.add_argument("--norm-mode", default=None, choices=("full", "percentile"),
                     help="override the notebook's NORM_MODE (default: the notebook's own)")
     ap.add_argument("--play-every", type=int, default=None, help="override the notebook's PLAY_EVERY stride")
     ap.add_argument("--timeout", type=int, default=2400, help="per-cell execution timeout in seconds")

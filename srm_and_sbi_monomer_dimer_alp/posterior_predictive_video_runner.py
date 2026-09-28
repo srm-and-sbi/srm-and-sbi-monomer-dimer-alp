@@ -422,11 +422,12 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     ALWAYS share ONE color limit, in every ``display_norm`` mode -- the max-projection row shares the
     full ``[min, max]`` range, and the mid-frame row shares a window the mode selects -- so identical
     intensities map to identical colors and the exp-vs-synth comparison is fair; the mode only sets WHAT
-    the shared mid-frame window is. ``autoscale`` (default): the two displayed frames' shared
-    min/max. ``full``: the whole-clip ``[min, max]`` of both clips (nothing clipped, but dim: one bright
-    pixel anywhere in either clip sets the top). ``percentile``: the whole-clip ``[min, p99.99]``,
-    dropping the top-0.01% hot-pixel sliver. The
-    histogram is in ADU in every mode."""
+    the shared mid-frame window is, and every mode fixes it over ALL frames of both clips, so the
+    brightness never changes from frame to frame (a per-frame window is not offered: it made the
+    brightness jump at playback). ``full`` (default): the whole-clip ``[min, max]`` of both clips
+    (nothing clipped; the brightest pixel anywhere in either clip sets the top, so single frames look
+    dim). ``percentile``: the whole-clip ``[min, p99.99]``, dropping the top-0.01% hot-pixel sliver for
+    contrast. The histogram is in ADU in every mode."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -456,17 +457,17 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     # The experimental and synthetic image panels ALWAYS share ONE color limit, in EVERY mode, so
     # identical intensities map to identical colors and the comparison is fair: the mid-frame row
     # shares `frame_clim` and the max-projection row shares `proj_clim`. `display_norm` only sets WHAT
-    # the shared mid-frame window is; the max projection always shares the full [min, max] range.
+    # the shared mid-frame window is; every mode fixes it over ALL frames of both clips, and the max
+    # projection always shares the full [min, max] range.
     emp, smp = experimental.max(0), synth.max(0)
     proj_clim = (float(min(emp.min(), smp.min())), float(max(emp.max(), smp.max())))
-    if display_norm == "full":                    # full whole-clip [min, max]; nothing clipped
+    if display_norm == "full":                    # whole-clip [min, max] of both clips; nothing clipped
         frame_clim = (float(min(eq[0], sq[0])), float(max(eq[-1], sq[-1])))
     elif display_norm == "percentile":            # whole-clip [min, p99.99]; drops the hot-pixel sliver
         frame_clim = (float(min(exp_r.min(), syn_r.min())),
                       float(max(np.percentile(exp_r, 99.99), np.percentile(syn_r, 99.99))))
-    else:                                         # autoscale: the two displayed frames' shared min/max
-        frame_clim = (float(min(experimental[mid].min(), synth[mid].min())),
-                      float(max(experimental[mid].max(), synth[mid].max())))
+    else:
+        raise ValueError(f"display_norm must be 'full' or 'percentile', not {display_norm!r}")
     exp_clim = syn_clim = frame_clim
     exp_proj_clim = syn_proj_clim = proj_clim
 
@@ -868,12 +869,11 @@ def build_parser(description):
                         "at the DLI stage: one value, or per initial MOLECULAR species 'A=0.5,B=1.0' "
                         "(monomer A, dimer B). Default: the condition's declared (MET-INLB 0.5) or "
                         "derived (MET-FAB 0.155) value; the value used is recorded in the clip.")
-    p.add_argument("--display-norm", default="autoscale", choices=("autoscale", "full", "percentile"),
+    p.add_argument("--display-norm", default="full", choices=("full", "percentile"),
                    help="color window of the comparison figure's image panels, always shared by the "
-                        "experimental and synthetic panel: 'autoscale' (default; the min/max of the two "
-                        "displayed frames), 'full' (the whole-clip [min, max] of both clips; dim, since one "
-                        "bright pixel anywhere sets the top) or 'percentile' (the whole-clip [min, p99.99]). "
-                        "Display-only -- never enters the quantitative comparison.")
+                        "experimental and synthetic panel and fixed over all frames of both clips: 'full' "
+                        "(default; the whole-clip [min, max]) or 'percentile' (the whole-clip "
+                        "[min, p99.99]). Display-only -- never enters the quantitative comparison.")
     p.add_argument("--fixed-imaging-parameters", action="store_true",
                    help="detector only: skip the MAP database and pin imaging to MET values.")
     p.add_argument("--set-imaging", action="append", default=[], metavar="KEY=VALUE",
