@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.25 - 2026-09-28
+
+The `percentile` display window's percentile pair is the user's to set. `full` stays the default. No estimator,
+estimate, prior or production default changes, and no render or figure changes.
+
+### Added
+
+- The `percentile` window of the comparison figure takes its (lower, upper) percentile pair from
+  `--display-percentiles LOWER UPPER` (default `0 99.99`, the former fixed value: the minimum to the p99.99),
+  validated as `0 <= LOWER < UPPER <= 100` (`check_display_percentiles`); the figure's provenance line names the
+  window used (`norm full` or `norm percentile [p0, p99.99]`). The viewer notebook takes the pair from an
+  editable `NORM_PERCENTILES = (0.0, 99.99)` with the same validation and names it in its window line; the
+  player script passes `--norm-percentiles LOWER UPPER` through. Regression tests cover the pair and its
+  refusals.
+
+### Fixed
+
+- A sensitivity render with `--set-imaging` overrides announced itself as the untouched setup: the dry run
+  printed only the base description ("calibrated Nuisance_DLI vector + MET SCOPE camera") and the figure's
+  imaging header only the base role ("FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)"). Both now name
+  the overrides applied on top (`imaging_role_label`); the clip already recorded them. Regression test added.
+
 ## 0.1.24 - 2026-09-28
 
 The display window of the posterior-predictive check is fixed over all frames again, and the per-frame window

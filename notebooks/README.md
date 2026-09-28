@@ -106,9 +106,11 @@ natively, so the server-versus-kernel distinction does not arise.
 **Posterior-Predictive-Video** (pure viewer, no `MACHINE_PROFILE`):
 - Set `CLIP_PATH` to the absolute path of a `*_Synthetic_Video.npz`.
 - Leave `NORM_MODE = "full"` (the shared min/max of both clips over all their frames, one fixed
-  window, the same the static figure uses; `percentile`, the whole-clip `[min, p99.99]`, is the
-  alternative, also fixed). The two panels always share one window, fixed over all frames; there is
-  no per-panel scaling and no per-frame window (it made the brightness jump between frames).
+  window, the same the static figure uses). The alternative, `percentile`, is the shared whole-clip
+  `[p_lower, p_upper]` of both clips at the `NORM_PERCENTILES` pair, which you edit to taste (default
+  `(0.0, 99.99)`, the minimum to the p99.99; `0 <= lower < upper <= 100`), also fixed over all frames.
+  The two panels always share one window, fixed over all frames; there is no per-panel scaling and no
+  per-frame window (it made the brightness jump between frames).
 - To compare two clips, load one, run all, then change `CLIP_PATH` and run all again.
 - The player cell prints its size and how many frames it embedded. Every frame must be embedded: a
   1000-frame 50 fps clip builds a player of roughly 260 to 330 MB under `full`, because lossless PNG frames of camera noise

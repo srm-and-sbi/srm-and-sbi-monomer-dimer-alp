@@ -9,8 +9,8 @@ file, ``<stem>_Player.html`` beside the clip (or under ``--out-dir``): the clip'
 notebook prints it, and the side-by-side player at the recording's frame rate with every frame embedded
 losslessly (PNG frames). The HTML plays in any browser without a kernel.
 
-The copy differs from the notebook in two ways only: ``CLIP_PATH`` (and, if given, ``NORM_MODE`` and
-``PLAY_EVERY``) is set, and the scrubber's ``interact(...)`` widget call is dropped. The widget needs a
+The copy differs from the notebook in two ways only: ``CLIP_PATH`` (and, if given, ``NORM_MODE``,
+``NORM_PERCENTILES`` and ``PLAY_EVERY``) is set, and the scrubber's ``interact(...)`` widget call is dropped. The widget needs a
 live kernel; a headless execution never returns from the cell that displays it. The scrubber's helper
 definitions stay, since the player uses them.
 
@@ -53,7 +53,7 @@ def _source(cell):
     return "".join(cell.source) if isinstance(cell.source, list) else cell.source
 
 
-def prepare_notebook(nb, clip, norm_mode=None, play_every=None):
+def prepare_notebook(nb, clip, norm_mode=None, play_every=None, norm_percentiles=None):
     """The headless copy: ``CLIP_PATH`` (and the optional settings) set, the scrubber widget call dropped."""
     code = [c for c in nb.cells if c.cell_type == "code"]
     if len(code) != 4:
@@ -67,6 +67,13 @@ def prepare_notebook(nb, clip, norm_mode=None, play_every=None):
         text, n = re.subn(r'^NORM_MODE = "[a-z]+"$', f'NORM_MODE = "{norm_mode}"', text, flags=re.M)
         if n != 1:
             raise SystemExit("the notebook's configuration cell has no single NORM_MODE line")
+    if norm_percentiles is not None:
+        lo, hi = (float(v) for v in norm_percentiles)
+        if not (0.0 <= lo < hi <= 100.0):
+            raise SystemExit(f"--norm-percentiles must satisfy 0 <= lower < upper <= 100, not ({lo:g}, {hi:g})")
+        text, n = re.subn(r"^NORM_PERCENTILES = \([^)]*\)", f"NORM_PERCENTILES = ({lo:g}, {hi:g})", text, flags=re.M)
+        if n != 1:
+            raise SystemExit("the notebook's configuration cell has no single NORM_PERCENTILES line")
     cfg.source = text
     head, sep, _ = _source(scrub).partition("\ninteract(")
     if not sep:
@@ -93,12 +100,12 @@ def player_report(nb):
     return None
 
 
-def render(clip, out, *, norm_mode=None, play_every=None, timeout=2400):
+def render(clip, out, *, norm_mode=None, play_every=None, norm_percentiles=None, timeout=2400):
     import nbformat
     from nbclient import NotebookClient
     from nbconvert import HTMLExporter
 
-    nb = prepare_notebook(nbformat.read(NOTEBOOK, as_version=4), clip, norm_mode, play_every)
+    nb = prepare_notebook(nbformat.read(NOTEBOOK, as_version=4), clip, norm_mode, play_every, norm_percentiles)
     start = time.time()
     NotebookClient(nb, timeout=timeout, kernel_name="python3", resources={"metadata": {"path": str(NOTEBOOK.parent)}}).execute()
     report = player_report(nb)
@@ -119,6 +126,9 @@ def main(argv=None):
     ap.add_argument("--out-dir", default=None, help="write the players here instead of beside the clips")
     ap.add_argument("--norm-mode", default=None, choices=("full", "percentile"),
                     help="override the notebook's NORM_MODE (default: the notebook's own)")
+    ap.add_argument("--norm-percentiles", type=float, nargs=2, default=None, metavar=("LOWER", "UPPER"),
+                    help="override the notebook's NORM_PERCENTILES pair of the 'percentile' window "
+                         "(0 <= LOWER < UPPER <= 100; the notebook's own default is 0 99.99)")
     ap.add_argument("--play-every", type=int, default=None, help="override the notebook's PLAY_EVERY stride")
     ap.add_argument("--timeout", type=int, default=2400, help="per-cell execution timeout in seconds")
     ap.add_argument("--dry-run", action="store_true", help="print what would be written and exit")
@@ -137,7 +147,8 @@ def main(argv=None):
             print(f"[DRY RUN] {clip} -> {out}")
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
-        render(clip, out, norm_mode=args.norm_mode, play_every=args.play_every, timeout=args.timeout)
+        render(clip, out, norm_mode=args.norm_mode, play_every=args.play_every,
+               norm_percentiles=args.norm_percentiles, timeout=args.timeout)
     return 0
 
 

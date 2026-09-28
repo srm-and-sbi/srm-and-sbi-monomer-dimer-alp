@@ -163,6 +163,30 @@ def test_the_figure_names_the_synthetic_source():
     assert "1000 subunits = 860 monomers + 70 dimers (930 receptors)" in text
     assert "labeled: 136 subunits carrying 261 dyes" in text
     assert "visible: 124 of 860 monomers + 10 of 70 dimers (2 with both subunits labeled) = 134 spots" in text
+    assert "norm full" in text
+    # A sensitivity render names its --set-imaging overrides in the imaging header, so it never
+    # reads as the untouched setup; without overrides the header is the bare role.
+    base = "FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)"
+    assert ppv.imaging_role_label(base) == base and ppv.imaging_role_label(base, {}) == base
+    assert (ppv.imaging_role_label(base, {"mu_pc": 250.731571, "sigma_pc": 0.6744})
+            == base + " WITH OVERRIDES (mu_pc=250.7, sigma_pc=0.6744)")
+    # The percentile window takes the user's pair and names it; an impossible pair is refused.
+    assert ppv.check_display_percentiles((0, 99.99)) == ppv.DISPLAY_PERCENTILES == (0.0, 99.99)
+    for bad in ((99.9, 1), (-1, 50), (0, 100.5), (50, 50), (1,), "ab"):
+        try:
+            ppv.check_display_percentiles(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bad!r} must be refused")
+    with tempfile.TemporaryDirectory() as tmp, matplotlib.rc_context({"svg.fonttype": "none"}):
+        path = Path(tmp) / "Comparison.svg"
+        ppv._save_comparison_png(
+            path, experimental, synth, "FAB", 0, None, "percentile", rds, ppv._fixed_imaging_theta(),
+            synth_label=ppv.synthetic_source_label("rds", declared_biology=True), labeling_row=row,
+            display_percentiles=(1, 99.9))
+        text = re.sub(r'"data:[^"]*"', '""', path.read_text())
+    assert "norm percentile [p1, p99.9]" in text
 
 
 # ==========================================================================================
@@ -306,7 +330,7 @@ def test_the_headless_copy_drops_only_the_scrubber_widget():
     import nbformat
     original = nbformat.read(pl.NOTEBOOK, as_version=4)
     copy = pl.prepare_notebook(nbformat.read(pl.NOTEBOOK, as_version=4), "/data/X_Synthetic_Video.npz",
-                               norm_mode="percentile", play_every=2)
+                               norm_mode="percentile", play_every=2, norm_percentiles=(1, 99.9))
     assert len(copy.cells) == len(original.cells)
     code_o = [c for c in original.cells if c.cell_type == "code"]
     code_c = [c for c in copy.cells if c.cell_type == "code"]
@@ -314,9 +338,21 @@ def test_the_headless_copy_drops_only_the_scrubber_widget():
     cfg = pl._source(code_c[1])
     assert 'CLIP_PATH = "/data/X_Synthetic_Video.npz"' in cfg and 'NORM_MODE = "percentile"' in cfg
     assert pl.CLIP_PLACEHOLDER not in cfg
-    assert 'NORM_MODE = "full"' in pl._source(code_o[1])        # the notebook's default: fixed over all frames
-    assert (pl._source(code_o[1]).replace(pl.CLIP_PLACEHOLDER, 'CLIP_PATH = "/data/X_Synthetic_Video.npz"')
-            .replace('NORM_MODE = "full"', 'NORM_MODE = "percentile"') == cfg)
+    original_cfg = pl._source(code_o[1])
+    assert 'NORM_MODE = "full"' in original_cfg                  # the notebook's default: fixed over all frames
+    assert "NORM_PERCENTILES = (0.0, 99.99)" in original_cfg     # the editable pair's default
+    assert "NORM_PERCENTILES = (1, 99.9)" in cfg
+    assert (original_cfg.replace(pl.CLIP_PLACEHOLDER, 'CLIP_PATH = "/data/X_Synthetic_Video.npz"')
+            .replace('NORM_MODE = "full"', 'NORM_MODE = "percentile"')
+            .replace("NORM_PERCENTILES = (0.0, 99.99)", "NORM_PERCENTILES = (1, 99.9)") == cfg)
+    for bad in ((99.9, 1), (-1, 50), (0, 100.5), (50, 50)):
+        try:
+            pl.prepare_notebook(nbformat.read(pl.NOTEBOOK, as_version=4), "/data/X_Synthetic_Video.npz",
+                                norm_percentiles=bad)
+        except SystemExit as exc:
+            assert "0 <= lower < upper <= 100" in str(exc), bad
+        else:
+            raise AssertionError(f"{bad} must be refused")
     # Scrubber: the helpers the player uses stay, the widget call goes.
     scrub = pl._source(code_c[2])
     assert "def _roi(" in scrub and "H, W = " in scrub and "interact(" not in scrub

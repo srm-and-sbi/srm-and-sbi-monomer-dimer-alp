@@ -181,10 +181,13 @@ Arguments:
   and fixed over all frames of both clips, so the brightness never changes from frame to frame:
   `full` (default; the whole-clip `[min, max]` of both clips: nothing is clipped, and single frames
   look dim because the brightest pixel anywhere in either clip sets the top) or `percentile` (the
-  whole-clip `[min, p99.99]`, cutting the top-0.01 % hot-pixel sliver for contrast). A per-frame
-  window is not offered: it made the brightness jump between frames, which is useless for a
-  comparison over time. The notebook uses the identical convention, so a given frame renders the
-  same in the static figure and the notebook. It does not change the stored pixels.
+  whole-clip `[p_lower, p_upper]` of both clips at the `--display-percentiles LOWER UPPER` pair, the
+  user's to set; default `0 99.99`, the minimum to the p99.99, cutting the top-0.01 % hot-pixel
+  sliver for contrast; `0 <= LOWER < UPPER <= 100`). The figure's provenance line names the window
+  used (`norm full` or `norm percentile [p0, p99.99]`). A per-frame window is not offered: it made
+  the brightness jump between frames, which is useless for a comparison over time. The notebook uses
+  the identical convention (`NORM_MODE`, `NORM_PERCENTILES`), so a given frame renders the same in
+  the static figure and the notebook. It does not change the stored pixels.
 - `--seed` — RNG seed, used as production uses it (above); each run otherwise draws a fresh motion
   realization (the check reads statistical appearance, not the specific track).
 - `--labeling-law`, `--occupancy` — sensitivity overrides of the condition's labeling, with the DLI
@@ -272,8 +275,9 @@ machine, not just the one that rendered the clip. Step by step:
 4. **Point it at your clip.** In the second code cell, set `CLIP_PATH` to the absolute path
    of your `.npz`. `NORM_MODE` there defaults to `full` (the shared whole-clip `[min, max]` of both
    clips over all frames, one fixed window, the one the static figure uses); `percentile` (the shared
-   whole-clip `[min, p99.99]`, also fixed) is the alternative. Every mode shares one window between
-   the two panels and fixes it over all frames (no per-panel scaling, no per-frame window).
+   whole-clip `[p_lower, p_upper]` at the editable `NORM_PERCENTILES` pair, default `(0.0, 99.99)`,
+   also fixed) is the alternative. Every mode shares one window between the two panels and fixes it
+   over all frames (no per-panel scaling, no per-frame window).
    Run the cell; it prints the clip's identity (entry point, recording, frame count and rate, seed,
    engine version) and its provenance as the static figure states it: the synthetic source, the
    imaging tag and its eleven values, the reaction-diffusion source and its eleven values (for a
@@ -298,7 +302,7 @@ To keep the players of a check as files, `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterio
 executes the notebook headlessly for each clip given and writes `<stem>_Player.html` beside it (or
 under `--out-dir`): the provenance the notebook prints and the real-time player, every frame embedded
 losslessly; the HTML plays in any browser without a kernel. The copy it executes differs from the
-notebook only in `CLIP_PATH` (and `--norm-mode`, `--play-every` when given) and in dropping the
+notebook only in `CLIP_PATH` (and `--norm-mode`, `--norm-percentiles`, `--play-every` when given) and in dropping the
 scrubber's widget call, which needs a live kernel (a headless execution never returns from the cell
 that displays it). It fails when the player is truncated at the embed limit and never overwrites an
 existing player. It needs the notebook environment (`nbformat`, `nbclient`, `nbconvert` and the

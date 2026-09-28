@@ -114,6 +114,15 @@ def synthetic_source_label(map_block, declared_biology=False, fixed_imaging=Fals
     return "SYNTH (fixed imaging)" if fixed_imaging else "SYNTH (MAP imaging)"
 
 
+def imaging_role_label(base, overrides=None):
+    """The figure's imaging header: ``base`` (the role the block plays) plus the ``--set-imaging``
+    overrides applied on top, named, so a sensitivity render never reads as the untouched setup."""
+    if not overrides:
+        return base
+    keys = ", ".join(f"{k}={float(v):.4g}" for k, v in overrides.items())
+    return f"{base} WITH OVERRIDES ({keys})"
+
+
 def render_output_paths(out_dir, stem):
     """The three files one render writes, named before any work is done."""
     out_dir = Path(out_dir)
@@ -396,11 +405,26 @@ def initial_receptor_lines(labeling_row):
             f"({r['dimers_two_labeled_0']} with both subunits labeled) = {vis_m + vis_d} spots"]
 
 
+DISPLAY_PERCENTILES = (0.0, 99.99)
+"""Default percentile pair of the ``percentile`` display window: whole-clip [p0, p99.99] of both clips."""
+
+
+def check_display_percentiles(pair):
+    """The ``percentile`` window's (lower, upper) percentiles as floats, in [0, 100] and increasing."""
+    try:
+        lo, hi = (float(v) for v in pair)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"display percentiles must be two numbers (lower, upper), not {pair!r}") from exc
+    if not (0.0 <= lo < hi <= 100.0):
+        raise ValueError(f"display percentiles must satisfy 0 <= lower < upper <= 100, not ({lo}, {hi})")
+    return lo, hi
+
+
 def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, display_norm,
                          nuisance, imaging_physical, *, synth_label, labeling_row, fixed_imaging=False,
                          fixed_nuisance=False, imaging_label="imaging",
                          rds_label="reaction-diffusion", motion_desc=None, rds_table=None,
-                         labeling_desc=None, rds_outside=()):
+                         labeling_desc=None, rds_outside=(), display_percentiles=DISPLAY_PERCENTILES):
     """Static experimental-vs-synthetic panel. ``synth_label`` (``synthetic_source_label``) names
     the synthetic source in the synthetic panel and the title, as the clip file does; ``sel_desc``
     names the MAP selection and is None when no MAP was read. ``labeling_row`` is the render's
@@ -426,8 +450,9 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     brightness never changes from frame to frame (a per-frame window is not offered: it made the
     brightness jump at playback). ``full`` (default): the whole-clip ``[min, max]`` of both clips
     (nothing clipped; the brightest pixel anywhere in either clip sets the top, so single frames look
-    dim). ``percentile``: the whole-clip ``[min, p99.99]``, dropping the top-0.01% hot-pixel sliver for
-    contrast. The histogram is in ADU in every mode."""
+    dim). ``percentile``: the whole-clip ``[p_lower, p_upper]`` of both clips at the ``display_percentiles``
+    pair, the user's to set (default ``DISPLAY_PERCENTILES`` = (0, 99.99): the minimum to the p99.99,
+    dropping the top-0.01% hot-pixel sliver for contrast). The histogram is in ADU in every mode."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -463,9 +488,12 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     proj_clim = (float(min(emp.min(), smp.min())), float(max(emp.max(), smp.max())))
     if display_norm == "full":                    # whole-clip [min, max] of both clips; nothing clipped
         frame_clim = (float(min(eq[0], sq[0])), float(max(eq[-1], sq[-1])))
-    elif display_norm == "percentile":            # whole-clip [min, p99.99]; drops the hot-pixel sliver
-        frame_clim = (float(min(exp_r.min(), syn_r.min())),
-                      float(max(np.percentile(exp_r, 99.99), np.percentile(syn_r, 99.99))))
+        norm_desc = "full"
+    elif display_norm == "percentile":            # whole-clip [p_lower, p_upper] of both clips
+        p_lo, p_hi = check_display_percentiles(display_percentiles)
+        frame_clim = (float(min(np.percentile(exp_r, p_lo), np.percentile(syn_r, p_lo))),
+                      float(max(np.percentile(exp_r, p_hi), np.percentile(syn_r, p_hi))))
+        norm_desc = f"percentile [p{p_lo:g}, p{p_hi:g}]"
     else:
         raise ValueError(f"display_norm must be 'full' or 'percentile', not {display_norm!r}")
     exp_clim = syn_clim = frame_clim
@@ -560,7 +588,7 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
         + (f"labeling: {labeling_desc}\n" if labeling_desc else "")
         + "initial receptors (frame 0, this render):\n" + "\n".join(initial_receptor_lines(labeling_row)) + "\n"
         + f"motion: {motion_desc or ('fixed nuisance (pinned)' if fixed_nuisance else 'fresh draw')}"
-        f"; norm {display_norm}",
+        f"; norm {norm_desc}",
         fontsize=6.5, va="top", family="monospace")
     fig.suptitle(fig_title, fontsize=11)
     fig.tight_layout()
@@ -634,7 +662,9 @@ def run_posterior_predictive_video(cfg, args):
                   "non-camera parameters at prior-center nominals")
         else:
             print("    MAP          : none read (the reaction-diffusion block is declared)")
-        print(f"    imaging held : {S['imaging_desc']}")
+        print(f"    imaging held : {S['imaging_desc']}"
+              + (f"  WITH --set-imaging OVERRIDES {_parse_kv(args.set_imaging, '--set-imaging')}"
+                 if args.set_imaging else ""))
         if S["map_block"] == "rds":
             try:
                 img = resolve_biology_imaging(PARAMETERS.machine.root_for("EVAL"), S["map_label"],
@@ -648,7 +678,8 @@ def run_posterior_predictive_video(cfg, args):
         print(f"    labeling     : {plan.describe()}")
         print(f"    experimental : {experimental_tif}  "
               f"[{'OK' if experimental_tif.exists() else 'MISSING'}]")
-        print(f"    display norm : {args.display_norm}")
+        print(f"    display norm : {args.display_norm}"
+              + (f" {list(args.display_percentiles)}" if args.display_norm == "percentile" else ""))
         print(f"[DRY RUN] would write under:\n    {out_dir}/\n"
               f"        {stem}_{{Synthetic_Video.npz,Comparison.png,Trajectory.h5}}")
         existing = [p.name for p in render_output_paths(out_dir, stem).values() if p.exists()]
@@ -751,7 +782,8 @@ def run_posterior_predictive_video(cfg, args):
     declared_label = (None if declared is None else
                       f"DECLARED reaction-diffusion ({declared[1]['scenario']['name']}, absolute)")
     if S["map_block"] == "rds":
-        imaging_label = "FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)"
+        imaging_label = imaging_role_label("FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)",
+                                           imaging_identity.get("set_imaging_overrides"))
         if declared_label:
             rds_label = declared_label
             motion_desc = "from the declared reaction-diffusion configuration (not a draw)"
@@ -760,7 +792,9 @@ def run_posterior_predictive_video(cfg, args):
             motion_desc = "from the MAP reaction-diffusion parameters (not a draw)"
         rds_table = parameter_table(cfg)                 # the eleven biology parameters
     else:
-        imaging_label = ("FIXED imaging (MET values)" if args.fixed_imaging_parameters
+        imaging_label = (imaging_role_label("FIXED imaging (MET values)",
+                                            imaging_identity.get("set_imaging_overrides"))
+                         if args.fixed_imaging_parameters
                          else "INFERRED imaging (MAP theta, absolute)")
         if declared_label:
             rds_label = declared_label
@@ -772,6 +806,7 @@ def run_posterior_predictive_video(cfg, args):
     _save_comparison_png(outputs["figure"], experimental, synth_u16,
                          args.kind, args.cell, args.map_source if needs_map else None,
                          args.display_norm, rds_provenance, imaging_physical,
+                         display_percentiles=tuple(args.display_percentiles),
                          synth_label=synth_label, labeling_row=labeling_row,
                          imaging_label=imaging_label, rds_label=rds_label,
                          motion_desc=motion_desc, rds_table=rds_table,
@@ -873,7 +908,13 @@ def build_parser(description):
                    help="color window of the comparison figure's image panels, always shared by the "
                         "experimental and synthetic panel and fixed over all frames of both clips: 'full' "
                         "(default; the whole-clip [min, max]) or 'percentile' (the whole-clip "
-                        "[min, p99.99]). Display-only -- never enters the quantitative comparison.")
+                        "[p_lower, p_upper] at --display-percentiles). Display-only -- never enters the "
+                        "quantitative comparison.")
+    p.add_argument("--display-percentiles", type=float, nargs=2, default=list(DISPLAY_PERCENTILES),
+                   metavar=("LOWER", "UPPER"),
+                   help="the 'percentile' window's percentile pair, 0 <= LOWER < UPPER <= 100 "
+                        f"(default {DISPLAY_PERCENTILES[0]:g} {DISPLAY_PERCENTILES[1]:g}: the minimum to "
+                        "the p99.99, dropping the top-0.01%% hot-pixel sliver). Ignored under 'full'.")
     p.add_argument("--fixed-imaging-parameters", action="store_true",
                    help="detector only: skip the MAP database and pin imaging to MET values.")
     p.add_argument("--set-imaging", action="append", default=[], metavar="KEY=VALUE",
