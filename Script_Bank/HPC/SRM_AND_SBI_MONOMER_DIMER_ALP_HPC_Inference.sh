@@ -20,7 +20,7 @@
 #     the default peak, learning_rate_minimum*max_factor = 1.28e-03),
 #   RESURRECT (set 1 to load the existing checkpoint and continue training from it
 #     -- continue a run stopped by the wall, or add epochs; unset = fresh run),
-#   NETWORK_PRESET (baseline|capacity256; parameterization.NETWORK_PRESETS, forwarded as
+#   NETWORK_PRESET (baseline|capacity256|kernel7|earlyconv|statspool; parameterization.NETWORK_PRESETS, forwarded as
 #     --network-preset; unset = baseline, the configured architecture),
 #   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
 #     PRODUCT of this stage -- Paths.product_label -- so a named experiment lives beside the

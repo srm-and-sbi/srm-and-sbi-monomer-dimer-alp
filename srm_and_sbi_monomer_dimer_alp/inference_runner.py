@@ -170,6 +170,9 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
           f"(feature dim {network_cfg.start_channels * 2 ** (network_cfg.n_conv_layers - 1)}), "
           f"MAF hidden={flow_cfg.hidden_features} transforms={flow_cfg.num_transforms} "
           f"blocks={flow_cfg.num_blocks} dropout={flow_cfg.dropout_probability}")
+    print(f"                         encoder: first spatial kernel {network_cfg.first_spatial_kernel}, "
+          f"extra spatial convs {network_cfg.extra_spatial_convs} in the first "
+          f"{network_cfg.extra_spatial_conv_blocks} block(s), spatial pooling {network_cfg.spatial_pooling}")
     print(f"  --artifact-tag       : {args.artifact_tag}   -> product label "
           f"{paths.product_label(timing.label, args.artifact_tag)}")
     print(f"  --replay-loss        : {args.replay_loss}        (per-epoch TRAIN loss in eval mode, comparable to TEST; off = cheaper)")
@@ -267,7 +270,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  embedding : Complex3DCNN(n_conv={network_cfg.n_conv_layers}, "
           f"n_attn={network_cfg.n_attn_layers}, "
           f"start_ch={network_cfg.start_channels}, "
-          f"temporal_target_frames={network_cfg.temporal_target_frames}) "
+          f"temporal_target_frames={network_cfg.temporal_target_frames}, "
+          f"first_spatial_kernel={network_cfg.first_spatial_kernel}, "
+          f"extra_spatial_convs={network_cfg.extra_spatial_convs}x{network_cfg.extra_spatial_conv_blocks}, "
+          f"spatial_pooling={network_cfg.spatial_pooling}) "
           f"+ TemporalTransformer(heads={network_cfg.attention_heads})")
     print(f"  estimator : MAF(hidden_features={flow_cfg.hidden_features}, "
           f"num_transforms={flow_cfg.num_transforms}, num_blocks={flow_cfg.num_blocks}, "
@@ -351,6 +357,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         use_temporal_attention=network_cfg.use_temporal_attention,
         attention_heads=network_cfg.attention_heads,
         temporal_target_frames=network_cfg.temporal_target_frames,
+        first_spatial_kernel=network_cfg.first_spatial_kernel,
+        extra_spatial_convs=network_cfg.extra_spatial_convs,
+        extra_spatial_conv_blocks=network_cfg.extra_spatial_conv_blocks,
+        spatial_pooling=network_cfg.spatial_pooling,
         verbose=args.verbose,
     )
     embedding_net = torch.compile(Complex3DCNN(**embedding_args)).to(device)

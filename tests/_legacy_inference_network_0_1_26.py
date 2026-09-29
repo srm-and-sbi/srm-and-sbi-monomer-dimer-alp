@@ -1,3 +1,10 @@
+"""FROZEN test fixture: the embedding network exactly as released in 0.1.26, before the encoder-screening
+settings of 0.1.27 (`first_spatial_kernel`, `extra_spatial_convs`, `extra_spatial_conv_blocks`,
+`spatial_pooling`). A verbatim copy of `srm_and_sbi_monomer_dimer_alp/inference_network.py` at that release,
+kept so `tests/test_inference_network.py` can show, value for value, that the production class's defaults
+still reproduce it. Not imported by the package; never edit it to follow the production module.
+"""
+# --- verbatim 0.1.26 module follows ---
 """PyTorch ANN architecture for the inference stage.
 
 This module defines the **embedding network** that maps a video tensor
@@ -14,14 +21,8 @@ Forward pipeline:
       |     PSF + its motion across a few neighboring frames).
       |   - Spatial dims are halved at each layer via MaxPool3d.
       |   - Temporal dim T is preserved through the conv stack.
-      |   - Three encoder settings, each off by default, widen what the
-      |     stack keeps before pooling (a wider first spatial kernel, extra
-      |     spatial-only convolutions in the early blocks) or what the
-      |     spatial reduction keeps (mean, or mean + std + max projected
-      |     back to C). See the encoder-screening section of
-      |     DETECTOR_WORKFLOW.md.
       |
-      v   Spatial reduction  ->  [B, C, T]
+      v   Spatial averaging  ->  [B, C, T]
       |
       v   TemporalTransformer (attention over the temporal sequence)
       |   - Captures long-range temporal dependencies that 3D convs
@@ -51,14 +52,6 @@ import math
 
 import torch
 from torch import nn
-
-SPATIAL_POOLINGS = ("mean", "stats")
-"""How the conv stack's final feature maps are reduced over space, per channel and time step:
-``mean`` (the mean over positions; the original network) or ``stats`` (mean, standard deviation and
-maximum over positions, concatenated to 3C and projected back to C by one linear layer)."""
-STATS_EPS = 1e-6
-"""Added to the spatial variance under ``stats`` pooling before the square root, so a constant
-feature map (zero variance) has a finite gradient."""
 
 
 # =============================================================================
@@ -246,27 +239,18 @@ class Complex3DCNN(nn.Module):
               |        Conv3d(kernel=(k,3,3))              -- first block strides time by
               |                                               `s` (k = max(3, s)) to reduce T
               |                                               toward temporal_target_frames;
-              |                                               later blocks preserve T, H, W;
-              |                                               the first block's spatial kernel
-              |                                               is `first_spatial_kernel` (3)
+              |                                               later blocks preserve T, H, W
               |        BatchNorm3d
               |        Mish activation
-              |        [Conv3d(kernel=(1,3,3)) + BatchNorm3d + Mish] x extra_spatial_convs
-              |                                            -- only in the first
-              |                                               `extra_spatial_conv_blocks`
-              |                                               blocks; none by default
               |        MaxPool3d(kernel=(1,2,2))           -- halves H, W; T preserved
               |      Channels double at each layer:
               |        in_channels -> start_channels -> ... -> start_channels * 2^(n-1)
               v
         features:        [B, C, T', H', W']   (T' = reduced temporal length)
               |
-              |   2. Spatial reduction (`spatial_pooling`)
-              |      ------------------------------------
-              |      `mean`:  mean over (H', W').
-              |      `stats`: mean, standard deviation and maximum over (H', W'),
-              |               concatenated to 3C and projected back to C by one
-              |               linear layer (per time step).
+              |   2. Spatial averaging
+              |      -----------------
+              |      Mean over (H', W') axes.
               v
         features:        [B, C, T]
               |
@@ -332,30 +316,6 @@ class Complex3DCNN(nn.Module):
             `n_frames = duration_seconds * frame_rate`, a given target maps to a
             different physical duration per frame rate (100 frames = 2 s @ 50
             FPS = 1 s @ 100 FPS = 4 s @ 25 FPS). `None` disables the reduction.
-        first_spatial_kernel: Spatial kernel size of the FIRST block's
-            convolution (odd, at least 3; padding keeps H and W). Every later
-            block keeps 3 x 3. The default 3 is the original network; a wider
-            kernel (7) enlarges the neighborhood seen at full resolution.
-        extra_spatial_convs: Number of additional spatial-only convolutions
-            (kernel (1, 3, 3), each followed by BatchNorm3d and Mish, same channel
-            count) inserted after a block's main convolution and before its
-            pooling, in the first `extra_spatial_conv_blocks` blocks. The
-            temporal reach is unchanged. Default 0 is the original network.
-        extra_spatial_conv_blocks: How many leading blocks receive the extra
-            convolutions (default 2: the two blocks at full and half resolution,
-            where a spot still spans several pixels). Ignored when
-            `extra_spatial_convs` is 0.
-        spatial_pooling: `mean` (default, the original network: the mean of the
-            final feature maps over positions) or `stats` (mean, standard
-            deviation and maximum over positions, concatenated to 3C and
-            projected back to C by one linear layer, so the temporal transformer's
-            width is unchanged).
-        verbose: Print the resolved architecture at construction.
-
-    The defaults reproduce the original network exactly: the same modules in the
-    same order, the same state-dictionary keys and the same forward computation,
-    so an estimator saved before these settings existed rebuilds and loads
-    unchanged.
     """
 
     def __init__(self,
@@ -367,29 +327,9 @@ class Complex3DCNN(nn.Module):
                  use_temporal_attention: bool = True,
                  attention_heads: int = 4,
                  temporal_target_frames: int = None,
-                 first_spatial_kernel: int = 3,
-                 extra_spatial_convs: int = 0,
-                 extra_spatial_conv_blocks: int = 2,
-                 spatial_pooling: str = "mean",
                  verbose: bool = False):
         super().__init__()
         self.use_temporal_attention = use_temporal_attention
-        first_spatial_kernel = int(first_spatial_kernel)
-        if first_spatial_kernel < 3 or first_spatial_kernel % 2 == 0:
-            raise ValueError(f"first_spatial_kernel must be odd and at least 3, not {first_spatial_kernel}")
-        extra_spatial_convs = int(extra_spatial_convs)
-        extra_spatial_conv_blocks = int(extra_spatial_conv_blocks)
-        if extra_spatial_convs < 0:
-            raise ValueError(f"extra_spatial_convs must be non-negative, not {extra_spatial_convs}")
-        if extra_spatial_convs and not 0 <= extra_spatial_conv_blocks <= n_conv_layers:
-            raise ValueError(f"extra_spatial_conv_blocks must lie in [0, n_conv_layers={n_conv_layers}], "
-                             f"not {extra_spatial_conv_blocks}")
-        if spatial_pooling not in SPATIAL_POOLINGS:
-            raise ValueError(f"spatial_pooling must be one of {SPATIAL_POOLINGS}, not {spatial_pooling!r}")
-        self.first_spatial_kernel = first_spatial_kernel
-        self.extra_spatial_convs = extra_spatial_convs
-        self.extra_spatial_conv_blocks = extra_spatial_conv_blocks
-        self.spatial_pooling = spatial_pooling
 
         # ---- Temporal reduction factor (folded into the first conv) ---------
         # Long videos are reduced toward `temporal_target_frames` by striding
@@ -443,31 +383,19 @@ class Complex3DCNN(nn.Module):
         for layer_index in range(n_conv_layers):
             # Only the first block strides time (by `temporal_stride`); every
             # later block keeps the original (3,3,3)/stride-1 temporal behavior.
-            # Only the first block's SPATIAL kernel is `first_spatial_kernel`.
             if layer_index == 0:
                 kernel_t, stride_t, pad_t = first_kernel_t, temporal_stride, first_pad_t
-                kernel_s = first_spatial_kernel
             else:
                 kernel_t, stride_t, pad_t = 3, 1, 1
-                kernel_s = 3
             layers.extend([
                 nn.Conv3d(in_channels, out_channels,
-                          kernel_size=(kernel_t, kernel_s, kernel_s),
+                          kernel_size=(kernel_t, 3, 3),
                           stride=(stride_t, 1, 1),
-                          padding=(pad_t, kernel_s // 2, kernel_s // 2)),
+                          padding=(pad_t, 1, 1)),
                 nn.BatchNorm3d(out_channels),
                 nn.Mish(),
+                nn.MaxPool3d(kernel_size=(1, 2, 2)),  # spatial /2 each block; time via block-1 stride
             ])
-            # Extra spatial-only processing before this block's pooling (early blocks only).
-            if layer_index < extra_spatial_conv_blocks:
-                for _ in range(extra_spatial_convs):
-                    layers.extend([
-                        nn.Conv3d(out_channels, out_channels, kernel_size=(1, 3, 3),
-                                  stride=1, padding=(0, 1, 1)),
-                        nn.BatchNorm3d(out_channels),
-                        nn.Mish(),
-                    ])
-            layers.append(nn.MaxPool3d(kernel_size=(1, 2, 2)))  # spatial /2 each block; time via block-1 stride
             in_channels = out_channels
             out_channels *= 2
         self.features = nn.Sequential(*layers)
@@ -485,12 +413,6 @@ class Complex3DCNN(nn.Module):
             self.feature_dim = channels
             self.reduced_frames = reduced_frames   # temporal length seen by the transformer
 
-        # ---- Spatial reduction ----------------------------------------------
-        # `mean` adds no module (the original network). `stats` adds one linear
-        # projection 3C -> C, applied per time step after the transpose in forward.
-        if spatial_pooling == "stats":
-            self.spatial_projection = nn.Linear(3 * self.feature_dim, self.feature_dim)
-
         # ---- Optional temporal transformer ----------------------------------
         if use_temporal_attention:
             self.temporal_transformer = TemporalTransformer(
@@ -505,44 +427,10 @@ class Complex3DCNN(nn.Module):
                 f"; temporal x{temporal_stride} ({n_frames} -> {self.reduced_frames} frames)"
                 if temporal_stride > 1 else "; no temporal reduction"
             )
-            extra_part = (f", {extra_spatial_convs} extra spatial conv(s) in the first "
-                          f"{extra_spatial_conv_blocks} block(s)" if extra_spatial_convs else "")
             print(
                 f"Complex3DCNN initialized: {n_conv_layers} CNN layers{attn_part}{reduce_part}; "
-                f"first spatial kernel {first_spatial_kernel}{extra_part}; spatial pooling {spatial_pooling}; "
-                f"spatial receptive field {self.spatial_receptive_field()} px; "
                 f"pre-pool shape {pre_pool_shape}; feature dim {self.feature_dim}"
             )
-
-    def spatial_receptive_field(self) -> int:
-        """Theoretical spatial receptive field of one final feature-map position, in input pixels,
-        from the conv stack's kernels and strides (the ``(kernel - 1) * jump`` recursion)."""
-        return self._receptive_field(axis=1)
-
-    def temporal_receptive_field(self) -> int:
-        """Theoretical temporal receptive field of one final feature-map position, in input frames."""
-        return self._receptive_field(axis=0)
-
-    def _receptive_field(self, axis: int) -> int:
-        field, jump = 1, 1
-        for module in self.features:
-            if isinstance(module, (nn.Conv3d, nn.MaxPool3d)):
-                kernel = module.kernel_size[axis] if isinstance(module.kernel_size, tuple) else module.kernel_size
-                stride = module.stride[axis] if isinstance(module.stride, tuple) else module.stride
-                field += (kernel - 1) * jump
-                jump *= stride
-        return field
-
-    def _reduce_space(self, x: torch.Tensor) -> torch.Tensor:
-        """``[B, C, T, H', W'] -> [B, C, T]`` under the configured spatial pooling."""
-        if self.spatial_pooling == "mean":
-            return torch.mean(x, dim=(3, 4))
-        flat = x.flatten(3)                                     # [B, C, T, H'W']
-        mean = flat.mean(dim=3)
-        std = torch.sqrt(flat.var(dim=3, unbiased=False) + STATS_EPS)
-        amax = flat.amax(dim=3)
-        stats = torch.cat([mean, std, amax], dim=1)             # [B, 3C, T]
-        return self.spatial_projection(stats.transpose(1, 2)).transpose(1, 2)   # linear over 3C, per t
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Encode a video into a summary embedding.
@@ -560,7 +448,7 @@ class Complex3DCNN(nn.Module):
         if x.dim() == 4:
             x = x.unsqueeze(1)                # [B, 1, T, H, W]
         x = self.features(x)                  # [B, C, T, H', W']
-        x = self._reduce_space(x)             # spatial reduction -> [B, C, T]
+        x = torch.mean(x, dim=(3, 4))         # spatial mean -> [B, C, T]
         if self.use_temporal_attention:
             x = x.transpose(1, 2)              # [B, T, C]
             x = self.temporal_transformer(x)   # CLS token -> [B, C]

@@ -1870,3 +1870,130 @@ limitation. The
 joint structure of the posterior, the parameter-pair dependence within each window's draws that a single point
 cannot carry and that the competing solutions above point to, is the next layer of this reading and is not
 analyzed here.
+
+### 9.9 The encoder screening: three isolated changes to the embedding network
+
+**Motivation and objective.** The direct PSF-width estimator recovers `sigma_r` from the synthetic EVAL
+videos (slope 0.90, correlation 0.96, MAE 0.046 dex; §9.6) while both neural estimators leave it flat
+(slope 0.04 baseline, 0.10 `capacity256`; §9.7). The information is in the frames, and the neural
+pipeline does not use it. That establishes a gap in the neural pipeline, not yet a proven encoder
+bottleneck, and `sigma_r` is the case that makes the gap measurable, not the objective. The objective is
+the whole posterior estimator: to recover more of the information the videos carry, across the full
+prior, with calibrated and informative posteriors. `sigma_r` motivates the screening and does not select
+its winner. The embedding network of this repository is the one the predecessor repository trained,
+module for module; the multiple-dye videos carry a noisier signal per spot, and the question is whether
+the encoder discards what the noisier signal still holds.
+
+**Receptive-field arithmetic against the spot.** The conv stack is five blocks of one `3 × 3 × 3`
+convolution, batch normalization, Mish and a `2 × 2` spatial max-pooling; its final position sees 94 × 94
+input pixels over 11 frames in theory, and the final `8 × 8` maps are averaged over space before the
+temporal transformer. The renderer draws each emitter's width `w = mu_r · exp(sigma_r · Z)` (a lognormal;
+`simulation_dli_support`), with `FWHM = 2 √(ln 2) · w`. Over the prior (`mu_r` in [1, 1.995] px, `sigma_r`
+in [0.10, 0.56]), the median FWHM spans 1.67 to 3.32 px, and at the upper corner of both parameters the
+central 95 % of individual FWHMs spans 1.10 to 10.0 px. The first block's `3 × 3` kernel therefore sees
+less than one spot at the wider end of the prior, and the second block sees a spot at half resolution with
+one `16`-channel convolution. Early downsampling may make spatial variation harder to preserve,
+particularly across the broad width populations allowed by the prior, and the spatial mean keeps only the
+first moment of the local features (`sigma_r` is the spread of the width population; `sigma_pc` the spread
+of the log brightness). Additional early processing and richer spatial summaries test whether useful
+information is currently being discarded. A first kernel need not span a whole spot; the question is
+whether the early layers encode enough before downsampling, and whether the spatial mean keeps it. The working-vector FWHM (2.64 px at `mu_r` 1.585) is not grounds for choosing a kernel: the
+encoder must serve the prior.
+
+**The three arms.** Each changes one encoder setting at the baseline channel widths, depth, temporal
+transformer and flow (`InferenceNetwork` fields; `NETWORK_PRESETS`; `Complex3DCNN`):
+
+| arm | preset | change | question |
+|---|---|---|---|
+| control | `baseline` | none | the estimator of record (§6.10, §9.7) |
+| A | `kernel7` | first block's spatial kernel `3 × 3` → `7 × 7` (temporal kernel unchanged) | does a larger early spatial neighborhood help? |
+| B | `earlyconv` | one spatial-only `1 × 3 × 3` convolution, batch normalization and Mish before the pooling of blocks 1 and 2 | does more processing before downsampling help? |
+| C | `statspool` | the final maps' mean, standard deviation and maximum over positions, concatenated to 3C and projected back to C by one linear layer, in place of the mean alone | does the final mean discard useful information? |
+
+| | `baseline` | `kernel7` | `earlyconv` | `statspool` |
+|---|---|---|---|---|
+| Embedding parameters | 691,392 | 692,352 | 694,344 | 740,672 |
+| Conv-stack activations kept for the backward pass, per 2 s video (fp32, the §9.7 convention) | 0.85 GiB | 0.85 GiB | 1.44 GiB | 0.85 GiB |
+| Theoretical spatial reach of a final position | 94 px | 98 px | 100 px | 94 px |
+| Temporal reach | 11 frames | 11 frames | 11 frames | 11 frames |
+
+Arm B's extra convolutions are spatial-only so that it does not enlarge the temporal reach at the same
+time; its cost is activation memory at full and half resolution. Arm C's statistics are computed on the
+`8 × 8` maps, so its cost is the 49,280 projection parameters and a reduction that must be measured, not
+estimated. Arm A adds no activations. The defaults reproduce the original network exactly (same modules,
+same state-dictionary keys, same forward values; `tests/test_inference_network.py`), so every persisted
+estimator rebuilds unchanged, and the settings are persisted in the rebuild specification of every new
+estimator. Combinations are not tested initially; one is considered only if the individual results
+justify it. The three are targeted first experiments, not a claim that the temporal processing needs no
+improvement: at 2 s the network reduces nothing in time and the transformer attends over all 100 frames.
+
+**What is held fixed.** The multiple-dye datasets and splits (TRAIN 200 tasks, TEST 50, EVAL 25), the six
+detector targets and their priors, the preprocessing and standardization, batch normalization, the
+optimizer, the learning-rate schedule, the number of epochs, the global batch of 1024 and the flow at the
+baseline's settings. With the flow fixed a difference between arms is attributable to the encoder and its
+training interaction; the flow question of §9.7 stays separate and is not folded in. The per-rank batch is
+relaxed only for device memory, as §9.7 relaxed it, and the smoke measures the actual peak first.
+
+**Naming.** Products carry the artifact tags `KERNEL7`, `EARLYCONV` and `STATSPOOL` after the timing label
+(`--artifact-tag`, dispatcher knob `ARTIFACT_TAG`, presets through `--network-preset` / `NETWORK_PRESET`),
+so `..._DETECTOR_FAB_2S_50FPS_KERNEL7_Estimator.npz`, `..._KERNEL7_MAP_Recovery`,
+`..._KERNEL7_Posterior_Calibration` and the job names `..._2S_50FPS_KERNEL7_Inference` / `_Evaluation` /
+`_Posterior_Calibration`, beside the baseline's and `CAP256`'s products, which are not touched.
+
+**Protocol.** Each step needs the user's word before it runs.
+
+0. *Probe* (diagnostic, no training): `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Embedding_Probe.py`
+   embeds EVAL videos through the frozen baseline and `capacity256` encoders and fits a ridge regression
+   per imaging parameter (log10), penalty chosen on a development set, scored on a task-disjoint held-out
+   set beside the null error and in the low and high halves of the true values. With rcl01's two EVAL
+   tasks: task 0's first 800 videos fit and its last 200 select the penalty (simulation-disjoint), task 1's
+   1,000 videos are scored (task-disjoint), the same split for both encoders; adequate for a first
+   diagnostic, not a fresh final validation. All six parameters are reported; `sigma_r` is the informative case because an independent method recovers it. A
+   well-predicted parameter is linearly accessible in the embedding, which points at the flow and the
+   training interface without fully locating the cause of a posterior-quality deficit; a poorly predicted
+   one is not shown to be absent. If the probe already
+   recovers the poorly estimated parameters, the flow and training interface is investigated before the
+   screen. A GPU pass on a machine with full EVAL tasks (rcl01 holds tasks 0 and 1; JUWELS and JUPITER the
+   25).
+1. *Smoke* (code, memory and timing; deleted afterwards): one epoch on TRAIN 4 / TEST 1 at batch 8 for
+   the three presets under tags `SMOKEKERNEL7`, `SMOKEEARLYCONV`, `SMOKESTATSPOOL`, on the machine that
+   will train. It records each arm's peak allocated and reserved device memory and epoch time, from which
+   the per-rank batch follows, and confirms the tagged products, the rebuild specification and the
+   downstream loaders. Its estimates carry no scientific meaning.
+2. *Training*, one run per arm under the production protocol of §9.7 on the full data: TRAIN 200 / TEST
+   50, 100 epochs in two legs, global batch 1024, the per-rank batch set from the smoke (`earlyconv` is
+   expected to need 16 per rank, as `capacity256` did; the others 32). The proposed commands, with the
+   measured memory and throughput, are presented before the runs are requested.
+3. *Evaluation and Posterior_Calibration* under each tag, exactly as for the baseline and `CAP256`, under the
+   corrected MAP routine (§9.8), so the four estimators are compared on the same EVAL videos with the same
+   settings.
+
+**Scorecard.** The comparison judges the whole posterior, not one parameter:
+
+| aspect | what is assessed |
+|---|---|
+| parameter recovery | MAE, bias, slope and correlation for all six parameters (the §6.10 views: MAP, median, SGM) |
+| calibration | marginal and joint coverage at the nominal levels; SBC; TARP; L-C2ST |
+| informativeness | posterior widths beside coverage; broadening alone is not an improvement |
+| joint posterior quality | the held-out log density at the true parameter vector (Posterior_Calibration's truth log-density), identical coordinates and settings for every arm |
+| robustness across the prior | the same metrics in predefined regimes (the low and high halves of `mu_r` and `sigma_r`, the operating subgroup of §6.10), not only aggregates |
+
+The held-out log density is a complementary measure of the joint predictive distribution, not a
+substitute for recovery and calibration, and distinct from the training or TEST loss, which is the
+model-selection criterion and never proof of inference.
+
+**Selection rule**, written before any result is read. Advance the candidate with the strongest balanced
+improvement in posterior quality, not the largest gain in `sigma_r`. A substantial `sigma_r` improvement
+with the other capabilities preserved is valuable; better calibration and informativeness across several
+parameters can also justify advancement; better point estimates with worse uncertainty estimates are not
+an improvement; no aggregate score may conceal a parameter collapse (the `capacity256` bleaching collapse
+is the precedent); small or conflicting differences are inconclusive until a focused repeat of the control
+and the leading candidate resolves them. One candidate advances at most. If it advances, the production
+gate is the standard one: its Evaluation and calibration compared with the baseline and `CAP256` records,
+then the adoption decision. A `CAP256`-flow combination is not added automatically; it is a separate
+question the results may or may not justify. Biology training remains a separate decision: a shared
+encoder does not guarantee that a detector improvement transfers to the biological parameters.
+
+**Status.** Implemented and tested in 0.1.27 (the settings, the presets, the probe, the tests); nothing
+trained, nothing probed, nothing adopted. Next: the probe on the frozen baseline and `capacity256`
+encoders, then the smoke, then the three trainings, each on the user's word.

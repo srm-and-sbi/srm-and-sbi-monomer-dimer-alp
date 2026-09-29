@@ -1198,6 +1198,18 @@ class InferenceNetwork:
       frames is not reduced at all, and peak memory therefore does not increase
       monotonically with duration.
 
+    - `first_spatial_kernel`, `extra_spatial_convs`, `extra_spatial_conv_blocks`,
+      `spatial_pooling`: the encoder-screening settings of DETECTOR_WORKFLOW.md
+      (the section on the encoder screening). Their defaults (3, 0, 2, `mean`)
+      are the original network, module for module; each screening preset in
+      `NETWORK_PRESETS` changes exactly one of them. `first_spatial_kernel` is
+      the first block's spatial kernel (odd, at least 3); `extra_spatial_convs`
+      adds that many spatial-only (1, 3, 3) convolutions, each with batch
+      normalization and Mish, before the pooling of the first
+      `extra_spatial_conv_blocks` blocks; `spatial_pooling` reduces the final
+      feature maps over space by their `mean` or by their `stats` (mean,
+      standard deviation and maximum, projected back to the channel width).
+
     The network returns the CLS-token embedding directly, which feeds the
     downstream MAF density estimator.
     """
@@ -1209,6 +1221,10 @@ class InferenceNetwork:
     attention_heads: int = 4
     temporal_target_frames: int = 100             # reduce longer videos toward ~this many frames
     #                                               (see class docstring); None disables reduction.
+    first_spatial_kernel: int = 3                 # first block's spatial kernel (odd, >= 3)
+    extra_spatial_convs: int = 0                  # spatial-only convs added before early pooling
+    extra_spatial_conv_blocks: int = 2            # ... in this many leading blocks
+    spatial_pooling: str = "mean"                 # "mean" | "stats" (inference_network.SPATIAL_POOLINGS)
 
 
 @dataclass(frozen=True)
@@ -1317,11 +1333,23 @@ class InferenceFlow:
 #   token, 64 per attention head), and the flow to hidden_features 128 / num_transforms 8 /
 #   num_blocks 2 / dropout 0.1. A combined test: an improvement supports the larger
 #   configuration but does not isolate the embedding from the flow.
+#
+#   kernel7 / earlyconv / statspool -- the three isolated encoder arms of the encoder screening
+#   (DETECTOR_WORKFLOW.md, the section on the encoder screening). Each changes ONE encoder setting
+#   at the baseline widths, depth, temporal transformer and flow: `kernel7` widens the first
+#   block's spatial kernel from 3 to 7; `earlyconv` adds one spatial-only (1, 3, 3) convolution
+#   (with batch normalization and Mish) before the pooling of blocks 1 and 2; `statspool`
+#   reduces the final feature maps by their mean, standard deviation and maximum over positions,
+#   projected back to the channel width, instead of the mean alone. The flow is the baseline's
+#   in all three, so a difference is attributable to the encoder and its training.
 NETWORK_PRESETS: dict = {
     "baseline": dict(network={}, flow={}),
     "capacity256": dict(network=dict(start_channels=16),
                         flow=dict(hidden_features=128, num_transforms=8, num_blocks=2,
                                   dropout_probability=0.1)),
+    "kernel7": dict(network=dict(first_spatial_kernel=7), flow={}),
+    "earlyconv": dict(network=dict(extra_spatial_convs=1, extra_spatial_conv_blocks=2), flow={}),
+    "statspool": dict(network=dict(spatial_pooling="stats"), flow={}),
 }
 
 

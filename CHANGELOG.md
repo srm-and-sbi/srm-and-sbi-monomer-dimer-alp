@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.27 - 2026-09-29
+
+The encoder screening of the detector estimator: three isolated encoder settings, each a named preset
+that changes one thing at the baseline widths, depth, temporal transformer and flow, and a linear probe of
+the frozen encoders that opens it. Nothing is trained or adopted by this release; the protocol, the
+scorecard and the selection rule are recorded before any run (DETECTOR_WORKFLOW.md, the section on the
+encoder screening). No estimator, estimate, prior, production law or production default changes.
+
+### Added
+
+- `Complex3DCNN` takes `first_spatial_kernel` (the first block's spatial kernel, odd, at least 3),
+  `extra_spatial_convs` and `extra_spatial_conv_blocks` (spatial-only (1, 3, 3) convolutions, each with
+  batch normalization and Mish, inserted before the pooling of the leading blocks) and `spatial_pooling`
+  (`mean`, or `stats`: mean, standard deviation and maximum over positions projected back to the channel
+  width by one linear layer). The defaults (3, 0, 2, `mean`) reproduce the original network module for
+  module, with the same state-dictionary keys and the same forward values, so every persisted estimator
+  rebuilds and loads unchanged. The class reports its theoretical spatial and temporal receptive fields.
+  The settings are `InferenceNetwork` fields, forwarded by the Inference stage and persisted in the
+  estimator's rebuild specification.
+- Presets `kernel7` (first spatial kernel 7), `earlyconv` (one extra spatial convolution before the pooling
+  of blocks 1 and 2) and `statspool` (statistics pooling) beside `baseline` and `capacity256`; each
+  leaves the flow at the baseline's, so a difference is attributable to the encoder and its training.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Embedding_Probe.py` with its note: embeds
+  EVAL videos through a persisted detector estimator's trained encoder and fits a ridge regression per
+  imaging parameter (log10), penalty selected on a development set, scored on a task-disjoint held-out
+  set, reported beside the null error and split by the low and high halves of the true values. A
+  diagnostic of linear accessibility, not a gate; nothing is adopted.
+- `tests/test_inference_network.py` (nine tests: the defaults reproduce the 0.1.26 network, kept verbatim as
+  the frozen fixture `tests/_legacy_inference_network_0_1_26.py`, value for value; every preset at every documented duration; finite forward and backward
+  passes, constant feature maps under statistics pooling included; the projection's width; the
+  receptive-field arithmetic against the layers; rejected arguments; the artifact round trip; and the
+  persisted estimators of record loading under the new class when the machine holds them) and
+  `tests/test_embedding_probe.py` (three tests of the probe's arithmetic and outputs). The network had no
+  tests before.
+
+### Documentation
+
+- The detector workflow gains the encoder-screening section: the evidence that motivates it, the
+  receptive-field arithmetic against the spot size over the prior, the three arms with their parameter
+  counts, activation memory and reach, what is held fixed, the naming, the protocol (probe, smoke,
+  training under the production protocol on the full data, Evaluation and calibration), the scorecard
+  that judges the whole posterior and the selection rule.
+- The HPC inference and submit scripts list the new presets.
+
 ## 0.1.26 - 2026-09-29
 
 The posterior-predictive check shows its clips under the percentile window by default, with the brightness
