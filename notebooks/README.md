@@ -14,10 +14,9 @@ simulation or an inference.
   (biology workflow; the visual check at a declared configuration) and
   `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.py` (detector
   workflow), so the notebook serves either. A pure viewer — it needs only `numpy`, `matplotlib`, and
-  `ipywidgets`; no project package and no `MACHINE_PROFILE`. The check's documentation, the full list of its files (the engine, both
-  entry points, the declared configuration `..._Posterior_Predictive_Video_Declared_RDS_FAB.toml`, the
-  receptor-total script `..._Posterior_Predictive_Video_Count_Match.py` and their notes) and the order of a
-  check are in `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`.
+  `ipywidgets`; no project package and no `MACHINE_PROFILE`. The check's documentation, the table of all its files (the engine, both
+  entry points, the declared configurations, the companions and their notes) and the order of a check are
+  in `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`.
 - **`Video_Scrubber.ipynb`** — frame-by-frame viewer and player for DLI video **sets**. Loads a
   generated video set through the project package, so it needs the package importable and a
   `MACHINE_PROFILE` pointing at the machine that holds the data.
@@ -105,17 +104,22 @@ natively, so the server-versus-kernel distinction does not arise.
 
 **Posterior-Predictive-Video** (pure viewer, no `MACHINE_PROFILE`):
 - Set `CLIP_PATH` to the absolute path of a `*_Synthetic_Video.npz`.
-- Leave `NORM_MODE = "full"` (the shared min/max of both clips over all their frames, one fixed
-  window, the same the static figure uses). The alternative, `percentile`, is the shared whole-clip
-  `[p_lower, p_upper]` of both clips at the `NORM_PERCENTILES` pair, which you edit to taste (default
-  `(0.0, 99.99)`, the minimum to the p99.99; `0 <= lower < upper <= 100`), also fixed over all frames.
-  The two panels always share one window, fixed over all frames; there is no per-panel scaling and no
-  per-frame window (it made the brightness jump between frames).
-- To compare two clips, load one, run all, then change `CLIP_PATH` and run all again.
+- Leave `NORM_MODE = "percentile"`, the static figure's default: the whole-clip `[p_lower, p_upper]`
+  of every clip shown at the `NORM_PERCENTILES` pair, which you edit to taste (default `(0.0, 99.99)`,
+  the minimum to the p99.99; `0 <= lower < upper <= 100`), one fixed window. The other modes are
+  `experimental` (the experimental clip's whole-clip min/max; synthetic pixels outside it saturate),
+  `synthetic` (the whole-clip min/max of every synthetic clip shown) and `full` (the whole-clip min/max
+  of every clip shown, which looks dim because the brightest pixel sets the top). The scrubber and the
+  player show the window in their titles. All panels always share one window, fixed over all frames; there is no
+  per-panel scaling and no per-frame window (it made the brightness jump between frames). The
+  configuration cell prints the window and each clip's pixels below and above it.
+- To compare two renders of the same recording (for example a render and its labeling arm), set
+  `SECOND_CLIP_PATH` to the second clip: it appears as a third panel under the same window. To compare
+  clips of different recordings, load one, run all, then change `CLIP_PATH` and run all again.
 - The player cell prints its size and how many frames it embedded. Every frame must be embedded: a
-  1000-frame 50 fps clip builds a player of roughly 260 to 330 MB under `full`, because lossless PNG frames of camera noise
-  barely compress (about 290 KB per frame at any panel size, plus a third for the base64 embedding), and the embed limit is set to 512 MB
-  for it. If the cell reports a truncation, raise `animation.embed_limit`, or set `PLAY_EVERY = 2` to
+  1000-frame 50 fps clip builds a player of roughly 400 to 490 MB under the default window, because lossless
+  PNG frames of camera noise barely compress (about 350 KB per two-panel frame, plus a third for the base64
+  embedding), and the embed limit is set to 768 MB for it. If the cell reports a truncation, raise `animation.embed_limit`, or set `PLAY_EVERY = 2` to
   subsample frames (playback stays real-time).
 - To keep a rendered player as a file, run
   `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Player.py` on the clip

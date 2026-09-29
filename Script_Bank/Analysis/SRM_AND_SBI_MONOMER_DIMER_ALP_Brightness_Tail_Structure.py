@@ -1,86 +1,87 @@
-"""Extreme-tail structure of the posterior-predictive renders: emitters or camera noise?
+#!/usr/bin/env python
+"""Extreme-tail structure of posterior-predictive renders: experimental versus synthetic arms, per recording.
 
-Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit.py`. The stationarity
-audit proves the latent brightness law; this script asks what the two brightness
-mechanisms do to the OBSERVED extreme pixel tail, where their structures differ. The
-retired grid caps every dye at the p95 quantile node of the lognormal, so any rendered
-pixel beyond the corresponding ADU scale can only come from EMCCD gain fluctuations; the
-stationary continuous process has genuine unbounded brightness excursions. Both can
-produce competitive tail QUANTILES -- the discriminating evidence is the spatial and
-temporal STRUCTURE of the extreme pixels: genuinely bright emitters are PSF-shaped
-(multi-pixel, same frame) and persistent (the same site stays hot across frames), while
-gain fluctuations are single-pixel, single-frame events.
+Part of the posterior-predictive video check (``SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md``).
+For every recording given, the persisted render under ``--source-label`` (the production labeling law) and
+every labeling arm under ``--arm-label`` (``..._Posterior_Predictive_Video_Labeling_Arm.py``) are compared
+with the experimental recording they share, on the bright tail where the observation model shows: pixel
+quantiles, the per-frame maximum, the pixels above a threshold and their spatial and temporal structure.
+Genuinely bright emitters are PSF-shaped (several hot pixels in one frame) and revisit the same place;
+camera gain fluctuations are single-pixel, single-frame events. The statistics are computed over the
+opening window (``--opening-frames``) and over the whole clip.
 
-This is a pure render consumer: `numpy`, `scipy`, `matplotlib` only -- no project package,
-no simulation (the Data_Bank location is read from `machine_profiles.toml` via the
-`MACHINE_PROFILE` environment variable). It reads persisted posterior-predictive clips from
-the Data_Bank Posit tier (the renders under the retired grid, and the fixed-model renders
-produced with `--run-label` tokens) and writes a report plus figures back to that tier --
-analysis results are data and never live in the codebase. To regenerate any missing render,
-run the engine (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.py`)
-with the matching `--kind/--cell/--run-label` (and, for the sigma probe, `--set-imaging`).
+The ``4 x 4-px bin`` statistics count the distinct frames in which a fixed bin holds a hot pixel: a
+REPEATED HOT-PIXEL OCCUPANCY. Frames need not be consecutive and different emitters can visit one bin, so
+it is not a spot lifetime and not a dye survival time.
 
-Usage:
-    MACHINE_PROFILE=<profile> python \
-        Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.py [--ppv-root DIR]
+The clips compared are the declared-configuration biology render under ``--source-label`` and the labeling
+arms named with ``--arm-label``, matched exactly as the engine and the labeling arm name their files. Before
+anything is computed or written, the script checks every recording's clips: they exist, share the
+experimental frames, carry one and the same imaging vector (printed in the report), and every arm labeled
+exactly the source's subunits. A violation stops the run with nothing written.
 
-Outputs:
-    <data_bank_root>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit/
-        SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.md + T*.png + tail_structure.json
+Pure render consumer: no simulation. It writes a report, a summary JSON and survival figures to
+``<data_bank>/Posit/<alias>_<timing>_Posterior_Predictive_Video_Tail_Structure_<SOURCE_LABEL>/``, one folder per
+source label; a rerun under the same source label regenerates that folder's files (they are derived from the
+persisted clips and carry no unique data), so another set of arms for the same source needs another source
+label to keep both reports.
+
+Usage::
+
+    MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
+        Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.py \
+        --total-time-seconds 2 --kind MET-FAB --cell 0 5 16 --source-label REF --arm-label BINOMIAL4
 """
-
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import tomllib
+import sys
+from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy import ndimage
-from scipy.stats import lognorm, norm
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+from srm_and_sbi_monomer_dimer_alp import __version__ as _PACKAGE_VERSION
+from srm_and_sbi_monomer_dimer_alp import posterior_predictive_video_runner as ppv
+from srm_and_sbi_monomer_dimer_alp.experiment_support import KIND_OF_CONDITION
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.workflow import biology_workflow
 
-
-OUT_DIR = REPORT = None  # resolved in main() from the active machine profile
-
-
-def data_bank_root() -> str:
-    """Data_Bank root of the active machine profile (no package import needed)."""
-    with open(os.path.join(REPO_ROOT, "machine_profiles.toml"), "rb") as handle:
-        return tomllib.load(handle)[os.environ["MACHINE_PROFILE"]]["data_bank_root"]
-
-# Frozen Nuisance_DLI photo-physics the renders were produced with (PROJECT_CONTEXT.md);
-# used only to state the retired grid's brightness ceiling and the extreme-value scale.
-MU_PC, SIGMA_PC = 250.73, 0.6744
-BRIGHTNESS_QUANTILE = np.asarray([0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95])
-SIGMA_PROBE = 0.53           # the --set-imaging sigma_pc probe rendered alongside
-THRESHOLD_ADU = 10_000       # structure threshold: beyond p99.99 of every stack audited
-QUANTILES = (50, 90, 99, 99.9, 99.99)
-
-COLORS = {"experimental": "#52514e", "grid": "#eb6834", "fixed": "#2a78d6",
-          "fixed_probe": "#7fb069"}
-INK, INK_2, INK_MUTED, SURFACE = "#0b0b0b", "#52514e", "#8a8a85", "#fcfcfb"
+QUANTILES = ((50, "median"), (99, "p99"), (99.9, "p99.9"), (99.99, "p99.99"), (100, "max"))
+STRUCTURE_ROWS = (
+    ("hot pixels", "npix", "{:,d}"),
+    ("per-frame 8-connected components", "blobs", "{:,d}"),
+    ("PSF-shaped components (3+ px)", "blobs_3plus", "{:,d}"),
+    ("fraction with a hot 8-neighbor, same frame", "frac_neighbor", "{:.2f}"),
+    ("median local ground / stack median", "local_over_background", "{:.2f}"),
+    ("distinct 4x4-px bins with a hot pixel", "sites", "{:,d}"),
+    ("repeated hot-pixel occupancy per bin, median (frames)", "frames_per_site_median", "{:.0f}"),
+    ("repeated hot-pixel occupancy per bin, max (frames)", "frames_per_site_max", "{:,d}"),
+)
 
 
-def stem(kind: str, cell: int, label: str = "") -> str:
-    token = f"_{label}" if label else ""
-    return (f"SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_MAP_Estimate_SGM_{kind}_Cell_{cell}"
-            f"_20S{token}_Synthetic_Video.npz")
+def label_token(label: str) -> str:
+    """A run or arm label as the engine (``_build_stem``) and the labeling arm write it in file names."""
+    token = "".join(c if c.isalnum() else "_" for c in str(label)).strip("_")
+    if not token:
+        raise SystemExit(f"a label must contain at least one alphanumeric character, not {label!r}.")
+    return token
+
+
+def output_dir(posit, project_alias: str, map_label: str, source_label: str) -> Path:
+    """The folder of one comparison, keyed by the source renders' run label, so comparisons of renders
+    under different source labels never overwrite each other."""
+    return Path(posit) / f"{project_alias}_{map_label}_Posterior_Predictive_Video_Tail_Structure_{label_token(source_label)}"
 
 
 def structure(stack: np.ndarray, threshold: int) -> dict:
-    """Spatial and temporal structure of the pixels above `threshold`."""
+    """Spatial and temporal structure of the pixels above ``threshold``."""
     mask = stack > threshold
     npix = int(mask.sum())
     if npix == 0:
-        return dict(npix=0)
+        return dict(npix=0, blobs=0, blobs_3plus=0, frac_neighbor=0.0, local_over_background=float("nan"),
+                    sites=0, frames_per_site_median=0.0, frames_per_site_max=0)
     blobs = big = 0
     for t in np.unique(np.argwhere(mask)[:, 0]):
         labels, n = ndimage.label(mask[t], structure=np.ones((3, 3)))
@@ -109,202 +110,204 @@ def structure(stack: np.ndarray, threshold: int) -> dict:
     per_site = np.array([len(v) for v in sites.values()])
     return dict(npix=npix, blobs=blobs, blobs_3plus=big, frac_neighbor=frac_neighbor,
                 local_over_background=float(np.median(ratios)), sites=len(sites),
-                frames_per_site_median=float(np.median(per_site)),
-                frames_per_site_max=int(per_site.max()))
+                frames_per_site_median=float(np.median(per_site)), frames_per_site_max=int(per_site.max()))
 
 
-def quantile_row(stack: np.ndarray) -> dict:
-    row = {f"p{q:g}": float(np.percentile(stack, q)) for q in QUANTILES}
-    row["min"], row["max"] = float(stack.min()), float(stack.max())
-    return row
+def window_stats(stack: np.ndarray, threshold: int, exp_max: int | None) -> dict:
+    fm = stack.reshape(stack.shape[0], -1).max(1)
+    out = {"quantiles": {name: float(np.percentile(stack, q)) for q, name in QUANTILES},
+           "per_frame_max_median": float(np.median(fm)), "per_frame_max_p90": float(np.percentile(fm, 90)),
+           "structure": structure(stack, threshold)}
+    if exp_max is not None:
+        out["above_experimental_max"] = int((stack > exp_max).sum())
+    return out
 
 
-def survival_figure(name: str, title: str, stacks: dict) -> None:
+def survival_figure(path: Path, title: str, stacks: dict, threshold: int) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     fig, ax = plt.subplots(figsize=(8.6, 4.8))
-    fig.patch.set_facecolor(SURFACE)
-    ax.set_facecolor(SURFACE)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
     hi = max(float(s.max()) for s in stacks.values())
-    grid_adu = np.linspace(2000, hi, 400)
+    grid = np.linspace(2000, hi, 400)
     for label, stack in stacks.items():
         values = np.sort(stack.ravel())
-        surv = 1.0 - np.searchsorted(values, grid_adu, side="right") / values.size
-        key = ("experimental" if label.startswith("experimental") else
-               "grid" if label.startswith("grid") else
-               "fixed_probe" if "sigma" in label else "fixed")
-        ax.semilogy(grid_adu, np.clip(surv, 1e-9, None), color=COLORS[key],
-                    linewidth=1.7, label=label)
-    ax.set_xlabel("pixel value (ADU)", fontsize=10, color=INK)
-    ax.set_ylabel("survival fraction P(pixel > x)", fontsize=10, color=INK)
-    ax.tick_params(colors=INK_2, labelsize=9)
-    ax.grid(axis="y", color=INK_MUTED, alpha=0.22, linewidth=0.7)
-    ax.set_axisbelow(True)
-    ax.set_title(title, fontsize=11.5, color=INK, pad=12, loc="left")
-    legend = ax.legend(frameon=False, fontsize=9, loc="upper right")
-    for text in legend.get_texts():
-        text.set_color(INK)
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUT_DIR, name), dpi=200, facecolor=SURFACE)
-    plt.close(fig)
+        surv = 1.0 - np.searchsorted(values, grid, side="right") / values.size
+        ax.semilogy(grid, np.clip(surv, 1e-9, None), linewidth=1.7, label=label)
+    ax.axvline(threshold, color="gray", linewidth=0.8, linestyle="--")
+    ax.set_xlabel("pixel value (ADU)"); ax.set_ylabel("survival fraction P(pixel > x)")
+    ax.set_title(title, fontsize=10, loc="left"); ax.grid(axis="y", alpha=0.25); ax.legend(frameon=False, fontsize=9)
+    fig.tight_layout(); fig.savefig(path, dpi=160); plt.close(fig)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ppv-root", default=None,
-                        help="directory holding the posterior-predictive render npz clips "
-                             "(default: the active profile's Data_Bank Posit PPV directory).")
-    args = parser.parse_args()
-    bank = data_bank_root()
-    ppv_root = args.ppv_root or os.path.join(
-        bank, "Posit", "SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_Posterior_Predictive_Video")
-    global OUT_DIR, REPORT
-    OUT_DIR = os.path.join(bank, "Posit", "SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit")
-    REPORT = os.path.join(OUT_DIR, "SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.md")
-    os.makedirs(OUT_DIR, exist_ok=True)
+def fmt_ratio(value: float, reference: float) -> str:
+    if reference and np.isfinite(reference):
+        return f"{value:,.0f} ({value / reference:.2f})"
+    return f"{value:,.0f}"
 
-    def load(root, kind, cell, label=""):
-        return np.load(os.path.join(root, stem(kind, cell, label)), allow_pickle=False)
 
-    results: dict = {}
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--total-time-seconds", type=float, required=True, help="the renders' model window (timing label).")
+    ap.add_argument("--kind", default="MET-FAB", choices=tuple(KIND_OF_CONDITION))
+    ap.add_argument("--cell", type=int, nargs="+", required=True, help="recording indices.")
+    ap.add_argument("--experiment-span-seconds", type=int, default=20, help="the renders' clip span (s).")
+    ap.add_argument("--source-label", required=True, help="run label of the production-law renders (e.g. REF).")
+    ap.add_argument("--arm-label", action="append", default=[], help="labeling arm token(s) to compare; repeatable.")
+    ap.add_argument("--threshold-adu", type=int, default=10_000, help="hot-pixel threshold (ADU).")
+    ap.add_argument("--opening-frames", type=int, default=100, help="length of the opening window (frames).")
+    args = ap.parse_args(argv)
 
-    # ---- the retired grid's brightness ceiling ---------------------------------------
-    nodes = np.round(lognorm.ppf(BRIGHTNESS_QUANTILE, s=SIGMA_PC, loc=0, scale=MU_PC))
-    results["grid_nodes_photons"] = nodes.tolist()
-    # Extreme-value scale of the unbounded law: expected max of n_eff independent draws.
-    z = norm.ppf(1 - 1 / 15_000.0)  # ~15k effective draws in a 20 s render
-    results["evt_photons"] = {f"{s:g}": float(MU_PC * np.exp(s * z))
-                              for s in (SIGMA_PC, SIGMA_PROBE)}
+    cfg = biology_workflow()
+    kind_token = KIND_OF_CONDITION[args.kind]
+    paths = cfg.paths.with_condition(kind_token)
+    map_label = RunTiming(total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing).label
+    posit = PARAMETERS.machine.data_bank_root / paths.posit_subdir
+    ppv_dir = posit / f"{paths.project_alias}_{map_label}_Posterior_Predictive_Video"
+    out_dir = output_dir(posit, paths.project_alias, map_label, args.source_label)
+    span = f"{args.experiment_span_seconds}S"
+    arm_tokens = [label_token(a) for a in args.arm_label]
 
-    # ---- per-condition tables ---------------------------------------------------------
-    conditions = {
-        "MET-FAB": [("fixed (OU_FIX)", "OU_FIX"),
-                    (f"fixed, sigma_pc={SIGMA_PROBE} (OU_FIX_SIGMA_053)", "OU_FIX_SIGMA_053")],
-        "MET-INLB": [("fixed (OU_FIX)", "OU_FIX")],
-    }
-    for kind, fixed_arms in conditions.items():
-        archived = load(ppv_root, kind, 0)
-        stacks = {"experimental recording": archived["experimental"],
-                  "grid render (retired)": archived["synth"]}
-        for label, token in fixed_arms:
-            clip = load(ppv_root, kind, 0, token)
-            assert np.array_equal(clip["experimental"], archived["experimental"]), \
-                f"{kind}: clips reference different recordings"
-            stacks[label] = clip["synth"]
-        exp = stacks["experimental recording"]
-        block = {"quantiles": {}, "structure": {}, "exceedance": {}}
-        exp_max = int(exp.max())
-        for label, stack in stacks.items():
-            block["quantiles"][label] = quantile_row(stack)
-            block["structure"][label] = structure(stack, THRESHOLD_ADU)
-            block["exceedance"][label] = {
-                f">{THRESHOLD_ADU}": int((stack > THRESHOLD_ADU).sum()),
-                ">exp_max": int((stack > exp_max).sum())}
-        block["exp_max"] = exp_max
-        results[kind] = block
-        survival_figure(
-            f"T{1 if kind == 'MET-FAB' else 2}_survival_{kind}.png",
-            f"{kind} cell 0: pixel-value survival curves (20 s recording, all pixels)",
-            stacks)
+    # ---- resolve and check every recording's clips before anything is computed or written ----------------
+    imaging_vector = None
+    column_names = None
+    resolved = {}
+    for cell in args.cell:
+        source_stem = ppv._build_stem(paths.project_alias, map_label, args.kind, cell, None, "cell-sgm", span,
+                                      run_label=args.source_label, declared_rds=True, map_block="rds")
+        clips = {}
+        for title, stem in [(f"{args.source_label} ({{law}})", source_stem)] + \
+                           [(f"{a} ({{law}})", f"{source_stem}_{tok}") for a, tok in zip(args.arm_label, arm_tokens)]:
+            path = ppv.render_output_paths(ppv_dir, stem)["clip"]
+            if not path.exists():
+                raise SystemExit(f"cell {cell}: missing {path.name}")
+            d = np.load(path, allow_pickle=False)
+            clips[title.format(law=str(d["labeling_law"]))] = d
+        names = list(clips)
+        if column_names is None:
+            column_names = names
+        elif names != column_names:
+            raise SystemExit(f"cell {cell}: arm laws {names} differ from {column_names}")
+        first = clips[names[0]]
+        experimental = first["experimental"]
+        for name, d in clips.items():
+            if not np.array_equal(d["experimental"], experimental):
+                raise SystemExit(f"cell {cell}: {name} references different experimental frames")
+            vec = np.asarray(d["imaging_physical"], dtype=float)
+            if imaging_vector is None:
+                imaging_vector = vec
+            elif not np.allclose(vec, imaging_vector, rtol=0, atol=1e-9):
+                raise SystemExit(f"cell {cell}: {name} was rendered with a different imaging vector {vec} != {imaging_vector}")
+            if not np.array_equal(d["dye_counts"] > 0, first["dye_counts"] > 0):
+                raise SystemExit(f"cell {cell}: {name} labels different subunits than {names[0]}")
+        resolved[cell] = clips
+        del experimental
 
-    with open(os.path.join(OUT_DIR, "tail_structure.json"), "w") as handle:
-        json.dump(results, handle, indent=1)
+    # ---- compute and write ---------------------------------------------------------------------------------
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = {"package_version": _PACKAGE_VERSION, "threshold_adu": args.threshold_adu,
+               "opening_frames": args.opening_frames, "source_label": args.source_label, "arm_labels": args.arm_label,
+               "cells": {}}
+    for cell, clips in resolved.items():
+        names = list(clips)
+        first = clips[names[0]]
+        experimental = first["experimental"]
+        block = {"experimental_tif": str(first["experimental_tif"]), "seed": int(first["seed"]),
+                 "labeled_subunits": int((first["dye_counts"] > 0).sum()),
+                 "dyes": {name: int(d["dye_counts"].sum()) for name, d in clips.items()},
+                 "dye_count_histogram": {name: {int(k): int(v) for k, v in zip(*np.unique(d["dye_counts"][d["dye_counts"] > 0], return_counts=True))}
+                                         for name, d in clips.items()},
+                 "windows": {}}
+        stacks = {"experimental": experimental, **{name: d["synth"] for name, d in clips.items()}}
+        for window, sl in ((f"opening {args.opening_frames} frames", slice(0, args.opening_frames)),
+                           (f"whole clip ({experimental.shape[0]} frames)", slice(None))):
+            exp_max = int(experimental[sl].max())
+            block["windows"][window] = {name: window_stats(s[sl], args.threshold_adu, None if name == "experimental" else exp_max)
+                                        for name, s in stacks.items()}
+        survival_figure(out_dir / f"T_survival_{args.kind}_Cell_{cell}.png",
+                        f"{args.kind} cell {cell}: pixel-value survival (whole clip)", stacks, args.threshold_adu)
+        results["cells"][str(cell)] = block
+        print(f"cell {cell}: done")
+    results["imaging_vector"] = dict(zip([str(k) for k in first["imaging_keys"]], [float(v) for v in imaging_vector]))
+    (out_dir / "tail_structure.json").write_text(json.dumps(results, indent=1))
 
-    # ---- report -----------------------------------------------------------------------
-    lines: list[str] = []
-    add = lines.append
-    add("# Extreme-tail structure of the posterior-predictive renders")
+    # ---- report -------------------------------------------------------------------------------------
+    L: list[str] = []
+    add = L.append
+    add(f"# Extreme-tail structure: {args.kind}, {len(args.cell)} recordings, experimental versus {', '.join(column_names)}")
     add("")
-    add("**Conclusion.** The experimental extreme pixel tail is emitter-driven: pixels above "
-        f"{THRESHOLD_ADU:,} ADU form PSF-shaped multi-pixel spots that stay hot at the same "
-        "site for many frames. The retired grid cannot produce that structure -- its "
-        "brightness is capped at the p95 quantile node "
-        f"({nodes[-1]:.0f} photons per dye, {2 * nodes[-1]:.0f} for a two-label dimer), so its "
-        "pixels beyond that scale are single-pixel, single-frame EMCCD gain fluctuations. "
-        "The stationary continuous process reproduces the experimental structure on every "
-        "measure (count, spatial extent, site persistence). The retired grid's competitive "
-        "tail QUANTILES up to p99.99 are therefore right numbers from the wrong mechanism, "
-        "and single-render maxima are one-noise-spike statistics that carry no evidential "
-        "weight. The continuous process's residual overshoot beyond the experimental maximum "
-        "is a calibration statement, not a structural one: it scales with sigma_pc "
-        f"(the sigma_pc = {SIGMA_PROBE} probe removes it entirely, at the price of starving "
-        "the observed deep tail), and the calibrated value is a matter for the imaging "
-        "recalibration under the new model, not for the brightness mechanism.")
+    add(f"Renders under `{args.source_label}` (the production labeling law) and the labeling arm(s) "
+        f"{', '.join(args.arm_label) or '(none)'} of the same trajectory and the same labeled subunits, compared with "
+        f"the experimental recording each shares. Hot pixels are those above {args.threshold_adu:,} ADU. The "
+        f"`4x4-px bin` statistics count distinct frames with a hot pixel in a fixed bin (repeated hot-pixel "
+        "occupancy), not a spot lifetime. Ratios in parentheses are synthetic / experimental. Regenerate with "
+        "`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.py`; package version "
+        f"{_PACKAGE_VERSION}.")
     add("")
-    add("Regenerate with `Script_Bank/Analysis/" + os.path.basename(__file__) + "`. Inputs: "
-        "the archived grid-era renders (canonical Data_Bank, read-only) and the fixed-model "
-        "renders produced with `--run-label OU_FIX` (both conditions, cell 0) and "
-        f"`--run-label OU_FIX_SIGMA_053 --set-imaging sigma_pc={SIGMA_PROBE}` (MET-FAB cell "
-        "0). Figures and the summary JSON sit beside this report in the Data_Bank Posit tier.")
+    add("**Imaging vector shared by every synthetic clip (verified):** "
+        + ", ".join(f"{k} {v:.4g}" for k, v in results["imaging_vector"].items()) + ".")
     add("")
-    add("## 1. The retired grid's brightness ceiling")
-    add("")
-    add("Grid nodes at the frozen photo-physics (mu_pc = "
-        f"{MU_PC}, sigma_pc = {SIGMA_PC}): " + ", ".join(f"{v:.0f}" for v in nodes)
-        + " photons. The top node is the p95 quantile: no dye can ever exceed "
-        f"{nodes[-1]:.0f} photons. The unbounded lognormal expects a "
-        f"~{norm.ppf(1 - 1 / 15_000.0):.1f}-sigma excursion over a 20 s render "
-        f"(~15,000 effective independent draws): "
-        + ", ".join(f"{v:,.0f} photons at sigma_pc = {s}"
-                    for s, v in results["evt_photons"].items())
-        + ". A longer tail than the grid's is therefore the intended behavior of the "
-        "continuous process, and its amplitude is set by sigma_pc.")
-    add("")
-    for kind in conditions:
-        block = results[kind]
-        add(f"## {2 if kind == 'MET-FAB' else 3}. {kind} cell 0")
+    for window in next(iter(results["cells"].values()))["windows"]:
+        add(f"## Summary, {window}")
         add("")
-        labels = list(block["quantiles"])
-        add("| quantile (ADU) | " + " | ".join(labels) + " |")
-        add("|---|" + "---|" * len(labels))
-        for key in ["min"] + [f"p{q:g}" for q in QUANTILES] + ["max"]:
-            add(f"| {key} | " + " | ".join(f"{block['quantiles'][l][key]:,.0f}"
-                                           for l in labels) + " |")
+        for key, label, kind in (("npix", "hot pixels", "structure"), ("max", "maximum (ADU)", "quantile"),
+                                 ("per_frame_max_median", "per-frame maximum, median (ADU)", "top"),
+                                 ("p99.99", "p99.99 (ADU)", "quantile"), ("blobs_3plus", "PSF-shaped components", "structure"),
+                                 ("frames_per_site_max", "repeated occupancy per bin, max (frames)", "structure"),
+                                 ("above_experimental_max", "pixels above the experimental maximum", "top")):
+            add(f"**{label}**")
+            add("")
+            add("| cell | experimental | " + " | ".join(column_names) + " |")
+            add("|---|---|" + "---|" * len(column_names))
+            for cell, block in results["cells"].items():
+                w = block["windows"][window]
+
+                def get(name):
+                    s = w[name]
+                    if kind == "structure":
+                        return s["structure"][key]
+                    if kind == "quantile":
+                        return s["quantiles"][key]
+                    return s.get(key, float("nan"))
+                e = get("experimental")
+                cells = [f"{e:,.0f}" if np.isfinite(e) else "-"]
+                for name in column_names:
+                    v = get(name)
+                    cells.append(fmt_ratio(v, e) if key != "above_experimental_max" else f"{v:,.0f}")
+                add(f"| {cell} | " + " | ".join(cells) + " |")
+            add("")
+    for cell, block in results["cells"].items():
+        add(f"## Cell {cell}")
         add("")
-        add(f"Structure of the pixels above {THRESHOLD_ADU:,} ADU:")
+        add(f"Recording `{Path(block['experimental_tif']).name}`; seed {block['seed']}; {block['labeled_subunits']} labeled subunits; dyes "
+            + "; ".join(f"{name} {n} {block['dye_count_histogram'][name]}" for name, n in block["dyes"].items()) + ".")
         add("")
-        add("| measure | " + " | ".join(labels) + " |")
-        add("|---|" + "---|" * len(labels))
-        rows = (("hot pixels", "npix", "{:,d}"),
-                ("per-frame 8-connected components", "blobs", "{:,d}"),
-                ("PSF-shaped components (3+ px)", "blobs_3plus", "{:,d}"),
-                ("fraction with a hot 8-neighbor, same frame", "frac_neighbor", "{:.2f}"),
-                ("median local ground / stack median", "local_over_background", "{:.2f}"),
-                ("distinct 4x4-px sites", "sites", "{:,d}"),
-                ("frames per site, median", "frames_per_site_median", "{:.0f}"),
-                ("frames per site, max", "frames_per_site_max", "{:,d}"))
-        for title, key, fmt in rows:
-            cells = []
-            for l in labels:
-                s = block["structure"][l]
-                cells.append(fmt.format(s[key]) if s["npix"] else "-")
-            add(f"| {title} | " + " | ".join(cells) + " |")
+        for window, w in block["windows"].items():
+            add(f"*{window}*")
+            add("")
+            add("| quantile (ADU) | experimental | " + " | ".join(column_names) + " |")
+            add("|---|---|" + "---|" * len(column_names))
+            for _, name in QUANTILES:
+                e = w["experimental"]["quantiles"][name]
+                add(f"| {name} | {e:,.0f} | " + " | ".join(fmt_ratio(w[c]["quantiles"][name], e) for c in column_names) + " |")
+            e = w["experimental"]["per_frame_max_median"]
+            add(f"| per-frame max, median | {e:,.0f} | " + " | ".join(fmt_ratio(w[c]["per_frame_max_median"], e) for c in column_names) + " |")
+            add("")
+            add(f"| structure of pixels above {args.threshold_adu:,} ADU | experimental | " + " | ".join(column_names) + " |")
+            add("|---|---|" + "---|" * len(column_names))
+            for title, key, fmt in STRUCTURE_ROWS:
+                add(f"| {title} | " + " | ".join(fmt.format(w[c]["structure"][key]) if w[c]["structure"]["npix"] else "-"
+                                                 for c in ["experimental"] + column_names) + " |")
+            add(f"| pixels above the experimental maximum | - | " + " | ".join(f"{w[c]['above_experimental_max']:,d}" for c in column_names) + " |")
+            add("")
+        add(f"![cell {cell} survival](T_survival_{args.kind}_Cell_{cell}.png)")
         add("")
-        add(f"Exceedance: pixels above the experimental maximum ({block['exp_max']:,} ADU): "
-            + "; ".join(f"{l} {block['exceedance'][l]['>exp_max']:,}"
-                        for l in labels if not l.startswith("experimental")) + ".")
-        add("")
-        add(f"![{kind} survival curves](T{1 if kind == 'MET-FAB' else 2}_survival_{kind}.png)")
-        add("")
-    add("## 4. Reading")
-    add("")
-    add("On MET-FAB the continuous process matches the experimental deep-tail mass "
-        "(pixels above 10,000 ADU) and its structure almost exactly, while the grid's "
-        "few extreme pixels are isolated one-frame events with zero PSF-shaped components. "
-        "On MET-INLB BOTH mechanisms fall short of the experimental tail from p99 outward: "
-        "that gap moves with the calibration (the InlB recording is systematically "
-        "brighter than the frozen imaging vector renders), consistent with "
-        "condition-specific per-dye brightness, and is not evidence in the mechanism "
-        "comparison. The sigma_pc probe brackets the recalibration: at "
-        f"{SIGMA_PC} the extreme overshoots and the deep tail matches; at {SIGMA_PROBE} "
-        "the extreme is contained and the deep tail is starved.")
-    add("")
-    with open(REPORT, "w") as handle:
-        handle.write("\n".join(lines))
-    print("wrote", REPORT)
-    print(json.dumps({k: v for k, v in results.items() if k.startswith("MET")},
-                     indent=1)[:600], "...")
+    report = out_dir / f"{paths.project_alias}_Brightness_Tail_Structure.md"
+    report.write_text("\n".join(L))
+    print("wrote", report)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

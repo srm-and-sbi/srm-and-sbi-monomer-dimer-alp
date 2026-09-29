@@ -1,0 +1,128 @@
+# Declared reaction-diffusion configuration for MET-FAB posterior-predictive checks, with the receptor
+# total adjusted to each recording's opening spot density.
+#
+# A companion of the posterior-predictive video check, documented in
+# SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md (sections "The files of the posterior-predictive
+# video check" and "A declared reaction-diffusion configuration"). It is an input of that analysis, specific
+# to the MET-FAB recordings compared and confirmed by the user before rendering; it is not a generic model
+# setting and no pipeline stage reads it. It equals SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_
+# Declared_RDS_FAB.toml in every value except the receptor total, which is set per recording (per_cell).
+#
+# Read by posterior_predictive_video_runner.load_declared_rds (--declared-rds); the SHA-256 of this
+# file and the origin of every value are recorded in each clip rendered from it. Every value below
+# is an explicit ASSUMPTION, stated with its basis and source. The receptor totals are rendering
+# settings scaled from the recordings' detected spot counts, capped by the prior range; they are
+# starting values for a density-adjusted render, not estimates of the receptor number of these cells,
+# which is the biology workflow's task.
+#
+# Not set here, because the production path sets it: the imaging block is read from the tagged
+# Nuisance_DLI artifact (--nuisance-tag REF), and the labeling is the condition's production
+# observation layer (Poisson(1.64) dye counts per bound probe, derived probe occupancy 0.155,
+# visibility 0.125 per subunit; labeling.resolve_labeling).
+#
+# Units are physical (counts, um^2/s, 1/s, dimensionless ratios). The biology prior box of every
+# row is in PROJECT_CONTEXT.md sec. 2; a value outside it is recorded as an extrapolation.
+
+[scenario]
+name = "FAB_DECLARED_RDS_DENSITY_ADJUSTED"
+condition = "FAB"
+status = "declared assumptions for posterior-predictive checks; not estimates"
+description = """The declared MET-FAB configuration with the receptor total adjusted to each \
+recording's opening spot density: the initial composition and the diffusion scale follow stated \
+external references; the receptor total is scaled per recording from its detected spot count and \
+capped by the prior range; every other value is the center of its prior, declared as a default where no \
+MET-FAB evidence fixes it."""
+
+[parameters.count_total]
+per_cell = { 0 = 550.0, 4 = 1500.0, 5 = 1200.0, 16 = 3162.0, 26 = 3162.0, 32 = 3162.0, 43 = 2500.0, 45 = 1500.0, 49 = 2000.0, 53 = 3162.0 }
+basis = "scaled from the recording's opening spot count, capped by the prior range (density-adjusted starting value)"
+source = """N_R = 1000 x c_exp / c_syn, rounded to two significant figures: c_exp is the recording's \
+detected spots per frame over its first 2 s and c_syn the same count on its render at N_R 1000 (the \
+declared configuration FAB_DECLARED_RDS), both under the direct estimators' detection (stored 8-bit \
+levels, 4 sigma, fit half-width 14 px, SCOPE box center; report \
+SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Posterior_Predictive_Video_Spot_Count_REF). Unscaled counts \
+(c_exp, c_syn): cell 0 44.3, 80.2; 4 107.5, 69.8; 5 106.3, 86.4; 16 259.4, 74.6; 26 188.0, 57.7; \
+32 301.1, 82.7; 43 161.7, 64.2; 45 120.5, 80.5; 49 132.2, 64.6; 53 222.4, 69.5. Values are capped at \
+the upper end of the decided prior 316-3162: cells 16, 26, 32 and 53 (scaled 3477, 3258, 3641, 3200) \
+render at 3162 and stay less dense than their recordings. A detected count is lowered by crowding, and \
+a single render's count carries its labeling draw, so these are starting values, not matches; each \
+render's own count is measured afterwards. N_R counts subunits in the whole simulated field \
+(256 x 256 px, 40.4 um square, open lateral boundary), not in the cell footprint."""
+
+[parameters.ratio_dimer_monomer_initial]
+value = 0.08108
+basis = "declared assumption (external reference range)"
+source = """r = n_B/n_A = f/(1 - f) at an initial complex fraction f = 7.5 %, the middle of the \
+5-10 % working range for resting MET taken from the project's analyses (literature context: \
+Baldering et al., iScience 24, 101895 (2021), doi:10.1016/j.isci.2020.101895, 5 +/- 1 % estimated \
+dimers at rest by quantitative PALM of endogenously tagged MET in HEK293T; Dietz et al., BMC \
+Biophysics 6, 6 (2013), 18 % of spots assigned to a dimeric component in fixed HeLa, stated as an \
+underestimate). The range spans r = 0.053-0.111. It is an INITIAL composition: under MET-FAB there \
+is no association channel, so dissociation (below) depletes it during the recording. A published \
+cluster or spot fraction is a different estimand, measured in other cells with other labels."""
+
+[parameters.rate_dissociation]
+value = 0.1
+basis = "prior center (declared default; no MET-FAB evidence)"
+source = """Center of the decided prior 0.001-10 per s. No dissociation rate is published for \
+MET-FAB; the measured 0.77 and 1.25 per s (Li et al., Small 22, e07115 (2026), \
+doi:10.1002/smll.202507115) describe InlB-activated MET and are scoped to MET-INLB. With no \
+association under MET-FAB, the initial dimers decay with a 10 s lifetime at this value (82 % \
+remain after 2 s, 14 % after 20 s)."""
+
+[parameters.diffusivity_alp]
+value = 0.10
+basis = "declared assumption (literature representative value)"
+source = """Li et al., Small 22, e07115 (2026), doi:10.1002/smll.202507115: donor-only segments \
+0.109 +/- 0.068 and 0.093 +/- 0.053 um^2/s (mean 0.10), the representative monomer value of the \
+sibling repository srm-and-sbi-dimer-alp, scoped there to both conditions. SCOPE: an APPARENT \
+diffusion coefficient of tracked segments in InlB-activated cells, used here as the model's \
+free-mode monomer coefficient D[A, f], a different quantity. With the slow and immobile modes at \
+the defaults below, whose declared stationary mode weights are 1/3 each, the monomer mode-averaged \
+coefficient under those weights is (1 + R_s + R_i)/3 D_A = 0.44 D_A = 0.044 um^2/s. It is not the \
+apparent coefficient a tracking analysis reports (MET-FAB ensemble 0.126 +/- 0.005 um^2/s, Harwardt \
+et al., FEBS Open Bio 7, 1422 (2017)); whether the rendered motion corresponds to the recordings' \
+tracks remains a check of the renders."""
+
+[parameters.relative_diffusivity_dimer]
+value = 0.3162
+basis = "prior center (declared default; no MET-FAB value)"
+source = """Center of the decided prior 0.1-1. The measured 0.60 (Li et al. 2026) derives from \
+InlB-activated MET and is scoped to MET-INLB; it is not transferred to MET-FAB. It acts only on \
+the dimers of the scene (7.5 % of complexes at the start, decaying)."""
+
+[parameters.relative_diffusivity_slow]
+value = 0.3162
+basis = "prior center (declared default)"
+source = """Center of the decided prior 0.1-1; the specification's anchors (confined/free 0.7 by \
+segment analysis, 0.28 by hidden Markov analysis; PROJECT_CONTEXT.md sec. 2) bracket it. Not \
+fitted to these recordings."""
+
+[parameters.relative_diffusivity_immobile]
+value = 0.003162
+basis = "prior center (declared default)"
+source = """Center of the decided prior 0.001-0.01: D_i = R_i D_A = 0.0003 um^2/s, below the \
+tracking pipelines' immobility thresholds (0.0028 and 0.0065 um^2/s). Not fitted."""
+
+[parameters.rate_fast_slow]
+value = 1.0
+basis = "prior center (declared default)"
+source = """Center of the decided prior 0.1-10 per s. Observed free/confined/immobile class \
+fractions are not used: observational classes are not established equivalents of the model's \
+modes, and class fractions would constrain rate ratios, not absolute switching times. Setting the \
+four switching rates from them is an open decision."""
+
+[parameters.rate_slow_fast]
+value = 1.0
+basis = "prior center (declared default)"
+source = "Center of the decided prior 0.1-10 per s; as rate_fast_slow."
+
+[parameters.rate_slow_immobile]
+value = 1.0
+basis = "prior center (declared default)"
+source = "Center of the decided prior 0.1-10 per s; as rate_fast_slow."
+
+[parameters.rate_immobile_slow]
+value = 1.0
+basis = "prior center (declared default)"
+source = "Center of the decided prior 0.1-10 per s; as rate_fast_slow."

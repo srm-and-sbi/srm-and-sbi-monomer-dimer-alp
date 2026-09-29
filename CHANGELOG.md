@@ -5,6 +5,129 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.26 - 2026-09-29
+
+The posterior-predictive check shows its clips under the percentile window by default, with the brightness
+range explicit in the figure, gains two more display windows, a figure drawn from the clip alone, a
+density-adjusted receptor total per recording, and its own reading of the bright tail: a controlled labeling arm, the tail-structure analysis and a spot count, all tools
+that adopt nothing. No estimator, estimate, prior, production law or production default changes.
+
+### Changed
+
+- The display window of the comparison figure (`--display-norm`), the viewer notebook (`NORM_MODE`) and the
+  player script (`--norm-mode`) defaults to `percentile` at `(0, 99.99)`, the whole-clip minimum to the
+  p99.99 of both clips, instead of `full`: under a whole-clip `[min, max]` the brightest pixel (17,000 to
+  37,000 ADU in the MET-FAB recordings) set the top and the frames looked dim. This is the viewing window
+  of the predecessor repository's brightness-audit viewer and side-by-side videos. `full` remains, unchanged.
+- The other video renderers default to the same window: the training-set viewer (`notebooks/Video_Scrubber.ipynb`),
+  whose scrubber rescaled every frame and whose player spanned zero to the clip's maximum, now shows each
+  simulation under its whole-clip `(0, 99.99)` percentile window, fixed over all frames, and names the
+  window; `visualization_dli.animate_video` takes a `display_percentiles` argument, default `(0, 99.99)`,
+  instead of the first frame's range. The brightness-audit viewer and `assemble_side_by_side.py` already
+  used it.
+- The comparison figure's provenance prints every number with at most four significant digits and three
+  decimal places (a value below 0.01 keeps three significant digits; 1000 or more prints as a whole number),
+  for example the occupancy `0.155`, the imaging values, the reaction-diffusion values and the labeling law's
+  parameters, and wraps long lines, so the text stays inside its panel; the figure is slightly taller. The law's
+  name is an identifier and prints as stored. The imaging header names the `Nuisance_DLI` tag, as the
+  `--nuisance-tag` help states. The match plot's axis widens beyond `[0.5, 3.5]` when a ratio falls outside,
+  so every ratio shows.
+- The render draws its figure from the fields it saves in the clip (`comparison_figure_inputs`,
+  `draw_comparison_figure`), so a figure drawn later from the clip file is the render's own apart from the
+  display window. A biology render's figure title no longer depends on `--fixed-imaging-parameters`, a
+  detector-only flag.
+- The mode and the percentile pair are checked before any work, the dry run included; a bad pair no longer
+  leaves a clip without its figure.
+- The tail-structure analysis writes to `..._Posterior_Predictive_Video_Tail_Structure_<SOURCE_LABEL>/`, one
+  folder per source label (a rerun under the same label regenerates it).
+- `refuse_existing_outputs` takes an optional hint, so a caller whose files are named by another option
+  names that option.
+- The brightness-audit viewer (`notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit_Video.ipynb`)
+  keeps `percentile` (its default) and `full` only; its `autoscale` option, the displayed frames' shared
+  min/max, is removed, since a window that follows the displayed frames is not one fixed over all frames.
+- The viewer notebook's `animation.embed_limit` rises from 512 to 768 MB: contrasted frames compress less, and a
+  two-panel 1000-frame player under `percentile` reaches about 490 MB.
+
+### Added
+
+- Two display windows, each one window shared by every panel over all frames: `experimental`, the experimental
+  clip's whole-clip `[min, max]`, and `synthetic`, the synthetic clip's, spanning both synthetic clips in the
+  notebook's three-panel view. The engine lists the four modes once (`DISPLAY_NORMS`, `DISPLAY_NORM_DEFAULT`,
+  `display_window`); the notebook and the player script repeat the list, and a test keeps the three equal.
+- The comparison figure states its brightness range explicitly: a colorbar beside each row of image panels
+  gives the row's window in ADU (the display window for the frames, the projections' joint `[min, max]` for
+  the projections). The provenance and the notebook's configuration cell state the window and how many pixels
+  of each clip fall below and above it (shown at the colormap's ends: above as the brightest color, below as
+  black); the notebook's scrubber and player show the window in their titles. The figure names the mode with
+  its statistic, for example `norm percentile [p0, p99.99]`.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Redraw_Figure.py` draws a
+  clip's comparison figure again from the clip alone, under the display window chosen; it simulates nothing,
+  replaces an existing figure only under `--replace`, refuses two clips that would draw the same figure, and
+  draws through a temporary file that never outlives a failed draw.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB_Density_Adjusted.toml`,
+  the declared MET-FAB configuration with the receptor total set per recording: 1000 times the recording's
+  opening detected spot count over its render's at 1000, rounded to two significant figures and capped by the
+  prior range.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Labeling_Arm.py` re-renders a
+  persisted declared-configuration biology render under another labeling law on the same trajectory, imaging
+  vector, seed and labeled subunits: only the dye counts of the labeled subunits are drawn again, conditioned on
+  at least one dye, so the arms differ in dye multiplicity alone. Written beside the source as
+  `<source stem>_<ARM>_...` with its figure drawn by the engine under the default window; never overwrites, and
+  its refusal names `--arm-label`.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.py` rewritten for this
+  codebase's renders: per recording, experimental versus the render under `--source-label` and the arms named,
+  over the opening window and the whole clip (quantiles, per-frame maximum, hot pixels and their structure,
+  pixels above the experimental maximum). It matches labels as the engine names files, and checks every
+  recording's clips (the shared experimental frames, one imaging vector, the arms' labeled subunits) before it
+  computes or writes anything. The former version targeted the predecessor repository's file names and could
+  not run here. The `4x4-px bin` statistic is named for what it is, a repeated hot-pixel occupancy, not a spot
+  lifetime.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Spot_Count.py` counts the
+  spots the direct estimators' detection accepts per frame on the experimental frames, the render under
+  `--source-label` and the arms named, over the opening and the closing window, under the count match's rule
+  reused from that script; it reports each render's receptor total, visible spots at frame 0 and
+  detected-per-visible ratio. It renders nothing and matches nothing, writes to
+  `..._Posterior_Predictive_Video_Spot_Count_<SOURCE_LABEL>/`, never overwrites its counts, and
+  `--rewrite-report` rebuilds only the report from the saved counts.
+- The viewer notebook takes an optional `SECOND_CLIP_PATH`: a second render of the same recording (for example a
+  labeling arm) is shown as a third panel under the one window shared by all panels and fixed over all frames; a
+  clip of another recording is refused. `None` keeps the two panels, so a headless player keeps its two panels.
+- The player script takes `--play-zoom Z` and `--play-center CX CY`: a region cropped around the frame center
+  (or the given center), zoomed `Z` times, under the same whole-clip window, written to
+  `<stem>_Player_Zoom<Z>.html` beside the full-frame player. A truncated player exits with status 2, as its
+  docstring states.
+- Regression tests for the display windows and their default in the engine, the notebook and the player; the
+  run's forwarding of the display settings and their check before the dry run; the figure inputs rebuilt from a
+  clip for every render kind; the notebook's windows equal to the engine's, with and without a second clip; the
+  figure redraw, including a failed draw and duplicate targets; the arm's fields and its refusal before any
+  work; the analysis folders keyed by label; the spot count's report with per-recording receptor totals; the
+  arm's dye counts; the structure measures; and the spot count's windows and rule. Further tests cover the
+  provenance block's width, compact values and conditional footnote; the notebook's scrubber, player and
+  labeling line executed on fixture clips; the training-set viewer's per-simulation window; the player
+  script's zoom options; the redraw script's default window; and that every video renderer defaults to the
+  `(0, 99.99)` percentile window.
+
+### Fixed
+
+- The notebook's labeling line prints a per-species occupancy (it raised on one) and marks a labeling arm, as
+  the figure does; its imaging and reaction-diffusion printout uses the figure's compact numbers, so it states
+  the provenance as the figure does.
+
+### Documentation
+
+- The posterior-predictive note lists the four display windows and the new default, the figure redraw, the
+  two forms of the receptor total and the three bright-tail tools (*Bright-tail structure and labeling arms*),
+  and states that a better-matching arm supports a candidate law without establishing the preparation's
+  labeling. The notebooks README lists the four windows, the default and the second clip; the notebook's text
+  lists the four windows, the default, the second clip and both forms of the receptor total.
+- The persisted MET-FAB figures (ten production renders, ten binomial arms, one sensitivity render, ten
+  density-adjusted renders and their ten arms) are redrawn from their clips under the `percentile` window, with
+  the colorbars and the compact provenance; the seven players under `full` were deleted and seventeen players
+  rendered under `percentile` (the seven production renders and the ten density-adjusted renders, 400 to 490 MB
+  each). The ten density-adjusted renders also have zoomed players, split at random into two groups of five
+  (seed 20260929): zoom 2 for cells 5, 16, 32, 45 and 53, zoom 4 for cells 0, 4, 26, 43 and 49. The sensitivity
+  render's figure now names its imaging overrides.
+
 ## 0.1.25 - 2026-09-28
 
 The `percentile` display window's percentile pair is the user's to set. `full` stays the default. No estimator,

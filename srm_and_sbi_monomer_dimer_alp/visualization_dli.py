@@ -95,13 +95,17 @@ def extract_pixel_stats(video: np.ndarray, convert: float = 4.78) -> None:
     plt.show()
 
 
-def animate_video(video: np.ndarray):
+def animate_video(video: np.ndarray, display_percentiles=(0.0, 99.99)):
     """Return a matplotlib FuncAnimation that plays back a video.
 
     Args:
         video: 3D array of shape `(height, width, n_frames)`. (Note: the DLI
             pipeline returns intensity tensors with time as the last axis;
             consumers should follow the same convention when passing here.)
+        display_percentiles: the color window, the video's whole-clip
+            [p_lower, p_upper]; default the minimum to the p99.99. It is fixed
+            over all frames, so the brightness never changes from frame to frame
+            and single hot pixels cannot dim the frames.
 
     Returns:
         A `matplotlib.animation.FuncAnimation` instance. To display
@@ -118,7 +122,9 @@ def animate_video(video: np.ndarray):
 
     get_ipython().run_line_magic("matplotlib", "qt")
     fig, ax = plt.subplots()
-    image = ax.imshow(video[:, :, 0], cmap="magma", interpolation="none", origin="lower")
+    vmin, vmax = (float(np.percentile(video, q)) for q in display_percentiles)
+    image = ax.imshow(video[:, :, 0], cmap="magma", interpolation="none", origin="lower",
+                      vmin=vmin, vmax=vmax)
     ax.set_title("Frame 0")
 
     def update(frame_index):

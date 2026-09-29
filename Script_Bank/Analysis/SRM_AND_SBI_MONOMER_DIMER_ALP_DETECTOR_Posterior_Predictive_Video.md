@@ -8,8 +8,8 @@ The mechanics, the options, the outputs, and the interpretation are documented o
 authoritative companion:
 
 → **`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`**, whose section *The files of the
-posterior-predictive video check* lists every file the check needs, including the declared configuration
-and the receptor-total script beside it.
+posterior-predictive video check* lists every file the check needs, including the declared configurations
+and the companions beside it.
 
 Read that note's table *"One engine, two workflows"* first: for this workflow the MAP supplies the
 six imaging parameters, the reaction-diffusion block is a marginalized nuisance (drawn per render from the

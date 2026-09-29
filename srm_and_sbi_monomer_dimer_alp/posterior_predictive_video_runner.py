@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -114,12 +115,31 @@ def synthetic_source_label(map_block, declared_biology=False, fixed_imaging=Fals
     return "SYNTH (fixed imaging)" if fixed_imaging else "SYNTH (MAP imaging)"
 
 
+def compact_number(value):
+    """A number as the figure prints it: at most four significant digits and three decimal places;
+    a value below 0.01 in magnitude keeps three significant digits, so it never rounds to zero, and a
+    value of 1000 or more prints as a whole number rounded to four significant digits (12345.6 -> 12350)."""
+    v = float(value)
+    if not np.isfinite(v):
+        return str(v)
+    if v == 0.0:
+        return "0"
+    if abs(v) < 0.01:
+        return f"{v:.3g}"
+    if abs(v) >= 1000.0:
+        return f"{float(f'{v:.4g}'):.0f}"
+    s = f"{v:.4g}"
+    if "e" in s or ("." in s and len(s.split(".")[1]) > 3):
+        s = f"{v:.3f}"
+    return s
+
+
 def imaging_role_label(base, overrides=None):
     """The figure's imaging header: ``base`` (the role the block plays) plus the ``--set-imaging``
     overrides applied on top, named, so a sensitivity render never reads as the untouched setup."""
     if not overrides:
         return base
-    keys = ", ".join(f"{k}={float(v):.4g}" for k, v in overrides.items())
+    keys = ", ".join(f"{k}={compact_number(v)}" for k, v in overrides.items())
     return f"{base} WITH OVERRIDES ({keys})"
 
 
@@ -131,15 +151,16 @@ def render_output_paths(out_dir, stem):
             "trajectory": out_dir / f"{stem}_Trajectory.h5"}
 
 
-def refuse_existing_outputs(paths):
+def refuse_existing_outputs(paths, hint=None):
     """Refuse, before any work, to write over an existing render. The stem carries neither the
     nuisance tag nor the declared configuration's identity, so another attempt or a variant of the
-    same recording needs its own ``--run-label``."""
+    same recording needs its own ``--run-label``. ``hint`` replaces that advice for a caller whose
+    files are named by another option (the labeling arm's ``--arm-label``)."""
     existing = [str(p) for p in paths.values() if Path(p).exists()]
     if existing:
-        raise SystemExit("refusing to overwrite an existing render:\n    " + "\n    ".join(existing)
-                         + "\nAnother attempt or a variant (another --nuisance-tag, --declared-rds file "
-                           "or --set-rds override, or a repeat) needs its own --run-label.")
+        raise SystemExit("refusing to overwrite an existing render:\n    " + "\n    ".join(existing) + "\n"
+                         + (hint or "Another attempt or a variant (another --nuisance-tag, --declared-rds file "
+                                    "or --set-rds override, or a repeat) needs its own --run-label."))
 
 
 def _load_map_theta(map_npz, keys, table, kind, cell, chunk, source, prior_low, prior_high):
@@ -388,7 +409,7 @@ def imaging_provenance(imaging_physical):
         lo, hi = entry["PRIOR_RANGE"]
         coordinate = float(bio.entry_to_flow(entry, value)) if value > 0 else float("-inf")
         mark = "*" if (coordinate < lo - 1e-9 or coordinate > hi + 1e-9) else ""
-        out.append(f"{short.get(entry['KEY'], entry['KEY'])}={value:.4g}{mark}")
+        out.append(f"{short.get(entry['KEY'], entry['KEY'])}={compact_number(value)}{mark}")
     return out
 
 
@@ -408,6 +429,21 @@ def initial_receptor_lines(labeling_row):
 DISPLAY_PERCENTILES = (0.0, 99.99)
 """Default percentile pair of the ``percentile`` display window: whole-clip [p0, p99.99] of both clips."""
 
+DISPLAY_NORMS = ("percentile", "experimental", "synthetic", "full")
+"""The color windows of the image panels, the default first. Each is ONE window shared by every panel
+and fixed over all frames: ``percentile`` the whole-clip [p_lower, p_upper] of both clips at the
+``display_percentiles`` pair, by default the minimum to the p99.99 (the viewing window: the top 0.01 % of
+pixels saturates, so single hot pixels cannot dim the frame); ``experimental`` the experimental clip's
+whole-clip [min, max] (synthetic pixels outside it saturate); ``synthetic`` the synthetic clip's whole-clip
+[min, max] (experimental pixels outside it saturate); ``full`` the whole-clip [min, max] of both clips
+(nothing saturates). The viewer notebook and the player script repeat this list (they import no project
+package); a test keeps the three equal."""
+DISPLAY_NORM_DEFAULT = DISPLAY_NORMS[0]
+
+
+PROVENANCE_WIDTH = 64
+"""Characters per line of the comparison figure's provenance text; longer lines wrap."""
+
 
 def check_display_percentiles(pair):
     """The ``percentile`` window's (lower, upper) percentiles as floats, in [0, 100] and increasing."""
@@ -418,6 +454,157 @@ def check_display_percentiles(pair):
     if not (0.0 <= lo < hi <= 100.0):
         raise ValueError(f"display percentiles must satisfy 0 <= lower < upper <= 100, not ({lo}, {hi})")
     return lo, hi
+
+
+def check_display_norm(mode):
+    """``mode`` when it names a display window (``DISPLAY_NORMS``); a ValueError otherwise."""
+    if mode not in DISPLAY_NORMS:
+        raise ValueError(f"display_norm must be one of {', '.join(repr(m) for m in DISPLAY_NORMS)}, "
+                         f"not {mode!r}")
+    return mode
+
+
+def display_window(experimental, synth, display_norm, display_percentiles=DISPLAY_PERCENTILES):
+    """The one color window of the comparison's image panels, over ALL frames of the clips.
+
+    Returns a dict: ``clim`` ``(vmin, vmax)`` in ADU; ``desc``, the mode and its statistic as the figure
+    prints it (``experimental [min, max]``, ``synthetic [min, max]``, ``full [min, max]``,
+    ``percentile [p0, p99.99]``); and ``outside``, the pixels of each clip below and above the window
+    (``{"experimental": (n_below, n_above), "synthetic": (n_below, n_above)}``), which the display shows
+    at the colormap's ends: above as the brightest color, below as black, like the background."""
+    check_display_norm(display_norm)
+    exp = np.asarray(experimental); syn = np.asarray(synth)
+    if display_norm == "experimental":
+        clim, desc = (float(exp.min()), float(exp.max())), "experimental [min, max]"
+    elif display_norm == "synthetic":
+        clim, desc = (float(syn.min()), float(syn.max())), "synthetic [min, max]"
+    elif display_norm == "full":
+        clim = (float(min(exp.min(), syn.min())), float(max(exp.max(), syn.max())))
+        desc = "full [min, max]"
+    else:
+        p_lo, p_hi = check_display_percentiles(display_percentiles)
+        clim = (float(min(np.percentile(exp, p_lo), np.percentile(syn, p_lo))),
+                float(max(np.percentile(exp, p_hi), np.percentile(syn, p_hi))))
+        desc = f"percentile [p{p_lo:g}, p{p_hi:g}]"
+    outside = {name: (int(np.count_nonzero(a < clim[0])), int(np.count_nonzero(a > clim[1])))
+               for name, a in (("experimental", exp), ("synthetic", syn))}
+    return {"clim": clim, "desc": desc, "outside": outside}
+
+
+def display_window_line(window):
+    """The display window and the pixels outside it, as the figure's provenance states them (two lines:
+    the mode with its window in ADU, then each clip's pixels below and above it)."""
+    lo, hi = window["clim"]
+    parts = "; ".join(f"{name} {below} below, {above} above"
+                      for name, (below, above) in window["outside"].items())
+    return f"display: norm {window['desc']} = [{lo:.0f}, {hi:.0f}] ADU\noutside it: {parts}"
+
+
+def labeling_description(record):
+    """The labeling line of a render, rebuilt from its plan record (the clip's ``labeling_record_json``):
+    ``LabelingPlan.describe()`` with its numbers compacted (``compact_number``). A labeling arm (a record
+    with an ``arm`` entry) redrew the dye counts on its source clip's labeled subunits, which the line
+    says."""
+    occupancy = record["occupancy"]
+    occupancy = (", ".join(f"{s}={compact_number(v)}" for s, v in occupancy.items())
+                 if isinstance(occupancy, dict) else compact_number(occupancy))
+    a = ", ".join(f"{s} {compact_number(v)}" for s, v in record["visible_per_subunit"].items())
+    kept = "; the source's labeled subunits kept" if record.get("arm") else ""
+    return (f"{record['condition']} {record['law_name']} = {_law_text(record['law'])}, occupancy "
+            f"{occupancy} ({record['occupancy_source']}{kept}); visible per subunit {a}")
+
+
+def _law_text(law):
+    """``LabelingLaw.describe()`` with its numbers compacted, from the record's ``law`` entry (the law's
+    name, an identifier, is printed as stored)."""
+    family, mean, shape = law.get("family"), law.get("mean"), law.get("shape")
+    if mean is None:
+        return str(law.get("description", family))
+    if family == "bernoulli":
+        return f"Bernoulli(q={compact_number(mean)})"
+    if family == "poisson":
+        return f"Poisson(mean={compact_number(mean)})"
+    if family == "binomial":
+        return f"Binomial(sites={int(shape)}, mean={compact_number(mean)})"
+    if family == "negative_binomial":
+        return f"NegativeBinomial(mean={compact_number(mean)}, variance/mean={compact_number(shape)})"
+    return str(law.get("description", family))
+
+
+def _clip_field(clip, key):
+    """One stored field of a clip (an opened npz or the dict saved as one) as a plain value."""
+    value = clip[key]
+    array = np.asarray(value)
+    return array.item() if array.ndim == 0 else value
+
+
+def comparison_figure_inputs(clip, cfg):
+    """The comparison figure's inputs, rebuilt from a persisted clip (an opened ``*_Synthetic_Video.npz``
+    or the dict saved as one): the two stored videos, the provenance and the labels as the render states
+    them. The render draws its own figure through this function (``draw_comparison_figure``), so a figure
+    redrawn later from the clip is the render's own, apart from the display window chosen.
+
+    ``cfg`` is the clip's workflow configuration (``biology_workflow()`` or ``detector_workflow()``; the
+    clip's ``workflow`` field names it). Returns the keyword arguments of ``_save_comparison_png`` except
+    the path and the display settings."""
+    map_block = str(_clip_field(clip, "map_block"))
+    rds_source = str(_clip_field(clip, "rds_source"))
+    needs_map = np.asarray(clip["map_theta"]).size > 0          # the render read a MAP vector
+    rds_record = json.loads(str(_clip_field(clip, "rds_record_json")))
+    imaging_identity = json.loads(str(_clip_field(clip, "imaging_record_json")))
+    labeling_record = json.loads(str(_clip_field(clip, "labeling_record_json")))
+    overrides = imaging_identity.get("set_imaging_overrides")
+    tag = str(_clip_field(clip, "nuisance_tag")) if "nuisance_tag" in (clip.files if hasattr(clip, "files") else clip) else ""
+    declared = rds_source == "declared"
+    declared_label = (f"DECLARED reaction-diffusion ({rds_record['scenario']['name']}, absolute)"
+                      if declared else None)
+    fixed_imaging = map_block == "imaging" and not needs_map      # the detector without a MAP read
+    if map_block == "rds":
+        imaging_label = imaging_role_label("FIXED imaging (calibrated Nuisance_DLI"
+                                           + (f" tag {tag}" if tag else "") + " + MET SCOPE)", overrides)
+        if declared:
+            rds_label = declared_label
+            motion_desc = "from the declared reaction-diffusion configuration (not a draw)"
+        else:
+            rds_label = "INFERRED reaction-diffusion (MAP theta, absolute)"
+            motion_desc = "from the MAP reaction-diffusion parameters (not a draw)"
+        rds_table = parameter_table(cfg)                 # the eleven biology parameters
+    else:
+        imaging_label = (imaging_role_label("FIXED imaging (MET values)", overrides) if fixed_imaging
+                         else "INFERRED imaging (MAP theta, absolute)")
+        if declared:
+            rds_label = declared_label
+            motion_desc = "from the declared reaction-diffusion configuration"
+        else:
+            rds_label = "NUISANCE reaction-diffusion (marginalized)"
+            motion_desc = None
+        rds_table = None                                 # detector: labeled by the biology table (its RDS nuisance)
+    if labeling_record.get("arm"):                       # a labeling arm reuses its source's trajectory
+        motion_desc = "the source render's trajectory (reused, not re-simulated)"
+    return dict(
+        experimental=np.asarray(clip["experimental"]), synth=np.asarray(clip["synth"]),
+        kind=str(_clip_field(clip, "kind")), cell=int(_clip_field(clip, "cell")),
+        sel_desc=(str(_clip_field(clip, "map_source")) if needs_map else None),
+        nuisance=np.asarray(clip["rds_provenance"], dtype=float),
+        imaging_physical=np.asarray(clip["imaging_physical"], dtype=float),
+        synth_label=str(_clip_field(clip, "synth_label")),
+        labeling_row=np.asarray(clip["labeling_row"], dtype=float),
+        imaging_label=imaging_label, rds_label=rds_label, motion_desc=motion_desc, rds_table=rds_table,
+        fixed_imaging=fixed_imaging, fixed_nuisance=rds_source == "pinned",
+        labeling_desc=labeling_description(labeling_record),
+        rds_outside=tuple(str(k) for k in np.asarray(clip["rds_outside_prior"]).ravel()))
+
+
+def draw_comparison_figure(clip, figure_path, cfg, display_norm=DISPLAY_NORM_DEFAULT,
+                           display_percentiles=DISPLAY_PERCENTILES):
+    """Draw a clip's comparison figure to ``figure_path`` under the display window given (one of
+    ``DISPLAY_NORMS``), from the clip alone (``comparison_figure_inputs``). The caller decides whether
+    an existing figure may be replaced; this function writes the file it is given."""
+    inputs = comparison_figure_inputs(clip, cfg)
+    head = [inputs.pop(k) for k in ("experimental", "synth", "kind", "cell", "sel_desc")]
+    nuisance, imaging_physical = inputs.pop("nuisance"), inputs.pop("imaging_physical")
+    _save_comparison_png(figure_path, *head, display_norm, nuisance, imaging_physical,
+                         display_percentiles=display_percentiles, **inputs)
 
 
 def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, display_norm,
@@ -443,59 +630,56 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     Both panels and the histogram use the STORED synthetic (``synth_u16``, clipped to the
     non-negative uint16 range), so the comparison is like-with-like against the experimental frames and
     matches the persisted clip -- not the pre-clip float. The experimental and synthetic image panels
-    ALWAYS share ONE color limit, in every ``display_norm`` mode -- the max-projection row shares the
-    full ``[min, max]`` range, and the mid-frame row shares a window the mode selects -- so identical
-    intensities map to identical colors and the exp-vs-synth comparison is fair; the mode only sets WHAT
-    the shared mid-frame window is, and every mode fixes it over ALL frames of both clips, so the
-    brightness never changes from frame to frame (a per-frame window is not offered: it made the
-    brightness jump at playback). ``full`` (default): the whole-clip ``[min, max]`` of both clips
-    (nothing clipped; the brightest pixel anywhere in either clip sets the top, so single frames look
-    dim). ``percentile``: the whole-clip ``[p_lower, p_upper]`` of both clips at the ``display_percentiles``
-    pair, the user's to set (default ``DISPLAY_PERCENTILES`` = (0, 99.99): the minimum to the p99.99,
-    dropping the top-0.01% hot-pixel sliver for contrast). The histogram is in ADU in every mode."""
+    ALWAYS share ONE color limit, in every ``display_norm`` mode, so identical intensities map to
+    identical colors and the exp-vs-synth comparison is fair: the mid-frame row shares the window the
+    mode selects (``display_window``), computed over ALL frames of the clips, so the brightness never
+    changes from frame to frame (a per-frame window is not offered: it made the brightness jump at
+    playback); the max-projection row shares the joint ``[min, max]`` of the two max projections in
+    every mode. The modes (``DISPLAY_NORMS``): ``percentile`` (default) the whole-clip
+    ``[p_lower, p_upper]`` of both clips at the ``display_percentiles`` pair, the user's to set (default
+    ``DISPLAY_PERCENTILES`` = (0, 99.99): the minimum to the p99.99); ``experimental`` the experimental
+    clip's whole-clip ``[min, max]``, synthetic pixels outside it saturating; ``synthetic`` the synthetic
+    clip's whole-clip ``[min, max]``, experimental pixels outside it saturating; ``full`` the whole-clip
+    ``[min, max]`` of both clips (nothing saturates; the brightest pixel anywhere in either clip sets the
+    top). Each row carries a colorbar stating its brightness range in ADU, and the provenance names the
+    mode, the window and each clip's pixels below and above it. Every number in the provenance is compact
+    (``compact_number``) and long lines wrap, so the text stays inside its panel. The histograms, the
+    quantile table and the match plot are in ADU and do not depend on the mode."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FixedLocator, FixedFormatter, NullLocator
 
-    imaging_header = f"{imaging_label} (absolute)"
+    imaging_header = imaging_label if "absolute" in imaging_label else f"{imaging_label} (absolute)"
     fig_title = ("Fixed-imaging video check (experimental vs synthetic; correct-source MET)"
                  if fixed_imaging
                  else f"Posterior-predictive video check: experimental vs {synth_label}")
     mid = experimental.shape[0] // 2
     label = {"FAB": "MET-FAB", "INLB": "MET-INLB"}.get(kind, kind)
-    fig, ax = plt.subplots(2, 4, figsize=(18, 8.5), dpi=200)
+    fig, ax = plt.subplots(2, 4, figsize=(18, 9.2), dpi=200)
 
-    # --- pixel-intensity quantiles (ADU): drive both the frame display window and the match plot ---
+    # --- pixel-intensity quantiles (ADU): drive the match plot and the quantile table ---
     exp_r = experimental.ravel(); syn_r = synth.ravel()
     q_probs = [0, 0.01, 50, 90, 99, 99.9, 99.99, 100]
     q_names = ["min", "p0.01", "median", "p90", "p99", "p99.9", "p99.99", "max"]
     eq = np.percentile(exp_r, q_probs); sq = np.percentile(syn_r, q_probs)
-    # The full quantile set drives the match plot + table (below); the frame display window
-    # (below) spans the full range, so no pixels are clipped from the frame color scale.
+    # The quantile set drives the match plot + table (below); the frame display window is the
+    # mode's (display_window), which may saturate pixels of either clip at the colormap's ends.
 
     def _frame(a, arr, title, clim):
-        a.imshow(arr, cmap="magma", origin="lower", interpolation="none",
-                 vmin=clim[0], vmax=clim[1])
+        image = a.imshow(arr, cmap="magma", origin="lower", interpolation="none",
+                         vmin=clim[0], vmax=clim[1])
         a.set_title(title, fontsize=9); a.set_xticks([]); a.set_yticks([])
+        return image
 
     # The experimental and synthetic image panels ALWAYS share ONE color limit, in EVERY mode, so
     # identical intensities map to identical colors and the comparison is fair: the mid-frame row
-    # shares `frame_clim` and the max-projection row shares `proj_clim`. `display_norm` only sets WHAT
-    # the shared mid-frame window is; every mode fixes it over ALL frames of both clips, and the max
-    # projection always shares the full [min, max] range.
+    # shares `frame_clim` (the mode's window over ALL frames of the clips) and the max-projection row
+    # shares `proj_clim`, the joint [min, max] of the two max projections, in every mode.
     emp, smp = experimental.max(0), synth.max(0)
     proj_clim = (float(min(emp.min(), smp.min())), float(max(emp.max(), smp.max())))
-    if display_norm == "full":                    # whole-clip [min, max] of both clips; nothing clipped
-        frame_clim = (float(min(eq[0], sq[0])), float(max(eq[-1], sq[-1])))
-        norm_desc = "full"
-    elif display_norm == "percentile":            # whole-clip [p_lower, p_upper] of both clips
-        p_lo, p_hi = check_display_percentiles(display_percentiles)
-        frame_clim = (float(min(np.percentile(exp_r, p_lo), np.percentile(syn_r, p_lo))),
-                      float(max(np.percentile(exp_r, p_hi), np.percentile(syn_r, p_hi))))
-        norm_desc = f"percentile [p{p_lo:g}, p{p_hi:g}]"
-    else:
-        raise ValueError(f"display_norm must be 'full' or 'percentile', not {display_norm!r}")
+    window = display_window(experimental, synth, display_norm, display_percentiles)
+    frame_clim, norm_desc = window["clim"], window["desc"]
     exp_clim = syn_clim = frame_clim
     exp_proj_clim = syn_proj_clim = proj_clim
 
@@ -504,8 +688,17 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     _frame(ax[0, 0], experimental[mid], f"EXPERIMENTAL {label} cell {cell}  frame {mid}", exp_clim)
     _frame(ax[1, 0], experimental.max(0), "EXPERIMENTAL  max projection", exp_proj_clim)
     sel = f" {sel_desc}" if sel_desc else ""
-    _frame(ax[0, 1], synth[mid], f"{synth_label} {kind} c{cell}{sel}  frame {mid}", syn_clim)
-    _frame(ax[1, 1], synth.max(0), "SYNTH  max projection", syn_proj_clim)
+    frame_image = _frame(ax[0, 1], synth[mid], f"{synth_label} {kind} c{cell}{sel}  frame {mid}", syn_clim)
+    proj_image = _frame(ax[1, 1], synth.max(0), "SYNTH  max projection", syn_proj_clim)
+    # The brightness range of each row, explicit: one colorbar per row in ADU, beside the synthetic panel;
+    # an equal blank strip beside the experimental panel keeps the two panels the same size.
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    for row, image, (lo, hi), what in ((0, frame_image, frame_clim, f"display window ({norm_desc})"),
+                                       (1, proj_image, proj_clim, "projection window [min, max]")):
+        make_axes_locatable(ax[row, 0]).append_axes("right", size="4%", pad=0.06).axis("off")
+        bar = fig.colorbar(image, cax=make_axes_locatable(ax[row, 1]).append_axes("right", size="4%", pad=0.06))
+        bar.set_label(f"{what}: {lo:.0f} to {hi:.0f} ADU", fontsize=7)
+        bar.ax.tick_params(labelsize=6)
 
     # --- histograms with SHARED bins (like-with-like): log-y over the full range (top), and
     #     linear-y through ~p99.99 (bottom) -- the whole range bar the top-0.01% hot-pixel sliver,
@@ -539,11 +732,15 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     axr.axhspan(0.9, 1.1, color="tab:green", alpha=0.12)
     axr.axhline(1.0, color="gray", lw=1.0, ls="--")
     axr.plot(xq, ratios, "-o", color="tab:red", ms=5)
-    axr.set_yscale("log"); axr.set_ylim(0.5, 3.5)
-    # Fixed decimal y-labels; suppress the log MINOR ticks -- in this narrow [0.5, 3.5] range
-    # they otherwise print auto sci-notation labels (e.g. 6x10^-1) that clutter the axis.
-    axr.yaxis.set_major_locator(FixedLocator([0.5, 0.7, 1.0, 1.5, 2.0, 3.0]))
-    axr.yaxis.set_major_formatter(FixedFormatter(["0.5", "0.7", "1.0", "1.5", "2.0", "3.0"]))
+    finite = ratios[np.isfinite(ratios) & (ratios > 0)]
+    y_lo = min(0.5, float(finite.min()) / 1.15) if finite.size else 0.5
+    y_hi = max(3.5, float(finite.max()) * 1.15) if finite.size else 3.5
+    axr.set_yscale("log"); axr.set_ylim(y_lo, y_hi)      # [0.5, 3.5], widened so every ratio shows
+    # Fixed decimal y-labels; suppress the log MINOR ticks -- in this narrow range they otherwise
+    # print auto sci-notation labels (e.g. 6x10^-1) that clutter the axis.
+    ticks = [v for v in (0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0) if y_lo <= v <= y_hi]
+    axr.yaxis.set_major_locator(FixedLocator(ticks))
+    axr.yaxis.set_major_formatter(FixedFormatter([f"{v:.1f}" for v in ticks]))
     axr.yaxis.set_minor_locator(NullLocator())
     axr.tick_params(axis="y", labelsize=7)
     axr.set_xticks(xq); axr.set_xticklabels(q_names, rotation=45, ha="right", fontsize=7)
@@ -555,7 +752,7 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     ax[1, 3].axis("off")
     # All eleven imaging values: the six emitter parameters and the five pinned camera values.
     dli = imaging_provenance(imaging_physical)
-    dli_lines = "\n".join("  " + "  ".join(dli[j:j + 3]) for j in range(0, len(dli), 3))
+    dli_lines = ["  " + "  ".join(dli[j:j + 3]) for j in range(0, len(dli), 3)]
     nuis = np.asarray(nuisance, dtype=float).ravel()
     npart = []
     # The label table must match the block being shown, or zip() silently truncates. Both
@@ -574,22 +771,32 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
         # even represent. Exact match, so a new "Count ..." unit cannot silently re-break it.
         is_count = str(ent.get("UNIT", "")).strip().lower() == "count"
         mark = "*" if ent["KEY"] in set(rds_outside) else ""
-        npart.append((f"{lab2}={v:.0f}" if is_count else f"{lab2}={v:.3g}") + mark)
-    nuis_lines = "\n".join("  " + "  ".join(npart[j:j + 3]) for j in range(0, len(npart), 3))
-    tbl = f"{'quantile':<8}{'exp':>7}{'synth':>7}{'ratio':>7}\n"
+        npart.append((f"{lab2}={v:.0f}" if is_count else f"{lab2}={compact_number(v)}") + mark)
+    nuis_lines = ["  " + "  ".join(npart[j:j + 3]) for j in range(0, len(npart), 3)]
+    tbl = [f"{'quantile':<8}{'exp':>7}{'synth':>7}{'ratio':>7}"]
     for name, ev, sv in zip(q_names, eq, sq):
-        tbl += f"{name:<8}{ev:7.0f}{sv:7.0f}{(sv / ev if ev > 0 else float('inf')):7.2f}\n"
-    ax[1, 3].text(
-        0.0, 1.0,
-        "QUANTILES (ADU)  ratio=synth/exp\n" + tbl + "\n"
-        + f"{imaging_header}:\n{dli_lines}\n  (* outside prior / SCOPE box)\n"
-        + f"{rds_label}:\n{nuis_lines}\n"
-        + ("  (* outside the biology prior)\n" if rds_outside else "")
-        + (f"labeling: {labeling_desc}\n" if labeling_desc else "")
-        + "initial receptors (frame 0, this render):\n" + "\n".join(initial_receptor_lines(labeling_row)) + "\n"
-        + f"motion: {motion_desc or ('fixed nuisance (pinned)' if fixed_nuisance else 'fresh draw')}"
-        f"; norm {norm_desc}",
-        fontsize=6.5, va="top", family="monospace")
+        tbl.append(f"{name:<8}{ev:7.0f}{sv:7.0f}{(sv / ev if ev > 0 else float('inf')):7.2f}")
+    lines = ["QUANTILES (ADU)  ratio=synth/exp", *tbl, "", f"{imaging_header}:", *dli_lines]
+    if any(item.endswith("*") for item in dli):
+        lines.append("  (* outside prior / SCOPE box)")
+    lines += [f"{rds_label}:", *nuis_lines]
+    if rds_outside:
+        lines.append("  (* outside the biology prior)")
+    if labeling_desc:
+        lines.append(f"labeling: {labeling_desc}")
+    lines += ["initial receptors (frame 0, this render):", *initial_receptor_lines(labeling_row),
+              f"motion: {motion_desc or ('fixed nuisance (pinned)' if fixed_nuisance else 'fresh draw')}",
+              *display_window_line(window).split("\n")]
+    # Long lines wrap with a hanging indent, so the block stays inside its panel.
+    wrapped = []
+    for line in lines:
+        if len(line) <= PROVENANCE_WIDTH:
+            wrapped.append(line)
+            continue
+        indent = line[:len(line) - len(line.lstrip())]
+        wrapped.extend(textwrap.wrap(line, width=PROVENANCE_WIDTH, subsequent_indent=indent + "    ",
+                                     break_long_words=False, break_on_hyphens=False))
+    ax[1, 3].text(0.0, 1.0, "\n".join(wrapped), fontsize=6.0, va="top", family="monospace")
     fig.suptitle(fig_title, fontsize=11)
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
@@ -631,6 +838,10 @@ def run_posterior_predictive_video(cfg, args):
     # labeling plan is the production one: the condition's law and declared (or derived) occupancy,
     # or the --labeling-law / --occupancy override, resolved exactly as at the DLI stage.
     plan = resolve_labeling(kind, args.labeling_law, args.occupancy)
+    # The display settings, checked before any work (the dry run included), so a bad value never
+    # leaves a clip without its figure. The pair is checked in every mode, as the viewer checks it.
+    check_display_norm(args.display_norm)
+    check_display_percentiles(args.display_percentiles)
     if args.set_rds and not args.declared_rds:
         raise SystemExit("--set-rds overrides a value of the --declared-rds configuration; pass "
                          "--declared-rds as well.")
@@ -757,8 +968,7 @@ def run_posterior_predictive_video(cfg, args):
               f"(of {synth.size}); clipped to match the experimental non-negative domain.")
     synth_u16 = np.clip(np.rint(synth), 0, 65535).astype(np.uint16)
     synth_label = synthetic_source_label(S["map_block"], declared_biology, args.fixed_imaging_parameters)
-    np.savez_compressed(
-        str(clips_path),
+    fields = dict(
         experimental=experimental.astype(np.uint16), synth=synth_u16,
         imaging_physical=imaging_physical, imaging_keys=np.array(det.DETECTOR_IMAGING_KEYS),
         map_theta=(np.array([]) if map_theta is None else map_theta),
@@ -779,40 +989,11 @@ def run_posterior_predictive_video(cfg, args):
         seed=(-1 if args.seed is None else args.seed),
         frame_time_seconds=frame_time, n_frames=n_frames, experimental_tif=str(experimental_tif),
         imaging_desc=str(imaging_desc), nuisance_tag=("" if args.nuisance_tag is None else args.nuisance_tag))
-    declared_label = (None if declared is None else
-                      f"DECLARED reaction-diffusion ({declared[1]['scenario']['name']}, absolute)")
-    if S["map_block"] == "rds":
-        imaging_label = imaging_role_label("FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)",
-                                           imaging_identity.get("set_imaging_overrides"))
-        if declared_label:
-            rds_label = declared_label
-            motion_desc = "from the declared reaction-diffusion configuration (not a draw)"
-        else:
-            rds_label = "INFERRED reaction-diffusion (MAP theta, absolute)"
-            motion_desc = "from the MAP reaction-diffusion parameters (not a draw)"
-        rds_table = parameter_table(cfg)                 # the eleven biology parameters
-    else:
-        imaging_label = (imaging_role_label("FIXED imaging (MET values)",
-                                            imaging_identity.get("set_imaging_overrides"))
-                         if args.fixed_imaging_parameters
-                         else "INFERRED imaging (MAP theta, absolute)")
-        if declared_label:
-            rds_label = declared_label
-            motion_desc = "from the declared reaction-diffusion configuration"
-        else:
-            rds_label = "NUISANCE reaction-diffusion (marginalized)"
-            motion_desc = None
-        rds_table = None                                 # detector: labeled by the biology table (its RDS nuisance)
-    _save_comparison_png(outputs["figure"], experimental, synth_u16,
-                         args.kind, args.cell, args.map_source if needs_map else None,
-                         args.display_norm, rds_provenance, imaging_physical,
-                         display_percentiles=tuple(args.display_percentiles),
-                         synth_label=synth_label, labeling_row=labeling_row,
-                         imaging_label=imaging_label, rds_label=rds_label,
-                         motion_desc=motion_desc, rds_table=rds_table,
-                         fixed_imaging=args.fixed_imaging_parameters,
-                         fixed_nuisance=bool(args.fixed_nuisance_rds),
-                         labeling_desc=plan.describe(), rds_outside=rds_outside)
+    np.savez_compressed(str(clips_path), **fields)
+    # The figure is drawn from the fields just saved (comparison_figure_inputs), so a redraw from the
+    # clip file reproduces it exactly, apart from the display window chosen.
+    draw_comparison_figure(fields, outputs["figure"], cfg, args.display_norm,
+                           tuple(args.display_percentiles))
     print(f"Persisted clip + provenance:\n    {clips_path}")
     print(f"Static comparison figure:\n    {outputs['figure']}")
     print(f"Trajectory (provenance):\n    {traj_path}")
@@ -904,17 +1085,22 @@ def build_parser(description):
                         "at the DLI stage: one value, or per initial MOLECULAR species 'A=0.5,B=1.0' "
                         "(monomer A, dimer B). Default: the condition's declared (MET-INLB 0.5) or "
                         "derived (MET-FAB 0.155) value; the value used is recorded in the clip.")
-    p.add_argument("--display-norm", default="full", choices=("full", "percentile"),
-                   help="color window of the comparison figure's image panels, always shared by the "
-                        "experimental and synthetic panel and fixed over all frames of both clips: 'full' "
-                        "(default; the whole-clip [min, max]) or 'percentile' (the whole-clip "
-                        "[p_lower, p_upper] at --display-percentiles). Display-only -- never enters the "
-                        "quantitative comparison.")
+    p.add_argument("--display-norm", default=DISPLAY_NORM_DEFAULT, choices=DISPLAY_NORMS,
+                   help="color window of the comparison figure's image panels: ONE window shared by the "
+                        "experimental and synthetic panel and fixed over all frames. 'percentile' (default; "
+                        "the whole-clip [p_lower, p_upper] of both clips at --display-percentiles, by default "
+                        "the minimum to the p99.99), 'experimental' (the experimental clip's whole-clip "
+                        "[min, max]; synthetic pixels outside it saturate), 'synthetic' (the synthetic clip's "
+                        "whole-clip [min, max]; experimental pixels outside it saturate) or 'full' (the "
+                        "whole-clip [min, max] of both clips). The figure states the window in a colorbar "
+                        "and each clip's pixels outside it. Display-only -- never enters the quantitative "
+                        "comparison.")
     p.add_argument("--display-percentiles", type=float, nargs=2, default=list(DISPLAY_PERCENTILES),
                    metavar=("LOWER", "UPPER"),
                    help="the 'percentile' window's percentile pair, 0 <= LOWER < UPPER <= 100 "
                         f"(default {DISPLAY_PERCENTILES[0]:g} {DISPLAY_PERCENTILES[1]:g}: the minimum to "
-                        "the p99.99, dropping the top-0.01%% hot-pixel sliver). Ignored under 'full'.")
+                        "the p99.99, dropping the top-0.01%% hot-pixel sliver). Used only by 'percentile'; "
+                        "checked in every mode.")
     p.add_argument("--fixed-imaging-parameters", action="store_true",
                    help="detector only: skip the MAP database and pin imaging to MET values.")
     p.add_argument("--set-imaging", action="append", default=[], metavar="KEY=VALUE",
