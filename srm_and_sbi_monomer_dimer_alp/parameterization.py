@@ -1341,15 +1341,28 @@ class InferenceFlow:
 #   (with batch normalization and Mish) before the pooling of blocks 1 and 2; `statspool`
 #   reduces the final feature maps by their mean, standard deviation and maximum over positions,
 #   projected back to the channel width, instead of the mean alone. The flow is the baseline's
-#   in all three, so a difference is attributable to the encoder and its training.
+#   in all three, so a difference is attributable to the encoder and its training. Smoked on
+#   2026-09-30 as the technical evidence for the combined arms below; not trained.
+#
+#   capacity256_kernel7_stats / capacity256_earlyconv_stats -- the two combined candidates of the
+#   encoder screening, both on the `capacity256` base (its widths, 16 * 2^4 = 256 features per
+#   temporal token, and its flow) with statistics pooling (3 * 256 -> 256), differing in the early
+#   spatial processing: the first block's spatial kernel widened to 7, or one spatial-only (1, 3, 3)
+#   convolution before the pooling of blocks 1 and 2. Neither isolates one modification; each is a
+#   candidate architecture for the whole posterior estimator, compared with `capacity256` (its base)
+#   and with `baseline` (the secondary reference).
+_CAPACITY256_FLOW: dict = dict(hidden_features=128, num_transforms=8, num_blocks=2, dropout_probability=0.1)
 NETWORK_PRESETS: dict = {
     "baseline": dict(network={}, flow={}),
-    "capacity256": dict(network=dict(start_channels=16),
-                        flow=dict(hidden_features=128, num_transforms=8, num_blocks=2,
-                                  dropout_probability=0.1)),
+    "capacity256": dict(network=dict(start_channels=16), flow=dict(_CAPACITY256_FLOW)),
     "kernel7": dict(network=dict(first_spatial_kernel=7), flow={}),
     "earlyconv": dict(network=dict(extra_spatial_convs=1, extra_spatial_conv_blocks=2), flow={}),
     "statspool": dict(network=dict(spatial_pooling="stats"), flow={}),
+    "capacity256_kernel7_stats": dict(network=dict(start_channels=16, first_spatial_kernel=7, spatial_pooling="stats"),
+                                      flow=dict(_CAPACITY256_FLOW)),
+    "capacity256_earlyconv_stats": dict(network=dict(start_channels=16, extra_spatial_convs=1, extra_spatial_conv_blocks=2,
+                                                     spatial_pooling="stats"),
+                                        flow=dict(_CAPACITY256_FLOW)),
 }
 
 

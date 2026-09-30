@@ -1871,7 +1871,7 @@ joint structure of the posterior, the parameter-pair dependence within each wind
 cannot carry and that the competing solutions above point to, is the next layer of this reading and is not
 analyzed here.
 
-### 9.9 The encoder screening: three isolated changes to the embedding network
+### 9.9 The encoder screening of the embedding network
 
 **Motivation and objective.** The direct PSF-width estimator recovers `sigma_r` from the synthetic EVAL
 videos (slope 0.90, correlation 0.96, MAE 0.046 dex; §9.6) while both neural estimators leave it flat
@@ -1940,31 +1940,90 @@ so `..._DETECTOR_FAB_2S_50FPS_KERNEL7_Estimator.npz`, `..._KERNEL7_MAP_Recovery`
 `..._KERNEL7_Posterior_Calibration` and the job names `..._2S_50FPS_KERNEL7_Inference` / `_Evaluation` /
 `_Posterior_Calibration`, beside the baseline's and `CAP256`'s products, which are not touched.
 
+**The first smoke: memory and throughput of each modification (2026-09-30, JUPITER booster, one node ×
+4 GH200 with 96 GiB each, TRAIN 4 / TEST 1, two epochs, jobs 2123069, 2123070, 2123071; code a7ebd0d).**
+Each single-change arm ran at the per-rank batch proposed for its production geometry (32 for the
+baseline-cost arms, 16 for `earlyconv`, as `capacity256` used). All three completed with exit code 0,
+every rank finished, no failure or new warning appears in any log, each tagged estimator's rebuild
+specification carries exactly its preset's encoder change at the baseline flow, each loads and embeds an
+EVAL video, samples and scores finite values through the flow, and the Evaluation stage resolves each tag.
+An adversarial second reading of every log and product confirmed all of it.
+
+| per GPU | `kernel7`, batch 32 | `earlyconv`, batch 16 | `statspool`, batch 32 |
+|---|---|---|---|
+| epoch 1, with start-up overhead | 63.1 s | 81.7 s | 55.1 s |
+| epoch 2, steady state | 39.9 s | 56.9 s | 31.0 s |
+| rank-0 peak allocated / reserved | 47.5 / 78.2 GiB | 37.9 / 53.0 GiB | 47.5 / 78.2 GiB |
+| TRAIN videos per second per GPU, epoch 2 | 25.1 | 17.6 | 32.3 |
+| job wall | 4 min 52 s | 5 min 29 s | 4 min 33 s |
+
+Reading, within the smoke's limits (rank-0 memory only, since Slurm records no GPU memory; global batches
+of 128, 64 and 128 with no scientific standing; one node, so no statement about multi-node scaling):
+`statspool` showed no obvious throughput penalty in this comparison, its rate matching the 32.3 videos per
+second per GPU of the baseline production run (8 nodes, the same per-rank batch, different launch
+conditions), but its isolated overhead was not measured, since no baseline ran in the same smoke, and the
+numerical agreement does not validate predicting eight-node performance from one node; `kernel7` costs
+29 % more time than `statspool` at the same batch and the same memory (its first convolution has 5.4 times
+the kernel elements, 26 % more multiply-adds over the stack); `earlyconv` costs 84 % more time at half the
+per-rank batch, hence with twice the optimizer steps per epoch, so that figure describes its practical
+configuration and not the cost of the extra convolutions alone (acceptable under the flexible-batch rule
+below), and at batch 16 it allocated 20 % less and reserved 32 % less memory than the batch-32 arms: its
+batch was halved, not its footprint (its activations per video are 1.69 times the baseline's). The first
+epoch carries 23 to 25 s of start-up overhead in every arm (compilation was not timed separately, so the
+overhead is not attributed to it alone), and about 3.1 minutes of each job lie outside the two epochs
+(data loading, process start-up, the final save), the same across arms.
+
+**The decision (2026-09-30): two combined candidates on the `capacity256` base.** The objective is the
+whole posterior estimator, not the isolated contribution of each modification, so the production budget
+goes to two combined architectures instead of the three single-change trainings, and `capacity256`, with
+its substantially better recorded calibration, is the common base: its widths (16 · 2⁴ = 256 features per
+token) and its flow (hidden 128, eight transforms, two blocks). Building on it inherits its settings, not
+its learned failure: the bleaching collapse occurred in a jointly trained encoder and flow, and the larger
+flow has not been established as its cause; bleaching recovery stays an explicit weakness to watch. Both
+candidates use statistics pooling (3 · 256 → 256, 196,864 projection parameters), which addresses the final
+spatial reduction at small cost, and they differ in the early spatial processing:
+
+| | `capacity256` (base) | A: `capacity256_kernel7_stats` | B: `capacity256_earlyconv_stats` |
+|---|---|---|---|
+| first spatial kernel | 3 × 3 | **7 × 7** | 3 × 3 |
+| extra spatial convolutions | none | none | **one before the pooling of blocks 1 and 2** |
+| spatial reduction | mean | **mean + std + max → 256** | **mean + std + max → 256** |
+| embedding parameters | 2,756,736 | 2,955,520 | 2,965,264 |
+| conv-stack activations per 2 s video (§9.7 convention) | 1.70 GiB | 1.70 GiB | 2.87 GiB |
+| theoretical spatial reach | 94 px | 98 px | 100 px |
+
+Neither candidate isolates statistics pooling's contribution; that is accepted for this selection
+exercise, and statistics pooling remains a hypothesis, not an assumed improvement. The three
+single-change smokes are retained as technical evidence, and their trainings are not run. Tags:
+`CAP256KERNEL7STATS` and `CAP256EARLYCONVSTATS` (smokes `SMOKECAP256KERNEL7STATS`,
+`SMOKECAP256EARLYCONVSTATS`).
+
+**Fixed node allocation, flexible batch.** Both candidates train on 16 nodes × 4 GH200. The per-GPU batch
+follows the measured memory of the exact combined architecture: 16 gives the global batch of 1,024 that
+the baseline and `capacity256` trained with; 8 gives 512. Either is acceptable, the two candidates may
+differ, no gradient accumulation is implemented or used, and no nodes are added to preserve the batch. The
+resolved per-GPU batch, the global batch and the optimizer steps per epoch are recorded for each
+candidate. A smaller batch changes the training dynamics and the number of updates per epoch, so the
+comparison evaluates each architecture under its practical training configuration, not a perfectly
+isolated architecture effect; that is accepted and is not a reason to delay.
+
 **Protocol.** Each step needs the user's word before it runs.
 
-0. *Probe* (diagnostic, no training): `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Embedding_Probe.py`
-   embeds EVAL videos through the frozen baseline and `capacity256` encoders and fits a ridge regression
-   per imaging parameter (log10), penalty chosen on a development set, scored on a task-disjoint held-out
-   set beside the null error and in the low and high halves of the true values. With rcl01's two EVAL
-   tasks: task 0's first 800 videos fit and its last 200 select the penalty (simulation-disjoint), task 1's
-   1,000 videos are scored (task-disjoint), the same split for both encoders; adequate for a first
-   diagnostic, not a fresh final validation. All six parameters are reported; `sigma_r` is the informative case because an independent method recovers it. A
-   well-predicted parameter is linearly accessible in the embedding, which points at the flow and the
-   training interface without fully locating the cause of a posterior-quality deficit; a poorly predicted
-   one is not shown to be absent. If the probe already
-   recovers the poorly estimated parameters, the flow and training interface is investigated before the
-   screen. A GPU pass on a machine with full EVAL tasks (rcl01 holds tasks 0 and 1; JUWELS and JUPITER the
-   25).
-1. *Smoke* (code, memory and timing; deleted afterwards): one epoch on TRAIN 4 / TEST 1 at batch 8 for
-   the three presets under tags `SMOKEKERNEL7`, `SMOKEEARLYCONV`, `SMOKESTATSPOOL`, on the machine that
-   will train. It records each arm's peak allocated and reserved device memory and epoch time, from which
-   the per-rank batch follows, and confirms the tagged products, the rebuild specification and the
-   downstream loaders. Its estimates carry no scientific meaning.
-2. *Training*, one run per arm under the production protocol of §9.7 on the full data: TRAIN 200 / TEST
-   50, 100 epochs in two legs, global batch 1024, the per-rank batch set from the smoke (`earlyconv` is
-   expected to need 16 per rank, as `capacity256` did; the others 32). The proposed commands, with the
-   measured memory and throughput, are presented before the runs are requested.
-3. *Evaluation and Posterior_Calibration* under each tag, exactly as for the baseline and `CAP256`, under the
+0. *Probe* of the frozen baseline and `capacity256` encoders (done; result above).
+1. *First smoke* of the three single-change arms (done; table above).
+2. *Second smoke* of the two exact combined architectures at batch 16 per GPU, one node × 4 GH200, TRAIN 4
+   / TEST 1, two epochs, 30-minute limit: it records each candidate's rank-0 peak memory, first-epoch time
+   (with start-up overhead) and steady-state epoch time, and settles the per-GPU batch. A candidate that
+   runs out of memory at 16 is retried at batch 8 on one node, the planned fallback and not an
+   architectural failure; production stays at 16 nodes without gradient accumulation. The measured
+   throughput gives a provisional cost estimate that allows for multi-node scaling and full-dataset input
+   and output, never a guaranteed wall time. Its products are verified as in the first smoke. The products
+   of both smokes are kept until these checks finish; then an exact deletion list is resolved for them,
+   and the logs, the settings and rebuild specifications and the verification summary are retained.
+3. *Training*, one run per candidate from scratch under the production protocol: TRAIN 200 / TEST 50, 100
+   epochs in two legs of 50 (the second continued with `--resurrect`, chained with `afterany`), 16 nodes
+   × 4 GH200, the per-GPU batch from the smoke.
+4. *Evaluation and Posterior_Calibration* under each tag, as for the baseline and `capacity256`, under the
    corrected MAP routine (§9.8), so the four estimators are compared on the same EVAL videos with the same
    settings.
 
@@ -1989,11 +2048,40 @@ parameters can also justify advancement; better point estimates with worse uncer
 an improvement; no aggregate score may conceal a parameter collapse (the `capacity256` bleaching collapse
 is the precedent); small or conflicting differences are inconclusive until a focused repeat of the control
 and the leading candidate resolves them. One candidate advances at most. If it advances, the production
-gate is the standard one: its Evaluation and calibration compared with the baseline and `CAP256` records,
-then the adoption decision. A `CAP256`-flow combination is not added automatically; it is a separate
-question the results may or may not justify. Biology training remains a separate decision: a shared
+gate is the standard one: its Evaluation and calibration compared with the `capacity256` record (its base)
+and the baseline record (the secondary reference), then the adoption decision. Biology training remains a separate decision: a shared
 encoder does not guarantee that a detector improvement transfers to the biological parameters.
 
-**Status.** Implemented and tested in 0.1.27 (the settings, the presets, the probe, the tests); nothing
-trained, nothing probed, nothing adopted. Next: the probe on the frozen baseline and `capacity256`
-encoders, then the smoke, then the three trainings, each on the user's word.
+**Probe result (rcl01, 2026-09-29, code a7ebd0d).** Both frozen encoders probed under the split above
+(fit 800, development 200, held-out 1,000; folders `..._2S_50FPS_Embedding_Probe/` and
+`..._2S_50FPS_CAP256_Embedding_Probe/`). Held-out MAE in dex, with the null (predicting the fit mean),
+the slope of predicted on true and the correlation:
+
+| parameter | span | null | baseline MAE / slope / corr | `capacity256` MAE / slope / corr |
+|---|---|---|---|---|
+| `mu_r` | 0.30 | 0.074 | 0.014 / 0.95 / 0.97 | 0.019 / 0.92 / 0.95 |
+| `sigma_r` | 0.75 | 0.191 | 0.177 / 0.11 / 0.34 | 0.184 / 0.07 / 0.24 |
+| `mu_pc` | 0.75 | 0.186 | 0.043 / 0.92 / 0.97 | 0.045 / 0.91 / 0.96 |
+| `sigma_pc` | 0.75 | 0.189 | 0.079 / 0.81 / 0.90 | 0.082 / 0.80 / 0.89 |
+| `prob_photo_bleach` | 1.50 | 0.363 | 0.224 / 0.56 / 0.75 | 0.354 / 0.05 / 0.19 |
+| `lambda_rate` | 1.00 | 0.252 | 0.198 / 0.32 / 0.58 | 0.202 / 0.28 / 0.55 |
+
+Reading. `mu_r`, `mu_pc` and `sigma_pc` are linearly accessible in both embeddings, and the estimators
+recover them. `sigma_r` shows little useful linear recovery in either (the error improves on the null by
+about 7 % for the baseline and 4 % for `capacity256`, with slopes at most 0.11): this supports testing
+richer encoders without establishing that non-linear information is absent. Bleaching is substantially
+more linearly accessible in the trained baseline embedding (38 % below the null, slope 0.56) than in
+`capacity256`'s (2.5 % below the null, slope 0.05). This is consistent with a representation-learning
+problem, but does not establish whether the information is absent, encoded non-linearly, or poorly
+learned through the joint encoder-flow training: the encoder and the flow were trained together, so a
+changed flow changes the learning signal the encoder receives, and a deficient final embedding neither
+exonerates the flow nor isolates the encoder architecture as the cause. `lambda_rate` is weakly
+accessible in both, as it is weakly recovered. The absolute errors are similar between the two halves of
+every parameter; this does not establish uniform recoverability across the prior. The probes supply
+enough motivation to test the candidates; they neither rank the arms nor warrant another diagnostic.
+
+**Status.** Presets, probe and tests in 0.1.27 and 0.1.28; the probe and the first smoke run and read; the
+second smoke (jobs 2123225 and 2123226, code 0.1.28, the JUPITER tree verified identical to the committed
+revision and left unchanged while they run) queued on 2026-09-30 behind a two-day reservation of the whole
+booster partition; nothing trained, nothing adopted. Next: read the second smoke, settle the per-GPU
+batches and the provisional costs, then each of the two trainings on the user's separate word.

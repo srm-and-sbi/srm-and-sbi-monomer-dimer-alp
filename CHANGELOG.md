@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.28 - 2026-09-30
+
+The encoder screening moves to two combined candidates on the `capacity256` base, after the three
+single-change smokes of 0.1.27 recorded the rank-0 memory and one-node throughput of each modification (in
+DETECTOR_WORKFLOW.md, the section on the encoder screening). Nothing is trained or adopted by this release.
+
+### Added
+
+- Presets `capacity256_kernel7_stats` and `capacity256_earlyconv_stats`: the `capacity256` widths and flow
+  with statistics pooling (3 · 256 → 256), plus the first block's spatial kernel widened to 7, or one
+  spatial-only (1, 3, 3) convolution before the pooling of blocks 1 and 2. The `capacity256` flow settings
+  are defined once and shared. The HPC inference and submit scripts list the presets.
+- Tests: the combined presets build on `capacity256` with the intended kernels, projection and parameter
+  counts, and their estimator artifacts restore the preset's flow as well as its encoder settings.
+
 ## 0.1.27 - 2026-09-29
 
 The encoder screening of the detector estimator: three isolated encoder settings, each a named preset

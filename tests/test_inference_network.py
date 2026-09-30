@@ -27,6 +27,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (NETWORK_PRESETS, PAR
                                                             InferenceNetwork)
 
 SCREENING_PRESETS = ("kernel7", "earlyconv", "statspool")
+COMBINED_PRESETS = ("capacity256_kernel7_stats", "capacity256_earlyconv_stats")
 DOCUMENTED_DURATIONS = {1.0: 50, 2.0: 100, 5.0: 250, 10.0: 500, 20.0: 1000}     # seconds -> frames at 50 FPS
 
 
@@ -95,6 +96,28 @@ def test_the_presets_change_one_encoder_setting_each_and_keep_the_flow():
     assert SPATIAL_POOLINGS[0] == "mean" == base.spatial_pooling
 
 
+def test_the_combined_presets_build_on_capacity256_with_statistics_pooling():
+    cap = NETWORK_PRESETS["capacity256"]
+    for preset, change in (("capacity256_kernel7_stats", {"first_spatial_kernel": 7}),
+                           ("capacity256_earlyconv_stats", {"extra_spatial_convs": 1, "extra_spatial_conv_blocks": 2})):
+        spec = NETWORK_PRESETS[preset]
+        assert spec["flow"] == cap["flow"] == {"hidden_features": 128, "num_transforms": 8, "num_blocks": 2,
+                                               "dropout_probability": 0.1}
+        assert spec["network"] == {**cap["network"], "spatial_pooling": "stats", **change}, preset
+        net = Complex3DCNN(**_network_kwargs(preset)).eval()
+        assert net.feature_dim == 256 and net.spatial_projection.in_features == 768
+        assert sum(p.numel() for p in net.spatial_projection.parameters()) == 3 * 256 * 256 + 256 == 196_864
+        with torch.no_grad():
+            out = net(torch.rand(1, 100, 256, 256))
+        assert out.shape == (1, 256) and torch.isfinite(out).all(), preset
+    a = Complex3DCNN(**_network_kwargs("capacity256_kernel7_stats"))
+    b = Complex3DCNN(**_network_kwargs("capacity256_earlyconv_stats"))
+    assert [m.kernel_size for m in a.features if isinstance(m, nn.Conv3d)] == [(3, 7, 7)] + [(3, 3, 3)] * 4
+    assert [m.kernel_size for m in b.features if isinstance(m, nn.Conv3d)] == [(3, 3, 3), (1, 3, 3), (3, 3, 3), (1, 3, 3),
+                                                                                 (3, 3, 3), (3, 3, 3), (3, 3, 3)]
+    assert sum(p.numel() for p in a.parameters()) == 2_955_520 and sum(p.numel() for p in b.parameters()) == 2_965_264
+
+
 def test_forward_and_backward_stay_finite_including_constant_maps_under_statistics_pooling():
     for preset in SCREENING_PRESETS:
         net = Complex3DCNN(**_network_kwargs(preset)).train()
@@ -149,7 +172,9 @@ def _brute_force_field(net, axis):
 
 def test_the_receptive_field_arithmetic_agrees_with_the_implemented_layers():
     expected = {"baseline": (94, 11), "capacity256": (94, 11), "kernel7": (98, 11),
-                "earlyconv": (100, 11), "statspool": (94, 11)}
+                "earlyconv": (100, 11), "statspool": (94, 11),
+                "capacity256_kernel7_stats": (98, 11), "capacity256_earlyconv_stats": (100, 11)}
+    assert set(expected) == set(NETWORK_PRESETS)
     for preset, (space, time) in expected.items():
         net = Complex3DCNN(**_network_kwargs(preset))
         assert (net.spatial_receptive_field(), net.temporal_receptive_field()) == (space, time), preset
@@ -197,8 +222,13 @@ def test_an_estimator_artifact_restores_the_selected_architecture():
                     num_transforms=flow.num_transforms, num_blocks=flow.num_blocks,
                     dropout_probability=flow.dropout_probability, use_batch_norm=flow.use_batch_norm)
     video_shape = (4, 256, 256)                                    # short clip: the test is about the spec, not the data
-    for preset in SCREENING_PRESETS:
+    for preset in SCREENING_PRESETS + COMBINED_PRESETS:
         kw = _network_kwargs(preset, n_frames=4, temporal_target_frames=None)
+        preset_flow = dataclasses.replace(flow, **NETWORK_PRESETS[preset]["flow"])
+        maf_args = dict(z_score_x=preset_flow.z_score_x, z_score_y=preset_flow.z_score_y,
+                        hidden_features=preset_flow.hidden_features, num_transforms=preset_flow.num_transforms,
+                        num_blocks=preset_flow.num_blocks, dropout_probability=preset_flow.dropout_probability,
+                        use_batch_norm=preset_flow.use_batch_norm)
         torch.manual_seed(3)
         estimator = build_maf(batch_x=torch.randn(2, 6), batch_y=torch.rand(2, *video_shape),
                               embedding_net=Complex3DCNN(**kw), **maf_args)
@@ -207,9 +237,13 @@ def test_an_estimator_artifact_restores_the_selected_architecture():
             artifacts.save_estimator(estimator, embedding_args=kw, maf_args=maf_args, theta_dim=6,
                                      video_shape=video_shape, parameter_keys=list("abcdef"),
                                      prior_low=np.zeros(6), prior_high=np.ones(6), path=path)
-            spec = artifacts.load_estimator_manifest(path)["rebuild_spec"]["embedding_args"]
-            for key in ("first_spatial_kernel", "extra_spatial_convs", "extra_spatial_conv_blocks", "spatial_pooling"):
+            spec_all = artifacts.load_estimator_manifest(path)["rebuild_spec"]
+            spec = spec_all["embedding_args"]
+            for key in ("first_spatial_kernel", "extra_spatial_convs", "extra_spatial_conv_blocks", "spatial_pooling",
+                        "start_channels"):
                 assert spec[key] == kw[key], (preset, key)
+            for key, value in maf_args.items():
+                assert spec_all["maf_args"][key] == value, (preset, key)
             posterior = artifacts.load_estimator(str(path), device="cpu", expected_parameter_keys=list("abcdef"))
         rebuilt = posterior.posterior_estimator.embedding_net          # the flow's (possibly wrapped) embedding
         encoder = _encoder_of(posterior.posterior_estimator)
