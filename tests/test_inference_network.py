@@ -125,13 +125,25 @@ def test_forward_and_backward_stay_finite_including_constant_maps_under_statisti
         out = net(x); out.sum().backward()
         assert torch.isfinite(out).all() and torch.isfinite(x.grad).all(), preset
         assert all(torch.isfinite(p.grad).all() for p in net.parameters() if p.grad is not None), preset
+    # The combined candidates, on short clips (the test is about the gradient path, not the duration): the
+    # gradient reaches the first convolution and the statistics projection, finite and not zero.
+    for preset in COMBINED_PRESETS:
+        net = Complex3DCNN(**_network_kwargs(preset, n_frames=16)).train()
+        x = torch.rand(2, 16, 256, 256, requires_grad=True)
+        out = net(x); out.sum().backward()
+        assert out.shape == (2, 256) and torch.isfinite(out).all() and torch.isfinite(x.grad).all(), preset
+        assert all(torch.isfinite(p.grad).all() for p in net.parameters() if p.grad is not None), preset
+        first_conv = next(m for m in net.features if isinstance(m, nn.Conv3d))
+        for name, module in (("first convolution", first_conv), ("statistics projection", net.spatial_projection)):
+            assert module.weight.grad is not None and module.weight.grad.abs().sum() > 0, (preset, name)
     # A constant input gives constant feature maps: zero spatial variance, whose square root must not
-    # produce a NaN gradient (STATS_EPS).
-    net = Complex3DCNN(**_network_kwargs("statspool")).train()
-    x = torch.zeros(1, 100, 256, 256, requires_grad=True)
-    net(x).sum().backward()
-    assert torch.isfinite(x.grad).all()
-    assert all(torch.isfinite(p.grad).all() for p in net.parameters() if p.grad is not None)
+    # produce a NaN gradient (STATS_EPS), in every network with statistics pooling.
+    for preset, n_frames in (("statspool", 100), ("capacity256_kernel7_stats", 16), ("capacity256_earlyconv_stats", 16)):
+        net = Complex3DCNN(**_network_kwargs(preset, n_frames=n_frames)).train()
+        x = torch.zeros(1, n_frames, 256, 256, requires_grad=True)
+        net(x).sum().backward()
+        assert torch.isfinite(x.grad).all(), preset
+        assert all(torch.isfinite(p.grad).all() for p in net.parameters() if p.grad is not None), preset
 
 
 def test_statistics_pooling_projects_the_three_statistics_back_to_the_channel_width():
@@ -253,6 +265,18 @@ def test_an_estimator_artifact_restores_the_selected_architecture():
         video = torch.rand(1, *video_shape)
         with torch.no_grad():
             assert torch.allclose(estimator.embedding_net(video), rebuilt(video)), preset
+        # The restored estimator is the saved one: every state tensor equal, and the same density score
+        # for the same parameters and videos.
+        saved = artifacts.strip_compile_prefix(estimator.state_dict())
+        restored = posterior.posterior_estimator.state_dict()
+        assert list(saved) == list(restored), preset
+        assert all(torch.equal(saved[key], restored[key]) for key in saved), preset
+        theta, videos = torch.rand(3, 6), torch.rand(3, *video_shape)
+        with torch.no_grad():
+            score = estimator.log_prob(input=theta.unsqueeze(0), condition=videos)
+            score_restored = posterior.posterior_estimator.log_prob(input=theta.unsqueeze(0), condition=videos)
+        assert score.shape == (1, 3) and torch.isfinite(score).all(), preset
+        assert torch.allclose(score, score_restored), preset
 
 
 def test_the_persisted_estimators_of_record_load_under_the_new_class_unchanged():

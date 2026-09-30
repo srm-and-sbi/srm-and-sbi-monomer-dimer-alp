@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.29 - 2026-09-30
+
+The scorecard of the encoder screening is compiled by a companion instead of by hand, and its control
+compilation on the two estimators of record reproduces the recorded comparison exactly. Nothing is trained
+or adopted by this release.
+
+### Added
+
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Estimator_Scorecard.py` and its note: for any
+  set of detector estimators named by their artifact tags, reads the Evaluation, Posterior_Calibration and
+  embedding-probe records, aligns them to the same EVAL recordings, and writes the scorecard record
+  (`..._Estimator_Scorecard_<COLUMNS>/`): recovery in the three point-estimate views, marginal coverage and
+  widths, the joint tests lifted from the calibration reports, the truth log-density with paired
+  differences, the predefined regimes of the prior, the encoder row, and the flags the selection rule
+  names, with their thresholds recorded.
+- Tests: `tests/test_estimator_scorecard.py` (alignment across row orders and by truth match, reproduction
+  of synthetic estimators, the flag rules, absent records, the dry run, refusals); the network tests cover
+  the combined presets in the backward pass and check exact state and density-score equality after an
+  artifact round trip.
+
+### Changed
+
+- DETECTOR_WORKFLOW.md, the encoder screening: the compiler, the control compilation and its reading; the
+  operating subgroup is referenced to the acceptance rules of the direct estimators.
+
 ## 0.1.28 - 2026-09-30
 
 The encoder screening moves to two combined candidates on the `capacity256` base, after the three

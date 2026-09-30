@@ -1905,7 +1905,7 @@ transformer and flow (`InferenceNetwork` fields; `NETWORK_PRESETS`; `Complex3DCN
 
 | arm | preset | change | question |
 |---|---|---|---|
-| control | `baseline` | none | the estimator of record (§6.10, §9.7) |
+| control | `baseline` | none | the estimator of record (§6.9, §9.7) |
 | A | `kernel7` | first block's spatial kernel `3 × 3` → `7 × 7` (temporal kernel unchanged) | does a larger early spatial neighborhood help? |
 | B | `earlyconv` | one spatial-only `1 × 3 × 3` convolution, batch normalization and Mish before the pooling of blocks 1 and 2 | does more processing before downsampling help? |
 | C | `statspool` | the final maps' mean, standard deviation and maximum over positions, concatenated to 3C and projected back to C by one linear layer, in place of the mean alone | does the final mean discard useful information? |
@@ -2031,11 +2031,11 @@ isolated architecture effect; that is accepted and is not a reason to delay.
 
 | aspect | what is assessed |
 |---|---|
-| parameter recovery | MAE, bias, slope and correlation for all six parameters (the §6.10 views: MAP, median, SGM) |
+| parameter recovery | MAE, bias, slope and correlation for all six parameters, in the three point-estimate views (MAP, posterior median, SGM) |
 | calibration | marginal and joint coverage at the nominal levels; SBC; TARP; L-C2ST |
 | informativeness | posterior widths beside coverage; broadening alone is not an improvement |
 | joint posterior quality | the held-out log density at the true parameter vector (Posterior_Calibration's truth log-density), identical coordinates and settings for every arm |
-| robustness across the prior | the same metrics in predefined regimes (the low and high halves of `mu_r` and `sigma_r`, the operating subgroup of §6.10), not only aggregates |
+| robustness across the prior | the same metrics in predefined regimes (the low and high halves of the `mu_r` and `sigma_r` priors, split at the prior midpoint; the operating subgroup of §9.6), not only aggregates |
 
 The held-out log density is a complementary measure of the joint predictive distribution, not a
 substitute for recovery and calibration, and distinct from the training or TEST loss, which is the
@@ -2080,8 +2080,46 @@ accessible in both, as it is weakly recovered. The absolute errors are similar b
 every parameter; this does not establish uniform recoverability across the prior. The probes supply
 enough motivation to test the candidates; they neither rank the arms nor warrant another diagnostic.
 
-**Status.** Presets, probe and tests in 0.1.27 and 0.1.28; the probe and the first smoke run and read; the
-second smoke (jobs 2123225 and 2123226, code 0.1.28, the JUPITER tree verified identical to the committed
-revision and left unchanged while they run) queued on 2026-09-30 behind a two-day reservation of the whole
-booster partition; nothing trained, nothing adopted. Next: read the second smoke, settle the per-GPU
-batches and the provisional costs, then each of the two trainings on the user's separate word.
+**The scorecard compiler.** The scorecard is compiled, not assembled by hand.
+`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Estimator_Scorecard.py` (companion note beside
+it) reads, for any set of estimators named by their artifact tags, the Evaluation product (the three point
+estimates, the posterior quantiles and the truth of every EVAL recording), the Posterior_Calibration product
+(the truth log-density of the same recordings, and the joint tests of its report) and, when present, the
+embedding-probe record; it aligns every estimator to the same recordings by identifier and each calibration
+cloud by exact truth match, and writes one record, `..._2S_50FPS_Estimator_Scorecard_<COLUMNS>/`, with the
+estimators as columns: the recovery tables of the three views (MAE, bias, slope, correlation, outside-prior
+fraction), the marginal coverage and widths from the quantiles, the joint tests lifted verbatim from the
+calibration reports (expected coverage, TARP, L-C2ST, SBC, the location-versus-width diagnosis), the truth
+log-density with its paired difference against the base and the control (percentile bootstrap), the same
+recovery and coverage in the predefined regimes, the encoder row (the probe's held-out numbers, which select
+nothing), and the flags. The flags mark what the selection rule names, from the median view over every
+recording, with thresholds recorded in the output: a parameter is *below the floor* when the correlation of
+its posterior median with the truth is under 0.3 (unrecovered), and *collapsed* when that correlation is more
+than 0.3 below the reference column's (the `capacity256` bleaching precedent); a column has *better points
+with worse uncertainty* when its MAE improves by at least 0.01 dex while its 90 % coverage gap worsens by
+more than 0.05; a MAE difference under 0.01 dex is *inconclusive*. The compiler scores each trained
+estimator as a whole, the encoder with the flow trained jointly with it under its training configuration,
+and isolates nothing; the reading and the selection stay in this section.
+
+**Control compilation (2026-09-30, PC, columns `baseline` as control and `capacity256` as base, record
+`..._2S_50FPS_Estimator_Scorecard_BASELINE_CAP256/`).** Every recovery, coverage and width number reproduces
+the §9.7 comparison record exactly (456 values), so the compiler is that computation generalized to any set
+of columns. Its flags read the pair as §9.7 read it by hand: `capacity256`'s bleaching parameter is collapsed
+against the baseline (correlation of the posterior median with the truth 0.16 against 0.79, MAE 0.369
+against 0.206 dex), the precedent the rule names; `sigma_r` is below the floor in both (0.27 and 0.17), the
+deficiency the screening targets and not a collapse; `mu_pc` improves under `capacity256` (0.044 against
+0.054 dex), and `mu_r`, `sigma_pc` and `lambda_rate` are inconclusive at the 0.01 dex threshold.
+`capacity256` is better on every joint test (L-C2ST rejection fraction 0.000 against 0.998, largest expected
+coverage gap 0.065 against 0.308, marginal 90 % coverage 83 to 86 % against 59 to 88 %), and its truth
+log-density is higher by 2.13 on average (bootstrap interval 2.09 to 2.17), higher on 77 % of the
+recordings. Under the selection rule the collapse stands regardless of the aggregate, as §9.7 concluded. The
+candidates are compiled into a four-column record when their Evaluation and Posterior_Calibration products
+exist; a candidate without them is listed as missing, not compiled.
+
+**Status.** Presets, probe and tests in 0.1.27 and 0.1.28; the scorecard compiler and its control
+compilation in 0.1.29; the probe and the first smoke run and read; the second smoke (jobs 2123225 and
+2123226, code 0.1.28, the JUPITER tree verified identical to the committed revision and left unchanged while
+they run) queued on 2026-09-30 behind a two-day reservation of the whole booster partition; nothing trained,
+nothing adopted. Next: read the second smoke, settle the per-GPU batches and the provisional costs, then each
+of the two trainings on the user's separate word, then Evaluation and Posterior_Calibration per tag and the
+four-column compilation.
