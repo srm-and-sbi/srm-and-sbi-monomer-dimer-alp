@@ -736,9 +736,11 @@ def extract_subunit_positions(tray, lineage: SubunitLineage, verbose: bool = Fal
     ``collapse_species_axis(extract_trajectory_poses(tray))[f, lineage.host_index[f]]``: the same
     per-frame coordinates, converted to float64 and shifted by half the box in the same order of
     operations, and the collapse of the rank axis selects the one non-NaN entry a present particle
-    has. The trailing ReaDDy observable is dropped exactly as the dense reader drops it, and the
-    lineage must come from the same trajectory (`extract_subunit_lineage`: same frame count and
-    the same particle order), or the read stops.
+    has. The trailing ReaDDy observable is dropped exactly as the dense reader drops it. The lineage
+    is checked for consistency with the trajectory, frame count and hosts: its frame count must equal
+    the trajectory's and every frame must hold the host particle of every subunit, or the read stops.
+    That is not a proof of origin: a lineage of another trajectory with the same frame count and
+    reused ids passes it, so pass the lineage extracted from this very trajectory, as the runner does.
 
     Args:
         tray: A `readdy.Trajectory` object opened from a .h5 file.

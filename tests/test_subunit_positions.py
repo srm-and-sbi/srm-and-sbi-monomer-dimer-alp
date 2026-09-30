@@ -176,7 +176,8 @@ def test_lean_positions_equal_the_dense_gather_at_every_documented_duration():
             assert np.isfinite(lean).all()
             dense = _dense_gather(tray, lineage)
             assert np.array_equal(lean, dense), (seconds, float32)
-    # a lineage of another trajectory is refused: different frame count, or same count but other ids
+    # the consistency checks: a lineage with another frame count, or with the same count but ids the
+    # trajectory does not hold (a lineage with the same count and reused ids is not detectable)
     a = StubTrajectory(50, 6, 3, seed=1)
     b = StubTrajectory(100, 6, 3, seed=2)
     c = StubTrajectory(50, 6, 3, seed=3)
@@ -187,7 +188,7 @@ def test_lean_positions_equal_the_dense_gather_at_every_documented_duration():
         except ValueError as e:
             assert needle in str(e)
         else:
-            raise AssertionError(f"accepted a foreign lineage ({needle})")
+            raise AssertionError(f"accepted an inconsistent lineage ({needle})")
 
 
 # ---- 2. the two dye-track builders agree --------------------------------------------------------

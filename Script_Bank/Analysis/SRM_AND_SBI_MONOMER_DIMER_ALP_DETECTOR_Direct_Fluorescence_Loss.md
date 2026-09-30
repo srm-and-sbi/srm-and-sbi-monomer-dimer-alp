@@ -269,7 +269,7 @@ tasks already rendered (5 and 8) allow a development run of this estimator on 20
 any time. The partial stores of tasks 9, 11, 16 and 18 remain on JUWELS until a decision to complete or
 remove them.
 
-**Reopened (2026-09-30): the lean reader is implemented; the tier's completion is not authorized yet.**
+**Reopened (2026-09-30): the lean reader is implemented and the missing tasks are being rendered on rcl01; the estimator runs are not authorized yet.**
 The second of the three ways above is in the package: `simulation_rds_support.extract_subunit_positions`
 gathers each subunit's host coordinates per frame directly from the trajectory's per-frame observables
 through the lineage, `(frames, subunits, 3)`, never building the dense tensor, and the shared DLI runner
@@ -283,10 +283,15 @@ both readers and render identical frames; the released 0.1.30 and this version w
 theta, SCOPE, nuisance and labeling stores for both workflows on the 2 s recordings under one seed; and on
 the largest scene (task 9, simulation 5: 3,011 subunits, 491,645 particle ids, the 65.9 GiB dense tensor)
 the lean read peaks at 0.9 GiB and the complete detector runner at 3.8 GiB for one recording in 60 s, where
-the dense path was killed at 59 GiB on 2026-09-25. What remains is sequenced and separately authorized: the
-identity checks on JUWELS (the same reads on its login node), task 9 alone through its 100 recordings before
-the other five single-node jobs, the exact manifest of the partial stores (archiving
-preferred to removal), and the estimator runs. The frozen estimator runs for characterization first; any
+the dense path was killed at 59 GiB on 2026-09-25. The identity checks were repeated on rcl01 on the same 20 s recordings, the lean read against the dense
+gather and identical frames from either source, with the same result, and the eleven missing tasks render
+there with the released reader as their trajectories arrive from JUWELS, task 9 alone first: tasks 9, 0, 1
+and 2 are complete, 100 recordings of 1,000 frames each, exit status 0, 28 to 33 minutes per task, kernel
+peak resident set 4,788,048 to 4,837,656 kB (4.57 to 4.61 GiB) per task process. The scripts, logs,
+checksums and raw memory numbers of every check are the data bank record
+`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_20S_50FPS_Renderer_Verification/` under `Posit`. What remains
+separately authorized: the exact manifest of the partial stores on JUWELS (archiving preferred to
+removal), the return of the rendered stores to the JUWELS data bank, and the estimator runs. The frozen estimator runs for characterization first; any
 modification of it is a separate decision before the reserved verdict is opened. Completing the tier
 closes the synthetic validation question; it does not by itself establish a better experimental
 bleaching value.

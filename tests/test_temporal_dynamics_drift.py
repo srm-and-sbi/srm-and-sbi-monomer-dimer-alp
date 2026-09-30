@@ -36,3 +36,20 @@ def test_single_window_recordings_do_not_contribute():
                                threshold=0.3)
     assert np.isclose(out["drift_sign_consistency"][0, 0], 1.0)
     assert np.isclose(out["drift_material_fraction"][0, 0], 0.5)
+
+
+if __name__ == "__main__":
+    import sys
+    import time
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    failed = 0
+    for name, fn in tests:
+        t0 = time.time()
+        try:
+            fn()
+            print(f"PASS {name} ({time.time() - t0:.1f} s)", flush=True)
+        except Exception as exc:                      # noqa: BLE001 -- report every failure
+            failed += 1
+            print(f"FAIL {name}: {type(exc).__name__}: {exc}", flush=True)
+    print(f"{len(tests) - failed}/{len(tests)} passed")
+    sys.exit(1 if failed else 0)

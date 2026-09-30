@@ -1687,8 +1687,9 @@ Evaluation and Experiment regenerated under the corrected MAP routine on 2026-09
 above and the source decision in §7.6. Open, and not prerequisites for §7.6: repeat training of
 `capacity256`; the 20 s tier (nine of its twenty tasks rendered; reopened on 2026-09-30 with the lean
 trajectory reader of the DLI stage, the memory cause of the lost renders recorded in the photobleaching
-estimator's note and its equality on real trajectories verified on the PC; the identity check on JUWELS,
-the re-render and the estimator runs each await separate authorization).
+estimator's note, its equality on real trajectories verified on the PC and on rcl01, and four of the eleven
+missing tasks rendered on rcl01; the remaining renders follow as their trajectories arrive, and the return of
+the stores to JUWELS and the estimator runs each await separate authorization).
 
 > **Regenerated.** Every MAP figure of this section comes from the Evaluation and Experiment stages re-run
 > under the corrected MAP routine (§9.8); the pre-correction comparison records are preserved as

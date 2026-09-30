@@ -653,7 +653,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             video = convert_video_dtype(video, bits_from=16, bits_to=args.video_dtype_bits)
             video_store[sim] = video
             if args.show:
-                last_frames = frames      # kept only for the --show plot; otherwise released with the sim
+                last_frames = frames      # the --show plot's own reference to the last render
 
             # ---- Sim-0 diagnostics (debug mode) -----------------------
             # Detailed checkpoints/checks/figures on the first simulation only,
@@ -763,6 +763,11 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 _th, _fd, _rss = probe_resources()
                 print(f"[probe] sim {sim + 1}: threads={_th} fds={_fd} "
                       f"rss_mb={_rss}", flush=True)
+
+            # Release this recording's render, its stored copy and its positions before the next
+            # trajectory is read: rebinding alone keeps them alive while the next recording is
+            # extracted and rendered, so two renders would coexist at the peak.
+            del frames, video, subunit_positions
 
         # ---- Persist the per-simulation labeling record (both workflows) ----
         print(f"  Writing Labeling_Set:   {labeling_set_path}")

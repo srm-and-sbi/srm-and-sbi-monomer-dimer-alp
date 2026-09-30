@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.32 - 2026-09-30
+
+Corrections after the review of the lean trajectory reader: one release note of 0.1.31 overstated the
+runner, one docstring overstated the reader's lineage check, and running the drift test file executed
+nothing. No rendering calculation changes; a rendered video is bit-identical to 0.1.31's.
+
+### Changed
+
+- The shared DLI runner releases each recording's render, its stored copy and its per-subunit positions
+  at the end of the recording. 0.1.31 stated that the previous render was kept only under `--show`; in
+  fact the loop only rebound the name, so the previous render stayed alive while the next recording was
+  read and rendered, and two renders coexisted at the peak. The peaks measured with 0.1.31 (below)
+  include that overlap.
+- `extract_subunit_positions` documents its lineage check as what it is: the lineage's frame count must
+  equal the trajectory's and every frame must hold the host particle of every subunit. That is a
+  consistency check, not a proof of origin; a lineage of another trajectory with the same frame count
+  and reused ids is not detectable, and the runner always passes the lineage of the trajectory it reads.
+- `tests/test_temporal_dynamics_drift.py` gains the main block every other test file has, so running the
+  file executes its two tests.
+- Record of the 20 s renders and of the reader's verification, kept as the data bank record
+  `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_20S_50FPS_Renderer_Verification/` under `Posit` (scripts, logs,
+  checksums of the code trees and trajectories, raw memory numbers): with 0.1.31 on rcl01, tasks 0, 1, 2
+  and 9 of the 20 s FAB EVAL tier rendered completely, 100 recordings of 1,000 frames each, exit status 0,
+  28 to 33 minutes per task; the kernel's maximum resident set per task process was 4,788,048 to
+  4,837,656 kB (4.57 to 4.61 GiB; 4.90 to 4.95 GB), the per-recording probe 1,448 to 1,664 MiB. On the
+  same machine the lean read of the largest scene (task 9, simulation 5) peaks at 1,043,152 kB (0.99 GiB),
+  and on a 459-subunit recording (task 9, simulation 0) the dense gather equals the lean positions and the
+  frames rendered from either source are identical, the dense process peaking at 5,528,436 kB (5.27 GiB).
+  On the PC the three 2 s recordings of task 0 were re-checked the same way against worktrees of 0.1.30
+  and 0.1.31: equal positions, identical frames, and byte-identical stores of both workflows.
+
 ## 0.1.31 - 2026-09-30
 
 The DLI stage reads the positions the renderer needs without the dense pose tensor, so long recordings
