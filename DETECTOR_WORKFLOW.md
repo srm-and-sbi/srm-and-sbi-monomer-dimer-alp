@@ -2085,8 +2085,11 @@ enough motivation to test the candidates; they neither rank the arms nor warrant
 it) reads, for any set of estimators named by their artifact tags, the Evaluation product (the three point
 estimates, the posterior quantiles and the truth of every EVAL recording), the Posterior_Calibration product
 (the truth log-density of the same recordings, and the joint tests of its report) and, when present, the
-embedding-probe record; it aligns every estimator to the same recordings by identifier and each calibration
-cloud by exact truth match, and writes one record, `..._2S_50FPS_Estimator_Scorecard_<COLUMNS>/`, with the
+embedding-probe record; it refuses a column whose Evaluation checkpoint, estimator weights and probe weights
+differ (the calibration product carries no checkpoint provenance and is recorded as unverified), aligns every
+estimator to the same recordings by identifier and each calibration cloud by the six true parameters rounded
+to nine decimals, requiring the same set of recordings and a report whose recorded video count equals those
+rows, and writes one record, `..._2S_50FPS_Estimator_Scorecard_<COLUMNS>/`, with the
 estimators as columns: the recovery tables of the three views (MAE, bias, slope, correlation, outside-prior
 fraction), the marginal coverage and widths from the quantiles, the joint tests lifted verbatim from the
 calibration reports (expected coverage, TARP, L-C2ST, SBC, the location-versus-width diagnosis), the truth
@@ -2094,30 +2097,38 @@ log-density with its paired difference against the base and the control (percent
 recovery and coverage in the predefined regimes, the encoder row (the probe's held-out numbers, which select
 nothing), and the flags. The flags mark what the selection rule names, from the median view over every
 recording, with thresholds recorded in the output: a parameter is *below the floor* when the correlation of
-its posterior median with the truth is under 0.3 (unrecovered), and *collapsed* when that correlation is more
-than 0.3 below the reference column's (the `capacity256` bleaching precedent); a column has *better points
-with worse uncertainty* when its MAE improves by at least 0.01 dex while its 90 % coverage gap worsens by
-more than 0.05; a MAE difference under 0.01 dex is *inconclusive*. The compiler scores each trained
+its posterior median with the truth is under 0.3 (unrecovered), has a *large correlation drop* when that
+correlation is more than 0.3 below the reference column's, and is *collapsed* when the drop leaves it below
+the floor (the `capacity256` bleaching precedent; a drop from 0.90 to 0.55 is a large drop, not a collapse);
+a column has *better points with worse uncertainty* when its MAE improves by at least 0.01 dex while its 90 %
+coverage gap worsens by more than 0.05; a MAE difference under 0.01 dex is *under the threshold*, a statement
+about MAE alone that says nothing about calibration, width or joint density. The bootstrap interval of the
+paired log-density difference measures the uncertainty over the evaluated recordings, not the variation
+between training runs; its resample count and seed are recorded. The compiler scores each trained
 estimator as a whole, the encoder with the flow trained jointly with it under its training configuration,
 and isolates nothing; the reading and the selection stay in this section.
 
 **Control compilation (2026-09-30, PC, columns `baseline` as control and `capacity256` as base, record
-`..._2S_50FPS_Estimator_Scorecard_BASELINE_CAP256/`).** Every recovery, coverage and width number reproduces
-the §9.7 comparison record exactly (456 values), so the compiler is that computation generalized to any set
-of columns. Its flags read the pair as §9.7 read it by hand: `capacity256`'s bleaching parameter is collapsed
-against the baseline (correlation of the posterior median with the truth 0.16 against 0.79, MAE 0.369
-against 0.206 dex), the precedent the rule names; `sigma_r` is below the floor in both (0.27 and 0.17), the
-deficiency the screening targets and not a collapse; `mu_pc` improves under `capacity256` (0.044 against
-0.054 dex), and `mu_r`, `sigma_pc` and `lambda_rate` are inconclusive at the 0.01 dex threshold.
-`capacity256` is better on every joint test (L-C2ST rejection fraction 0.000 against 0.998, largest expected
-coverage gap 0.065 against 0.308, marginal 90 % coverage 83 to 86 % against 59 to 88 %), and its truth
-log-density is higher by 2.13 on average (bootstrap interval 2.09 to 2.17), higher on 77 % of the
-recordings. Under the selection rule the collapse stands regardless of the aggregate, as §9.7 concluded. The
+`..._2S_50FPS_Estimator_Scorecard_BASELINE_CAP256/`, compiled by 0.1.30; the 0.1.29 compilation is preserved
+unchanged under `Superseded_0.1.29/` beside it, with identical numbers, and a supersession note links the two).** Every recovery, coverage and width number reproduces
+the §9.7 comparison record exactly (456 values), and the Evaluation checkpoint, estimator weights and probe
+weights agree within each column, so the compiler is that computation generalized to any set of columns
+with its inputs checked. Its flags read the pair as §9.7 read it by hand: `capacity256`'s bleaching
+parameter is collapsed against the baseline (a large correlation drop of the posterior median, 0.79 to 0.16,
+that leaves it below the floor; MAE 0.369 against 0.206 dex), the precedent the rule names; `sigma_r` is
+below the floor in both (0.27 and 0.17), the deficiency the screening targets and not a collapse; `mu_pc`
+improves under `capacity256` (0.044 against 0.054 dex); the MAE differences of `mu_r`, `sigma_pc` and
+`lambda_rate` lie under the 0.01 dex threshold, a statement about MAE alone. The joint diagnostics read:
+L-C2ST rejection fraction 0.000 against 0.998, largest expected coverage gap 0.065 against 0.308, TARP
+area-to-curve −0.025 against −0.053, marginal 90 % coverage 83 to 86 % against 59 to 88 %; the truth
+log-density is higher under `capacity256` by 2.13 on average (bootstrap interval 2.09 to 2.17 over the
+evaluated recordings, 2,000 resamples), on 77 % of the recordings. Under the selection rule the collapse
+stands regardless of the aggregate, as §9.7 concluded. The
 candidates are compiled into a four-column record when their Evaluation and Posterior_Calibration products
 exist; a candidate without them is listed as missing, not compiled.
 
 **Status.** Presets, probe and tests in 0.1.27 and 0.1.28; the scorecard compiler and its control
-compilation in 0.1.29; the probe and the first smoke run and read; the second smoke (jobs 2123225 and
+compilation in 0.1.29, its input safeguards in 0.1.30; the probe and the first smoke run and read; the second smoke (jobs 2123225 and
 2123226, code 0.1.28, the JUPITER tree verified identical to the committed revision and left unchanged while
 they run) queued on 2026-09-30 behind a two-day reservation of the whole booster partition; nothing trained,
 nothing adopted. Next: read the second smoke, settle the per-GPU batches and the provisional costs, then each

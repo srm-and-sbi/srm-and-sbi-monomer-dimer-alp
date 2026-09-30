@@ -6,8 +6,9 @@ Part of the encoder screening (DETECTOR_WORKFLOW.md, the section on the encoder 
 estimators, named by their artifact tags (the canonical one is ``baseline``), the compiler reads each
 one's Evaluation product (MAP, posterior quantiles and sample geometric median per EVAL recording, with
 the truth) and, when present, its Posterior_Calibration product (the sample clouds, the truth
-log-densities and the report's joint tests) and its embedding-probe record, aligns every estimator to the
-same recordings, and writes one table of the scorecard's aspects with the estimators as columns:
+log-densities and the report's joint tests) and its embedding-probe record, checks that the records of a
+column come from one checkpoint, aligns every estimator to the same recordings, and writes one table of the
+scorecard's aspects with the estimators as columns:
 parameter recovery in the three point-estimate views, marginal coverage and posterior widths, the joint
 tests lifted from the calibration reports, the truth log-density with its paired difference against the
 base and the control, the same recovery and coverage in predefined regimes of the prior, and, as a
@@ -15,9 +16,9 @@ separate row that selects nothing, what the frozen encoder carries linearly (the
 
 The scorecard scores the whole posterior estimator that a training produced: its encoder, the flow
 trained jointly with it, and its training configuration. Nothing here isolates the encoder. Flags mark
-the conditions the selection rule names (a parameter collapse, better point estimates with worse
-uncertainty, differences too small to read); the thresholds are options recorded in the output, and the
-selection rule, not the compiler, decides.
+the conditions the selection rule names (a parameter below the recovery floor, a large correlation drop, a
+collapse, better point estimates with worse uncertainty, MAE differences under a practical threshold); the
+thresholds are options recorded in the output, and the selection rule, not the compiler, decides.
 
 Inputs are read-only; the output folder ``<data_bank>/<posit>/<alias>_<timing>_Estimator_Scorecard_<COLUMNS>/``
 (the columns in order, e.g. ``_BASELINE_CAP256``) is never overwritten (``--out-dir`` writes elsewhere). Usage::
@@ -55,10 +56,14 @@ for L-C2ST, from a classifier the compiler does not retrain."""
 DEFAULT_THRESHOLDS = dict(collapse_corr=0.3, collapse_drop=0.3, coverage_tolerance=0.05, min_effect=0.01)
 """The flag thresholds. A parameter is below the floor when the correlation of its posterior median with
 the truth is under ``collapse_corr`` (unrecovered, as ``sigma_r`` in every estimator of record so far); it
-is flagged collapsed when that correlation is more than ``collapse_drop`` below the reference column's
-(the ``capacity256`` bleaching precedent). A column has better points with worse uncertainty when its MAE
-improves by at least ``min_effect`` dex while its 90 % coverage gap worsens by more than
-``coverage_tolerance``; a MAE difference under ``min_effect`` dex is inconclusive."""
+has a large correlation drop when that correlation is more than ``collapse_drop`` below the reference
+column's; it is collapsed when the drop leaves it below the floor (the ``capacity256`` bleaching precedent;
+a drop from 0.90 to 0.55 is a large drop, not a collapse). A column has better points with worse
+uncertainty when its MAE improves by at least ``min_effect`` dex while its 90 % coverage gap worsens by more
+than ``coverage_tolerance``; a MAE difference under ``min_effect`` dex is under the practical threshold, a
+statement about MAE alone. A constant estimate is scored with zero correlation by convention (its
+correlation is undefined)."""
+CALIBRATION_UNVERIFIED = "unverified: the calibration product carries no checkpoint provenance"
 
 
 # --- inputs -----------------------------------------------------------------------------------------
@@ -94,7 +99,11 @@ def resolve(cfg, args):
 def load_column(column, keys):
     """Read one estimator's records. The Evaluation product is required (through the schema, so a
     superseded product is refused); the calibration product, its report, the probe record and the
-    estimator manifest are optional and recorded as absent."""
+    estimator manifest are optional and recorded as absent. The records of one column must come from one
+    checkpoint: the Evaluation's checkpoint, the estimator's weights and the probe's weights are compared
+    and a mismatch is refused; the calibration product carries no checkpoint provenance, so its identity is
+    recorded as unverified. Its report is lifted only when the calibration arrays are present and the
+    report's recorded video count equals their rows."""
     arrays, manifest = schema.load_product(column["evaluation"], stage="evaluation")
     schema.assert_parameter_keys(manifest, keys, source=str(column["evaluation"]))
     ids = schema.observation_ids(arrays, "evaluation")
@@ -110,6 +119,9 @@ def load_column(column, keys):
                scores=np.asarray(arrays["scores"], dtype=float), evaluation_manifest=manifest,
                calibration_truth=None, truth_log_density=None, lifted=None, probe_result=None,
                estimator_manifest=None)
+    identity = {"evaluation_checkpoint": manifest.get("checkpoint_sha256"), "estimator_weights": None,
+                "probe_weights": None, "calibration": CALIBRATION_UNVERIFIED}
+    col["lifted_status"] = "no calibration report"
     if column["calibration"].exists():
         cal = np.load(column["calibration"])
         cal_keys = [str(k) for k in np.asarray(cal["parameter_keys"]).ravel()]
@@ -118,11 +130,30 @@ def load_column(column, keys):
         col["calibration_truth"] = np.asarray(cal["truths"], dtype=float)
         col["truth_log_density"] = np.asarray(cal["truth_log_probs"], dtype=float)
     if column["calibration_report"].exists():
-        col["lifted"] = lift_calibration_report(column["calibration_report"], keys)
+        if col["calibration_truth"] is None:
+            col["lifted_status"] = ("report present, not lifted: without the calibration arrays its coverage of "
+                                    "the Evaluation's recordings cannot be verified")
+        else:
+            lifted = lift_calibration_report(column["calibration_report"], keys)
+            counted = lifted["quantitative"].get("calibration_videos")
+            n_cal = int(col["calibration_truth"].shape[0])
+            if counted is None or not np.isfinite(_float(counted)) or int(_float(counted)) != n_cal:
+                raise SystemExit(f"{column['calibration_report']}: the report counts {counted!r} calibration videos; "
+                                 f"the calibration arrays hold {n_cal}; the report does not describe these arrays")
+            col["lifted"], col["lifted_status"] = lifted, f"lifted; the report's {n_cal} videos are the arrays' rows"
     if column["probe"].exists():
         col["probe_result"] = json.loads(column["probe"].read_text(encoding="utf-8"))
+        identity["probe_weights"] = (col["probe_result"].get("meta") or {}).get("weights_sha256")
     if column["estimator"].exists():
         col["estimator_manifest"] = artifacts.load_estimator_manifest(column["estimator"])
+        identity["estimator_weights"] = col["estimator_manifest"].get("weights_sha256")
+    hashes = {k: v for k, v in identity.items() if k != "calibration" and v}
+    if len(set(hashes.values())) > 1:
+        raise SystemExit(f"{column['name']}: the records under this tag come from different weights: "
+                         + ", ".join(f"{k} {str(v)[:12]}" for k, v in hashes.items()))
+    identity["status"] = ((f"one checkpoint across {', '.join(hashes)}" if len(hashes) > 1
+                           else "a single record carries a checkpoint; nothing to compare") + "; calibration unverified")
+    col["identity"] = identity
     return col
 
 
@@ -180,7 +211,8 @@ def _float(text):
 
 def align(columns):
     """Reorder every column's rows to the base's ``(task, sim)`` order and check that the truths agree
-    exactly; align each calibration cloud to the same rows by exact truth match. Returns the base
+    exactly; align each calibration cloud to the same rows by the six true parameters rounded to nine
+    decimals, requiring unique truths and the same set of recordings as the Evaluation. Returns the base
     truths."""
     base = next(c for c in columns if c["role"] == "base")
     order = {tuple(int(v) for v in row): j for j, row in enumerate(base["ids"])}
@@ -200,9 +232,14 @@ def align(columns):
         if not np.array_equal(col["truth"], base["truth"]):
             raise SystemExit(f"{col['name']}: truths differ from the base's after identifier alignment")
         if col["calibration_truth"] is not None:
+            n_cal, n_eval = col["calibration_truth"].shape[0], base["truth"].shape[0]
+            if n_cal != n_eval:
+                raise SystemExit(f"{col['name']}: the calibration product holds {n_cal} recordings, the Evaluation "
+                                 f"{n_eval}; the same set is required before its lifted tests stand beside the "
+                                 f"Evaluation's numbers")
             lut = {tuple(np.round(t, 9)): j for j, t in enumerate(col["calibration_truth"])}
-            if len(lut) != col["calibration_truth"].shape[0]:
-                raise SystemExit(f"{col['name']}: calibration truths are not unique; cannot align by truth")
+            if len(lut) != n_cal:
+                raise SystemExit(f"{col['name']}: calibration truths are not unique at nine decimals; cannot align by truth")
             try:
                 p = np.array([lut[tuple(np.round(t, 9))] for t in base["truth"]])
             except KeyError as e:
@@ -284,9 +321,10 @@ def paired_difference(a, b, rng, n_boot):
 
 def flag(candidate, reference, thresholds):
     """The flags of one column against a reference column, per parameter, from the median view over every
-    recording: the category of the MAE change, whether better points come with worse uncertainty, and
-    whether the parameter is below the correlation floor, and the collapse test (a drop against the
-    reference)."""
+    recording: the category of the MAE change (a difference under the threshold is "under threshold", a
+    statement about MAE alone), whether better points come with worse uncertainty, whether the parameter is
+    below the correlation floor, whether its correlation dropped by more than the threshold against the
+    reference (a large correlation drop), and whether that drop leaves it below the floor (a collapse)."""
     t = thresholds
     out = {}
     for key in candidate["recovery"]:
@@ -295,7 +333,7 @@ def flag(candidate, reference, thresholds):
         d_mae = ref["mae_dex"] - r["mae_dex"]                # positive = the candidate is better
         d_gap = c["gap90"] - cref["gap90"]                   # positive = the candidate's coverage is further off
         if abs(d_mae) < t["min_effect"]:
-            category = "inconclusive"
+            category = "under threshold"
         elif d_mae > 0:
             category = "improved" if d_gap <= t["coverage_tolerance"] else "points better, uncertainty worse"
         else:
@@ -303,15 +341,18 @@ def flag(candidate, reference, thresholds):
         out[key] = dict(mae_change_dex=float(d_mae), coverage90_gap_change=float(d_gap), category=category,
                         corr=r["corr"], corr_reference=ref["corr"],
                         below_floor=bool(r["corr"] < t["collapse_corr"]),
-                        collapse=bool(ref["corr"] - r["corr"] > t["collapse_drop"]))
+                        large_drop=bool(ref["corr"] - r["corr"] > t["collapse_drop"]))
+        out[key]["collapse"] = out[key]["below_floor"] and out[key]["large_drop"]
     return out
 
 
 # --- compilation ------------------------------------------------------------------------------------
 
-def compile_scorecard(columns, keys, lo, hi, thresholds, rng, n_boot=2000):
+def compile_scorecard(columns, keys, lo, hi, thresholds, rng, n_boot=2000, seed=None):
     """Every number of the scorecard, as nested dictionaries keyed by aspect, parameter, column name,
-    view and regime. ``columns`` are loaded and aligned."""
+    view and regime. ``columns`` are loaded and aligned. ``n_boot`` and ``seed`` are recorded with the
+    result: the bootstrap interval measures the uncertainty of a paired mean over the evaluated recordings,
+    not the variation between training runs."""
     truth = align(columns)
     masks, definitions = regime_masks(truth, keys, lo, hi)
     names = [c["name"] for c in columns]
@@ -355,13 +396,16 @@ def compile_scorecard(columns, keys, lo, hi, thresholds, rng, n_boot=2000):
             f = flags[col["name"]][base["name"]]
             s["versus_base"] = {"improved": [k for k in keys if f[k]["category"] == "improved"],
                                 "worsened": [k for k in keys if f[k]["category"] == "worsened"],
-                                "inconclusive": [k for k in keys if f[k]["category"] == "inconclusive"],
+                                "under_threshold": [k for k in keys if f[k]["category"] == "under threshold"],
                                 "points_better_uncertainty_worse": [k for k in keys if f[k]["category"] == "points better, uncertainty worse"],
+                                "large_drop": [k for k in keys if f[k]["large_drop"]],
                                 "collapse": [k for k in keys if f[k]["collapse"]]}
         summary[col["name"]] = s
     result = dict(
         columns={c["name"]: describe_column(c) for c in columns}, order=names, base=base["name"],
         control=(control["name"] if control else None), thresholds=dict(thresholds), n_recordings=int(truth.shape[0]),
+        bootstrap=dict(resamples=int(n_boot), seed=(None if seed is None else int(seed)),
+                       measures="uncertainty of the paired mean over the evaluated recordings; not variation between training runs"),
         regimes={m: dict(definition=definitions[m], n=int(mk.sum())) for m, mk in masks.items()},
         recovery={k: {c["name"]: c["recovery"][k] for c in columns} for k in keys},
         coverage={k: {c["name"]: c["coverage"][k] for c in columns} for k in keys},
@@ -388,7 +432,8 @@ def describe_column(col):
              n_observations=int(em.get("n_observations", 0)), checkpoint_sha256=em.get("checkpoint_sha256"),
              pool_mode=em.get("pool_mode"), n_summary_draws=em.get("n_summary_draws"),
              calibration=(str(col["calibration"]) if col["truth_log_density"] is not None else None),
-             calibration_report_lifted=bool(col["lifted"]), probe=(str(col["probe"]) if col["probe_result"] else None),
+             calibration_report_lifted=bool(col["lifted"]), lifted_status=col["lifted_status"],
+             identity=col["identity"], probe=(str(col["probe"]) if col["probe_result"] else None),
              estimator=(str(col["estimator"]) if m else None))
     if m:
         spec = m.get("rebuild_spec", {})
@@ -434,7 +479,7 @@ def write_tables(result, keys, path):
          f"Base = {base}; control = {control or 'none'}. {result['n_recordings']:,} EVAL recordings, aligned by "
          f"(task, simulation). Log10 units throughout. Cells of the recovery tables read MAE · bias · slope · "
          f"correlation. The scorecard scores each trained posterior estimator as a whole; it isolates nothing.", ""]
-    L += ["## Columns", "", "| column | role | tag | encoder | flow | Evaluation job | calibration | probe |", "|---|---|---|---|---|---|---|---|"]
+    L += ["## Columns", "", "| column | role | tag | encoder | flow | Evaluation job | calibration | probe | identity |", "|---|---|---|---|---|---|---|---|---|"]
     for n in names:
         c = result["columns"][n]
         enc = c.get("encoder")
@@ -444,7 +489,7 @@ def write_tables(result, keys, path):
         flow = c.get("flow")
         flow_s = f"hidden {flow['hidden_features']}, {flow['num_transforms']} transforms, {flow['num_blocks']} blocks" if flow else "-"
         L.append(f"| {n} | {c['role']} | {c['tag'] or '-'} | {enc_s} | {flow_s} | {c['evaluation_job'] or '-'} | "
-                 f"{'yes' if c['calibration'] else 'not run'} | {'yes' if c['probe'] else 'not run'} |")
+                 f"{'yes' if c['calibration'] else 'not run'} | {'yes' if c['probe'] else 'not run'} | {c['identity']['status']} |")
     for view in VIEWS:
         L += ["", f"## Recovery, {view} view, every recording (MAE · bias · slope · correlation)", "", head, rule]
         for k in keys:
@@ -470,7 +515,11 @@ def write_tables(result, keys, path):
             dg = lf.get("diagnosis", {}).get(k)
             cells.append(("not run" if ks is None else f"{ks:.3f}") + (f"; {dg['bias_z']:+.2f}, {dg['spread_z']:.2f}" if dg else ""))
         L.append(f"| {k} | " + " | ".join(cells) + " |")
+    b = result["bootstrap"]
     L += ["", "## Joint posterior quality: truth log-density on the EVAL recordings", "",
+          f"Paired differences with a percentile bootstrap interval ({b['resamples']:,} resamples, seed {b['seed']}): "
+          f"the interval measures the uncertainty of the paired mean over the evaluated recordings, not the variation "
+          f"between training runs.", "",
           "| quantity | " + " | ".join(names) + " |", rule]
     for lab, fn in (("mean", lambda j: f"{j['mean']:.3f}"), ("median", lambda j: f"{j['median']:.3f}")):
         L.append(f"| {lab}, every recording | " + " | ".join(fn(result["joint"][n]["all"]) if result["joint"][n] else "not run" for n in names) + " |")
@@ -505,16 +554,19 @@ def write_tables(result, keys, path):
     t = result["thresholds"]
     L += ["", "## Flags (median view, every recording; marks, not decisions)", "",
           f"Thresholds: below the floor when the correlation of the posterior median with the truth is under "
-          f"{t['collapse_corr']} (unrecovered); collapse when that correlation is more than {t['collapse_drop']} below the "
-          f"reference's; better points with worse uncertainty when MAE improves by at least {t['min_effect']} dex while "
-          f"the 90 % coverage gap worsens by more than {t['coverage_tolerance']}; inconclusive when the MAE difference "
-          f"is under {t['min_effect']} dex.", ""]
+          f"{t['collapse_corr']} (unrecovered); large correlation drop when that correlation is more than "
+          f"{t['collapse_drop']} below the reference's; collapse when the drop leaves it below the floor; better points "
+          f"with worse uncertainty when MAE improves by at least {t['min_effect']} dex while the 90 % coverage gap "
+          f"worsens by more than {t['coverage_tolerance']}; under threshold when the MAE difference is under "
+          f"{t['min_effect']} dex, a statement about MAE alone that says nothing about calibration, width or joint "
+          f"density.", ""]
     for n in names:
         for ref, f in result["flags"][n].items():
-            L += [f"### {n} against {ref}", "", "| parameter | MAE change (dex, + = better) | 90 % coverage gap change (+ = worse) | category | correlation (reference) | floor / collapse |", "|---|---|---|---|---|---|"]
+            L += [f"### {n} against {ref}", "", "| parameter | MAE change (dex, + = better) | 90 % coverage gap change (+ = worse) | category | correlation (reference) | floor / drop / collapse |", "|---|---|---|---|---|---|"]
             for k in keys:
                 x = f[k]
-                mark = "; ".join(w for w, on in (("below floor", x["below_floor"]), ("COLLAPSE (drop)", x["collapse"])) if on)
+                mark = ("COLLAPSE (large drop, below floor)" if x["collapse"] else
+                        "; ".join(w for w, on in (("below floor", x["below_floor"]), ("large correlation drop", x["large_drop"])) if on))
                 L.append(f"| {k} | {x['mae_change_dex']:+.4f} | {x['coverage90_gap_change']:+.3f} | {x['category']} | "
                          f"{x['corr']:.2f} ({x['corr_reference']:.2f}) | {mark or 'no'} |")
             L.append("")
@@ -528,10 +580,11 @@ def write_tables(result, keys, path):
         line = f"- **{n}**: parameters below the correlation floor: {', '.join(s['below_floor_parameters']) or 'none'}"
         if "versus_base" in s:
             vb = s["versus_base"]
-            line += (f"; against the base, improved: {', '.join(vb['improved']) or 'none'}; worsened: "
-                     f"{', '.join(vb['worsened']) or 'none'}; inconclusive: {', '.join(vb['inconclusive']) or 'none'}; "
-                     f"points better with uncertainty worse: {', '.join(vb['points_better_uncertainty_worse']) or 'none'}; "
-                     f"collapse against the base: {', '.join(vb['collapse']) or 'none'}")
+            line += (f"; against the base, MAE improved: {', '.join(vb['improved']) or 'none'}; MAE worsened: "
+                     f"{', '.join(vb['worsened']) or 'none'}; MAE difference under the threshold: "
+                     f"{', '.join(vb['under_threshold']) or 'none'}; points better with uncertainty worse: "
+                     f"{', '.join(vb['points_better_uncertainty_worse']) or 'none'}; large correlation drop: "
+                     f"{', '.join(vb['large_drop']) or 'none'}; collapse: {', '.join(vb['collapse']) or 'none'}")
         L.append(line + ".")
     L.append("")
     Path(path).write_text("\n".join(L), encoding="utf-8")
@@ -603,13 +656,17 @@ def write_provenance(result, R, path):
          f"(package {ident['package_version']}, git {ident['git_head'] or 'not a checkout'}"
          f"{', dirty' if ident['git_dirty'] else ''}). Protocol: DETECTOR_WORKFLOW.md, the encoder screening "
          f"(scorecard and selection rule).", "", "## Inputs (read-only)", "",
-         "| column | role | Evaluation product | job | written | n | checkpoint | calibration | probe |", "|---|---|---|---|---|---|---|---|---|"]
+         "| column | role | Evaluation product | job | written | n | checkpoint | calibration | probe | identity |", "|---|---|---|---|---|---|---|---|---|---|"]
     for n in result["order"]:
         c = result["columns"][n]
         L.append(f"| {n} | {c['role']} | `{Path(c['evaluation']).parent.name}` | {c['evaluation_job'] or '-'} | "
                  f"{c['evaluation_written'] or '-'} | {c['n_observations']:,} | `{(c['checkpoint_sha256'] or '-')[:12]}` | "
                  f"{'`' + Path(c['calibration']).parent.name + '`' if c['calibration'] else 'not run'} | "
-                 f"{'`' + Path(c['probe']).parent.name + '`' if c['probe'] else 'not run'} |")
+                 f"{'`' + Path(c['probe']).parent.name + '`' if c['probe'] else 'not run'} | {c['identity']['status']} |")
+    L += ["", "Identity: within each column the Evaluation's checkpoint, the estimator artifact's weights and the "
+          "probe's weights (those present) must be one hash, or the compilation is refused; the calibration product "
+          "carries no checkpoint provenance, so its identity is unverified. Calibration report: " +
+          "; ".join(f"{n}: {result['columns'][n]['lifted_status']}" for n in result["order"]) + "."]
     L += ["", "## Estimator artifacts", ""]
     for n in result["order"]:
         c = result["columns"][n]
@@ -620,14 +677,17 @@ def write_provenance(result, R, path):
             L.append(f"- **{n}**: estimator artifact not present beside the records; architecture not read.")
     L += ["", "## Alignment", "",
           f"Every column is reordered to the base's (task_index, sim_index) order and the truths must agree exactly; "
-          f"each calibration cloud is aligned to the same recordings by exact match of the six true parameters. "
-          f"{result['n_recordings']:,} recordings.", "", "## Regimes", ""]
+          f"each calibration cloud is aligned to the same recordings by the six true parameters rounded to nine "
+          f"decimals, unique, and must hold exactly the Evaluation's set. {result['n_recordings']:,} recordings.",
+          "", "## Regimes", ""]
     for m, info in result["regimes"].items():
         L.append(f"- `{m}`: {info['definition']} ({info['n']:,} recordings)")
     L += ["", "## Computed and lifted", "",
-          "Computed from the products: recovery of the three point estimates, marginal coverage and widths from the "
-          "stored quantiles, the truth log-density statistics and their paired differences (percentile bootstrap, "
-          "2,000 resamples), the regimes, the flags. Lifted verbatim from each Posterior_Calibration report: the "
+          f"Computed from the products: recovery of the three point estimates, marginal coverage and widths from the "
+          f"stored quantiles, the truth log-density statistics and their paired differences (percentile bootstrap, "
+          f"{result['bootstrap']['resamples']:,} resamples, seed {result['bootstrap']['seed']}; the interval measures "
+          f"the uncertainty of the paired mean over the evaluated recordings, not the variation between training "
+          f"runs), the regimes, the flags. Lifted verbatim from each Posterior_Calibration report: the "
           "joint tests (expected coverage, TARP, L-C2ST, the marginal worst cases), the SBC statistic and the "
           "location-versus-width diagnosis. The encoder row copies the held-out numbers of each embedding-probe "
           "record and selects nothing.", "", "## Thresholds", "", "`" + json.dumps(result["thresholds"]) + "`", ""]
@@ -709,7 +769,8 @@ def main(argv=None):
         return 0
     columns = [load_column(c, R["keys"]) for c in present]
     rng = np.random.default_rng(args.seed)
-    result, arrays = compile_scorecard(columns, R["keys"], R["lo"], R["hi"], thresholds, rng, n_boot=args.bootstrap)
+    result, arrays = compile_scorecard(columns, R["keys"], R["lo"], R["hi"], thresholds, rng, n_boot=args.bootstrap,
+                                       seed=args.seed)
     result["missing_candidates"] = [c["name"] for c in missing]
     write_outputs(result, arrays, R, R["keys"])
     for n in result["order"]:

@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.30 - 2026-09-30
+
+Two safeguards in the scorecard compiler before it is used to select an architecture, and narrower labels.
+Nothing is trained or adopted by this release.
+
+### Changed
+
+- The compiler refuses a column whose Evaluation checkpoint, estimator weights and probe weights differ, and
+  records the calibration product's identity as unverified, since that product carries no checkpoint
+  provenance.
+- The calibration arrays must hold exactly the Evaluation's recordings (matched by the six true parameters
+  rounded to nine decimals, unique), and the calibration report is lifted only when its recorded video count
+  equals those rows; a report without arrays is recorded as present but not lifted.
+- Flags: a correlation more than the threshold below the reference's is a "large correlation drop"; "collapse"
+  is reserved for a large drop that leaves the parameter below the recovery floor; a MAE difference under the
+  threshold is "under threshold", a statement about MAE alone. The bootstrap resample count and seed are
+  recorded; the interval measures uncertainty over the evaluated recordings, not variation between training
+  runs. The zero correlation of a constant estimate is a documented scoring convention.
+- Tests for each refusal and for the flag distinction; DETECTOR_WORKFLOW.md's control reading names the
+  individual joint diagnostics instead of ranking them.
+- The control record is recompiled by this release; the 0.1.29 compilation is preserved unchanged under
+  `Superseded_0.1.29/` in the data bank, with a supersession note linking the two (identical numbers).
+
 ## 0.1.29 - 2026-09-30
 
 The scorecard of the encoder screening is compiled by a companion instead of by hand, and its control
