@@ -269,6 +269,28 @@ tasks already rendered (5 and 8) allow a development run of this estimator on 20
 any time. The partial stores of tasks 9, 11, 16 and 18 remain on JUWELS until a decision to complete or
 remove them.
 
+**Reopened (2026-09-30): the lean reader is implemented; the tier's completion is not authorized yet.**
+The second of the three ways above is in the package: `simulation_rds_support.extract_subunit_positions`
+gathers each subunit's host coordinates per frame directly from the trajectory's per-frame observables
+through the lineage, `(frames, subunits, 3)`, never building the dense tensor, and the shared DLI runner
+of both workflows renders from it through the same rendering calculation as before, the dense reader
+staying in place for its other consumers. On a stubbed trajectory with mode switches, association and
+dissociation the lean positions equal the dense gather value for value at every documented duration, the
+rendered frames are identical under a fixed seed, and the runner's stored videos and labeling records
+equal the dense path's for both workflows. On real trajectories pulled to the PC the same holds: the
+three 2 s EVAL recordings of task 0 and a 20 s recording of task 9 (459 subunits) read identically through
+both readers and render identical frames; the released 0.1.30 and this version write byte-identical video,
+theta, SCOPE, nuisance and labeling stores for both workflows on the 2 s recordings under one seed; and on
+the largest scene (task 9, simulation 5: 3,011 subunits, 491,645 particle ids, the 65.9 GiB dense tensor)
+the lean read peaks at 0.9 GiB and the complete detector runner at 3.8 GiB for one recording in 60 s, where
+the dense path was killed at 59 GiB on 2026-09-25. What remains is sequenced and separately authorized: the
+identity checks on JUWELS (the same reads on its login node), task 9 alone through its 100 recordings before
+the other five single-node jobs, the exact manifest of the partial stores (archiving
+preferred to removal), and the estimator runs. The frozen estimator runs for characterization first; any
+modification of it is a separate decision before the reserved verdict is opened. Completing the tier
+closes the synthetic validation question; it does not by itself establish a better experimental
+bleaching value.
+
 **Development characterization on the rendered tasks 5 and 8 (2026-09-25; JUWELS job 14273151, run folder
 `..._20S_50FPS_Direct_Fluorescence_Loss_DEV_45177cb`, 200 multiple-dye recordings at 1000 frames, field
 observable, 45 s of wall time).** By the frozen rules the run is INSUFFICIENT EVIDENCE (200 attempted against

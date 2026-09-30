@@ -54,6 +54,13 @@ Functions:
         Collapses the species-rank axis of that tensor to
         (frame, particle, spatial-dim).
 
+    extract_subunit_positions(tray, lineage, ...)
+        Reads the same trajectory and produces the (frame, subunit, spatial-dim)
+        positions of each subunit's host particle directly, without the dense
+        tensor, whose particle axis grows with every reaction of a long recording;
+        the renderer's lean input, identical value for value to the gather of the
+        dense tensor through the lineage.
+
     extract_subunit_lineage(tray, ...)
         Replays the reaction records and produces, per frame, the particle
         hosting each receptor subunit -- the RDS/DLI handoff the DOL-explicit
@@ -709,3 +716,61 @@ def extract_subunit_lineage(tray, verbose: bool = False) -> SubunitLineage:
 
     return SubunitLineage(host_index=host_index, host_rank=host_rank,
                           soul_ids=all_souls.astype(np.int64))
+
+
+def extract_subunit_positions(tray, lineage: SubunitLineage, verbose: bool = False) -> np.ndarray:
+    """Read a saved ReaDDy .h5 trajectory and produce, per frame, the position of each receptor
+    SUBUNIT: the coordinates of the particle hosting it, ``(n_frames, n_subunits, 3)`` in nm,
+    box-anchored (origin at the corner) like `extract_trajectory_poses`.
+
+    The lean counterpart of `extract_trajectory_poses` followed by `collapse_species_axis` for the
+    renderer, which only ever gathers each dye's host coordinates per subunit
+    (`simulation_dli_support.build_dye_tracks`). It never allocates the dense
+    (frame, particle id, spatial-dim, rank) tensor, whose particle axis holds every id that ever
+    appears -- ReaDDy gives each reaction product and each mode switch a fresh id, so that axis
+    grows with duration, receptor count and reaction rates, quadratically in the duration --
+    and its output scales with frames x subunits instead. The trajectory's own per-frame
+    observables, id lookup and reaction records are read as before.
+
+    The values are identical to the gather
+    ``collapse_species_axis(extract_trajectory_poses(tray))[f, lineage.host_index[f]]``: the same
+    per-frame coordinates, converted to float64 and shifted by half the box in the same order of
+    operations, and the collapse of the rank axis selects the one non-NaN entry a present particle
+    has. The trailing ReaDDy observable is dropped exactly as the dense reader drops it, and the
+    lineage must come from the same trajectory (`extract_subunit_lineage`: same frame count and
+    the same particle order), or the read stops.
+
+    Args:
+        tray: A `readdy.Trajectory` object opened from a .h5 file.
+        lineage: its `SubunitLineage`.
+        verbose: If True, print the output shape.
+
+    Returns:
+        subunit_positions: float64 array ``(n_frames, n_subunits, 3)``; every entry is a real
+            coordinate, since every subunit has a host in every frame.
+    """
+    part_spans, _ranks, souls, poses = tray.read_observable_particles()
+    n_frames = int(part_spans.shape[0]) - 1          # the trailing observable, dropped as the dense reader drops it
+    if lineage.n_frames != n_frames:
+        raise ValueError(
+            f"extract_subunit_positions: the lineage holds {lineage.n_frames} frames but the "
+            f"trajectory {n_frames}; the lineage must come from this trajectory.")
+    box_size = PARAMETERS.simulation.stem.box_size
+    half_box = np.array([dim / 2 for dim in box_size]).reshape(1, 3)
+    soul_ids = np.asarray(lineage.soul_ids, dtype=np.int64)
+    out = np.empty((n_frames, lineage.n_subunits, 3), dtype=float)
+    for frame in range(n_frames):
+        frame_souls = np.asarray(souls[frame]).reshape(-1).astype(np.int64)
+        frame_poses = np.asarray(poses[frame], dtype=float).reshape(frame_souls.shape[0], 3)
+        wanted = soul_ids[lineage.host_index[frame]]                # the ReaDDy id hosting each subunit
+        order = np.argsort(frame_souls, kind="stable")
+        found = np.searchsorted(frame_souls, wanted, sorter=order)
+        inside = found < frame_souls.shape[0]
+        if not inside.all() or not np.array_equal(frame_souls[order[found[inside]]], wanted[inside]):
+            raise ValueError(
+                f"extract_subunit_positions: frame {frame} does not hold the host particle of every "
+                f"subunit; the lineage does not belong to this trajectory.")
+        out[frame] = half_box + frame_poses[order[found]]
+    if verbose:
+        print(f"  subunit_positions shape: {out.shape}")
+    return out

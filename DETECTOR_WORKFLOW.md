@@ -1685,8 +1685,10 @@ benchmark; the biology estimator needs its own capacity test (§2).
 **Status.** Training, Evaluation, Posterior_Calibration and Experiment complete under the `CAP256` tag, the
 Evaluation and Experiment regenerated under the corrected MAP routine on 2026-09-24; comparison recorded
 above and the source decision in §7.6. Open, and not prerequisites for §7.6: repeat training of
-`capacity256`; the 20 s tier (nine of its twenty tasks rendered; parked, with the memory cause of the lost
-renders located and recorded in the photobleaching estimator's note).
+`capacity256`; the 20 s tier (nine of its twenty tasks rendered; reopened on 2026-09-30 with the lean
+trajectory reader of the DLI stage, the memory cause of the lost renders recorded in the photobleaching
+estimator's note and its equality on real trajectories verified on the PC; the identity check on JUWELS,
+the re-render and the estimator runs each await separate authorization).
 
 > **Regenerated.** Every MAP figure of this section comes from the Evaluation and Experiment stages re-run
 > under the corrected MAP routine (§9.8); the pre-correction comparison records are preserved as

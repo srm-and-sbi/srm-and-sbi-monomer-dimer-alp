@@ -553,14 +553,48 @@ def build_dye_tracks(soul_poses: np.ndarray, host_index: np.ndarray,
     return dye_positions, dye_subunit
 
 
+def build_dye_tracks_from_subunit_positions(subunit_positions: np.ndarray,
+                                            dye_counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """`build_dye_tracks` from per-subunit positions instead of per-particle poses and the lineage.
+
+    ``subunit_positions`` is `simulation_rds_support.extract_subunit_positions`'s
+    ``(n_frames, n_subunits, 3)``: the coordinates of each subunit's host particle in each frame.
+    The dye order is the same ``np.repeat`` of the subunit index by its dye count, and the (x, y)
+    gather reads the same coordinates, so the two builders agree element for element and feed the
+    one rendering calculation of `render_dli_video`.
+    """
+    dye_counts = np.asarray(dye_counts, dtype=np.int64)
+    subunit_positions = np.asarray(subunit_positions, dtype=float)
+    if subunit_positions.ndim != 3 or subunit_positions.shape[2] != 3:
+        raise ValueError(
+            f"subunit_positions has shape {subunit_positions.shape}; expected (n_frames, n_subunits, 3).")
+    if dye_counts.ndim != 1 or dye_counts.shape[0] != subunit_positions.shape[1]:
+        raise ValueError(
+            f"dye_counts has shape {dye_counts.shape}; expected ({subunit_positions.shape[1]},), "
+            f"one count per subunit.")
+    if (dye_counts < 0).any():
+        raise ValueError("dye_counts must be non-negative.")
+    dye_subunit = np.repeat(np.arange(dye_counts.shape[0]), dye_counts)      # (n_dyes,)
+    dye_positions = subunit_positions[:, dye_subunit, :2]                      # (n_frames, n_dyes, 2)
+    return dye_positions, dye_subunit
+
+
 def render_dli_video(soul_poses: np.ndarray,
                      host_index: np.ndarray,
                      dye_counts: np.ndarray,
                      imaging_physical: np.ndarray,
                      seed=None,
-                     verbose: bool = False) -> np.ndarray:
+                     verbose: bool = False,
+                     *,
+                     subunit_positions: np.ndarray = None) -> np.ndarray:
     """Render one video from particle poses, the subunit lineage, per-subunit dye counts,
     and a physical imaging vector.
+
+    The emitter tracks reach the ONE rendering calculation below in either of two ways, exactly
+    one per call: ``soul_poses`` with ``host_index`` (the dense reader's product, gathered by
+    `build_dye_tracks`), or ``subunit_positions`` (`extract_subunit_positions`, expanded by
+    `build_dye_tracks_from_subunit_positions`). Everything after the tracks -- PSF widths,
+    brightness, bleaching, camera -- is the same code and the same random-number consumption.
 
     The source-agnostic diffraction-limited-imaging renderer shared by both DLI stages. It
     sources the 11 imaging parameters entirely from ``imaging_physical`` -- the imaging
@@ -584,14 +618,18 @@ def render_dli_video(soul_poses: np.ndarray,
 
     Args:
         soul_poses: particle coordinates ``(n_frames, n_particles, 3)`` in nm (only x, y are
-            used; z dropped); NaN for absent particles (`collapse_species_axis`).
+            used; z dropped); NaN for absent particles (`collapse_species_axis`). ``None`` when
+            ``subunit_positions`` is given.
         host_index: the subunit lineage's ``(n_frames, n_subunits)`` host-particle indices
-            (`extract_subunit_lineage`).
+            (`extract_subunit_lineage`); required with ``soul_poses``, optional (checked for
+            shape) with ``subunit_positions``.
         dye_counts: per-subunit static dye counts ``(n_subunits,)`` (`labeling.draw_dye_counts`).
         imaging_physical: physical values of the 11 imaging parameters,
             in ``det.DETECTOR_IMAGING`` order.
         seed: optional RNG seed for PSF widths, brightness, and EMCCD noise.
         verbose: print the resolved emitter and OU brightness quantities.
+        subunit_positions: per-subunit host coordinates ``(n_frames, n_subunits, 3)`` in nm
+            (`extract_subunit_positions`), the lean input; ``None`` when ``soul_poses`` is given.
 
     Returns:
         Frames of shape ``(root_size_px, root_size_px, n_frames)`` in ADU.
@@ -604,14 +642,35 @@ def render_dli_video(soul_poses: np.ndarray,
         )
     img = dict(zip(_IMAGING_KEYS, imaging_physical))
 
-    nframes = soul_poses.shape[0]
-    n_subunits = host_index.shape[1]
     stem_geometry = PARAMETERS.simulation.stem
     pixel_size_nm = stem_geometry.pixel_size_nm
     root_size_px = stem_geometry.root_size_px
 
     # --- Dyes as emitters: positions follow the host particle of each dye's subunit -----
-    dye_positions_nm, dye_subunit = build_dye_tracks(soul_poses, host_index, dye_counts)
+    # Exactly one source of tracks; the calculation from here on is the same for both.
+    if (soul_poses is None) == (subunit_positions is None):
+        raise ValueError(
+            "render_dli_video takes exactly one source of emitter tracks: soul_poses (with "
+            "host_index) or subunit_positions.")
+    if subunit_positions is not None:
+        subunit_positions = np.asarray(subunit_positions, dtype=float)
+        if subunit_positions.ndim != 3 or subunit_positions.shape[2] != 3:
+            raise ValueError(
+                f"subunit_positions has shape {subunit_positions.shape}; expected "
+                f"(n_frames, n_subunits, 3).")
+        nframes, n_subunits = subunit_positions.shape[0], subunit_positions.shape[1]
+        if host_index is not None and tuple(np.asarray(host_index).shape) != (nframes, n_subunits):
+            raise ValueError(
+                f"host_index has shape {np.asarray(host_index).shape} but subunit_positions "
+                f"{subunit_positions.shape}; the lineage does not belong to these positions.")
+        dye_positions_nm, dye_subunit = build_dye_tracks_from_subunit_positions(
+            subunit_positions, dye_counts)
+    else:
+        if host_index is None:
+            raise ValueError("render_dli_video needs host_index with soul_poses.")
+        nframes = soul_poses.shape[0]
+        n_subunits = host_index.shape[1]
+        dye_positions_nm, dye_subunit = build_dye_tracks(soul_poses, host_index, dye_counts)
     ndyes = dye_subunit.shape[0]
 
     # --- Camera params + EMCCD detector (imaging from the vector) ----------

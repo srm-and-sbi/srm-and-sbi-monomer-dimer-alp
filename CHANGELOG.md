@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.31 - 2026-09-30
+
+The DLI stage reads the positions the renderer needs without the dense pose tensor, so long recordings
+no longer exhaust memory in the trajectory reader. Every rendered video is bit-identical; no stage,
+parameter role, labeling, photophysics or camera calculation changes. Nothing is rendered, trained or
+adopted by this release.
+
+### Changed
+
+- `simulation_rds_support.extract_subunit_positions(tray, lineage)`: the per-frame position of each
+  receptor subunit's host particle, `(n_frames, n_subunits, 3)`, gathered directly from the trajectory's
+  per-frame observables through the lineage. The dense `(frame, particle id, 3, rank)` tensor of
+  `extract_trajectory_poses`, whose id axis holds every id that ever appears (a fresh one per reaction
+  and mode switch, so it grows quadratically with the duration), is not built; the values are identical
+  to the gather of that tensor through the lineage (same float64 conversion, same box shift, same
+  dropped trailing observable). The dense reader stays for its other consumers (the audits, the
+  posterior-predictive video, the horizon audit).
+- `simulation_dli_support.build_dye_tracks_from_subunit_positions` expands those positions into the
+  per-dye tracks in the same dye order as `build_dye_tracks`; `render_dli_video` accepts
+  `subunit_positions` in place of `soul_poses` with `host_index`, exactly one source per call, and feeds
+  either into its one rendering calculation.
+- The shared DLI runner of both workflows uses the lean reader, guards the frame count through the
+  lineage, releases the trajectory after the labeling draw, keeps the previous render only under
+  `--show`, and reports the lean positions and the lineage's id count in its debug diagnostics, which
+  no longer touch the dense tensor.
+- Tests (`tests/test_subunit_positions.py`, on a stubbed ReaDDy trajectory with mode switches, association
+  and dissociation): lean equals dense value for value at 1, 2, 5, 10 and 20 s with float64 and float32
+  positions; the dye-track builders agree for zero, one and several dyes; identical frames from either
+  source under a fixed seed, and refusals of ambiguous calls; no frames-by-historical-ids allocation; the
+  runner's stored videos and labeling records equal the dense path's for both workflows, in the ordinary
+  and the debug path, over successive simulations.
+- Verified on real trajectories on the PC: three 2 s EVAL recordings and a 1,000-frame 20 s recording read
+  identically through both readers and render identical frames; the released 0.1.30 and this release write
+  byte-identical video, theta, SCOPE, nuisance and labeling stores for both workflows on the same 2 s
+  recordings under one seed; on the largest 20 s scene (3,011 subunits, 491,645 particle ids, a 65.9 GiB
+  dense tensor) the lean read peaks at 0.9 GiB and the complete detector DLI runner at 3.8 GiB for one
+  recording, where the dense path exhausted a 62 GiB machine.
+
 ## 0.1.30 - 2026-09-30
 
 Two safeguards in the scorecard compiler before it is used to select an architecture, and narrower labels.

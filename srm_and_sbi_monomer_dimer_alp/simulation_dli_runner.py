@@ -83,7 +83,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
-    collapse_species_axis, extract_subunit_lineage, extract_trajectory_poses,
+    extract_subunit_lineage, extract_subunit_positions,
 )
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
@@ -607,21 +607,23 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 task_alias, sim, data_bank_root, timing_label, split)
             print(f"  Reading trajectory: {traj_path}")
             tray = readdy.Trajectory(filename=str(traj_path))
-            tray_poses = extract_trajectory_poses(tray, verbose=args.verbose)
             lineage = extract_subunit_lineage(tray, verbose=args.verbose)
             # Guard: the trajectory's own frame count must match this run's declared
             # duration. A mismatch means the trajectory was generated at a different
             # --total-time-seconds than the run claims, so the rendered video would be
             # mislabeled/wrong. Fail loudly rather than emit it.
-            if tray_poses.shape[0] != timing.frame_count:
+            if lineage.n_frames != timing.frame_count:
                 raise ValueError(
-                    f"Trajectory {traj_path} holds {tray_poses.shape[0]} frames but this run "
+                    f"Trajectory {traj_path} holds {lineage.n_frames} frames but this run "
                     f"declares {timing.frame_count} frames (--total-time-seconds "
                     f"{args.total_time_seconds}). Refusing to render a duration-mismatched video."
                 )
-            # Collapse the species-rank axis: each particle's (x, y, z) at each frame, NaN
-            # where absent (a particle is exactly one species per frame).
-            soul_poses = collapse_species_axis(tray_poses)
+            # Per-subunit positions, the lean reader: the coordinates of each subunit's host
+            # particle in each frame, (n_frames, n_subunits, 3). The dense (frame, particle id,
+            # 3, rank) tensor is never built here: its id axis grows with every reaction and mode
+            # switch of a recording, quadratically in the duration, and the renderer only ever
+            # gathers host coordinates per subunit (identical values, see the extractor).
+            subunit_positions = extract_subunit_positions(tray, lineage, verbose=args.verbose)
 
             # Static labeling draw: one dye count per SUBUNIT, once per recording, from the
             # condition's law composed with the probe occupancy (per initial molecular species;
@@ -632,36 +634,38 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             # non-deterministic.
             dye_counts, labeling_rows[sim] = label_trajectory(
                 labeling_plan, tray, lineage, labeling_rng(args.seed, task_alias, sim))
+            del tray          # the per-frame observables and the file handle are no longer needed
 
             # Assemble the full eleven-key imaging vector (det.DETECTOR_IMAGING order): the six
             # photophysics/imaging followed by the five SCOPE camera-nuisance draws.
             imaging_physical = np.concatenate([imaging_draw[sim], scope_data[sim]])
             frames = render_dli_video(
-                soul_poses=soul_poses,
+                soul_poses=None,
                 host_index=lineage.host_index,
                 dye_counts=dye_counts,
                 imaging_physical=imaging_physical,
                 seed=args.seed,   # default None -> non-deterministic
                 verbose=args.verbose,
+                subunit_positions=subunit_positions,
             )
             # Move frame axis from last (DLI output) to first (storage convention).
             video = np.moveaxis(frames, 2, 0)
             video = convert_video_dtype(video, bits_from=16, bits_to=args.video_dtype_bits)
             video_store[sim] = video
-            last_frames = frames
+            if args.show:
+                last_frames = frames      # kept only for the --show plot; otherwise released with the sim
 
             # ---- Sim-0 diagnostics (debug mode) -----------------------
             # Detailed checkpoints/checks/figures on the first simulation only,
-            # to keep the per-task report clean. NaN is EXPECTED in tray_poses
-            # (absent particles), so no-NaN is asserted only on the rendered
-            # output, never on the trajectory poses.
+            # to keep the per-task report clean. The diagnostics read the lean
+            # per-subunit positions and the lineage; the dense pose tensor is
+            # not rebuilt for them.
             if reporter.enabled and sim == 0:
                 reporter.checkpoint(
                     "DLI render (sim 0)",
-                    tray_poses=tray_poses,
+                    subunit_positions=subunit_positions,
                     host_index=lineage.host_index,
                     dye_counts=dye_counts,
-                    soul_poses=soul_poses,
                     frames=frames,
                     video=video,
                 )
@@ -679,7 +683,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                          "overflow/clipping bug).",
                 )
                 reporter.stat(
-                    "particle_ids", int(tray_poses.shape[1]),
+                    "particle_ids", int(lineage.soul_ids.shape[0]),
                     note="ReaDDy particle ids over the trajectory (all species; a subunit "
                          "takes a new id at every reaction it undergoes).",
                 )
