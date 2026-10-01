@@ -476,6 +476,157 @@ def test_redraw_utility_reproduces_the_figures_and_refuses_a_folder_without_arra
         assert not (empty / "figures").exists()
 
 
+# ---- the experimental input path: pixel domains and the model-free decline readings ---------
+
+def test_frame_flux_curve_raw_domain_reads_the_values_as_adu():
+    rng = np.random.default_rng(1)
+    v16 = rng.integers(1200, 1400, size=(40, 8, 8)).astype(np.uint16)
+    raw = die.frame_flux_curve(v16, domain="raw")
+    flat = v16.reshape(40, 64).astype(np.float64)
+    assert raw["domain"] == "raw"
+    assert np.allclose(raw["background"], np.median(flat, axis=1))
+    assert np.allclose(raw["flux"], flat.sum(axis=1) - 64 * np.median(flat, axis=1))
+    v8 = (v16 // 257).astype(np.uint8)
+    stored = die.frame_flux_curve(v8)
+    flat8 = v8.reshape(40, 64).astype(np.float64)
+    assert stored["domain"] == "stored"
+    assert np.allclose(stored["flux"], die.levels_to_adu(flat8.sum(axis=1)) - 64 * die.levels_to_adu(np.median(flat8, axis=1)))
+    _refused(lambda: die.frame_flux_curve(v16, domain="adu"), "domain")
+
+
+def test_field_decline_summary_reads_an_exponential_decline_without_a_fit():
+    dt, n, p = 0.02, 1000, 0.05
+    t = np.arange(n, dtype=float)
+    b = np.full(n, 1250.0)
+    f = 6000.0 * (1.0 - p) ** (t / 100.0)
+    d = die.field_decline_summary(f, b, frame_time_seconds=dt, window_frames=50)
+    assert d["center_close"] - d["center_open"] == 950 and d["center_close"] - d["center_mid"] == 450
+    for key in ("p_whole", "p_late", "p_whole_normalized", "p_late_normalized"):
+        assert abs(d[key] - p) < 1e-9, (key, d[key])
+    assert d["background_ratio"] == 1.0
+    # a floor that falls 10 % and a flux that falls with it: the raw reading mixes the two declines,
+    # the background-normalized one recovers the dyes' decline alone
+    b2 = 1250.0 * (1.0 - 0.1 * t / (n - 1))
+    f2 = f * b2 / 1250.0
+    d2 = die.field_decline_summary(f2, b2, frame_time_seconds=dt, window_frames=50)
+    assert d2["p_whole"] > p + 0.005 and abs(d2["p_whole_normalized"] - p) < 1e-9
+    assert abs(d2["p_late_normalized"] - p) < 1e-9 and abs(d2["background_ratio"] - 0.9) < 0.01
+    # a window too short for the mid-recording window is refused, not misread
+    _refused(lambda: die.field_decline_summary(f[:100], b[:100], frame_time_seconds=dt, window_frames=50), "mid window")
+    # a non-positive window mean gives nan, not an exception
+    d3 = die.field_decline_summary(f - 10000.0, b, frame_time_seconds=dt, window_frames=50)
+    assert np.isnan(d3["p_whole"]) and np.isnan(d3["p_late"])
+
+
+def test_field_decline_by_window_tiles_the_recording_and_reads_each_window_alone():
+    dt, n, p = 0.02, 1000, 0.05
+    t = np.arange(n, dtype=float)
+    flux = np.stack([6000.0 * (1.0 - p) ** (t / 100.0), 3000.0 * (1.0 - p) ** (t / 100.0)])
+    by = die.field_decline_by_window(flux, frame_time_seconds=dt, durations_seconds=(1.0, 2.0, 5.0, 10.0, 20.0, 40.0))
+    assert list(by) == [1.0, 2.0, 5.0, 10.0, 20.0]            # 40 s does not fit a 20 s recording
+    assert [by[T]["windows_per_recording"] for T in by] == [20, 10, 4, 2, 1]
+    for T, rec in by.items():
+        assert rec["rate"].shape == (2, rec["windows_per_recording"])
+        assert np.allclose(rec["rate"], p, atol=1e-9), T
+        assert rec["starts"][0] == 0 and rec["starts"][-1] == (rec["windows_per_recording"] - 1) * rec["window_frames"]
+    # a two-rate curve: the first windows read the fast component, the late ones the slow one
+    two = 0.5 * (0.8 ** (t / 100.0)) + 0.5 * (0.97 ** (t / 100.0))
+    r2 = die.field_decline_by_window(two[None, :], frame_time_seconds=dt, durations_seconds=(2.0,))[2.0]["rate"][0]
+    assert r2[0] > 0.1 and r2[-1] < 0.06 and np.all(np.diff(r2) < 0)
+    # a window whose means are not positive gives nan, not an exception
+    r3 = die.field_decline_by_window(np.full((1, n), -5.0), frame_time_seconds=dt, durations_seconds=(2.0,))[2.0]["rate"]
+    assert np.all(np.isnan(r3))
+    _refused(lambda: die.field_decline_by_window(flux[0], frame_time_seconds=dt), "n_recordings, n_frames")
+
+
+def test_window_pixel_statistics_reads_the_floor_the_excess_and_the_bright_area():
+    rng = np.random.default_rng(3)
+    block = 1250.0 + rng.normal(0.0, 2.0, size=(50, 16, 16))   # a floor with a 2-unit spread
+    block[:, 0, 0] = 1250.0 + 5000.0                            # one bright pixel per frame
+    s = die.window_pixel_statistics(block)
+    assert abs(s["median"] - 1250.0) < 0.2
+    assert abs(s["excess"] - 5000.0 / 256) < 0.2
+    assert abs(s["robust_sd"] - 2.0) < 0.2
+    assert s["p9999"] > 1250.0 + 100 and s["bright_fraction"] == 1.0 / 256
+    _refused(lambda: die.window_pixel_statistics(np.zeros((0, 4, 4))), "empty")
+
+
+def test_read_cell_chunks_keeps_the_16_bit_values_in_the_raw_domain():
+    import tifffile
+    from srm_and_sbi_monomer_dimer_alp.experiment_support import read_cell_chunks
+    from srm_and_sbi_monomer_dimer_alp.io import convert_video_dtype
+    rng = np.random.default_rng(2)
+    raw = rng.integers(0, 65535, size=(120, 8, 8)).astype(np.uint16)
+    with tempfile.TemporaryDirectory() as tmp:
+        tif = pathlib.Path(tmp) / "Experiment_FAB_Cell_0_2S_RAW.tif"
+        tifffile.imwrite(tif, raw)
+        windows = read_cell_chunks(tif, 50, 50, domain="raw")
+        assert len(windows) == 2 and windows[0].dtype == np.uint16
+        assert np.array_equal(windows[0], raw[:50]) and np.array_equal(windows[1], raw[50:100])
+        stored = read_cell_chunks(tif, 50, 50)
+        assert stored[0].dtype == np.uint8
+        assert np.array_equal(stored[1], convert_video_dtype(raw, bits_from=16, bits_to=8)[50:100])
+        _refused(lambda: read_cell_chunks(tif, 50, 50, domain="adu"), "domain")
+
+
+def test_field_decline_figure_overlays_the_scenarios_and_the_utility_redraws_an_experiment_folder():
+    rng = np.random.default_rng(4)
+    n_rec, n_frames, dt = 12, 300, 0.02
+    t = np.arange(n_frames)
+    scale = rng.uniform(2000, 8000, size=n_rec)
+    flux = scale[:, None] * (0.5 * (0.8 ** (t / 100.0)) + 0.5 * (0.97 ** (t / 100.0))) + rng.normal(0, 50, size=(n_rec, n_frames))
+    background = 1250.0 * (1.0 - 0.1 * t / (n_frames - 1))[None, :] + rng.normal(0, 1, size=(n_rec, n_frames))
+    estimate = rng.uniform(0.1, 0.3, size=n_rec)
+    valid = np.ones(n_rec, bool); usable = valid.copy(); usable[0] = False
+    name, fig, caption = da.field_decline_figure(
+        flux=flux, background=background, frame_time_seconds=dt, condition="FAB", domain="raw",
+        estimate=estimate, valid=valid, usable=usable, prior_log10=(-2.0, -0.5), window_frames=50,
+        opening_excess=scale / 65536.0, compare_values=(0.03, 0.05))
+    assert name == "field_flux_curves_FAB"
+    labels = [txt.get_text() for ax in fig.axes for leg in [ax.get_legend()] if leg for txt in leg.get_texts()]
+    assert any("p = 0.03" in s for s in labels) and any("p = 0.05" in s for s in labels)
+    assert any("dimmest third" in s for s in labels) and any("brightest third" in s for s in labels)
+    assert "p = 0.03, 0.05" in caption
+    spec = importlib.util.spec_from_file_location(
+        "figs", ANALYSIS / "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py")
+    figs = importlib.util.module_from_spec(spec); spec.loader.exec_module(figs)
+    with tempfile.TemporaryDirectory() as tmp:
+        run = pathlib.Path(tmp) / "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_6S_50FPS_Direct_Fluorescence_Loss_Experiment_test"
+        run.mkdir()
+        np.savez_compressed(run / "direct_fluorescence_loss_experiment.npz", flux=flux, background=background,
+                            estimate=estimate, valid=valid, usable=usable, kinds=np.asarray(["FAB"]),
+                            domain=np.asarray(["raw"]), frame_time_seconds=dt, opening_excess=scale / 65536.0,
+                            window_frames=np.full(n_rec, 50))
+        (run / "summary.json").write_text('{"mode": "experiment", "condition": "FAB", "compare_values": [0.03, 0.05], "early_late_window_frames": 50}')
+        written = figs.redraw(str(run))
+        assert [pathlib.Path(w).name for w in written] == ["field_flux_curves_FAB.png", "window_rates_FAB.png"]
+        assert all(pathlib.Path(w).stat().st_size > 10_000 for w in written)
+    # the window-rate figure: one series per duration, its pooled median in the legend, the scenarios as lines
+    by = die.field_decline_by_window(flux, frame_time_seconds=dt, durations_seconds=(1.0, 2.0, 6.0))
+    name, fig, caption = da.window_rate_figure(by_window=by, frame_time_seconds=dt, condition="FAB", compare_values=(0.05, 0.03))
+    assert name == "window_rates_FAB"
+    labels = [txt.get_text() for txt in fig.axes[0].get_legend().get_texts()]
+    assert sum("windows (" in s and "pooled median" in s for s in labels) == 3
+    assert any("1 s windows (6 per recording)" in s for s in labels) and any("6 s windows (1 per recording)" in s for s in labels)
+    assert any("p = 0.05" in s for s in labels) and "pooled" in caption
+
+
+def test_the_raw_domain_is_an_experiment_only_field_only_option():
+    mod = _load("Direct_Fluorescence_Loss")
+    base = ["--condition", "FAB", "--total-time-seconds", "20.0", "--tasks", "0", "--purpose", "development"]
+    code, err = _cli_refusal(mod, base + ["--domain", "raw"])
+    assert code == 2 and "--experiment only" in err
+    code, err = _cli_refusal(mod, ["--experiment", "--condition", "FAB", "--total-time-seconds", "20.0",
+                                   "--domain", "raw", "--observable", "apertures"])
+    assert code == 2 and "field observable only" in err
+    code, err = _cli_refusal(mod, ["--experiment", "--condition", "FAB", "--total-time-seconds", "20.0",
+                                   "--exclude-opening-seconds", "-1"])
+    assert code == 2 and "not be negative" in err
+    # the estimator itself refuses the apertures observable on raw frames
+    _refused(lambda: mod.estimate_one(np.zeros((30, 8, 8), np.uint16), {}, observable="apertures", domain="raw"),
+             "stored 8-bit levels only")
+
+
 if __name__ == "__main__":
     import sys
     import time

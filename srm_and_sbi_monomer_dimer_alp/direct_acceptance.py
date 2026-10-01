@@ -673,3 +673,176 @@ def recovery_figures(*, key: str, truth: np.ndarray, estimate: np.ndarray, valid
         return f"recovery_{key}_{coord}", fig, caption
 
     return [draw("log10"), draw("linear")]
+
+
+def field_decline_figure(*, flux: np.ndarray, background: np.ndarray, frame_time_seconds: float,
+                         condition: str, domain: str, estimate: np.ndarray, valid: np.ndarray,
+                         usable: np.ndarray, prior_log10: Tuple[float, float], window_frames: int = 50,
+                         opening_excess: Optional[np.ndarray] = None, compare_values=(),
+                         numb_photo_bleach: int = 100, title: str = ""):
+    """The field-flux decline of the experimental recordings against single-rate scenarios.
+
+    Four panels. (1) Every recording's background-subtracted field flux divided by its opening-window
+    mean, with the median over recordings, and over it the ideal single-rate decline
+    ``(1 - p) ** (t / numb_photo_bleach)`` for each of ``compare_values`` (normalized the same way), so
+    that a reader sees at once where a one-rate renderer at those values would run against the
+    recordings. (2) The same, as the median and interquartile band of the dimmest and the brightest
+    third of the recordings by their opening emitter excess, with the same scenarios. (3) The
+    per-frame background level divided by its opening-window mean. (4) The distribution of the fitted
+    whole-window value with the prior box and the scenarios marked.
+
+    Returns ``(name, figure, caption)``; the name is ``field_flux_curves_<condition>``.
+    """
+    from matplotlib.figure import Figure
+
+    flux = np.asarray(flux, dtype=float)
+    background = np.asarray(background, dtype=float)
+    n_rec, n_frames = flux.shape
+    w = int(min(max(window_frames, 1), n_frames // 2))
+    t = np.arange(n_frames) * float(frame_time_seconds)
+    frames = np.arange(n_frames, dtype=float)
+    compare = [float(p) for p in compare_values]
+    styles = ["--", ":", "-.", (0, (5, 1, 1, 1))]
+
+    def scenario(p):
+        s = (1.0 - p) ** (frames / float(numb_photo_bleach))
+        return s / s[:w].mean()
+
+    def overlay(ax):
+        for i, p in enumerate(compare):
+            ax.plot(t, scenario(p), color="k", lw=1.4, ls=styles[i % len(styles)],
+                    label=f"single rate p = {p:g} per {numb_photo_bleach} frames")
+
+    e = flux[:, :w].mean(axis=1)
+    ok = np.isfinite(e) & (e > 0)
+    norm = flux[ok] / e[ok][:, None]
+
+    fig = Figure(figsize=(13.5, 8.6), layout="constrained")
+    ax = fig.subplots(2, 2).ravel()
+    for row in norm:
+        ax[0].plot(t, row, color="#4C72B0", alpha=0.15, lw=0.6)
+    if ok.any():
+        ax[0].plot(t, np.median(norm, axis=0), color="#C44E52", lw=1.8, label="median over recordings")
+    overlay(ax[0])
+    ax[0].axhline(1.0, color="grey", lw=0.6, ls="--")
+    ax[0].set_xlabel("time (s)"); ax[0].set_ylabel("field flux / opening-window mean")
+    ax[0].set_title(f"MET-{condition}: background-subtracted field flux, {int(ok.sum())} recordings ({domain})", fontsize=10)
+    ax[0].legend(fontsize=8, loc="lower left")
+
+    if opening_excess is not None and ok.sum() >= 3:
+        ex = np.asarray(opening_excess, dtype=float)[ok]
+        lo_q, hi_q = np.percentile(ex, [100.0 / 3.0, 200.0 / 3.0])
+        for mask, color, label in ((ex <= lo_q, "#55A868", "dimmest third by opening excess"),
+                                   (ex >= hi_q, "#DD8452", "brightest third by opening excess")):
+            if mask.sum() == 0:
+                continue
+            med = np.median(norm[mask], axis=0)
+            q25, q75 = np.percentile(norm[mask], [25, 75], axis=0)
+            ax[1].fill_between(t, q25, q75, color=color, alpha=0.2, lw=0)
+            ax[1].plot(t, med, color=color, lw=1.8, label=f"{label} (n = {int(mask.sum())}, median and IQR)")
+        overlay(ax[1])
+        ax[1].axhline(1.0, color="grey", lw=0.6, ls="--")
+        ax[1].set_xlabel("time (s)"); ax[1].set_ylabel("field flux / opening-window mean")
+        ax[1].set_title("the decline by opening brightness", fontsize=10)
+        ax[1].legend(fontsize=8, loc="lower left")
+    else:
+        ax[1].text(0.5, 0.5, "no opening-excess values", ha="center", va="center", transform=ax[1].transAxes)
+        ax[1].set_axis_off()
+
+    b0 = background[:, :w].mean(axis=1)
+    okb = np.isfinite(b0) & (b0 > 0)
+    normb = background[okb] / b0[okb][:, None]
+    for row in normb:
+        ax[2].plot(t, row, color="#8172B2", alpha=0.15, lw=0.6)
+    if okb.any():
+        ax[2].plot(t, np.median(normb, axis=0), color="#C44E52", lw=1.8, label="median over recordings")
+    ax[2].axhline(1.0, color="grey", lw=0.6, ls="--")
+    ax[2].set_xlabel("time (s)"); ax[2].set_ylabel("background level / opening-window mean")
+    ax[2].set_title("per-frame background level (the median pixel)", fontsize=10)
+    ax[2].legend(fontsize=8, loc="lower left")
+
+    est = np.asarray(estimate, dtype=float)
+    valid = np.asarray(valid, bool); usable = np.asarray(usable, bool)
+    lo_p, hi_p = prior_log10
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lv = np.log10(est[valid & (est > 0)]); lu = np.log10(est[usable & (est > 0)])
+    if lv.size:
+        ax[3].hist(lv, bins=30, color="#4C72B0", alpha=0.85, label="valid")
+    if lu.size:
+        ax[3].hist(lu, bins=30, color="#55A868", alpha=0.85, label="usable")
+    ax[3].axvline(lo_p, color="#C44E52", ls="--", lw=0.8, label="prior box")
+    ax[3].axvline(hi_p, color="#C44E52", ls="--", lw=0.8)
+    for i, p in enumerate(compare):
+        ax[3].axvline(np.log10(p), color="k", lw=1.2, ls=styles[i % len(styles)], label=f"p = {p:g}")
+    ax[3].set_xlabel("log10 fitted effective loss parameter (whole window)"); ax[3].set_ylabel("recordings")
+    ax[3].set_title("fitted single-rate values", fontsize=10)
+    ax[3].legend(fontsize=8)
+    if title:
+        fig.suptitle(title, fontsize=10)
+    scen = (", ".join(f"{p:g}" for p in compare) if compare else "none")
+    caption = (f"Top left: every recording's whole-field, background-subtracted flux divided by its opening-window "
+               f"mean ({w} frames; display normalization only, the fit and the readings use the saved curves), the "
+               f"median over recordings, and the ideal single-rate decline (1 - p)^(t/{numb_photo_bleach}) for "
+               f"p = {scen}, normalized the same way. Top right: the median and interquartile band of the dimmest "
+               f"and the brightest third of the recordings by opening emitter excess, with the same scenarios. "
+               f"Bottom left: the per-frame background level (the median pixel) divided by its opening-window mean; "
+               f"in the stored domain this curve is quantized to whole levels. Bottom right: the fitted whole-window "
+               f"values with the prior box and the scenarios marked.")
+    return f"field_flux_curves_{condition}", fig, caption
+
+
+def window_rate_figure(*, by_window: dict, frame_time_seconds: float, condition: str, compare_values=(),
+                       numb_photo_bleach: int = 100, title: str = ""):
+    """The local single rate along the recording, for every window duration, in one panel.
+
+    ``by_window`` is the output of ``direct_imaging_estimates.field_decline_by_window``: per duration the
+    recordings tiled into non-overlapping windows and the single rate read inside each window. One series
+    per duration, a point at every window center: the median over recordings, with the interquartile band
+    shaded. A thin horizontal line per duration marks its pooled median over all windows and recordings;
+    these lie on top of one another when the pooled value does not depend on the window length. The ideal
+    single-rate scenarios of ``compare_values`` are horizontal reference lines in the style of the
+    decline figure. Returns ``(name, figure, caption)``; the name is ``window_rates_<condition>``.
+    """
+    from matplotlib.figure import Figure
+
+    styles = ["--", ":", "-.", (0, (5, 1, 1, 1))]
+    palette = ["#4C72B0", "#55A868", "#C44E52", "#8172B2", "#CCB974", "#64B5CD"]
+    fig = Figure(figsize=(9.5, 5.4), layout="constrained")
+    ax = fig.add_subplot(1, 1, 1)
+    pooled = []
+    for i, (T, rec) in enumerate(sorted(by_window.items())):
+        rate = np.asarray(rec["rate"], dtype=float)
+        if rate.size == 0 or not np.isfinite(rate).any():
+            continue
+        color = palette[i % len(palette)]
+        centers = (np.asarray(rec["starts"], dtype=float) + (rec["window_frames"] - 1) / 2.0) * float(frame_time_seconds)
+        med = np.nanmedian(rate, axis=0)
+        q25, q75 = np.nanpercentile(rate, [25, 75], axis=0)
+        pm = float(np.nanmedian(rate))
+        pooled.append((T, pm))
+        label = f"{T:g} s windows ({rec['windows_per_recording']} per recording); pooled median {pm:.3f}"
+        if centers.size >= 2:
+            ax.fill_between(centers, q25, q75, color=color, alpha=0.18, lw=0)
+            ax.plot(centers, med, color=color, lw=1.6, marker="o", ms=3.5, label=label)
+        else:
+            ax.errorbar(centers, med, yerr=[med - q25, q75 - med], color=color, fmt="o", ms=5, capsize=4, lw=1.6, label=label)
+        ax.axhline(pm, color=color, lw=0.8, alpha=0.9)
+    for i, p in enumerate(float(v) for v in compare_values):
+        ax.axhline(p, color="k", lw=1.4, ls=styles[i % len(styles)], label=f"single rate p = {p:g} per {numb_photo_bleach} frames")
+    ax.axhline(0.0, color="grey", lw=0.6)
+    ax.set_xlabel("position of the window along the recording (s, window center)")
+    ax.set_ylabel(f"local single rate per {numb_photo_bleach} frames")
+    ax.set_title(f"MET-{condition}: local single rate on non-overlapping windows, median over recordings "
+                 f"with the interquartile band", fontsize=10)
+    ax.legend(fontsize=8, loc="upper right")
+    if title:
+        fig.suptitle(title, fontsize=10)
+    scen = ", ".join(f"{float(p):g}" for p in compare_values) if len(compare_values) else "none"
+    pooled_txt = "; ".join(f"{T:g} s: {pm:.3f}" for T, pm in pooled)
+    caption = (f"The recordings tiled into non-overlapping windows of each duration; inside every window the single "
+               f"rate that takes the mean of its opening quarter to the mean of its closing quarter, no fit. One "
+               f"series per duration, a point at each window center: the median over recordings, the interquartile "
+               f"range shaded (a bar for the one-window duration). The thin horizontal line of each series is its "
+               f"median pooled over all windows and recordings ({pooled_txt}); the black lines are the ideal "
+               f"single-rate scenarios p = {scen}.")
+    return f"window_rates_{condition}", fig, caption

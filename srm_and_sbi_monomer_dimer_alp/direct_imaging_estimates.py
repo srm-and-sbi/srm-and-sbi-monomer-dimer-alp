@@ -64,6 +64,9 @@ __all__ = [
     "psf_width_population",
     "spot_flux_curve",
     "frame_flux_curve",
+    "window_pixel_statistics",
+    "field_decline_summary",
+    "field_decline_by_window",
     "fit_fluorescence_loss",
 ]
 
@@ -940,7 +943,8 @@ def fit_fluorescence_loss(flux: np.ndarray, *, numb_photo_bleach: int = 100,
                 resid_sd=resid_sd, n_frames=int(n))
 
 
-def frame_flux_curve(video_levels: np.ndarray, *, background_quantile: float = 0.5) -> dict:
+def frame_flux_curve(video_levels: np.ndarray, *, background_quantile: float = 0.5,
+                     domain: str = "stored") -> dict:
     """Total emitter flux per frame, estimated over the WHOLE field.
 
     The motion-immune alternative to `spot_flux_curve`. Emitters diffuse: over a 20 s
@@ -964,27 +968,202 @@ def frame_flux_curve(video_levels: np.ndarray, *, background_quantile: float = 0
     loss of flux that no per-frame background estimate can distinguish from bleaching. On a
     trajectory tier that turnover is part of the measured error and is reported as such.
 
+    The per-frame quantile is itself quantized to the input's levels. On a stationary floor that
+    costs nothing: the quantized level is the same in every frame and the fit's free offset
+    absorbs it. On a floor that drifts across a level boundary during the recording, the
+    quantile steps, and in the stored 8-bit domain one step moves the field sum by one level
+    times the pixel count, more than the whole emitter signal at the MET-FAB density. The
+    experimental recordings do exactly that (their floor falls by about 9 % over 20 s), which
+    is why ``domain="raw"`` exists: the same arithmetic on the 16-bit frames, where a level is
+    one ADU and the step is 257 times smaller.
+
     Args:
-        video_levels: ``(n_frames, n_x, n_y)`` stored 8-bit video.
+        video_levels: ``(n_frames, n_x, n_y)`` video; stored 8-bit levels under
+            ``domain="stored"``, 16-bit ADU under ``domain="raw"``.
         background_quantile: quantile of each frame taken as its background level.
+        domain: ``"stored"`` converts levels to ADU with `levels_to_adu`; ``"raw"`` takes the
+            values as ADU already.
 
     Returns:
         ``dict`` with ``flux`` (``(n_frames,)`` net ADU over the field), ``background``
-        (``(n_frames,)`` per-pixel level in ADU) and ``n_pixels``.
+        (``(n_frames,)`` per-pixel level in ADU), ``n_pixels`` and ``domain``.
     """
+    if domain not in ("stored", "raw"):
+        raise ValueError(f"domain={domain!r}; expected 'stored' or 'raw'.")
     video = np.asarray(video_levels)
     if video.ndim != 3:
         raise ValueError(f"video_levels has shape {video.shape}; expected (n_frames, n_x, n_y).")
     n_frames = video.shape[0]
     n_pixels = int(video.shape[1] * video.shape[2])
     flat = video.reshape(n_frames, n_pixels)
-    # Work in the stored integer domain for the quantile, then convert once: the quantile of a
+    # Work in the input's integer domain for the quantile, then convert once: the quantile of a
     # heavily quantized array is exact, and converting first would only add float noise.
     bg_levels = np.quantile(flat, float(background_quantile), axis=1)
-    total = levels_to_adu(flat.sum(axis=1))
-    background = levels_to_adu(bg_levels)
+    if domain == "stored":
+        total = levels_to_adu(flat.sum(axis=1))
+        background = levels_to_adu(bg_levels)
+    else:
+        total = flat.sum(axis=1, dtype=np.float64)
+        background = np.asarray(bg_levels, dtype=np.float64)
     return dict(flux=total - n_pixels * background, background=background,
-                n_pixels=n_pixels)
+                n_pixels=n_pixels, domain=domain)
+
+
+def window_pixel_statistics(frames: np.ndarray, *, bright_sigma: float = 5.0) -> dict:
+    """Pixel statistics of a block of frames read as one sample, in the input's units.
+
+    The median level (the floor), the mean, their difference (the per-pixel emitter excess,
+    which times the pixel count is the field flux `frame_flux_curve` forms), the 99.9th and
+    99.99th percentiles (the bright tail), and the fraction of pixels brighter than the median
+    by ``bright_sigma`` robust standard deviations (1.4826 times the median absolute
+    deviation), a bright-pixel area. Compared between the opening and the closing frames of a
+    recording these say how much of the field's brightness is left, without a model.
+
+    Args:
+        frames: ``(n, n_x, n_y)`` block of frames (any numeric dtype).
+        bright_sigma: threshold above the median, in robust standard deviations.
+
+    Returns:
+        ``dict`` with ``median``, ``mean``, ``excess``, ``p999``, ``p9999``, ``robust_sd`` and
+        ``bright_fraction``.
+    """
+    a = np.asarray(frames, dtype=np.float64).ravel()
+    if a.size == 0:
+        raise ValueError("frames is empty.")
+    med = float(np.median(a))
+    mean = float(a.mean())
+    mad = float(np.median(np.abs(a - med))) * 1.4826
+    p999, p9999 = np.percentile(a, [99.9, 99.99])
+    return dict(median=med, mean=mean, excess=mean - med, p999=float(p999), p9999=float(p9999),
+                robust_sd=mad, bright_fraction=float(np.mean(a > med + bright_sigma * mad)))
+
+
+def field_decline_summary(flux: np.ndarray, background: np.ndarray, *, frame_time_seconds: float,
+                          window_frames: int = 50, late_start_seconds: float = 10.0,
+                          late_end_seconds: float = 11.0,
+                          numb_photo_bleach: int = 100) -> dict:
+    """Model-free readings of a field flux curve: window means, their ratios, and the effective
+    per-interval loss parameter each ratio implies.
+
+    Three averaging windows: the opening ``window_frames`` frames, the closing ``window_frames``
+    frames, and a mid-recording window spanning ``[late_start_seconds, late_end_seconds)``. For
+    identical, independent dyes of stationary mean brightness the expected flux falls as
+    ``(1 - p) ** (t / numb_photo_bleach)``, so a ratio ``F_b / F_a`` between two window centers
+    separated by ``d`` frames implies ``p = 1 - (F_b / F_a) ** (numb_photo_bleach / d)``: the
+    whole-recording rate from the opening and closing windows, and the late-phase rate from the
+    mid and closing windows, which the opening transient of the recordings does not enter. Both
+    are computed on the flux as given (``raw``) and on the flux divided frame by frame by the
+    background level and rescaled to the mean level (``normalized``), which removes a decline the
+    illumination or the floor share with the emitters. A ratio is ``nan`` where a window mean is
+    not positive. Nothing here is fitted.
+
+    Args:
+        flux: ``(n_frames,)`` field flux curve (`frame_flux_curve`).
+        background: ``(n_frames,)`` per-frame background level (same source).
+        frame_time_seconds: frame interval.
+        window_frames: frames averaged in the opening and the closing window.
+        late_start_seconds, late_end_seconds: the mid-recording window.
+        numb_photo_bleach: the fixed reference interval of the parameter (100 frames).
+
+    Returns:
+        ``dict`` with ``window_frames``, the window centers in frames (``center_open``,
+        ``center_mid``, ``center_close``), the window means of the raw flux (``open``, ``mid``,
+        ``close``), of the normalized flux (``open_normalized``, ...), of the background
+        (``background_open``, ``background_close``), ``background_ratio``, the flux ratios
+        (``ratio_whole``, ``ratio_late``, ``ratio_whole_normalized``, ``ratio_late_normalized``)
+        and the implied parameters (``p_whole``, ``p_late``, ``p_whole_normalized``,
+        ``p_late_normalized``).
+    """
+    f = np.asarray(flux, dtype=np.float64)
+    b = np.asarray(background, dtype=np.float64)
+    n = f.shape[0]
+    if f.ndim != 1 or b.shape != f.shape:
+        raise ValueError(f"flux {f.shape} and background {b.shape} must be one-dimensional and equal.")
+    w = int(window_frames)
+    if not 1 <= w <= n // 2:
+        raise ValueError(f"window_frames={w} must lie in [1, {n // 2}] for {n} frames.")
+    s = int(round(late_start_seconds / frame_time_seconds))
+    e = int(round(late_end_seconds / frame_time_seconds))
+    if not 0 <= s < e <= n - w:
+        raise ValueError(f"the mid window [{s}, {e}) must lie before the closing window of {n} frames.")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        fn = np.where(b > 0, f / b, np.nan) * float(np.mean(b[b > 0])) if np.any(b > 0) else np.full_like(f, np.nan)
+
+    def means(x):
+        return float(np.mean(x[:w])), float(np.mean(x[s:e])), float(np.mean(x[-w:]))
+
+    c_open, c_mid, c_close = (w - 1) / 2.0, (s + e - 1) / 2.0, n - 1 - (w - 1) / 2.0
+
+    def implied(ratio, d):
+        return float(1.0 - ratio ** (float(numb_photo_bleach) / d)) if np.isfinite(ratio) and ratio > 0 else float("nan")
+
+    def ratio(num, den):
+        return float(num / den) if np.isfinite(num) and np.isfinite(den) and num > 0 and den > 0 else float("nan")
+
+    o, m, c = means(f)
+    on, mn, cn = means(fn)
+    out = dict(window_frames=w, center_open=c_open, center_mid=c_mid, center_close=c_close,
+               open=o, mid=m, close=c, open_normalized=on, mid_normalized=mn, close_normalized=cn,
+               background_open=float(np.mean(b[:w])), background_close=float(np.mean(b[-w:])))
+    out["background_ratio"] = ratio(out["background_close"], out["background_open"])
+    out["ratio_whole"], out["ratio_late"] = ratio(c, o), ratio(c, m)
+    out["ratio_whole_normalized"], out["ratio_late_normalized"] = ratio(cn, on), ratio(cn, mn)
+    out["p_whole"] = implied(out["ratio_whole"], c_close - c_open)
+    out["p_late"] = implied(out["ratio_late"], c_close - c_mid)
+    out["p_whole_normalized"] = implied(out["ratio_whole_normalized"], c_close - c_open)
+    out["p_late_normalized"] = implied(out["ratio_late_normalized"], c_close - c_mid)
+    return out
+
+
+def field_decline_by_window(flux: np.ndarray, *, frame_time_seconds: float,
+                            durations_seconds=(1.0, 2.0, 5.0, 10.0, 20.0),
+                            sub_window_fraction: float = 0.25,
+                            numb_photo_bleach: int = 100) -> dict:
+    """The local single rate on NON-OVERLAPPING windows of each duration, per recording and window.
+
+    Each recording is tiled into ``floor(n_frames / window_frames)`` windows of the duration, the way
+    the Experiment stage tiles a recording into model-length windows, and within every window the
+    single rate that takes the mean of its opening quarter to the mean of its closing quarter is
+    ``p = 1 - (F_close / F_open) ** (numb_photo_bleach / d)``, ``d`` the separation of the two
+    sub-window centers in frames. So a 20 s recording yields 20 values at 1 s, 10 at 2 s, 4 at 5 s,
+    2 at 10 s and 1 at 20 s, each a reading of the decline inside that window alone; pooled over the
+    windows of a duration they describe the loss a renderer at one rate would have to reproduce in a
+    video of that length cut from anywhere in a recording, and by window position they show how the
+    local rate changes along the recording. No fit. A duration longer than the recording is skipped.
+
+    Args:
+        flux: ``(n_recordings, n_frames)`` field flux curves.
+        frame_time_seconds: frame interval.
+        durations_seconds: window lengths to tile with.
+        sub_window_fraction: the share of a window averaged at its opening and at its closing.
+        numb_photo_bleach: the fixed reference interval of the parameter (100 frames).
+
+    Returns:
+        ``dict`` keyed by duration (seconds, as given) with ``window_frames``, ``windows_per_recording``,
+        ``sub_window_frames``, ``starts`` (``(k,)`` first frame of each window) and ``rate``
+        (``(n_recordings, k)``; ``nan`` where a sub-window mean is not positive).
+    """
+    f = np.asarray(flux, dtype=np.float64)
+    if f.ndim != 2:
+        raise ValueError(f"flux has shape {f.shape}; expected (n_recordings, n_frames).")
+    n = f.shape[1]
+    out = {}
+    for T in durations_seconds:
+        nf = int(round(float(T) / float(frame_time_seconds)))
+        k = n // nf if nf > 0 else 0
+        if k == 0:
+            continue
+        w = max(2, int(round(nf * float(sub_window_fraction))))
+        d = float(nf - w)
+        starts = np.arange(k) * nf
+        rate = np.full((f.shape[0], k), np.nan)
+        for j, a in enumerate(starts):
+            o = f[:, a:a + w].mean(axis=1)
+            c = f[:, a + nf - w:a + nf].mean(axis=1)
+            good = (o > 0) & (c > 0) & np.isfinite(o) & np.isfinite(c)
+            rate[good, j] = 1.0 - (c[good] / o[good]) ** (float(numb_photo_bleach) / d)
+        out[T] = dict(window_frames=nf, windows_per_recording=k, sub_window_frames=w, starts=starts, rate=rate)
+    return out
 
 
 # =============================================================================

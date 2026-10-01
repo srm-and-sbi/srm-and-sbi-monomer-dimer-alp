@@ -151,20 +151,23 @@ def read_recording(tif_path):
     return raw
 
 
-def read_cell_chunks(tif_path, n_frames, step_frames):
+def read_cell_chunks(tif_path, n_frames, step_frames, *, domain="stored"):
     """Read one recording and cut it into model-length windows.
 
-    Reads the frames through :func:`read_recording`, converts the 16-bit raw frames to 8-bit (the
-    model's input domain), and returns the list of ``(n_frames, H, W)`` uint8 windows stepped by
-    ``step_frames`` (``1 s`` step -> maximal overlap; a step equal to the window -> non-overlapping
-    tiling). The number of windows equals :func:`chunk_count` of the inspected frame count.
-    Identical windowing in every stage.
+    Reads the frames through :func:`read_recording` and, under ``domain="stored"`` (the default
+    and the model's input domain), converts the 16-bit raw frames to 8-bit; ``domain="raw"``
+    keeps the 16-bit values, for a direct estimator that reads the raw frames. Returns the list of
+    ``(n_frames, H, W)`` windows stepped by ``step_frames`` (``1 s`` step -> maximal overlap; a
+    step equal to the window -> non-overlapping tiling). The number of windows equals
+    :func:`chunk_count` of the inspected frame count. Identical windowing in every stage.
     """
+    if domain not in ("stored", "raw"):
+        raise ValueError(f"domain={domain!r}; expected 'stored' or 'raw'.")
     raw = read_recording(tif_path)
-    video8 = convert_video_dtype(raw, bits_from=16, bits_to=8)
-    chunks = [video8[start:start + n_frames]
-              for start in range(0, video8.shape[0] - n_frames + 1, step_frames)]
-    assert len(chunks) == chunk_count(video8.shape[0], n_frames, step_frames)
+    video = convert_video_dtype(raw, bits_from=16, bits_to=8) if domain == "stored" else raw
+    chunks = [video[start:start + n_frames]
+              for start in range(0, video.shape[0] - n_frames + 1, step_frames)]
+    assert len(chunks) == chunk_count(video.shape[0], n_frames, step_frames)
     return chunks
 
 

@@ -24,6 +24,19 @@ coordinates of the detector prior and of the dex accuracy rules; the second,
 `figures/recovery_<key>_linear.png`, is in absolute values, where the lower end of a log-uniform prior
 is a narrow sliver. Both say the same thing; a reader uses the one whose scale matches the question.
 
+For a fluorescence-loss **experiment** run folder (`direct_fluorescence_loss_experiment.npz`) the utility
+redraws the field-decline figure instead, through `direct_acceptance.field_decline_figure`: every recording's
+background-subtracted field flux divided by its opening-window mean with the median over recordings, and over
+it the ideal single-rate decline `(1 − p)^(t/100)` for the comparison values the run recorded (by default
+the working bleaching value 0.05 and its late-time variant 0.03 of `DETECTOR_WORKFLOW.md` §7.6); the same for the
+dimmest and the brightest third of the recordings by opening brightness; the per-frame background level; and
+the fitted whole-window values with the scenarios marked. The overlay is what shows at a glance where a
+one-rate renderer at those values runs against the recordings. It also redraws `figures/window_rates_<condition>.png`
+(`direct_acceptance.window_rate_figure`, from `direct_imaging_estimates.field_decline_by_window` on the saved
+curves): the local single rate on non-overlapping windows of every documented duration against the window's
+position along the recording, one series per duration with the median over recordings and the interquartile
+band, each series' pooled median as a thin horizontal line, and the same scenarios as reference lines.
+
 ## How to run
 
 ```

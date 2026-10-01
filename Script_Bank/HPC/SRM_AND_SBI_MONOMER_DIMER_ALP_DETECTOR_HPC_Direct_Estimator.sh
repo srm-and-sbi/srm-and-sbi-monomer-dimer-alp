@@ -18,7 +18,11 @@
 #
 # Overridable via --export:
 #   ESTIMATOR   PSF_Width | Flicker_Rate | Fluorescence_Loss | Flicker_Mismatch   (required)
-#   CONDITION   FAB | INLB (tier runs)          TOTAL_TIME  recording length in s (default 2.0)
+#   MODE        tier (default) | experiment -- experiment runs the utility's --experiment path on the
+#               condition's experimental recordings under <data_bank_root>/<experiment_subdir>: no
+#               TASKS, no PURPOSE (no ground truth, no verdict); EXTRA carries its flags, e.g.
+#               EXTRA="--domain raw --lambda-rate 5"
+#   CONDITION   FAB | INLB                      TOTAL_TIME  recording length in s (default 2.0)
 #   TASKS       EVAL task indices, e.g. "2 3 4 5 6 7 8 9" (tier runs)
 #   MAX_VIDEOS  cap on recordings scored (default: every recording of TASKS)
 #   EXPECT      recordings expected per task (default 1000; the 20 s tier holds 100)
@@ -36,6 +40,12 @@
 #          Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh
 # The job name mirrors the run folder the utility writes
 # (<alias>_<CONDITION>_<timing>_Direct_<ESTIMATOR>_<DEV|VERDICT>[_<RUN_SUFFIX>]).
+# Example (the fluorescence-loss estimator on the MET-FAB recordings, raw 16-bit domain):
+#   sbatch --partition=batch --account=chkf10 \
+#          --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW \
+#          --export=ALL,REPO=$PWD,ESTIMATOR=Fluorescence_Loss,MODE=experiment,CONDITION=FAB,TOTAL_TIME=20.0,RUN_SUFFIX=RAW,CODE_COMMIT=<commit>,EXTRA="--domain raw" \
+#          Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh
+# (folder <alias>_<CONDITION>_<timing>_Direct_<ESTIMATOR>_Experiment[_<RUN_SUFFIX>]).
 # -----------------------------------------------------------------------------
 #SBATCH --job-name=SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator
 #SBATCH --partition=YOUR_PARTITION
@@ -84,8 +94,16 @@ WORKERS="${WORKERS:-48}"
 # ABSOLUTE script path: hpc_local.env may cd elsewhere after this script's own cd.
 PY="$REPO/Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_${ESTIMATOR}.py"
 
+MODE="${MODE:-tier}"
+case "$MODE" in tier|experiment) ;; *) echo "FATAL: MODE='${MODE}' (use tier|experiment)." >&2; exit 1;; esac
 ARGS=( --total-time-seconds "$TOTAL_TIME" --workers "$WORKERS" )
-if [ "$ESTIMATOR" != "Flicker_Mismatch" ]; then
+if [ "$MODE" = "experiment" ]; then
+    # The utility's --experiment path: the condition's recordings, no EVAL task, no purpose token.
+    [ "$ESTIMATOR" != "Flicker_Mismatch" ] || { echo "FATAL: the mismatch study has no experiment mode." >&2; exit 1; }
+    case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
+    [ -z "${TASKS:-}" ] && [ -z "${PURPOSE:-}" ] || { echo "FATAL: MODE=experiment takes no TASKS and no PURPOSE." >&2; exit 1; }
+    ARGS+=( --experiment --condition "$CONDITION" )
+elif [ "$ESTIMATOR" != "Flicker_Mismatch" ]; then
     case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
     [ -n "${TASKS:-}" ] || { echo "FATAL: TASKS is required for a tier run (e.g. TASKS=\"2 3\")." >&2; exit 1; }
     # shellcheck disable=SC2206
@@ -95,7 +113,7 @@ if [ "$ESTIMATOR" != "Flicker_Mismatch" ]; then
 fi
 [ -n "${RUN_SUFFIX:-}" ] && ARGS+=( --run-suffix "$RUN_SUFFIX" )
 
-echo "=== Direct_${ESTIMATOR} | condition=${CONDITION:-n/a} time=${TOTAL_TIME}s tasks=${TASKS:-n/a} purpose=${PURPOSE:-n/a} workers=${WORKERS} suffix=${RUN_SUFFIX:-none} commit=${CODE_COMMIT:-undeclared} | node $(hostname) | $(date -u +%FT%TZ) ==="
+echo "=== Direct_${ESTIMATOR} | mode=${MODE} condition=${CONDITION:-n/a} time=${TOTAL_TIME}s tasks=${TASKS:-n/a} purpose=${PURPOSE:-n/a} workers=${WORKERS} suffix=${RUN_SUFFIX:-none} extra=${EXTRA:-none} commit=${CODE_COMMIT:-undeclared} | node $(hostname) | $(date -u +%FT%TZ) ==="
 echo "    version: $(grep -m1 '^version' "$REPO/pyproject.toml")"
 # Exit status of the utilities: 0 nothing failed, 1 a FAIL verdict, 2 insufficient evidence only,
 # 3 the implementation changed during the run (results invalid for acceptance). Python also exits 1

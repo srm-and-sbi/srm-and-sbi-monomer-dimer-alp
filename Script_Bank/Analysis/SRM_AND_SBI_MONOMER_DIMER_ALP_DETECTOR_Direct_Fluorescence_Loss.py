@@ -66,20 +66,32 @@ Usage (from the repo root):
                                             # reserved EVAL tasks of the tier in full (sec. 9.6)
     ... --selftest --selftest-frames 1000   # in-memory recordings at known bleaching rates
     ... --experiment --condition FAB --total-time-seconds 20.0   # the EXPERIMENTAL recordings (below)
+    ... --experiment --domain raw ...       # the same, on the 16-bit raw frames
     ... --dry-run                           # resolve settings and apply every refusal; read nothing
 
-The experimental input path (--experiment) applies the same arithmetic to the raw MET recordings
-of a condition: every recording is read as the Experiment stage reads it (16-bit raw to the stored
-8-bit domain), cut into windows of --total-time-seconds (one window per recording at 20 s), the
-camera taken from the section 6.3 acquisition values, and the flux curve formed over the WHOLE
-field with the per-frame median as the background level (recorded in the outputs; no per-frame
-normalization). The recordings have no ground truth, so no acceptance verdict is reached and no
-purpose token applies. Per recording it saves the flux and background curves, the early-to-late
-fractional loss between the centers of the opening and closing averaging windows, the fitted
-effective loss parameter with its diagnostics, and the eligibility outcome; the report shows the
-distribution over recordings and the full curves, discarding no interval. The fitted parameter is
-chosen to approximate the observed fluorescence decline under the renderer; it is not an
-independently identified molecular photobleaching probability (DETECTOR_WORKFLOW.md sec. 7.6).
+The experimental input path (--experiment) applies the same arithmetic to the MET recordings of a
+condition: every recording is windowed as the Experiment stage windows it (windows of
+--total-time-seconds; one window per recording at 20 s), the camera taken from the section 6.3
+acquisition values, and the flux curve formed over the WHOLE field with the per-frame median as the
+background level (recorded in the outputs; no per-frame normalization). --domain selects the pixel
+domain: 'stored' (the default) converts the 16-bit frames to the stored 8-bit domain the neural
+estimator reads, where one level is 257 ADU and the per-frame median is quantized to whole levels;
+'raw' reads the 16-bit frames as they are, where one level is one ADU. On the MET-FAB recordings the
+floor falls by about 9 % over 20 s, so in the stored domain the median steps between levels during
+the recording and each step moves the field sum by more than the entire emitter signal (the
+stored-domain run of 2026-09-25 fitted that stepping floor); in the raw domain the step is 257 times
+smaller. The recordings have no ground truth, so no acceptance verdict is reached and no purpose
+token applies. Per recording it saves the flux and background curves, the early-to-late fractional
+loss between the centers of the opening and closing averaging windows, the fitted effective loss
+parameter with its diagnostics and the eligibility outcome, two disclosed variants of the same fit
+(the opening of the window left out, --exclude-opening-seconds; the flux divided by the per-frame
+background level), the model-free decline readings (window ratios and the per-interval loss each
+implies, whole recording and late phase, raw and background-normalized) and the pixel statistics of
+the opening and closing windows (background level, emitter excess, bright tail, bright-pixel area);
+the report shows the distributions over recordings and the full curves, discarding no interval
+from the estimator's value. The fitted parameter is chosen to approximate the observed fluorescence
+decline under the renderer; it is not an independently identified molecular photobleaching
+probability (DETECTOR_WORKFLOW.md sec. 7.6).
 
 Outputs (analysis results are data and live in the Data_Bank, never the codebase):
     <data_bank_root>/Posit/<alias>_<CONDITION>_<timing>_Direct_Fluorescence_Loss_<DEV|VERDICT>[_<suffix>]/
@@ -159,41 +171,54 @@ def _scope_center() -> dict:
             for e in det.DETECTOR_NUISANCE_SCOPE}
 
 
+def _outcome(prob=np.nan, se=np.nan, n_ap=-1, n_eff=np.nan, snr=np.nan, se10=np.nan,
+             outcome="failed", reason=None, low=np.nan, high=np.nan):
+    return dict(prob_photo_bleach=prob, prob_se=se, n_apertures=n_ap, n_eff=n_eff,
+                decay_snr=snr, se_log10=se10, outcome=outcome, reason=reason,
+                low=low, high=high)
+
+
 def estimate_one(video_levels, scope: dict, *, lambda_rate=None,
                  n_sigma: float = 4.0, detect_frames: int = 5,
-                 observable: str = "field") -> dict:
-    """Estimate ``prob_photo_bleach`` from one stored video.
+                 observable: str = "field", domain: str = "stored") -> dict:
+    """Estimate ``prob_photo_bleach`` from one video.
 
     ``observable`` selects how the flux curve is formed. ``"field"`` sums the whole frame and
     removes the background by a per-frame quantile; it is immune to emitter motion and is the
     default. ``"apertures"`` sums inside apertures pinned to the opening frames; it is kept
     only for diagnosis, because on diffusing emitters the spots walk out of their apertures
-    and the resulting decay is dominated by motion rather than bleaching.
+    and the resulting decay is dominated by motion rather than bleaching. ``domain`` names the
+    pixel domain of ``video_levels``: ``"stored"`` (8-bit levels, the synthetic tiers and the
+    neural estimator's input) or ``"raw"`` (16-bit ADU of an experimental recording; field
+    observable only).
     """
-    def _out(prob=np.nan, se=np.nan, n_ap=-1, n_eff=np.nan, snr=np.nan, se10=np.nan,
-             outcome="failed", reason=None, low=np.nan, high=np.nan):
-        return dict(prob_photo_bleach=prob, prob_se=se, n_apertures=n_ap, n_eff=n_eff,
-                    decay_snr=snr, se_log10=se10, outcome=outcome, reason=reason,
-                    low=low, high=high)
-
     if observable == "apertures":
+        if domain != "stored":
+            raise ValueError("the apertures observable reads stored 8-bit levels only")
         curve = die.spot_flux_curve(video_levels, scope, n_sigma=n_sigma,
                                     detect_frames=detect_frames)
         n_ap = curve["n_apertures"]
         if n_ap == 0:
-            return _out(n_ap=0, reason="no_apertures")
+            return _outcome(n_ap=0, reason="no_apertures")
     else:
-        curve = die.frame_flux_curve(video_levels)
+        curve = die.frame_flux_curve(video_levels, domain=domain)
         n_ap = -1
     lam = LAMBDA_RATE_DEFAULT if lambda_rate is None else float(lambda_rate)
     fit = die.fit_fluorescence_loss(
         curve["flux"], lambda_rate=lam,
         frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)
+    return classify_fit(fit, n_ap)
+
+
+def classify_fit(fit: dict, n_ap: int = -1) -> dict:
+    """The per-recording outcome of one fluorescence-loss fit under the frozen eligibility rule:
+    ``failed`` with a reason code, or a valid estimate classed ``usable`` or ``uninformative``
+    by two observable diagnostics, with its nominal 90 % range. Reads no true value."""
     prob, se = fit["prob_photo_bleach"], fit["prob_se"]
     if not fit["success"]:
-        return _out(prob, se, n_ap, fit["n_eff"], reason="fit_failed")
+        return _outcome(prob, se, n_ap, fit["n_eff"], reason="fit_failed")
     if not (np.isfinite(prob) and prob > 0):
-        return _out(prob, se, n_ap, fit["n_eff"], reason="nonpositive_estimate")
+        return _outcome(prob, se, n_ap, fit["n_eff"], reason="nonpositive_estimate")
     # Three outcomes (sec. 9.6): a VALID estimate is classed usable or uninformative by two
     # observable diagnostics -- the visibility of the fitted decay above the residual scatter,
     # and the fit's own standard error on log10 p. Neither reads the true value.
@@ -212,8 +237,8 @@ def estimate_one(video_levels, scope: dict, *, lambda_rate=None,
         high = 10.0 ** min(log_c + z * se10, 300.0)
     else:
         low, high = np.nan, np.nan
-    return _out(prob, se, n_ap, fit["n_eff"], snr, se10,
-                outcome="usable" if usable else "uninformative", reason=None, low=low, high=high)
+    return _outcome(prob, se, n_ap, fit["n_eff"], snr, se10,
+                    outcome="usable" if usable else "uninformative", reason=None, low=low, high=high)
 
 
 _STORE_CACHE: dict = {}
@@ -284,44 +309,100 @@ def run_selftest(n_subunits: int, n_frames: int, n_sigma: float, detect_frames: 
 
 BACKGROUND_QUANTILE = 0.5      # the kernel's per-frame background level (frame_flux_curve default)
 EARLY_LATE_WINDOW_FRAMES = 50  # opening and closing averaging windows of the fractional-loss measure
+LATE_WINDOW_SECONDS = (10.0, 11.0)  # the mid-recording window of the model-free late-phase rate
+EXCLUDE_OPENING_SECONDS = 2.0  # the disclosed fit variant that leaves out the opening of each window
+# Single-rate scenarios drawn over the measured decline in the experiment figure: the working bleaching
+# value and its stronger-loss variant of DETECTOR_WORKFLOW.md sec. 7.6 (comparison values, not targets).
+COMPARE_VALUES_DEFAULT = (0.05, 0.03)
+# Window lengths of the local single-rate table: the documented durations of the duration-general pipeline.
+WINDOW_DURATIONS_DEFAULT = (1.0, 2.0, 5.0, 10.0, 20.0)
+_FAILED_FIT = dict(prob_photo_bleach=np.nan, prob_se=np.nan, amplitude=np.nan, offset=np.nan,
+                   rate_per_frame=np.nan, n_eff=np.nan, success=False, resid_sd=np.nan, n_frames=0)
+_DECLINE_KEYS = ("background_open", "background_close", "background_ratio", "open", "mid", "close",
+                 "ratio_whole", "ratio_late", "ratio_whole_normalized", "ratio_late_normalized",
+                 "p_whole", "p_late", "p_whole_normalized", "p_late_normalized")
+_STATS_KEYS = ("median", "excess", "p999", "p9999", "bright_fraction")
 
 
 def _worker_video(job):
-    """One in-memory window: the estimate, the flux and background curves, the early/late measure."""
-    video, cell, chunk, scope, lam, opts, w = job
+    """One in-memory window: the estimate, the flux and background curves, the early/late measure,
+    the disclosed fit variants, the model-free decline readings and the opening/closing pixel
+    statistics."""
+    video, cell, chunk, scope, lam, opts, w, domain, exclude_frames = job
     video = np.asarray(video)
-    out = estimate_one(video, scope, lambda_rate=lam, **opts)
-    curve = die.frame_flux_curve(video, background_quantile=BACKGROUND_QUANTILE)
+    dt = PARAMETERS.simulation.timing.frame_time_seconds
+    lam_v = LAMBDA_RATE_DEFAULT if lam is None else float(lam)
+    out = estimate_one(video, scope, lambda_rate=lam, domain=domain, **opts)
+    curve = die.frame_flux_curve(video, background_quantile=BACKGROUND_QUANTILE, domain=domain)
     flux = np.asarray(curve["flux"], dtype=float)
-    fit = die.fit_fluorescence_loss(
-        flux, lambda_rate=(LAMBDA_RATE_DEFAULT if lam is None else float(lam)),
-        frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)
+    background = np.asarray(curve["background"], dtype=float)
+    fit = die.fit_fluorescence_loss(flux, lambda_rate=lam_v, frame_time_seconds=dt)
     n = flux.shape[0]
     w = int(min(max(w, 1), n // 2))
     early, late = float(flux[:w].mean()), float(flux[-w:].mean())
-    out.update(cell=int(cell), chunk=int(chunk), flux=flux,
-               background=np.asarray(curve["background"], dtype=float),
+    # Two disclosed variants of the same fit: the opening of the window left out (the recordings'
+    # fast initial decline does not enter), and the flux divided frame by frame by the background
+    # level and rescaled to its mean (a decline the illumination or the floor share with the
+    # emitters is removed). Neither is the estimator's value; both are reported beside it.
+    k = int(min(max(exclude_frames, 0), max(n - 20, 0)))
+    excluded = classify_fit(die.fit_fluorescence_loss(flux[k:], lambda_rate=lam_v, frame_time_seconds=dt))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        positive = background > 0
+        norm = (np.where(positive, flux / background, np.nan) * float(np.mean(background[positive]))
+                if positive.any() else np.full_like(flux, np.nan))
+    normalized = classify_fit(die.fit_fluorescence_loss(norm, lambda_rate=lam_v, frame_time_seconds=dt)
+                              if np.all(np.isfinite(norm)) else dict(_FAILED_FIT))
+    try:
+        decline = die.field_decline_summary(flux, background, frame_time_seconds=dt, window_frames=w,
+                                            late_start_seconds=LATE_WINDOW_SECONDS[0],
+                                            late_end_seconds=LATE_WINDOW_SECONDS[1])
+    except ValueError:            # a window too short for the mid-recording window
+        decline = {key: np.nan for key in _DECLINE_KEYS}
+    stats_open = die.window_pixel_statistics(video[:w])
+    stats_close = die.window_pixel_statistics(video[-w:])
+    out.update(cell=int(cell), chunk=int(chunk), flux=flux, background=background,
                n_pixels=int(curve["n_pixels"]), early_mean=early, late_mean=late,
                fractional_loss=(1.0 - late / early) if early > 0 else np.nan,
                center_separation_frames=float(n - w), window_frames=w,
                amplitude=float(fit["amplitude"]), offset=float(fit["offset"]),
-               rate_per_frame=float(fit["rate_per_frame"]), resid_sd=float(fit["resid_sd"]))
+               rate_per_frame=float(fit["rate_per_frame"]), resid_sd=float(fit["resid_sd"]),
+               excluded_frames=k, estimate_excluded=excluded["prob_photo_bleach"],
+               outcome_excluded=excluded["outcome"], estimate_normalized=normalized["prob_photo_bleach"],
+               outcome_normalized=normalized["outcome"],
+               decline={key: float(decline[key]) for key in _DECLINE_KEYS},
+               stats_open={key: float(stats_open[key]) for key in _STATS_KEYS},
+               stats_close={key: float(stats_close[key]) for key in _STATS_KEYS})
     return out
+
+
+def _quantile_row(values, *, physical=True):
+    """Median (physical), IQR and central 90 % of a set of log10 values, as table cells."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return ["0", "--", "--", "--"]
+    q05, q25, q50, q75, q95 = np.percentile(v, [5, 25, 50, 75, 95])
+    mid = f"{q50:+.3f} ({10 ** q50:.4f})" if physical else f"{q50:.3f}"
+    return [str(int(v.size)), mid, f"[{q25:+.3f}, {q75:+.3f}]", f"[{q05:+.3f}, {q95:+.3f}]"]
 
 
 def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, startup_code):
     """Apply the estimator to the experimental recordings of ``--condition``.
 
-    Reads every recording the way the Experiment stage does (``read_cell_chunks``: 16-bit raw to
-    the stored 8-bit domain, windows of the model length stepped by ``--chunk-step-seconds``, one
-    window per recording when the window is the recording), takes the camera from the section 6.3
-    acquisition values, forms the flux curve over the whole field with the per-frame median as the
-    background level, and fits the same model as the tier runs. No ground truth, so no acceptance
-    verdict; the outputs carry every curve, the early-to-late fractional loss, the fit and its
-    diagnostics, and the eligibility outcome per recording. Nothing is pooled by the estimator.
+    Reads every recording the way the Experiment stage does (``read_cell_chunks``: windows of the
+    model length stepped by ``--chunk-step-seconds``, one window per recording when the window is
+    the recording), in the stored 8-bit domain or, under ``--domain raw``, on the 16-bit frames;
+    takes the camera from the section 6.3 acquisition values, forms the flux curve over the whole
+    field with the per-frame median as the background level, and fits the same model as the tier
+    runs. No ground truth, so no acceptance verdict; the outputs carry every curve, the
+    early-to-late fractional loss, the fit and its diagnostics, the eligibility outcome per
+    recording, two disclosed variants of the fit, the model-free decline readings and the pixel
+    statistics of the opening and closing windows. Nothing is pooled by the estimator.
     """
     from matplotlib.figure import Figure
 
+    domain = args.domain
+    exclude_frames = int(round(args.exclude_opening_seconds / timing.frame_time_seconds))
     span = args.experiment_span_seconds
     experiment_dir = (pathlib.Path(args.experiment_dir) if args.experiment_dir
                       else data_bank_root / paths.experiment_subdir)
@@ -337,9 +418,15 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
     w = int(args.early_late_window_frames)
     reporter.checkpoint("experiment", condition=args.condition, cells=len(cells), span_s=span,
                         window_s=timing.total_time_seconds, step_s=step_seconds,
-                        observable=args.observable)
+                        observable=args.observable, domain=domain)
     reporter.check("experimental recordings found", len(cells) > 0,
                    f"{len(cells)} recordings under {experiment_dir}")
+    reporter.stat("input domain", domain,
+                  note=("the 16-bit raw frames (one level = 1 ADU); the per-frame median steps by one ADU "
+                        "where the stored domain's steps by 257"
+                        if domain == "raw" else
+                        "the stored 8-bit domain, the neural estimator's input (one level = 257 ADU); the "
+                        "per-frame median is quantized to that level"))
     for k, v in scope.items():
         reporter.stat(f"camera {k}", float(v),
                       note="section 6.3 acquisition value (box center), supplied, not fitted")
@@ -357,8 +444,8 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
         if not tif.exists():
             reporter.check(f"recording cell {cell}", False, f"missing: {tif.name}", fatal=False)
             continue
-        for ci, win in enumerate(read_cell_chunks(tif, n_frames, step_frames)):
-            jobs.append((win, cell, ci, scope, args.lambda_rate, opts, w))
+        for ci, win in enumerate(read_cell_chunks(tif, n_frames, step_frames, domain=domain)):
+            jobs.append((win, cell, ci, scope, args.lambda_rate, opts, w, domain, exclude_frames))
             meta.append((cell, ci))
     reporter.stat("windows queued", len(jobs), note="(cell, window) pairs the estimator reads")
     if not jobs:
@@ -433,37 +520,119 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
                  "recording, background-subtracted per frame over the whole field. A model-free "
                  "reading of the same curves the fit uses; positive = decline.")
 
-    # ---- figure: every curve, normalized to its opening mean for display only ----------------
-    fig = Figure(figsize=(9, 4.2), layout="constrained")
-    ax = fig.add_subplot(1, 2, 1)
-    t = np.arange(flux.shape[1]) * timing.frame_time_seconds
-    e = np.asarray([o["early_mean"] for o in out])
-    ok = np.isfinite(e) & (e > 0)
-    norm = flux[ok] / e[ok][:, None]
-    for row in norm:
-        ax.plot(t, row, color="#4C72B0", alpha=0.15, linewidth=0.6)
-    if ok.any():
-        ax.plot(t, np.median(norm, axis=0), color="#C44E52", linewidth=1.8, label="median over recordings")
-    ax.axhline(1.0, color="grey", linewidth=0.6, linestyle="--")
-    ax.set_xlabel("time (s)"); ax.set_ylabel("field flux / opening-window mean (display only)")
-    ax.set_title(f"MET-{args.condition}: background-subtracted field flux, {int(ok.sum())} windows", fontsize=9)
-    ax.legend(fontsize=7)
-    ax2 = fig.add_subplot(1, 2, 2)
-    if valid.any():
-        ax2.hist(np.log10(estimate[valid]), bins=30, color="#4C72B0", alpha=0.85, label="valid")
-    if usable.any():
-        ax2.hist(np.log10(estimate[usable]), bins=30, color="#55A868", alpha=0.85, label="usable")
-    ax2.axvline(lo_p, color="#C44E52", linestyle="--", linewidth=0.8)
-    ax2.axvline(hi_p, color="#C44E52", linestyle="--", linewidth=0.8)
-    ax2.set_xlabel("log10 fitted effective loss parameter"); ax2.set_ylabel("recordings")
-    ax2.set_title("fitted values (red dashes = prior box)", fontsize=9)
-    ax2.legend(fontsize=7)
-    reporter.save_figure(
-        f"field_flux_curves_{args.condition}", fig,
-        caption="Left: every recording's whole-field, background-subtracted flux curve divided by "
-                "its opening-window mean (display normalization only; the fit and the fractional "
-                "loss use the raw curves saved in the arrays), with the median over recordings. "
-                "Right: the distribution of the fitted effective loss parameter.")
+    # ---- the same fit, two disclosed variants ------------------------------------------------
+    est_x, out_x = col("estimate_excluded"), np.asarray([o["outcome_excluded"] for o in out])
+    est_n, out_n = col("estimate_normalized"), np.asarray([o["outcome_normalized"] for o in out])
+    k_excl = int(np.median(col("excluded_frames", np.int64))) if out else exclude_frames
+
+    def variant_rows(label, est, outc):
+        v = np.isfinite(est) & (est > 0) & (outc != "failed")
+        u = v & (outc == "usable")
+        return [[label, str(int(v.sum())), str(int(u.sum()))] + _quantile_row(np.log10(est[u]))[1:]]
+    reporter.table(
+        "The same fit, disclosed variants (log10 prob_photo_bleach per 100-frame interval, usable fits)",
+        ["variant", "valid", "usable", "median (physical)", "IQR", "central 90 %"],
+        variant_rows("whole window (the estimator's value, above)", estimate, outcome)
+        + variant_rows(f"opening excluded: frames {k_excl} to {n_frames - 1} "
+                       f"({k_excl * timing.frame_time_seconds:g} s left out)", est_x, out_x)
+        + variant_rows("flux divided by the per-frame background level (rescaled to its mean)", est_n, out_n),
+        note="The estimator's value is the whole-window fit. The variants are reported, not selected: "
+             "leaving the opening out removes a fast initial decline from the fit, and dividing by the "
+             "background level removes a decline the illumination or the floor share with the emitters. "
+             "The excluded interval is disclosed here and in the arrays (excluded_frames).")
+
+    # ---- model-free readings: window ratios and the loss parameter each implies ---------------
+    dec = {key: np.asarray([o["decline"][key] for o in out], dtype=float) for key in _DECLINE_KEYS}
+    sep_whole = float(np.median(col("center_separation_frames")))
+    rows_mf = []
+    for label, key in (("whole recording, raw flux (opening -> closing window)", "p_whole"),
+                       ("whole recording, flux / background level", "p_whole_normalized"),
+                       (f"late phase, raw flux ({LATE_WINDOW_SECONDS[0]:g}-{LATE_WINDOW_SECONDS[1]:g} s window -> closing window)", "p_late"),
+                       ("late phase, flux / background level", "p_late_normalized")):
+        v = dec[key]
+        v = v[np.isfinite(v)]
+        if v.size:
+            q05, q25, q50, q75, q95 = np.percentile(v, [5, 25, 50, 75, 95])
+            rows_mf.append([label, str(int(v.size)), f"{q50:.4f}", f"[{q25:.4f}, {q75:.4f}]", f"[{q05:.4f}, {q95:.4f}]"])
+        else:
+            rows_mf.append([label, "0", "--", "--", "--"])
+    reporter.table(
+        "Model-free effective loss parameter per 100-frame interval (per recording; medians over recordings)",
+        ["reading", "n", "median", "IQR", "central 90 %"], rows_mf,
+        note=f"p = 1 - (F_b / F_a) ** (100 / d) for two window means separated by d frames (window "
+             f"centers; whole recording d = {sep_whole:.0f} frames). No fit, no free offset: the ratio "
+             f"reads the decline of the background-subtracted field flux between the windows, under the "
+             f"ideal relation for identical independent dyes of stationary mean brightness. The late-phase "
+             f"reading leaves the opening transient out by construction; the background-normalized "
+             f"readings divide the flux by the per-frame background level first. A field measure does not "
+             f"separate bleaching from emitters leaving the field or from label exchange.")
+
+    # ---- local single rate on non-overlapping windows of each documented duration ------------
+    by_window = die.field_decline_by_window(flux, frame_time_seconds=timing.frame_time_seconds,
+                                            durations_seconds=args.window_durations)
+    rows_bw = []
+    for T, rec in by_window.items():
+        v = rec["rate"][np.isfinite(rec["rate"])]
+        if v.size == 0:
+            rows_bw.append([f"{T:g}", str(rec["windows_per_recording"]), "0", "--", "--", "--", "--", "--"]); continue
+        q05, q25, q50, q75, q95 = np.percentile(v, [5, 25, 50, 75, 95])
+        by_pos = " ".join(f"{np.nanmedian(rec['rate'][:, j]):+.3f}" for j in range(rec["windows_per_recording"]))
+        rows_bw.append([f"{T:g}", str(rec["windows_per_recording"]), str(int(v.size)), f"{q50:+.4f}",
+                        f"[{q25:+.4f}, {q75:+.4f}]", f"[{q05:+.4f}, {q95:+.4f}]", f"{100 * np.mean(v < 0):.0f} %", by_pos])
+    reporter.table(
+        "Local single rate on non-overlapping windows, per 100-frame interval (pooled over recordings and windows)",
+        ["window (s)", "windows / recording", "windows", "median", "IQR", "central 90 %", "share < 0", "median by window position"],
+        rows_bw,
+        note="Each recording tiled into non-overlapping windows of the duration, as the Experiment stage tiles it; "
+             "inside every window the single rate that takes the mean of its opening quarter to the mean of its "
+             "closing quarter, p = 1 - (F_close / F_open) ** (100 / d). No fit. Pooled over windows, the value a "
+             "one-rate renderer would have to reproduce in a video of that length cut from anywhere in a recording; "
+             "by position, how the local rate changes along the recording. Short windows are noisy (a negative value "
+             "is a window whose closing mean exceeds its opening mean).")
+
+    # ---- pixel statistics of the opening and closing windows -------------------------------
+    so = {key: np.asarray([o["stats_open"][key] for o in out], dtype=float) for key in _STATS_KEYS}
+    sc = {key: np.asarray([o["stats_close"][key] for o in out], dtype=float) for key in _STATS_KEYS}
+    unit = "ADU" if domain == "raw" else "stored levels"
+
+    def stat_row(label, key):
+        a, b = so[key], sc[key]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = np.where((a > 0) & np.isfinite(a) & np.isfinite(b), b / a, np.nan)
+        r = r[np.isfinite(r)]
+        rq = (f"{np.median(r):.3f} [{np.percentile(r, 25):.3f}, {np.percentile(r, 75):.3f}]" if r.size else "--")
+        return [label, f"{np.nanmedian(a):.4g}", f"{np.nanmedian(b):.4g}", rq]
+    reporter.table(
+        f"Pixel statistics of the opening and closing {w}-frame windows (medians over recordings; {unit})",
+        ["statistic", "opening", "closing", "closing / opening, median [IQR]"],
+        [stat_row("background level (median pixel)", "median"),
+         stat_row("emitter excess per pixel (mean - median)", "excess"),
+         stat_row("99.9th percentile", "p999"),
+         stat_row("99.99th percentile", "p9999"),
+         stat_row("bright-pixel area (above median + 5 robust SD)", "bright_fraction")],
+        note="Each window's pixels read as one sample. The excess times the pixel count is the field "
+             "flux the fit uses; the tail and the area say how much of the field's brightness is left "
+             "without a model. A falling background level means the illumination or the floor is not "
+             "constant, so part of the excess decline is not emitter loss.")
+
+    # ---- figure: the decline against the single-rate scenarios ---------------------------------
+    e = col("early_mean")
+    reporter.stat("single-rate scenarios overlaid", ", ".join(f"{p:g}" for p in args.compare_values) or "none",
+                  note="the ideal decline (1 - p)^(t/100) for each value, drawn over the measured curves; "
+                       "comparison values, not targets (default: the working value and its variant of "
+                       "DETECTOR_WORKFLOW.md sec. 7.6)")
+    fig_name, fig, fig_caption = da.field_decline_figure(
+        flux=flux, background=background, frame_time_seconds=timing.frame_time_seconds,
+        condition=args.condition, domain=domain, estimate=estimate, valid=valid, usable=usable,
+        prior_log10=(lo_p, hi_p), window_frames=w, opening_excess=so["excess"],
+        compare_values=args.compare_values,
+        title=f"{STAGE}, experimental recordings, {int(n_frames)} frames, {domain} domain")
+    reporter.save_figure(fig_name, fig, caption=fig_caption)
+    fig_name, fig, fig_caption = da.window_rate_figure(
+        by_window=by_window, frame_time_seconds=timing.frame_time_seconds, condition=args.condition,
+        compare_values=args.compare_values,
+        title=f"{STAGE}, experimental recordings, {int(n_frames)} frames, {domain} domain")
+    reporter.save_figure(fig_name, fig, caption=fig_caption)
 
     np.savez_compressed(
         os.path.join(out_dir, "direct_fluorescence_loss_experiment.npz"),
@@ -478,7 +647,17 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
         kind_index=np.zeros(len(out), dtype=np.int64), kinds=np.asarray([args.condition]),
         camera=np.asarray([scope[k] for k in det.DETECTOR_SCOPE_KEYS]),
         camera_keys=np.asarray(list(det.DETECTOR_SCOPE_KEYS)),
-        frame_time_seconds=float(timing.frame_time_seconds))
+        frame_time_seconds=float(timing.frame_time_seconds),
+        domain=np.asarray([domain]), excluded_frames=col("excluded_frames", np.int64),
+        estimate_excluded=est_x, outcome_excluded=out_x,
+        estimate_normalized=est_n, outcome_normalized=out_n,
+        late_window_seconds=np.asarray(LATE_WINDOW_SECONDS, dtype=float),
+        window_durations_seconds=np.asarray(list(by_window), dtype=float),
+        **{f"window_rate_{T:g}s": rec["rate"] for T, rec in by_window.items()},
+        **{f"window_starts_{T:g}s": rec["starts"] for T, rec in by_window.items()},
+        **{f"decline_{key}": dec[key] for key in _DECLINE_KEYS},
+        **{f"opening_{key}": so[key] for key in _STATS_KEYS},
+        **{f"closing_{key}": sc[key] for key in _STATS_KEYS})
     code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
     changed = bool(code["changed_during_run"])
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
@@ -486,8 +665,15 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
                        window_seconds=timing.total_time_seconds, step_seconds=step_seconds,
                        cells=[int(c) for c in cells], n_windows=int(len(meta)),
                        n_valid=int(valid.sum()), n_usable=int(usable.sum()),
-                       observable=args.observable, background_quantile=BACKGROUND_QUANTILE,
+                       observable=args.observable, domain=domain, background_quantile=BACKGROUND_QUANTILE,
                        region="whole field", early_late_window_frames=w,
+                       excluded_opening_frames=k_excl, late_window_seconds=list(LATE_WINDOW_SECONDS),
+                       compare_values=[float(p) for p in args.compare_values],
+                       window_rate_medians={f"{T:g}": (float(np.nanmedian(rec["rate"])) if np.isfinite(rec["rate"]).any() else None)
+                                            for T, rec in by_window.items()},
+                       model_free_medians={key: (float(np.nanmedian(dec[key])) if np.isfinite(dec[key]).any() else None)
+                                           for key in ("p_whole", "p_whole_normalized", "p_late", "p_late_normalized",
+                                                       "background_ratio", "ratio_whole", "ratio_late")},
                        lambda_rate_for_se=(LAMBDA_RATE_DEFAULT if args.lambda_rate is None else args.lambda_rate),
                        eligibility=ELIGIBILITY, camera=scope,
                        implementation=("INVALID (implementation changed during the run)" if changed
@@ -499,8 +685,9 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
         extra=dict(stage=STAGE, mode="experiment", condition=args.condition,
                    cells=[int(c) for c in cells], span_seconds=span, step_seconds=step_seconds,
                    windows=int(len(meta)), run_suffix=args.run_suffix, out_dir=str(out_dir),
-                   observable=args.observable, background_quantile=BACKGROUND_QUANTILE,
-                   early_late_window_frames=w, lambda_rate=args.lambda_rate))
+                   observable=args.observable, domain=domain, background_quantile=BACKGROUND_QUANTILE,
+                   early_late_window_frames=w, excluded_opening_frames=k_excl,
+                   compare_values=[float(p) for p in args.compare_values], lambda_rate=args.lambda_rate))
     with open(os.path.join(out_dir, "provenance.json"), "w") as fh:
         json.dump(record, fh, indent=2, default=str)
     reporter.check("implementation unchanged during the run", not changed,
@@ -572,7 +759,32 @@ def main(argv=None):
     ap.add_argument("--early-late-window-frames", type=int, default=EARLY_LATE_WINDOW_FRAMES,
                     help="frames averaged at the opening and at the closing of each window for the "
                          "model-free early-to-late fractional loss (--experiment).")
+    ap.add_argument("--domain", default="stored", choices=["stored", "raw"],
+                    help="pixel domain of the experimental recordings (--experiment only): 'stored' "
+                         "converts the 16-bit frames to the stored 8-bit domain the neural estimator "
+                         "reads; 'raw' reads the 16-bit frames as they are. Field observable only.")
+    ap.add_argument("--exclude-opening-seconds", type=float, default=EXCLUDE_OPENING_SECONDS,
+                    help="the disclosed fit variant of --experiment that leaves out this much of the "
+                         "opening of each window; the estimator's value is the whole-window fit.")
+    ap.add_argument("--compare-values", type=float, nargs="*", default=list(COMPARE_VALUES_DEFAULT),
+                    help="single-rate values whose ideal decline (1 - p)^(t/100) is drawn over the measured "
+                         "curves in the --experiment figure (comparison, not a target). Default: the working "
+                         "bleaching value and its variant of DETECTOR_WORKFLOW.md sec. 7.6.")
+    ap.add_argument("--window-durations", type=float, nargs="*", default=list(WINDOW_DURATIONS_DEFAULT),
+                    help="window lengths in seconds for the local single rate on non-overlapping windows "
+                         "(--experiment figure and table); default: the documented durations.")
     args = ap.parse_args(argv)
+    if any(not (0.0 < p < 1.0) for p in args.compare_values):
+        ap.error("--compare-values are probabilities per 100-frame interval, in (0, 1)")
+    if any(T <= 0 for T in args.window_durations):
+        ap.error("--window-durations must be positive")
+
+    if args.domain != "stored" and not args.experiment:
+        ap.error("--domain applies to --experiment only; a synthetic tier is stored 8-bit")
+    if args.domain != "stored" and args.observable != "field":
+        ap.error("--domain raw works with the field observable only")
+    if args.exclude_opening_seconds < 0:
+        ap.error("--exclude-opening-seconds must not be negative")
 
     if not args.selftest and (args.condition is None or args.total_time_seconds is None):
         ap.error("--condition and --total-time-seconds are required (or use --selftest)")
@@ -678,8 +890,11 @@ def main(argv=None):
             print(f"  recordings      : {len(cells)} x {span} s -> {n_win} window(s) of "
                   f"{args.total_time_seconds:g} s each (step {step:g} s)")
             print("  camera (sec. 6.3): " + ", ".join(f"{k}={v:.4g}" for k, v in _scope_center().items()))
+            print(f"  domain          : {args.domain}   "
+                  f"({'16-bit frames as they are' if args.domain == 'raw' else 'converted to the stored 8-bit domain'})")
             print(f"  background      : per-frame quantile {BACKGROUND_QUANTILE} over the whole field; "
-                  f"early/late window {args.early_late_window_frames} frames")
+                  f"early/late window {args.early_late_window_frames} frames; disclosed variant leaves out "
+                  f"the opening {args.exclude_opening_seconds:g} s; late-phase window {LATE_WINDOW_SECONDS} s")
             print("  ground truth    : none -- no acceptance verdict; per-recording curves, fits, outcomes")
         elif tier_run:
             for t, p in video_paths:

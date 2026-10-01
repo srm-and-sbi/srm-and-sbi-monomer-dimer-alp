@@ -5,6 +5,85 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.34 - 2026-10-01
+
+The fluorescence-loss estimator's experimental input path can read the 16-bit raw frames, and the model-free
+decline readings made on them by hand on 2026-09-25 are part of its report, as a table over every documented
+window duration and as two figures that set the measured decline against the single-rate scenarios. The
+working bleaching value of §7.6 is 0.05 per 100-frame interval from this release (0.03 the variant) and the
+`REF` artifact is rebuilt with it. No synthetic tier, rendering, labeling or inference calculation changes;
+the estimator's arithmetic on a flux curve is unchanged.
+
+### Added
+
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Fluorescence_Loss.py --experiment
+  --domain raw|stored`: the pixel domain of the experimental recordings. `stored` (the default, the
+  behavior until now) converts the 16-bit frames to the stored 8-bit domain the neural estimator reads,
+  where one level is 257 ADU and the per-frame median is quantized to whole levels; `raw` reads the 16-bit
+  frames as they are. On the MET-FAB recordings the floor falls by about 9 % over 20 s, so the stored-domain
+  median steps between levels during the recording and each step moves the field sum by more than the whole
+  emitter signal (the run of 2026-09-25 fitted that stepping floor); the raw domain's step is 257 times
+  smaller. Field observable and `--experiment` only. The report, the arrays, `summary.json` and
+  `provenance.json` record the domain. Beside the estimator's value (the whole-window fit) the experiment
+  report now carries two disclosed variants of the same fit (the opening left out,
+  `--exclude-opening-seconds`, 2 s by default; the flux divided by the per-frame background level and
+  rescaled to its mean), the model-free decline readings (the per-interval loss implied by the
+  opening-to-closing and by the 10 to 11 s-to-closing window ratios, raw and background-normalized, with the
+  window ratios themselves), the pixel statistics of the opening and closing windows (background level,
+  emitter excess per pixel, 99.9th and 99.99th percentiles, bright-pixel area), and a four-panel figure
+  (`direct_acceptance.field_decline_figure`): the measured decline of every recording with the ideal single-rate
+  decline `(1 − p)^(t/100)` drawn over it for `--compare-values` (by default the working bleaching value 0.05
+  and its late-time variant 0.03 of §7.6), the same by dimmest and brightest third of the recordings, the per-frame
+  background level, and the fitted values with the scenarios marked. The overlay shows at a glance where a
+  one-rate renderer at those values runs against the recordings. All of it is saved per recording in the
+  arrays; nothing is pooled. `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py` redraws the
+  figure for an existing experiment run folder.
+- The experiment report's table of the local single rate on non-overlapping windows of every documented
+  duration (`--window-durations`, 1, 2, 5, 10 and 20 s by default; `direct_imaging_estimates.field_decline_by_window`):
+  each recording tiled as the Experiment stage tiles it, the rate inside each window read from its opening
+  and closing quarter means, pooled over windows and by window position, saved per recording and window in
+  the arrays. It states the duration dependence of the effective loss parameter instead of two numbers. The
+  same readings as a one-panel figure (`direct_acceptance.window_rate_figure`, `figures/window_rates_<condition>.png`):
+  the local rate against the window's position along the recording, one series per duration with the median
+  over recordings and the interquartile band, each series' pooled median as a thin horizontal line (they
+  coincide when the pooled value does not depend on the window length), and the `--compare-values` scenarios
+  as reference lines; the figures utility redraws it for an existing experiment folder.
+- `direct_imaging_estimates.frame_flux_curve(..., domain=)`, `window_pixel_statistics` and
+  `field_decline_summary`: the kernel behind the above; `experiment_support.read_cell_chunks(..., domain=)`
+  keeps the 16-bit values under `domain="raw"`.
+- `Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh`: `MODE=experiment` runs a
+  utility's `--experiment` path on the condition's recordings (no `TASKS`, no `PURPOSE`; `EXTRA` carries the
+  path's flags), for the measurement on JUWELS, where the recordings now are.
+- `tests/test_direct_estimator_guards.py`: the raw-domain flux curve reads the values as ADU and the stored
+  one converts; the model-free readings recover an exponential decline exactly and separate a falling floor
+  from the dyes' decline when normalized; the window statistics read the floor, the excess and the bright
+  area; the raw-domain reader keeps the 16-bit values; the raw domain is refused outside `--experiment` and
+  with the apertures observable.
+
+### Documentation
+
+- The photobleaching estimator's note: the raw domain as the estimator's experimental input, with the two
+  checks that preceded its use (the path reproduces the 2026-09-25 diagnostic's records on the PC's ten
+  recordings; the synthetic tier's per-frame median is one constant level, which is why the stored domain
+  measures the tier and not the recordings), and the measurement on the sixty MET-FAB recordings (JUWELS job
+  14282553, record `..._Direct_Fluorescence_Loss_Experiment_RAW`): the estimator's whole-window value, 0.21 per
+  interval, describes the fast component of a two-component decline and is not a candidate for the renderer's
+  single-rate parameter; the model-free late-phase and whole-recording readings (0.029 to 0.034 and 0.046 to
+  0.057) are the two readings of the measured decline. DETECTOR workflow §7.6: the bleaching row's cross-check
+  cell cites the measurement.
+- **The working bleaching value is 0.05 per 100-frame interval (user's decision, 2026-10-01), 0.03 the
+  variant.** On the overlay figure the ideal single-rate decline at 0.03 runs above the recordings from the
+  first second and ends at 0.75 of the opening signal where the recordings keep 0.57, while 0.05 reproduces
+  the loss over the whole recording (too steep in the opening seconds, crossing the median near 10 s, ending
+  at 0.61); a 20 s render must lose what the recordings lose, so §7.6 selects the whole-recording value and
+  keeps the late-phase value, which the baseline neural median matches, as the variant `VAR_PB`. The `REF`
+  `Nuisance_DLI` artifact was rebuilt from the revised spec (five values unchanged; bleaching 0.05 with its
+  source and limitation); the artifact built with 0.03 is kept under
+  `Posit/..._REF_Nuisance_DLI_Superseded_20261001/` with a README, and the posterior-predictive renders and
+  reports made before that date under `REF` used 0.03, as their provenance records. The photobleaching
+  estimator's note carries the decision and the reason, and notes that a single-rate decay is an exponential
+  that reads as nearly straight on a linear axis only because the decay is shallow over 20 s.
+
 ## 0.1.33 - 2026-10-01
 
 The fleet sync no longer reports a sync as a success when rsync, the content verification or the secrets check

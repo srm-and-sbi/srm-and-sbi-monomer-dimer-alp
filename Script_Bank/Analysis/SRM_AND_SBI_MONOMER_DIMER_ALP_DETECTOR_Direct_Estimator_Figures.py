@@ -7,7 +7,10 @@ prior coordinates and in absolute values -- into ``figures/`` of every tier run 
 ``report.md``. This utility draws the same figures, through the same shared builder
 (``direct_acceptance.recovery_figures``), for a run folder written before the figures existed, or
 again after a change to the builder. It reads the run's ``direct_*.npz`` and ``summary.json``, writes
-only into the run's ``figures/`` (or ``--out-dir``), and leaves ``report.md`` as the run wrote it.
+only into the run's ``figures/`` (or ``--out-dir``), and leaves ``report.md`` as the run wrote it. For a
+fluorescence-loss EXPERIMENT run folder (``direct_fluorescence_loss_experiment.npz``) it redraws the
+field-decline figure instead (``direct_acceptance.field_decline_figure``): the measured curves against the
+single-rate scenarios the run recorded, or the working value and its variant.
 
 Usage (from the repo root):
     PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py \\
@@ -29,6 +32,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
 from srm_and_sbi_monomer_dimer_alp import direct_acceptance as da  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import direct_imaging_estimates as die  # noqa: E402
 
 # Per estimator: the arrays file, and per figure the parameter key, how to read truth/estimate and
 # the nominal range from the arrays, and the accuracy rule's band (from the utilities' ACCEPTANCE).
@@ -60,6 +64,52 @@ SPECS = {
 }
 
 
+EXPERIMENT_NPZ = "direct_fluorescence_loss_experiment.npz"
+COMPARE_VALUES_DEFAULT = (0.05, 0.03)   # the working bleaching value and its variant (DETECTOR_WORKFLOW.md sec. 7.6)
+WINDOW_DURATIONS_DEFAULT = (1.0, 2.0, 5.0, 10.0, 20.0)   # the documented durations
+
+
+def redraw_experiment(run_dir: str, out_dir: str | None = None, dpi: int = 200, compare_values=None) -> list:
+    """The field-decline figure of a fluorescence-loss EXPERIMENT run folder, from its saved arrays, through
+    the same builder the run uses (``direct_acceptance.field_decline_figure``). ``compare_values`` default to
+    the run's own (``summary.json``), else the working value and its variant."""
+    npz = os.path.join(run_dir, EXPERIMENT_NPZ)
+    z = np.load(npz, allow_pickle=True)
+    summary_path = os.path.join(run_dir, "summary.json")
+    summary = json.load(open(summary_path)) if os.path.isfile(summary_path) else {}
+    if compare_values is None:
+        compare_values = summary.get("compare_values") or list(COMPARE_VALUES_DEFAULT)
+    condition = summary.get("condition") or str(z["kinds"][0])
+    domain = str(z["domain"][0]) if "domain" in z.files else summary.get("domain", "stored")
+    w = int(summary.get("early_late_window_frames") or (int(z["window_frames"][0]) if "window_frames" in z.files else 50))
+    lo_p, hi_p = da.prior_range("prob_photo_bleach")
+    name, fig, _caption = da.field_decline_figure(
+        flux=z["flux"], background=z["background"], frame_time_seconds=float(z["frame_time_seconds"]),
+        condition=condition, domain=domain, estimate=z["estimate"], valid=z["valid"], usable=z["usable"],
+        prior_log10=(lo_p, hi_p), window_frames=w,
+        opening_excess=z["opening_excess"] if "opening_excess" in z.files else None,
+        compare_values=compare_values,
+        title=f"Direct_Fluorescence_Loss, experimental recordings, {int(z['flux'].shape[1])} frames, {domain} domain")
+    target = out_dir or os.path.join(run_dir, "figures")
+    os.makedirs(target, exist_ok=True)
+    path = os.path.join(target, f"{name}.png")
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    written = [path]
+    durations = (summary.get("window_durations") or
+                 (z["window_durations_seconds"].tolist() if "window_durations_seconds" in z.files else list(WINDOW_DURATIONS_DEFAULT)))
+    by_window = die.field_decline_by_window(z["flux"], frame_time_seconds=float(z["frame_time_seconds"]),
+                                            durations_seconds=durations)
+    if by_window:
+        name, fig, _caption = da.window_rate_figure(
+            by_window=by_window, frame_time_seconds=float(z["frame_time_seconds"]), condition=condition,
+            compare_values=compare_values,
+            title=f"Direct_Fluorescence_Loss, experimental recordings, {int(z['flux'].shape[1])} frames, {domain} domain")
+        path = os.path.join(target, f"{name}.png")
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        written.append(path)
+    return written
+
+
 def identify(run_dir: str):
     """The estimator name and its arrays file for a run folder, or ``(None, reason)``."""
     summary_path = os.path.join(run_dir, "summary.json")
@@ -80,6 +130,8 @@ def identify(run_dir: str):
 
 def redraw(run_dir: str, out_dir: str | None = None, dpi: int = 200) -> list:
     """Write the figures of one run folder; returns the paths written. Raises ValueError for a folder without a run."""
+    if os.path.isfile(os.path.join(run_dir, EXPERIMENT_NPZ)):
+        return redraw_experiment(run_dir, out_dir, dpi)
     estimator, summary, npz = identify(run_dir)
     if estimator is None:
         raise ValueError(npz)

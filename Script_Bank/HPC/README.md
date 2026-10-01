@@ -554,7 +554,11 @@ directory, submitted directly with `sbatch`:
   `CODE_COMMIT=` is recorded in the run folder's `provenance.json`. Which EVAL tasks are
   development and which are reserved is fixed in `DETECTOR_WORKFLOW.md` §9.6, and the
   utility refuses, before it reads a recording, the tasks its purpose may not read; it also
-  refuses an existing run folder. Exit status: 0 no FAIL verdict, 1 a FAIL verdict, 2
+  refuses an existing run folder. `MODE=experiment` runs a utility's `--experiment` path on
+  the condition's experimental recordings under the data bank's `Experiment/` folder instead
+  of a tier: no `TASKS`, no `PURPOSE` (no ground truth, no verdict), `EXTRA` carrying the
+  path's flags (for the fluorescence-loss estimator `--domain raw` reads the 16-bit frames),
+  the folder `..._Direct_<ESTIMATOR>_Experiment[_<RUN_SUFFIX>]`. Exit status: 0 no FAIL verdict, 1 a FAIL verdict, 2
   insufficient evidence only, 3 the implementation changed during the run (invalid for
   acceptance). Python also exits 1 on an uncaught exception and argparse 2 on an argument
   error or a refusal, so 1 and 2 are not verdicts alone; the job log says which.
