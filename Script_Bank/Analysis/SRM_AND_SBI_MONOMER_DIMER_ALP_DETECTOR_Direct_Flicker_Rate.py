@@ -444,6 +444,10 @@ def main(argv=None):
     code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
     da.apply_code_provenance(result, code)
     da.render(reporter, result, estimator=STAGE, target_key="lambda_rate")
+    for fig_name, fig, fig_caption in da.recovery_figures(
+            key="lambda_rate", truth=truth, estimate=estimate, valid=valid,
+            range_low=low, range_high=high, tolerance=("dex", ACCEPTANCE["lambda_mae_dex"]), title=STAGE):
+        reporter.save_figure(fig_name, fig, caption=fig_caption)
     typ, worst = die.flicker_multiplicity_band(float(np.nanmedian(estimate[valid])) if valid.any() else np.nan)
     reporter.stat("multiplicity systematic (dex)", typ, expected=f"up to {worst} at the top of the sigma_pc prior",
                   note="the price of a single-dye model arm, reported as a band rather than corrected; it is "

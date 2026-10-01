@@ -5,6 +5,83 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.33 - 2026-10-01
+
+The fleet sync no longer reports a sync as a success when rsync, the content verification or the secrets check
+fails or cannot run. A verification read through the node that performed the writes can still pass when that
+node's view differs from storage, as on 2026-09-30; `VERIFY_VIA_<name>` reads through another host. No pipeline
+stage, parameter, rendering, labeling or inference calculation changes.
+
+### Fixed
+
+- `Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_Fleet_Sync.sh`: every ssh, rsync and check status is tested
+  explicitly and rsync's own messages are printed on failure; a live transfer counts only after a verification
+  that compares file content by checksum (a dry run with `--checksum`), where it compared only size and
+  modification time; a check that cannot run counts as a failure (the secrets check reports absence only after
+  the same remote command has entered the repository directory, so an unreadable mount is "could not run", not
+  "absent"); machine names are checked before any transfer and a requested name missing from the table is a
+  failure; and the run ends with a per-machine summary and exit status 1 if any machine was unreachable,
+  failed to transfer, still differs in content, or failed or could not run its secrets check. By default the
+  verification reads back through the same ssh session as the transfer, so on JUPITER and JUWELS through the
+  same login node, and the output says so; `VERIFY_VIA_<name>=<user@host>` runs it through another host that
+  sees the same filesystem, for example another login node with its own authenticated session (the script does
+  not check that this host is a different node). The 0.1.32 script (`c909496`) printed "(already identical)"
+  when rsync failed (`rsync ... | grep ... || echo`), discarded rsync's error text, printed "verified: 0" when
+  its verifying rsync itself failed, reported a secrets check that could not run as passed, and exited 0
+  whatever the outcome for each machine; run against a receiver that fails after three files it printed its
+  plan, "(already identical)" and "verified: 198 outstanding difference(s) after sync (want 0)", and exited 0.
+  On 2026-09-30 the two later live syncs to JUPITER (10:50 and about 11:11 UTC; the one at 10:05 is stored
+  intact) left nine of the ten files they transferred empty on JUPITER's storage and the tenth at its earlier
+  content. After the 10:50 sync the login node that performed it reported the new content (a search found the
+  new presets, a dry run at 11:05 matched the files by size and time, and sbatch read the complete batch
+  script); the rsync of the about-11:11 sync exited with an error that the script printed as "(already
+  identical)", followed by "verified: 0". The second smoke's jobs, submitted from that tree, failed at import
+  (DETECTOR workflow §9.9; the evidence is kept in the data bank).
+- `tests/test_fleet_sync.py`: the real script against local stand-ins for the remotes (`FLEET_FILE` replaces
+  the machine table; a stand-in for ssh maps each host to a directory and can refuse the connection, break the
+  secrets check, make the repository unreadable while that check runs, cap the size of written files, or keep
+  the names of written files while losing their content; a guard `ssh` first on PATH refuses any real
+  connection): a clean live sync verifies by content, says that it read back through the writing session, and
+  exits 0; an rsync write failure prints rsync's messages and exits non-zero; files whose content the verifying
+  host reads as lost fail the verification; an unreachable machine fails without a transfer; the verification
+  reads through the named host, and fails when that host cannot be reached; the secrets check fails closed when
+  ssh fails and when the repository cannot be read, and reports a dangling link by that name as present; a dry
+  run transfers nothing and still reports failures; one failing machine fails the run while the others are
+  synced, only named machines are touched, a name unusable in `VERIFY_VIA_<name>` fails before any transfer,
+  and a requested name missing from the table fails the run.
+
+### Added
+
+- `direct_acceptance.recovery_figures`: the true value against the inferred one, per attempted recording, for
+  one estimated imaging parameter, in two figures of three panels: in the parameter's log10 prior coordinates
+  and in absolute values. Every recording by outcome (scored, valid but not scored, failed) with the identity
+  line and the prior bounds; the scored recordings with their nominal 90 % ranges and the mean absolute error,
+  mean signed error and measured coverage in those coordinates; and the error against the true value with
+  binned medians over eight equal prior bins. The three direct-estimator utilities write them into `figures/`
+  of every tier run and list them at the end of `report.md` (PSF width: `mu_r` and `sigma_r`; flicker rate:
+  `lambda_rate`; fluorescence loss: `prob_photo_bleach`). The report had carried the verdicts and the
+  stratified numbers without a picture of the recovery itself.
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py` (with its note):
+  redraws those figures for an existing run folder from its saved arrays, for runs written before this
+  release; it writes only into the run's `figures/` and leaves `report.md` as the run wrote it.
+- `tests/test_direct_estimator_guards.py`: the figures are written and listed in the report, from arrays with
+  failed, rejected and scored recordings, in both coordinate systems; the redraw utility reproduces them from
+  a run folder and refuses a folder without the arrays.
+
+### Documentation
+
+- DETECTOR workflow §9.9 status: the second smoke failed at import because the package files it needed were
+  empty on JUPITER's storage; the tree had been reported as verified identical, which it was not; the repair
+  waits for the JUPITER storage incident to be cleared, and the resubmission needs its own decision.
+- The photobleaching estimator's note and DETECTOR workflow §9.7: the 20 s MET-FAB EVAL tier is complete on
+  JUWELS (the eleven tasks rendered on rcl01 returned and read back identical through a second login node, the
+  four partial stores archived under `Superseded_0.1.18/`, the three rendering versions and the changes
+  between them recorded), and the estimator's development run on the tier's ten development tasks
+  (2026-10-01, `_DEV_c909496`, 1,000 recordings) is recorded: a FAIL on the frozen accuracy and uncertainty
+  rules, within threshold above about 0.1 per interval and overstating the parameter around the working
+  value; the reserved tasks stay unread.
+- `Script_Bank/HPC/README.md`: the fleet sync's verification, its exit status and `VERIFY_VIA_<name>`.
+
 ## 0.1.32 - 2026-09-30
 
 Corrections after the review of the lean trajectory reader: one release note of 0.1.31 overstated the

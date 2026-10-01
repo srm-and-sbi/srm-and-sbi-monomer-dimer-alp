@@ -1685,11 +1685,18 @@ benchmark; the biology estimator needs its own capacity test (§2).
 **Status.** Training, Evaluation, Posterior_Calibration and Experiment complete under the `CAP256` tag, the
 Evaluation and Experiment regenerated under the corrected MAP routine on 2026-09-24; comparison recorded
 above and the source decision in §7.6. Open, and not prerequisites for §7.6: repeat training of
-`capacity256`; the 20 s tier (nine of its twenty tasks rendered; reopened on 2026-09-30 with the lean
-trajectory reader of the DLI stage, the memory cause of the lost renders recorded in the photobleaching
-estimator's note, its equality on real trajectories verified on the PC and on rcl01, and four of the eleven
-missing tasks rendered on rcl01; the remaining renders follow as their trajectories arrive, and the return of
-the stores to JUWELS and the estimator runs each await separate authorization).
+`capacity256`; the 20 s tier (complete on JUWELS since 2026-10-01: nine of its twenty tasks rendered there by
+0.1.13 and 0.1.18; the eleven missing tasks rendered on rcl01 with the lean trajectory reader of the DLI stage,
+0.1.31, between 2026-09-30 and 2026-10-01, each with 100 recordings, exit status 0, a read-only store check
+and source trajectories identical to the JUWELS originals by sha256, then returned to JUWELS and read back
+identical through a second login node, the four partial stores archived there under `Superseded_0.1.18/`;
+the memory cause of the lost renders is recorded in the photobleaching estimator's note, the reader's
+equality on real trajectories was verified on the PC and on rcl01, and the renderer verification record
+lists every change between the three rendering versions, all outside the detector rendering calculation;
+the photobleaching estimator's development run on the tier's ten development tasks (2026-10-01, run folder
+`_DEV_c909496`) fails the frozen accuracy and uncertainty rules, measuring the parameter within threshold
+only above about 0.1 per interval and overstating it around the working value, as its companion note
+records; the reserved tasks 10 to 19 are unread).
 
 > **Regenerated.** Every MAP figure of this section comes from the Evaluation and Experiment stages re-run
 > under the corrected MAP routine (§9.8); the pre-correction comparison records are preserved as
@@ -2131,9 +2138,15 @@ candidates are compiled into a four-column record when their Evaluation and Post
 exist; a candidate without them is listed as missing, not compiled.
 
 **Status.** Presets, probe and tests in 0.1.27 and 0.1.28; the scorecard compiler and its control
-compilation in 0.1.29, its input safeguards in 0.1.30; the probe and the first smoke run and read; the second smoke (jobs 2123225 and
-2123226, code 0.1.28, the JUPITER tree verified identical to the committed revision and left unchanged while
-they run) queued on 2026-09-30 behind a two-day reservation of the whole booster partition; nothing trained,
-nothing adopted. Next: read the second smoke, settle the per-GPU batches and the provisional costs, then each
-of the two trainings on the user's separate word, then Evaluation and Posterior_Calibration per tag and the
-four-column compilation.
+compilation in 0.1.29, its input safeguards in 0.1.30; the probe and the first smoke run and read. The second
+smoke (jobs 2123225 and 2123226, submitted on 2026-09-30 for code 0.1.28) failed after three and a half
+minutes, before any training: every rank stopped at import, because the package's settings module was an empty
+file on JUPITER's storage. The sync before the submission had left every file it changed empty there, while the
+login node that performed it reported the new content, so the tree, reported then as verified identical to the
+committed revision, was not. In 0.1.33 the fleet sync reports a failed transfer as a failure and verifies file
+content, through another host when `VERIFY_VIA_<name>` names one; on 2026-09-30 a read-back through the node
+that performed the writes returned the new content, so it does not replace a read from another node. The repair of the JUPITER tree, verified from another node, waits for the storage
+incident JSC declared on 2026-10-01 to be cleared, and resubmitting both smokes unchanged needs the user's word.
+Nothing trained, nothing adopted. Next: the repaired tree, the second smoke, the per-GPU batches and the
+provisional costs, then each of the two trainings on the user's separate word, then Evaluation and
+Posterior_Calibration per tag and the four-column compilation.

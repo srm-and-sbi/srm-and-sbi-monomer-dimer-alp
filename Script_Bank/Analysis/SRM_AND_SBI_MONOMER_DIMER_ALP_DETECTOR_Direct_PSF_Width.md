@@ -112,6 +112,13 @@ production filenames while holding only a couple of videos, and scoring it would
 confident-looking but meaningless error. The check names that case in the report rather than
 hiding it.
 
+Every tier run also writes the recovery figures `figures/recovery_mu_r_log10.png`, `..._mu_r_linear.png`, `..._sigma_r_log10.png` and `..._sigma_r_linear.png` and lists them at the end of
+`report.md`: the true value against the inferred one for every attempted recording, by outcome, in the
+parameter's log10 prior coordinates and in absolute values, with the identity line, the prior bounds, the
+accuracy rule's band, the nominal 90 % ranges of the scored recordings and the error against the true value
+with binned medians. `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py <run folder>` redraws
+them for a run folder written before the figures existed.
+
 ## Result and interpretation
 
 **Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are

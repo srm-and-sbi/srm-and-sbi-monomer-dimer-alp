@@ -818,6 +818,12 @@ def main(argv=None):
     code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
     da.apply_code_provenance(result, code)
     da.render(reporter, result, estimator=STAGE, target_key="prob_photo_bleach")
+    for fig_name, fig, fig_caption in da.recovery_figures(
+            key="prob_photo_bleach", truth=truth, estimate=estimate, valid=valid, usable=usable,
+            range_low=extra["range_low"], range_high=extra["range_high"],
+            tolerance=("dex", ACCEPTANCE["prob_bleach_mae_dex"]),
+            title=f"{STAGE}, {int(n_frames)} frames"):
+        reporter.save_figure(fig_name, fig, caption=fig_caption)
     reporter.table(
         "Bleaching outcomes against all attempted recordings", ["outcome", "count", "share of attempted", "rule"],
         [["failed measurement", str(int((outcome == "failed").sum())),

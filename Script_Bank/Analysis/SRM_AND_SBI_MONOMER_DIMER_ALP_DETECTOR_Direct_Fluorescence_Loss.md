@@ -137,6 +137,13 @@ resolves the settings and prints what it would read and write. `--workers` sets 
 pool for a tier run. `--expect-videos-per-task` guards against a stale development tier that
 carries production filenames while holding only a couple of videos.
 
+Every tier run also writes the recovery figures `figures/recovery_prob_photo_bleach_log10.png` and `..._linear.png` and lists them at the end of
+`report.md`: the true value against the inferred one for every attempted recording, by outcome, in the
+parameter's log10 prior coordinates and in absolute values, with the identity line, the prior bounds, the
+accuracy rule's band, the nominal 90 % ranges of the scored recordings and the error against the true value
+with binned medians. `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py <run folder>` redraws
+them for a run folder written before the figures existed.
+
 ## Result and interpretation
 
 **Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
@@ -266,10 +273,10 @@ so the completed tier could confirm the order of magnitude of that value and lit
 imaging vector (`DETECTOR_WORKFLOW.md` §7.6) carries the value as a provisional anchor. If the biology step
 turns out to depend on the value, the large-memory-node completion needs no code change; the development
 tasks already rendered (5 and 8) allow a development run of this estimator on 200 full-length recordings at
-any time. The partial stores of tasks 9, 11, 16 and 18 remain on JUWELS until a decision to complete or
-remove them.
+any time. The partial stores of tasks 9, 11, 16 and 18 stayed on JUWELS until the tier was completed, and
+were then archived there (below).
 
-**Reopened (2026-09-30): the lean reader is implemented and the missing tasks are being rendered on rcl01; the estimator runs are not authorized yet.**
+**Completed (2026-09-30 to 2026-10-01): the lean reader is implemented, the missing tasks were rendered on rcl01, and the whole tier is on JUWELS.**
 The second of the three ways above is in the package: `simulation_rds_support.extract_subunit_positions`
 gathers each subunit's host coordinates per frame directly from the trajectory's per-frame observables
 through the lineage, `(frames, subunits, 3)`, never building the dense tensor, and the shared DLI runner
@@ -284,17 +291,24 @@ theta, SCOPE, nuisance and labeling stores for both workflows on the 2 s recordi
 the largest scene (task 9, simulation 5: 3,011 subunits, 491,645 particle ids, the 65.9 GiB dense tensor)
 the lean read peaks at 0.9 GiB and the complete detector runner at 3.8 GiB for one recording in 60 s, where
 the dense path was killed at 59 GiB on 2026-09-25. The identity checks were repeated on rcl01 on the same 20 s recordings, the lean read against the dense
-gather and identical frames from either source, with the same result, and the eleven missing tasks render
-there with the released reader as their trajectories arrive from JUWELS, task 9 alone first: tasks 9, 0, 1
-and 2 are complete, 100 recordings of 1,000 frames each, exit status 0, 28 to 33 minutes per task, kernel
-peak resident set 4,788,048 to 4,837,656 kB (4.57 to 4.61 GiB) per task process. The scripts, logs,
-checksums and raw memory numbers of every check are the data bank record
-`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_20S_50FPS_Renderer_Verification/` under `Posit`. What remains
-separately authorized: the exact manifest of the partial stores on JUWELS (archiving preferred to
-removal), the return of the rendered stores to the JUWELS data bank, and the estimator runs. The frozen estimator runs for characterization first; any
-modification of it is a separate decision before the reserved verdict is opened. Completing the tier
-closes the synthetic validation question; it does not by itself establish a better experimental
-bleaching value.
+gather and identical frames from either source, with the same result, and the eleven missing tasks (0, 1,
+2, 3, 4, 6, 7, 9, 11, 16 and 18) were rendered there with the released reader as their trajectories arrived
+from JUWELS, task 9 alone first: 100 recordings of 1,000 frames per task, exit status 0 for every task, and
+for the first four (9, 0, 1 and 2) 28 to 33 minutes per task and a kernel peak resident set of 4,788,048 to
+4,837,656 kB (4.57 to 4.61 GiB) per task process; the per-task numbers of all eleven, a read-only check of
+every store and the sha256 identity of the source trajectories with the JUWELS originals are in the data
+bank record `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_20S_50FPS_Renderer_Verification/` under `Posit`, with
+the scripts, logs and checksums of every check. On 2026-10-01 the record's archive-and-transfer manifest was
+executed: the four partial stores (952 files) were moved on JUWELS to `Data_Bank/Superseded_0.1.18/`, their
+checksums identical before and after; the eleven tasks' 44 stores (4,455 files) were pushed directly from
+rcl01 to JUWELS and read back identical by sha256 through a second login node; the nine complete stores were
+not touched. The tier's 80 stores are whole on JUWELS, the tier's single home. Three rendering versions made
+them (tasks 5, 8 and 19 by 0.1.13; tasks 10, 12 to 15 and 17 by 0.1.18; the eleven by 0.1.31), and the
+record's README lists every change between those versions: all lie outside the detector rendering
+calculation, and the stores' layout equality and the rendered-value equality of the reader are recorded as
+separate evidence. The frozen estimator then ran on the development tasks for characterization (below); any
+modification of it is a separate decision before the reserved verdict is opened. Completing the tier closes
+the synthetic validation question; it does not by itself establish a better experimental bleaching value.
 
 **Development characterization on the rendered tasks 5 and 8 (2026-09-25; JUWELS job 14273151, run folder
 `..._20S_50FPS_Direct_Fluorescence_Loss_DEV_45177cb`, 200 multiple-dye recordings at 1000 frames, field
@@ -314,6 +328,29 @@ scatter. An experimental result in which most recordings are uninformative is it
 loss rate, and a usable subset near 0.03 to 0.06 per interval is to be read against this +0.3 dex bias rather
 than at face value. No correction cycle follows from this; it is the characterization the experimental reading
 is judged against.
+
+**Development run on the complete development set (2026-10-01; JUWELS job 14281932, code c909496, run
+folder `..._20S_50FPS_Direct_Fluorescence_Loss_DEV_c909496`, tasks 0 to 9, 1,000 multiple-dye recordings at
+1000 frames, field observable, 64 s of wall time on one CPU node).** The run meets the evidence requirements of
+the frozen rules (1,000 attempted, 475 in the operating brightness subgroup; 523 usable overall and 210 in the
+subgroup) and fails the operational, accuracy and uncertainty steps. Valid estimates: 863 (86.3 %, against the
+95 % required; 86.5 % in the operating subgroup against 90 %), all 137 drops carrying `fit_failed`. Among the
+usable recordings MAE 0.176 dex against the 0.10 dex threshold, bias +0.141 dex and correlation 0.55 (operating
+subgroup: 0.152 dex, +0.117 dex, 0.63); among the 340 valid but uninformative recordings MAE 0.51 dex. Coverage
+of the nominal 90 % range: 63 % overall and 73 % in the subgroup against the 85 % required, with a median range
+width of 0.17 of the prior width. The characterization on 200 recordings above is reproduced with five times
+the recordings and localized by prior quarter of the true value: in [−0.875, −0.5) (0.13 to 0.32 per interval)
+242 of 244 recordings are usable with MAE 0.053 dex and bias +0.016; in [−1.25, −0.875) (0.056 to 0.13) 186 of
+261, MAE 0.122, bias +0.075; in [−1.625, −1.25) (0.024 to 0.056) 65 of 241, MAE 0.38, bias +0.37; in [−2,
+−1.625) (0.010 to 0.024) 30 of 254, bias +1.06. In absolute values the usable recordings carry MAE 0.040 and
+bias +0.029 per interval, the error concentrated below 0.05, where the inferred values gather near 0.1 to 0.2
+while the failed fits sit at zero; the run folder's `figures/recovery_prob_photo_bleach_log10.png` and
+`_linear.png` show every recording by outcome. The reading stands: above about 0.1 per interval the estimator
+measures the parameter within the threshold; around the working value of 0.03 most recordings are
+uninformative and the admitted ones overstate it by a factor of two or more, a selection effect of the
+eligibility rule; and its range is too narrow at every level. Under the frozen rules this is a development
+FAIL on accuracy and uncertainty, with the operational shortfall beside it. It motivates no correction cycle
+here, and the reserved tasks 10 to 19 stay unread.
 
 **Planned experimental measurement (agreed 2026-09-25; each step separately approved).** The working
 imaging vector's bleaching row (`DETECTOR_WORKFLOW.md` §7.6) is to be anchored on a measurement made on

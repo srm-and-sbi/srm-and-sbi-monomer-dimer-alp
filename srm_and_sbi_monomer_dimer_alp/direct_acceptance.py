@@ -526,3 +526,150 @@ def render(reporter, res: dict, *, estimator: str, target_key: str) -> None:
             note="Coverage establishes uncertainty reliability; interval width describes informativeness. A broad "
                  "range can cover adequately without measuring anything: returning nearly the whole prior is not "
                  "successful, precise recovery, however well it covers.")
+
+
+# ------------------------------------------------------------------------------------------
+# Recovery figures: the true value against the inferred one, per recording
+# ------------------------------------------------------------------------------------------
+def recovery_figures(*, key: str, truth: np.ndarray, estimate: np.ndarray, valid: np.ndarray,
+                     usable: Optional[np.ndarray] = None,
+                     range_low: Optional[np.ndarray] = None, range_high: Optional[np.ndarray] = None,
+                     ranges_are_log10: bool = False,
+                     tolerance: Optional[Tuple[str, float]] = None,
+                     title: str = "", bins: int = 8) -> List[Tuple[str, object, str]]:
+    """Two three-panel figures of one estimated parameter: in its log10 prior coordinates and in
+    absolute (linear) values. Returned as ``(name, Figure, caption)`` for ``reporter.save_figure``.
+
+    Panels: (1) every attempted recording by outcome -- scored, valid but not scored, failed -- with the
+    identity line and the prior bounds; (2) the scored recordings with their nominal 90 % ranges, the
+    mean absolute error, the mean signed error and the measured coverage in the panel title; (3) the
+    error against the true value with binned medians (``bins`` equal bins over the log10 prior).
+
+    Args:
+        key: the detector imaging parameter (its prior range comes from the detector parameterization).
+        truth, estimate: per attempted recording, PHYSICAL units (an invalid estimate may be NaN).
+        valid: the estimator's validity mask; ``usable`` (optional) the subset the accuracy rule scores
+            (the bleaching estimator's eligibility); without it every valid recording is scored.
+        range_low, range_high: the nominal 90 % range per recording, physical units, or log10 when
+            ``ranges_are_log10``; omitted when the estimator emits none.
+        tolerance: ``("dex", 0.1)`` or ``("linear", 0.08)``: the accuracy rule's band, drawn in both
+            coordinate systems (a dex band is multiplicative in linear coordinates and conversely).
+        title: a line for the figure header, typically the estimator and the run.
+    Matplotlib is imported here, lazily, so that a run without figures never pays for it.
+    """
+    from matplotlib.figure import Figure   # lazy: headless Agg rendering through Figure.savefig
+
+    truth = np.asarray(truth, dtype=float); estimate = np.asarray(estimate, dtype=float)
+    valid = np.asarray(valid, dtype=bool)
+    scored = valid.copy() if usable is None else (valid & np.asarray(usable, dtype=bool))
+    rejected = valid & ~scored
+    failed = ~valid
+    lo10, hi10 = prior_range(key)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t10 = np.where(truth > 0, np.log10(np.where(truth > 0, truth, 1.0)), np.nan)
+        e10 = np.where(estimate > 0, np.log10(np.where(estimate > 0, estimate, 1.0)), np.nan)
+        if range_low is not None and range_high is not None:
+            rl = np.asarray(range_low, dtype=float); rh = np.asarray(range_high, dtype=float)
+            if ranges_are_log10:
+                rl10, rh10 = rl, rh
+                rl_lin, rh_lin = 10.0 ** rl, 10.0 ** rh
+            else:
+                rl_lin, rh_lin = rl, rh
+                rl10 = np.where(rl > 0, np.log10(np.where(rl > 0, rl, 1.0)), np.nan)
+                rh10 = np.where(rh > 0, np.log10(np.where(rh > 0, rh, 1.0)), np.nan)
+        else:
+            rl10 = rh10 = rl_lin = rh_lin = None
+    edges10 = np.linspace(lo10, hi10, bins + 1)
+    scored_label = "usable (scored)" if usable is not None else "valid (scored)"
+    rejected_label = "valid, rejected by the diagnostic" if usable is not None else "valid, not scored"
+    kinds = [(scored, "#4C72B0", 14, scored_label), (rejected, "#DD8452", 10, rejected_label),
+             (failed, "#C44E52", 10, "failed")]
+
+    def draw(coord: str):
+        is_log = coord == "log10"
+        x = t10 if is_log else truth
+        y = e10 if is_log else estimate
+        lo, hi = (lo10, hi10) if is_log else (10.0 ** lo10, 10.0 ** hi10)
+        unit = f"log10 {key}" if is_log else key
+        fig = Figure(figsize=(17, 5.6), layout="constrained")
+        ax = [fig.add_subplot(1, 3, i) for i in (1, 2, 3)]
+        line = np.array([lo, hi]) if is_log else np.geomspace(lo, hi, 200)
+        for a in ax[:2]:
+            a.plot(line, line, "k-", lw=1, label="identity")
+            if tolerance is not None:
+                kind, tol = tolerance
+                if is_log and kind == "dex":
+                    band_lo, band_hi = line - tol, line + tol
+                elif is_log and kind == "linear":
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        band_lo = np.log10(np.clip(10.0 ** line - tol, 1e-300, None)); band_hi = np.log10(10.0 ** line + tol)
+                elif kind == "dex":
+                    band_lo, band_hi = line * 10.0 ** (-tol), line * 10.0 ** tol
+                else:
+                    band_lo, band_hi = line - tol, line + tol
+                a.fill_between(line, band_lo, band_hi, color="k", alpha=0.08, label=f"±{tol:g} {kind} (accuracy rule)")
+            a.axvline(lo, color="gray", lw=0.6, ls=":"); a.axvline(hi, color="gray", lw=0.6, ls=":")
+            a.set_xlabel(f"true {unit}"); a.set_ylabel(f"inferred {unit}")
+            if not is_log:
+                a.set_xscale("linear"); a.set_yscale("linear")
+        for m, c, s, lab in kinds:
+            ax[0].scatter(x[m], y[m], s=s, c=c, alpha=0.6, edgecolors="none", label=f"{lab}: {int(m.sum())}")
+        ax[0].set_title(f"all {int(truth.size):,} attempted recordings, by outcome", fontsize=10)
+        ax[0].legend(fontsize=8, loc="best")
+        m = scored
+        err = (y - x)
+        if m.any():
+            if rl10 is not None:
+                rlo = rl10 if is_log else rl_lin; rhi = rh10 if is_log else rh_lin
+                yerr = [np.clip(y[m] - rlo[m], 0, None), np.clip(rhi[m] - y[m], 0, None)]
+                yerr = [np.where(np.isfinite(v), v, 0.0) for v in yerr]
+                ax[1].errorbar(x[m], y[m], yerr=yerr, fmt="o", ms=3, color="#4C72B0", ecolor="#4C72B0",
+                               alpha=0.35, lw=0.7, label="scored, with the nominal 90 % range")
+                with np.errstate(invalid="ignore"):
+                    cov = float(np.mean((rlo[m] <= x[m]) & (x[m] <= rhi[m])))
+                cov_txt = f", coverage {100 * cov:.0f} %"
+            else:
+                ax[1].scatter(x[m], y[m], s=14, c="#4C72B0", alpha=0.6, edgecolors="none", label="scored")
+                cov_txt = ""
+            mae = float(np.nanmean(np.abs(err[m]))); bias = float(np.nanmean(err[m]))
+            ax[1].set_title(f"scored recordings ({int(m.sum())}): MAE {mae:.3g}, bias {bias:+.3g}{cov_txt}  "
+                            f"[{'dex' if is_log else 'absolute'}]", fontsize=10)
+        else:
+            ax[1].set_title("no scored recording", fontsize=10)
+        ax[1].legend(fontsize=8, loc="best")
+        for mm, c, s, lab in kinds:
+            ax[2].scatter(x[mm], err[mm], s=s, c=c, alpha=0.5, edgecolors="none")
+        for mm, c, lab, fill in ((scored, "#4C72B0", "scored: binned median and IQR", True),
+                                 (rejected, "#DD8452", f"{rejected_label}: binned median", False)):
+            xs, med, q1, q3 = [], [], [], []
+            for i in range(bins):
+                sel = mm & (t10 >= edges10[i]) & (t10 < edges10[i + 1]) & np.isfinite(err)
+                if sel.sum() >= 5:
+                    c10 = 0.5 * (edges10[i] + edges10[i + 1])
+                    xs.append(c10 if is_log else 10.0 ** c10)
+                    med.append(float(np.median(err[sel])))
+                    q1.append(float(np.percentile(err[sel], 25))); q3.append(float(np.percentile(err[sel], 75)))
+            if xs:
+                ax[2].plot(xs, med, "-o", color=c, ms=4, lw=1.5, label=lab)
+                if fill:
+                    ax[2].fill_between(xs, q1, q3, color=c, alpha=0.15)
+        ax[2].axhline(0, color="k", lw=1)
+        if tolerance is not None and ((is_log and tolerance[0] == "dex") or (not is_log and tolerance[0] == "linear")):
+            ax[2].axhline(tolerance[1], color="k", lw=0.6, ls="--"); ax[2].axhline(-tolerance[1], color="k", lw=0.6, ls="--")
+        ax[2].set_xlabel(f"true {unit}"); ax[2].set_ylabel(f"inferred − true ({'dex' if is_log else 'absolute'})")
+        ax[2].set_title("error against the true value", fontsize=10)
+        ax[2].legend(fontsize=8, loc="best")
+        for a in ax:
+            a.set_xlim(lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo))
+        head = f"{title} — " if title else ""
+        fig.suptitle(f"{head}{key}: true against inferred, {'log10 prior coordinates' if is_log else 'absolute values'}",
+                     fontsize=10)
+        caption = (f"{key}, {'log10 prior coordinates' if is_log else 'absolute values'}. Left: every attempted "
+                   f"recording by outcome, with the identity line and the prior bounds (dotted). Middle: the scored "
+                   f"recordings with their nominal 90 % range; the title gives the mean absolute error, the mean "
+                   f"signed error and the measured coverage in these coordinates. Right: inferred minus true against "
+                   f"the true value, with binned medians over {bins} equal log10-prior bins (scored: median and "
+                   f"interquartile band).")
+        return f"recovery_{key}_{coord}", fig, caption
+
+    return [draw("log10"), draw("linear")]

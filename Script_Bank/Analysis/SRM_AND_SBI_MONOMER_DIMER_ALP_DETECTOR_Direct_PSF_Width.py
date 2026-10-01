@@ -1056,6 +1056,14 @@ def main(argv=None):
     code = prov.finalize_code_provenance(startup_code, files=prov.DIRECT_ESTIMATOR_FILES)
     da.apply_code_provenance(result, code)
     da.render(reporter, result, estimator=STAGE, target_key="mu_r")
+    for fig_name, fig, fig_caption in (
+            da.recovery_figures(key="mu_r", truth=truth[:, 0], estimate=estimate[:, 0], valid=valid,
+                                range_low=mu_lo, range_high=mu_hi, ranges_are_log10=True,
+                                tolerance=("dex", ACCEPTANCE["mu_r_mae_dex"]), title=STAGE)
+            + da.recovery_figures(key="sigma_r", truth=truth[:, 1], estimate=estimate[:, 1], valid=valid,
+                                  range_low=sg_lo, range_high=sg_hi,
+                                  tolerance=("linear", ACCEPTANCE["sigma_r_mae"]), title=STAGE)):
+        reporter.save_figure(fig_name, fig, caption=fig_caption)
     if per_video["n_tracks"].size:
         reporter.stat("median tracks per video", float(np.median(per_video["n_tracks"])),
                       note="linked spot tracks entering the population estimate")

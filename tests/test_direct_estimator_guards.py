@@ -411,6 +411,71 @@ def test_verdict_table_leads_with_the_implementation_check():
     assert rows[0][1].startswith("INVALID")
 
 
+
+def _recovery_arrays(n=400, seed=7):
+    """Synthetic truth/estimate arrays over the bleaching prior with failed, rejected and scored rows."""
+    rng = np.random.default_rng(seed)
+    lo, hi = da.prior_range("prob_photo_bleach")
+    truth = 10 ** rng.uniform(lo, hi, n)
+    estimate = truth * 10 ** rng.normal(0.0, 0.05, n)
+    valid = np.ones(n, bool); valid[:40] = False; estimate[:40] = np.nan
+    usable = valid.copy(); usable[40:120] = False
+    low, high = estimate * 10 ** -0.1, estimate * 10 ** 0.1
+    return truth, estimate, valid, usable, low, high
+
+
+def test_recovery_figures_are_written_and_listed_in_the_report():
+    from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
+    truth, estimate, valid, usable, low, high = _recovery_arrays()
+    with tempfile.TemporaryDirectory() as tmp:
+        reporter = DiagnosticReporter("Direct_Test", enabled=True, dump=True, dump_dir=tmp)
+        figs = da.recovery_figures(key="prob_photo_bleach", truth=truth, estimate=estimate, valid=valid,
+                                   usable=usable, range_low=low, range_high=high,
+                                   tolerance=("dex", 0.1), title="test")
+        assert [f[0] for f in figs] == ["recovery_prob_photo_bleach_log10", "recovery_prob_photo_bleach_linear"]
+        for name, fig, caption in figs:
+            assert "prior coordinates" in caption or "absolute values" in caption
+            assert reporter.save_figure(name, fig, caption=caption) is not None
+        with contextlib.redirect_stdout(io.StringIO()):
+            reporter.summary()
+            reporter.write_report()
+        for name in ("recovery_prob_photo_bleach_log10", "recovery_prob_photo_bleach_linear"):
+            png = pathlib.Path(tmp) / "figures" / f"{name}.png"
+            assert png.is_file() and png.stat().st_size > 10_000, name
+        report = (pathlib.Path(tmp) / "report.md").read_text()
+        assert "figures/recovery_prob_photo_bleach_log10.png" in report
+        assert "figures/recovery_prob_photo_bleach_linear.png" in report
+    # without usable and without ranges (the PSF and flicker estimators' shape), and with log10 ranges
+    figs = da.recovery_figures(key="mu_r", truth=10 ** np.linspace(0.0, 0.3, 50), estimate=10 ** np.linspace(0.0, 0.3, 50),
+                               valid=np.ones(50, bool), tolerance=("dex", 0.02))
+    assert len(figs) == 2
+    figs = da.recovery_figures(key="mu_r", truth=10 ** np.linspace(0.0, 0.3, 50), estimate=10 ** np.linspace(0.0, 0.3, 50),
+                               valid=np.ones(50, bool), range_low=np.linspace(-0.05, 0.25, 50),
+                               range_high=np.linspace(0.05, 0.35, 50), ranges_are_log10=True, tolerance=("linear", 0.08))
+    assert len(figs) == 2
+
+
+def test_redraw_utility_reproduces_the_figures_and_refuses_a_folder_without_arrays():
+    spec = importlib.util.spec_from_file_location(
+        "figs", ANALYSIS / "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py")
+    figs = importlib.util.module_from_spec(spec); spec.loader.exec_module(figs)
+    truth, estimate, valid, usable, low, high = _recovery_arrays()
+    with tempfile.TemporaryDirectory() as tmp:
+        run = pathlib.Path(tmp) / "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_20S_50FPS_Direct_Fluorescence_Loss_DEV_test"
+        run.mkdir()
+        np.savez_compressed(run / "direct_fluorescence_loss.npz", truth=truth, estimate=estimate, valid=valid,
+                            usable=usable, range_low=low, range_high=high)
+        (run / "summary.json").write_text('{"acceptance": {"prob_bleach_mae_dex": 0.1}, "purpose": {"estimator": "Direct_Fluorescence_Loss"}}')
+        written = figs.redraw(str(run))
+        assert sorted(pathlib.Path(w).name for w in written) == ["recovery_prob_photo_bleach_linear.png",
+                                                                  "recovery_prob_photo_bleach_log10.png"]
+        assert all(pathlib.Path(w).stat().st_size > 10_000 for w in written)
+        empty = pathlib.Path(tmp) / "not_a_run"; empty.mkdir()
+        with contextlib.redirect_stderr(io.StringIO()):
+            assert figs.main([str(empty)]) == 2
+        assert not (empty / "figures").exists()
+
+
 if __name__ == "__main__":
     import sys
     import time

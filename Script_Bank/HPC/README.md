@@ -498,7 +498,26 @@ remote's own machine-local files (`machine_profiles.toml`,
 `Script_Bank/HPC/hpc_local.env`) are never touched. Dry run is the default
 (`DRYRUN=1` prints what would change and transfers nothing; set `DRYRUN=0` only
 after reading the printed plan), and an optional machine argument restricts the
-sync to one remote.
+sync to one remote. A live sync counts as done only when it is verified: after the
+transfer a dry run with `--checksum` compares every file's content with the
+reference, and the secrets check must run and find no secrets file (it reports
+absence only after the same remote command has entered the repository directory).
+Every ssh and rsync status is tested and rsync's own messages are shown on failure;
+the run ends with a per-machine summary and exits with status 1 if any machine was
+unreachable, failed to transfer, still differs in content, or failed its secrets
+check, or if that check could not run, or if a requested machine is not in the
+table. By default the verification reads back through the same ssh session as the
+transfer, so on JUPITER and JUWELS through the same login node, and the output says
+so. Set `VERIFY_VIA_<name>=<user@host>` to run it through another host that sees
+the same filesystem, for example another login node reached through its own
+authenticated session; the script does not check that this host is a different
+node. On 2026-09-30 a size-and-time check and a content search through the login
+node that had performed the writes both showed the new files, while the compute
+nodes that imported the package about six hours later read its two changed modules
+as empty, and another login node read every changed file as empty the next day;
+that the data never left the writing node's cache is inferred, not observed.
+`tests/test_fleet_sync.py` exercises these paths against local stand-ins for the
+remotes.
 
 ---
 

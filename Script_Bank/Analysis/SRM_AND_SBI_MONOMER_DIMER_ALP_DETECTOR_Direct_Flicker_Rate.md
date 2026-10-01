@@ -152,6 +152,13 @@ of record required. `--model-traces` sizes the Ornstein–Uhlenbeck arm per grid
 vectorized by trace length, costing about 1.5 s per grid point, so roughly 16 s per recording
 for the ten-point grid. `--dry-run` resolves settings and prints what it would read and write.
 
+Every tier run also writes the recovery figures `figures/recovery_lambda_rate_log10.png` and `..._linear.png` and lists them at the end of
+`report.md`: the true value against the inferred one for every attempted recording, by outcome, in the
+parameter's log10 prior coordinates and in absolute values, with the identity line, the prior bounds, the
+accuracy rule's band, the nominal 90 % ranges of the scored recordings and the error against the true value
+with binned medians. `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Estimator_Figures.py <run folder>` redraws
+them for a run folder written before the figures existed.
+
 ## Result and interpretation
 
 **Acceptance is governed by `DETECTOR_WORKFLOW.md` §9.6 (frozen 2026-09-21).** The thresholds below are
