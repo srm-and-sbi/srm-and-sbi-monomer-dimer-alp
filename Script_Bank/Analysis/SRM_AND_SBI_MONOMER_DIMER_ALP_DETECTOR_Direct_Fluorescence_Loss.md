@@ -483,9 +483,10 @@ background division) and late-phase 0.0341 (0.0289), the numbers quoted above. A
 domain measures the synthetic tier but not the recordings was checked on rcl01's copies of the tier: in the
 synthetic 20 s recordings the per-frame median is the same level, 5, in every one of the 1,000 frames (three
 recordings of task 0 read), so the quantized floor is a constant the fit's free offset absorbs, where the
-recordings' floor falls through a level boundary. The ad hoc script `raw_domain_diag.py` in the record
-folder is superseded by the path; it is kept there as the producer of the stored files until its removal is
-decided.
+recordings' floor falls through a level boundary. The ad hoc script that produced the record's
+`raw_domain_diagnostic/` files on 2026-09-25 was removed from the record on 2026-10-01 once the path reproduced
+its outputs: scripts do not live in the data bank, and its arithmetic is the utility's `--domain raw` path.
+The files it produced stay, with its log.
 
 **Experimental measurement in the raw domain (2026-10-01; JUWELS job 14282553 on one batch node, 108 s,
 repeated the same day as job 14282877 once the report carried the window table and the scenario figure, the
@@ -559,8 +560,11 @@ value is the whole-recording one: the bleaching row of `DETECTOR_WORKFLOW.md` §
 0.03 as the late-time variant `VAR_PB`, and the `REF` artifact was rebuilt with it (the artifact built with
 0.03 is kept under `..._REF_Nuisance_DLI_Superseded_20261001/`; the posterior-predictive renders made before
 that date under `REF` used 0.03, as their provenance records). The two-component shape and the brightness
-coupling remain unrepresented by one per-interval probability, and whether a render at 0.05 reproduces the
-measured field decline is the predictive check that remains.
+coupling remain unrepresented by one per-interval probability; the value is carried as a working scenario, and
+by the user's decision no predictive render at 0.05 is made to check it. The bleaching work closes here: the
+estimator is a cross-check whose fitted value reads the fast component, the window readings are the
+measurement of record, and the parameter is reopened only if the biological conclusion turns out to depend on
+the choice between 0.05 and 0.03.
 
 **What the raw-domain measurement is, and what remains to be checked.** The raw-recording decline measurements
 above stand as measured. Their reading as a bleaching proxy rests on the ideal relation for identical,

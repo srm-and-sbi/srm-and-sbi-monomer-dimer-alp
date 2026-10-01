@@ -82,7 +82,11 @@ the estimator's arithmetic on a flux curve is unchanged.
   `Posit/..._REF_Nuisance_DLI_Superseded_20261001/` with a README, and the posterior-predictive renders and
   reports made before that date under `REF` used 0.03, as their provenance records. The photobleaching
   estimator's note carries the decision and the reason, and notes that a single-rate decay is an exponential
-  that reads as nearly straight on a linear axis only because the decay is shallow over 20 s.
+  that reads as nearly straight on a linear axis only because the decay is shallow over 20 s. No predictive
+  render at the selected value is made (the user's decision): the value is carried as a working scenario and
+  the bleaching work closes, the parameter to be reopened only if the biological conclusion depends on the
+  choice between 0.05 and 0.03. The ad hoc script that produced the 2026-09-25 raw-domain diagnostic was
+  removed from that record once the utility's path reproduced its outputs; the files it produced stay.
 
 ## 0.1.33 - 2026-10-01
 
