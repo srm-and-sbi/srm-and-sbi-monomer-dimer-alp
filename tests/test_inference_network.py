@@ -27,7 +27,7 @@ from srm_and_sbi_monomer_dimer_alp.parameterization import (NETWORK_PRESETS, PAR
                                                             InferenceNetwork)
 
 SCREENING_PRESETS = ("kernel7", "earlyconv", "statspool")
-COMBINED_PRESETS = ("capacity256_kernel7_stats", "capacity256_earlyconv_stats")
+COMBINED_PRESETS = ("capacity256_kernel7_stats", "capacity256_earlyconv_stats", "capacity256_kernel7_earlyconv_stats")
 DOCUMENTED_DURATIONS = {1.0: 50, 2.0: 100, 5.0: 250, 10.0: 500, 20.0: 1000}     # seconds -> frames at 50 FPS
 
 
@@ -99,7 +99,9 @@ def test_the_presets_change_one_encoder_setting_each_and_keep_the_flow():
 def test_the_combined_presets_build_on_capacity256_with_statistics_pooling():
     cap = NETWORK_PRESETS["capacity256"]
     for preset, change in (("capacity256_kernel7_stats", {"first_spatial_kernel": 7}),
-                           ("capacity256_earlyconv_stats", {"extra_spatial_convs": 1, "extra_spatial_conv_blocks": 2})):
+                           ("capacity256_earlyconv_stats", {"extra_spatial_convs": 1, "extra_spatial_conv_blocks": 2}),
+                           ("capacity256_kernel7_earlyconv_stats", {"first_spatial_kernel": 7, "extra_spatial_convs": 1,
+                                                                    "extra_spatial_conv_blocks": 2})):
         spec = NETWORK_PRESETS[preset]
         assert spec["flow"] == cap["flow"] == {"hidden_features": 128, "num_transforms": 8, "num_blocks": 2,
                                                "dropout_probability": 0.1}
@@ -116,6 +118,20 @@ def test_the_combined_presets_build_on_capacity256_with_statistics_pooling():
     assert [m.kernel_size for m in b.features if isinstance(m, nn.Conv3d)] == [(3, 3, 3), (1, 3, 3), (3, 3, 3), (1, 3, 3),
                                                                                  (3, 3, 3), (3, 3, 3), (3, 3, 3)]
     assert sum(p.numel() for p in a.parameters()) == 2_955_520 and sum(p.numel() for p in b.parameters()) == 2_965_264
+    # The third candidate combines both early modifications: the kernel sequence is B's with A's first kernel.
+    c = Complex3DCNN(**_network_kwargs("capacity256_kernel7_earlyconv_stats"))
+    assert [m.kernel_size for m in c.features if isinstance(m, nn.Conv3d)] == [(3, 7, 7), (1, 3, 3), (3, 3, 3), (1, 3, 3),
+                                                                                 (3, 3, 3), (3, 3, 3), (3, 3, 3)]
+    assert sum(p.numel() for p in c.parameters()) == 2_967_184
+    # Its stored activations equal B's: the wider first kernel changes no tensor size.
+    with torch.no_grad():
+        shapes = []
+        for net in (b, c):
+            x, kept = torch.zeros(1, 1, 16, 256, 256), []
+            for m in net.features:
+                x = m(x); kept.append(tuple(x.shape))
+            shapes.append(kept)
+    assert shapes[0] == shapes[1]
 
 
 def test_forward_and_backward_stay_finite_including_constant_maps_under_statistics_pooling():
@@ -138,7 +154,8 @@ def test_forward_and_backward_stay_finite_including_constant_maps_under_statisti
             assert module.weight.grad is not None and module.weight.grad.abs().sum() > 0, (preset, name)
     # A constant input gives constant feature maps: zero spatial variance, whose square root must not
     # produce a NaN gradient (STATS_EPS), in every network with statistics pooling.
-    for preset, n_frames in (("statspool", 100), ("capacity256_kernel7_stats", 16), ("capacity256_earlyconv_stats", 16)):
+    for preset, n_frames in (("statspool", 100), ("capacity256_kernel7_stats", 16), ("capacity256_earlyconv_stats", 16),
+                             ("capacity256_kernel7_earlyconv_stats", 16)):
         net = Complex3DCNN(**_network_kwargs(preset, n_frames=n_frames)).train()
         x = torch.zeros(1, n_frames, 256, 256, requires_grad=True)
         net(x).sum().backward()
@@ -185,7 +202,8 @@ def _brute_force_field(net, axis):
 def test_the_receptive_field_arithmetic_agrees_with_the_implemented_layers():
     expected = {"baseline": (94, 11), "capacity256": (94, 11), "kernel7": (98, 11),
                 "earlyconv": (100, 11), "statspool": (94, 11),
-                "capacity256_kernel7_stats": (98, 11), "capacity256_earlyconv_stats": (100, 11)}
+                "capacity256_kernel7_stats": (98, 11), "capacity256_earlyconv_stats": (100, 11),
+                "capacity256_kernel7_earlyconv_stats": (104, 11)}
     assert set(expected) == set(NETWORK_PRESETS)
     for preset, (space, time) in expected.items():
         net = Complex3DCNN(**_network_kwargs(preset))

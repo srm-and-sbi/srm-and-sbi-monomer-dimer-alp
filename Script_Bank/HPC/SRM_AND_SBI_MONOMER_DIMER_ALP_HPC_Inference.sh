@@ -20,7 +20,7 @@
 #     the default peak, learning_rate_minimum*max_factor = 1.28e-03),
 #   RESURRECT (set 1 to load the existing checkpoint and continue training from it
 #     -- continue a run stopped by the wall, or add epochs; unset = fresh run),
-#   NETWORK_PRESET (baseline|capacity256|kernel7|earlyconv|statspool|capacity256_kernel7_stats|capacity256_earlyconv_stats; parameterization.NETWORK_PRESETS, forwarded as
+#   NETWORK_PRESET (baseline|capacity256|kernel7|earlyconv|statspool|capacity256_kernel7_stats|capacity256_earlyconv_stats|capacity256_kernel7_earlyconv_stats; parameterization.NETWORK_PRESETS, forwarded as
 #     --network-preset; unset = baseline, the configured architecture),
 #   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
 #     PRODUCT of this stage -- Paths.product_label -- so a named experiment lives beside the
@@ -110,6 +110,9 @@ RESURRECT="${RESURRECT:-}"   # set 1 to load the existing checkpoint and continu
 
 BATCH_ARG=()
 [ -n "$BATCH" ] && BATCH_ARG=(--batch-size "$BATCH")
+GLOBAL_BATCH="${GLOBAL_BATCH:-}"   # videos per optimizer step across ALL ranks (gradient accumulation); empty -> one step per batch
+GLOBAL_BATCH_ARG=()
+[ -n "$GLOBAL_BATCH" ] && GLOBAL_BATCH_ARG=(--global-batch "$GLOBAL_BATCH")
 HEARTBEAT_ARG=()
 [ -n "$HEARTBEAT" ] && HEARTBEAT_ARG=(--heartbeat "$HEARTBEAT")
 LR_ARG=()
@@ -134,9 +137,9 @@ INFER_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py"
 case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
 
 INFER_ARGS=( --condition "$CONDITION" --tasks "$TRAIN_TASKS" --test-tasks "$TEST_TASKS" --epochs "$EPOCHS"
-             --total-time-seconds "$TOTAL_TIME" "${BATCH_ARG[@]}" "${HEARTBEAT_ARG[@]}" "${RESURRECT_ARG[@]}" "${LR_ARG[@]}" "${PRESET_ARG[@]}" "${TAG_ARG[@]}" )
+             --total-time-seconds "$TOTAL_TIME" "${BATCH_ARG[@]}" "${GLOBAL_BATCH_ARG[@]}" "${HEARTBEAT_ARG[@]}" "${RESURRECT_ARG[@]}" "${LR_ARG[@]}" "${PRESET_ARG[@]}" "${TAG_ARG[@]}" )
 
-echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} resurrect=${RESURRECT:-0} preset=${NETWORK_PRESET:-baseline} tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} global_batch=${GLOBAL_BATCH:-none} resurrect=${RESURRECT:-0} preset=${NETWORK_PRESET:-baseline} tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # Training keeps torchrun: DistributedDataParallel needs its rendezvous, and its ranks finish
 # together (every step is synchronized), so torchrun's fixed 300 s exit barrier -- which no

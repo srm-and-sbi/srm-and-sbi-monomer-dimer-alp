@@ -1351,6 +1351,12 @@ class InferenceFlow:
 #   convolution before the pooling of blocks 1 and 2. Neither isolates one modification; each is a
 #   candidate architecture for the whole posterior estimator, compared with `capacity256` (its base)
 #   and with `baseline` (the secondary reference).
+#
+#   capacity256_kernel7_earlyconv_stats -- the third combined candidate (2026-10-02): both early
+#   modifications together on the same base, the 7-wide first spatial kernel AND the spatial-only
+#   (1, 3, 3) convolution before the pooling of blocks 1 and 2, with statistics pooling and the
+#   `capacity256` flow. Its stored activations equal the earlyconv candidate's (the wider kernel changes
+#   no tensor size); its theoretical spatial reach is 104 px.
 _CAPACITY256_FLOW: dict = dict(hidden_features=128, num_transforms=8, num_blocks=2, dropout_probability=0.1)
 NETWORK_PRESETS: dict = {
     "baseline": dict(network={}, flow={}),
@@ -1363,6 +1369,10 @@ NETWORK_PRESETS: dict = {
     "capacity256_earlyconv_stats": dict(network=dict(start_channels=16, extra_spatial_convs=1, extra_spatial_conv_blocks=2,
                                                      spatial_pooling="stats"),
                                         flow=dict(_CAPACITY256_FLOW)),
+    "capacity256_kernel7_earlyconv_stats": dict(network=dict(start_channels=16, first_spatial_kernel=7,
+                                                             extra_spatial_convs=1, extra_spatial_conv_blocks=2,
+                                                             spatial_pooling="stats"),
+                                                flow=dict(_CAPACITY256_FLOW)),
 }
 
 

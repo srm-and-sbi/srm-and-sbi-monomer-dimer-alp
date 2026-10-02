@@ -35,6 +35,7 @@ conditioned on the Complex3DCNN embedding of the input video.
 
 from dataclasses import dataclass
 from pathlib import Path
+import contextlib
 import copy
 import os
 import random
@@ -886,6 +887,31 @@ def _diagnose_nonfinite_loss(model, video_batch, theta_batch, loss_value, epoch,
     )
 
 
+def resolve_accumulation_steps(global_batch: Optional[int], batch_size: int, world_size: int) -> int:
+    """Gradient-accumulation count that realizes a requested global batch.
+
+    The optimizer should see the same number of videos per step whatever the rank count
+    (the node count is a speed knob; the optimization is defined by the data, the
+    architecture and the global batch). With `batch_size` videos per rank on `world_size`
+    ranks, one batch covers `batch_size * world_size` videos, so `global_batch` is reached by
+    accumulating `global_batch / (batch_size * world_size)` batches per step. That ratio must
+    be a whole number of at least 1: a smaller global batch than one batch covers needs a
+    smaller per-rank batch or fewer ranks, and a non-integer ratio cannot be realized.
+    `global_batch=None` means no constraint (one step per batch, the original behavior).
+    """
+    if global_batch is None:
+        return 1
+    global_batch, batch_size, world_size = int(global_batch), int(batch_size), int(world_size)
+    per_step = batch_size * world_size
+    if global_batch < per_step:
+        raise ValueError(f"--global-batch {global_batch} is smaller than one batch of {batch_size} x "
+                         f"{world_size} rank(s) = {per_step} videos; reduce --batch-size or the rank count")
+    if global_batch % per_step:
+        raise ValueError(f"--global-batch {global_batch} is not a multiple of one batch of {batch_size} x "
+                         f"{world_size} rank(s) = {per_step} videos")
+    return global_batch // per_step
+
+
 def train_loop(estimator: nn.Module,
                model: nn.Module,
                train_loader: DataLoader,
@@ -904,7 +930,8 @@ def train_loop(estimator: nn.Module,
                test_loss_distribution: bool = False,
                on_new_best: Optional[Callable] = None,
                resurrect_state_path: Optional[Path] = None,
-               resume_meta: Optional[dict] = None) -> tuple:
+               resume_meta: Optional[dict] = None,
+               accumulation_steps: int = 1) -> tuple:
     """Run the training loop with optimum-checkpoint tracking, optional RESURRECT, and in-run warm restarts.
 
     Args:
@@ -938,6 +965,17 @@ def train_loop(estimator: nn.Module,
         resume_meta: Optional {`timing_label`, `parameter_keys`} stamped into the
             resurrect-state and checked on hot restart, so a stale/mismatched file is
             refused rather than silently loaded.
+        accumulation_steps: Gradient accumulation: the number of consecutive per-rank
+            batches whose gradients are summed before one optimizer step (1 = a step per
+            batch, the original behavior). Each batch's mean loss is divided by this
+            count, so the summed gradient is the gradient of the mean loss over the
+            `accumulation_steps * batch * world_size` videos of the group: the optimizer
+            then sees exactly the global batch of a run with that many videos per step,
+            whatever the rank count. Under DDP the all-reduce runs only on the last batch
+            of each group (`no_sync` on the others). An epoch whose batch count is not a
+            multiple of the count ends with a smaller final group, stepped with the same
+            scaling (a slightly smaller last update). Resolved by the entry point from
+            `--global-batch` (`resolve_accumulation_steps`).
 
     Epochs are per invocation: `epochs` is how many epochs THIS call runs, always
     starting a fresh 0..epochs-1 loop; on a hot restart the global epoch counter (for
@@ -1073,6 +1111,11 @@ def train_loop(estimator: nn.Module,
                       f"(no test set; last-epoch checkpointing).", flush=True)
 
     n_batches = len(train_loader)
+    accumulation_steps = int(accumulation_steps)
+    if accumulation_steps < 1:
+        raise ValueError(f"accumulation_steps must be at least 1, not {accumulation_steps}")
+    n_steps = -(-n_batches // accumulation_steps)   # optimizer steps per epoch per rank (ceil)
+    global_batch = train_loader.batch_size * topo.world_size * accumulation_steps
     # Within-epoch progress cadence: a line every `heartbeat` batches. Default
     # (heartbeat_every unset) is ~4 lines/epoch; pass a smaller N (--heartbeat)
     # for finer progress on the long epochs of a production run.
@@ -1082,12 +1125,19 @@ def train_loop(estimator: nn.Module,
     n_test_videos = len(val_loader.dataset) if has_val else 0
     if is_main:
         where = f"{topo.world_size} GPUs (DDP)" if distributed else f"{device}"
+        accum_str = (f" accumulated {accumulation_steps} per step -> {n_steps} optimizer step(s)/epoch"
+                     if accumulation_steps > 1 else "")
         print(
             f"Training: {n_train_videos} train / {n_test_videos} test videos, "
-            f"{n_batches} batch(es)/epoch/rank, {epochs} epoch(s) on {where}. "
+            f"{n_batches} batch(es)/epoch/rank{accum_str}, global batch {global_batch}, "
+            f"{epochs} epoch(s) on {where}. "
             f"The first batch triggers model compilation -- expect a delay before the first heartbeat.",
             flush=True,
         )
+    # Under DDP, gradients are all-reduced only on the batch that closes an accumulation
+    # group; the other batches of the group run inside `no_sync()`. A plain module (single
+    # worker) has no `no_sync`, and nothing needs skipping there.
+    no_sync = getattr(model, "no_sync", None) if accumulation_steps > 1 else None
 
     loop_start = time.time()
     for epoch in range(epochs):
@@ -1098,23 +1148,34 @@ def train_loop(estimator: nn.Module,
         # ---- Training pass ------------------------------------------------
         model.train()
         batch_train_losses = []
+        optimizer.zero_grad()
         for b, (video_batch, theta_batch) in enumerate(train_loader, start=1):
             video_batch = video_batch.to(device)
             theta_batch = theta_batch.to(device)
-            optimizer.zero_grad()
-            loss = torch.mean(model(theta_batch, condition=video_batch))
-            loss_value = loss.item()   # single host sync, reused below
-            if not np.isfinite(loss_value):
-                # Fail-fast: abort before the NaN propagates through backward/step
-                # (a NaN can drive an out-of-bounds GPU access -> "memory access fault").
-                # --resurrect resumes from the last checkpoint on the next submission.
-                _diagnose_nonfinite_loss(model, video_batch, theta_batch,
-                                         loss_value, epoch + 1, b, topo.rank)
-                raise RuntimeError(
-                    f"[FINITE-GUARD] non-finite training loss; aborting before backward/step "
-                    f"(epoch {epoch + 1}, batch {b}, rank {topo.rank}).")
-            loss.backward()
-            optimizer.step()
+            # The optimizer steps when this batch closes an accumulation group (every
+            # `accumulation_steps` batches, and at the epoch's last batch). With
+            # accumulation_steps == 1 every batch closes its own group: the original loop.
+            step_now = (b % accumulation_steps == 0) or (b == n_batches)
+            sync_ctx = (no_sync() if (no_sync is not None and not step_now)
+                        else contextlib.nullcontext())
+            with sync_ctx:
+                loss = torch.mean(model(theta_batch, condition=video_batch))
+                loss_value = loss.item()   # single host sync, reused below
+                if not np.isfinite(loss_value):
+                    # Fail-fast: abort before the NaN propagates through backward/step
+                    # (a NaN can drive an out-of-bounds GPU access -> "memory access fault").
+                    # --resurrect resumes from the last checkpoint on the next submission.
+                    _diagnose_nonfinite_loss(model, video_batch, theta_batch,
+                                             loss_value, epoch + 1, b, topo.rank)
+                    raise RuntimeError(
+                        f"[FINITE-GUARD] non-finite training loss; aborting before backward/step "
+                        f"(epoch {epoch + 1}, batch {b}, rank {topo.rank}).")
+                # Dividing by the group size makes the summed gradient the gradient of the
+                # group's mean loss (a no-op at accumulation_steps == 1).
+                (loss / accumulation_steps if accumulation_steps > 1 else loss).backward()
+            if step_now:
+                optimizer.step()
+                optimizer.zero_grad()
             batch_train_losses.append(loss_value)
             # Always-on within-epoch heartbeat (~4/epoch), rank 0 only.
             if is_main and (b % heartbeat == 0 or b == n_batches):

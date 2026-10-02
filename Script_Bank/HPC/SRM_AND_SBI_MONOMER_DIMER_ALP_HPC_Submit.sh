@@ -33,7 +33,7 @@
 #                   (SKIN_FACTOR = ReaDDy neighbor-list skin as a multiple of the
 #                   particle diameter; RDS-only, performance not physics; unset =
 #                   the code default 10x = 100 nm)
-#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH LR HEARTBEAT RESURRECT
+#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH GLOBAL_BATCH LR HEARTBEAT RESURRECT
 #                   (RESURRECT=1 continues training from the existing checkpoint;
 #                   LR = per-run starting/peak learning rate, unset = the stage
 #                   script's default peak)
@@ -56,7 +56,7 @@
 #             experiment reports) and of the job name -- <alias>_<CONDITION>_<timing>_<TAG>_<Stage> --
 #             so a named experiment lives beside the canonical run (Paths.product_label). Inputs
 #             (video/theta sets, recordings) keep the plain timing label. Unset = canonical names.
-#   NETWORK_PRESET  inference: baseline|capacity256|kernel7|earlyconv|statspool|capacity256_kernel7_stats|capacity256_earlyconv_stats (parameterization.NETWORK_PRESETS); unset = baseline.
+#   NETWORK_PRESET  inference: baseline|capacity256|kernel7|earlyconv|statspool|capacity256_kernel7_stats|capacity256_earlyconv_stats|capacity256_kernel7_earlyconv_stats (parameterization.NETWORK_PRESETS); unset = baseline.
 #   NODES     GPU stages: --nodes override for multi-node (else the baked --nodes=1).
 #             --gres is per node, so NODES=2 GRES=gpu:4 spans 2*4=8 ranks (world_size):
 #             inference trains data-parallel across them, evaluation/experiment shard

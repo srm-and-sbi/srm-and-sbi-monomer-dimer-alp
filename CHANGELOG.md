@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.36 - 2026-10-02
+
+The Inference stage can hold the global batch fixed on any rank count. The node count is a speed knob; the
+optimization is defined by the data, the architecture and the videos per optimizer step, and the
+learning-rate schedule advances per epoch, so the same per-GPU batch on twice the ranks halved the optimizer
+steps per epoch of the encoder-screening trainings. Nothing changes for a run that does not request a
+global batch.
+
+### Added
+
+- `--global-batch N` (Inference entry points; `GLOBAL_BATCH` in both HPC Inference scripts and listed by both
+  dispatchers): gradient accumulation to a fixed global batch. Each rank sums the gradients of
+  `N / (batch_size × world_size)` consecutive batches before one optimizer step, scaling each batch's mean
+  loss by that count so the step is the gradient of the mean loss over the N videos; under DDP the
+  all-reduce runs only on the group's last batch (`no_sync` on the others). N must be a multiple of
+  `batch_size × world_size` and at least that large (`resolve_accumulation_steps`). The training banner
+  prints the optimizer steps per epoch and the global batch; the estimator manifests record `batch_size`,
+  `global_batch` and `world_size`.
+- Tests (`tests/test_gradient_accumulation.py`, CPU): the resolution accepts the recorded geometries and
+  refuses what cannot be realized; accumulated steps equal single steps on the whole group to floating-point
+  precision; a count of 1 reproduces the original loop; the last partial group and the epoch boundary are
+  handled as documented.
+
+### Changed
+
+- DETECTOR_WORKFLOW.md, the encoder screening: the batch rule is restated as "nodes for speed, a fixed
+  global batch for comparability" with the reference global batch 1,024 and the sweep at 256 and 512; the
+  screening rule (candidates below the baseline's TEST loss are dropped without Evaluation) and the
+  retrained control are recorded in the protocol.
+
+## 0.1.35 - 2026-10-02
+
+A third combined candidate joins the encoder screening: both early spatial modifications together on the
+`capacity256` base. Nothing is trained or adopted by this release; the two running candidates are unchanged.
+
+### Added
+
+- Preset `capacity256_kernel7_earlyconv_stats` (tag `CAP256KERNEL7EARLYCONVSTATS`): the `capacity256`
+  widths and flow with statistics pooling, the first block's spatial kernel widened to 7 and one
+  spatial-only (1, 3, 3) convolution before the pooling of blocks 1 and 2. 2,967,184 embedding parameters,
+  theoretical spatial reach 104 px; its stored activations equal the earlyconv candidate's. The HPC
+  inference and submit scripts list the preset; DETECTOR_WORKFLOW.md's combined-candidates table carries
+  it as C.
+- Tests: the third candidate builds on `capacity256` with the intended kernel sequence, projection and
+  parameter count, keeps the earlyconv candidate's activation shapes, stays finite forward and backward
+  (constant maps included), and its receptive field agrees with the implemented layers.
+
 ## 0.1.34 - 2026-10-01
 
 The fluorescence-loss estimator's experimental input path can read the 16-bit raw frames, and the model-free

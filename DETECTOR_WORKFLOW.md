@@ -1993,29 +1993,53 @@ flow has not been established as its cause; bleaching recovery stays an explicit
 candidates use statistics pooling (3 · 256 → 256, 196,864 projection parameters), which addresses the final
 spatial reduction at small cost, and they differ in the early spatial processing:
 
-| | `capacity256` (base) | A: `capacity256_kernel7_stats` | B: `capacity256_earlyconv_stats` |
-|---|---|---|---|
-| first spatial kernel | 3 × 3 | **7 × 7** | 3 × 3 |
-| extra spatial convolutions | none | none | **one before the pooling of blocks 1 and 2** |
-| spatial reduction | mean | **mean + std + max → 256** | **mean + std + max → 256** |
-| embedding parameters | 2,756,736 | 2,955,520 | 2,965,264 |
-| conv-stack activations per 2 s video (§9.7 convention) | 1.70 GiB | 1.70 GiB | 2.87 GiB |
-| theoretical spatial reach | 94 px | 98 px | 100 px |
+| | `capacity256` (base) | A: `capacity256_kernel7_stats` | B: `capacity256_earlyconv_stats` | C: `capacity256_kernel7_earlyconv_stats` |
+|---|---|---|---|---|
+| first spatial kernel | 3 × 3 | **7 × 7** | 3 × 3 | **7 × 7** |
+| extra spatial convolutions | none | none | **one before the pooling of blocks 1 and 2** | **one before the pooling of blocks 1 and 2** |
+| spatial reduction | mean | **mean + std + max → 256** | **mean + std + max → 256** | **mean + std + max → 256** |
+| embedding parameters | 2,756,736 | 2,955,520 | 2,965,264 | 2,967,184 |
+| conv-stack activations per 2 s video (§9.7 convention) | 1.70 GiB | 1.70 GiB | 2.87 GiB | 2.87 GiB |
+| theoretical spatial reach | 94 px | 98 px | 100 px | 104 px |
 
-Neither candidate isolates statistics pooling's contribution; that is accepted for this selection
+No candidate isolates statistics pooling's contribution; that is accepted for this selection
 exercise, and statistics pooling remains a hypothesis, not an assumed improvement. The three
 single-change smokes are retained as technical evidence, and their trainings are not run. Tags:
-`CAP256KERNEL7STATS` and `CAP256EARLYCONVSTATS` (smokes `SMOKECAP256KERNEL7STATS`,
-`SMOKECAP256EARLYCONVSTATS`).
+`CAP256KERNEL7STATS`, `CAP256EARLYCONVSTATS` and `CAP256KERNEL7EARLYCONVSTATS` (smokes
+`SMOKECAP256KERNEL7STATS`, `SMOKECAP256EARLYCONVSTATS`, `SMOKECAP256KERNEL7EARLYCONVSTATS`).
 
-**Fixed node allocation, flexible batch.** Both candidates train on 16 nodes × 4 GH200. The per-GPU batch
-follows the measured memory of the exact combined architecture: 16 gives the global batch of 1,024 that
-the baseline and `capacity256` trained with; 8 gives 512. Either is acceptable, the two candidates may
-differ, no gradient accumulation is implemented or used, and no nodes are added to preserve the batch. The
-resolved per-GPU batch, the global batch and the optimizer steps per epoch are recorded for each
-candidate. A smaller batch changes the training dynamics and the number of updates per epoch, so the
-comparison evaluates each architecture under its practical training configuration, not a perfectly
-isolated architecture effect; that is accepted and is not a reason to delay.
+**The third candidate (2026-10-02).** While A and B trained, C was added: both early modifications
+together on the same base. A and B differ only in how the early spatial detail is handled, a wider first
+view or more nonlinear processing before downsampling; C asks whether the two are complementary. Its stored
+activations equal B's, since the wider kernel changes no tensor size, so its per-GPU batch follows B's
+measured memory. Which of the early-processing variants is worth having (more convolutions per block, or
+in every block) is architecture selection beyond this screening and is deferred.
+
+**Nodes for speed, a fixed global batch for comparability.** The node count is a speed knob and is set
+to what the machine allows (32 nodes × 4 GH200 for the candidate trainings of 2026-10-02). The per-GPU
+batch is the memory-determined value of the exact architecture (16 for all three candidates; a candidate
+that ran out of memory would run at 8). What defines the optimization, beside the data and the
+architecture, is the **global batch**, the videos per optimizer step across all ranks, because the
+learning-rate schedule advances per epoch: at the same per-GPU batch, twice the ranks means half the
+optimizer steps per epoch, and the retrained control (`CAP256REPRO`, 128 ranks × 16 = 2,048) lagged the
+original `capacity256` run (64 ranks × 16 = 1,024) by epoch in its first leg. Within one geometry every
+arm shares the global batch, so the candidates and the retrained control compare directly; across
+geometries the global batch must be held fixed. The Inference stage does this by gradient accumulation
+(`--global-batch`, `GLOBAL_BATCH` in the HPC scripts): each rank sums the gradients of
+`global_batch / (batch × world_size)` consecutive batches before stepping, the all-reduce running only on
+the group's last batch, so the optimizer sees the same videos per step on any rank count at no extra
+compute. The reference global batch is **1,024**, the value the estimators of record trained with; it is a
+reference, not a demonstrated optimum. Whether a smaller global batch trains better per epoch is measured
+by a sweep at 256 and 512 (`CAP256GB256`, `CAP256GB512`: `capacity256`, 50 epochs, 16 nodes at batch 4
+and 8) against the 1,024 of record and the 2,048 of `CAP256REPRO`; the estimator of record is then
+trained at the best-supported global batch. The per-GPU batch, the global batch, the rank count and the
+optimizer steps per epoch are recorded in every estimator manifest.
+
+**Screening rule (2026-10-02).** The candidates share the data, the priors and the protocol, so the
+training's TEST loss (the mean negative log-probability of the parameters on the 50,000 TEST videos) is
+the screening metric. A candidate that does not at least reach the baseline's TEST loss is dropped, and
+the Evaluation and Posterior_Calibration stages are not run for it; the scorecard below is for the
+candidates that pass.
 
 **Protocol.** Each step needs the user's word before it runs.
 
@@ -2031,11 +2055,13 @@ isolated architecture effect; that is accepted and is not a reason to delay.
    of both smokes are kept until these checks finish; then an exact deletion list is resolved for them,
    and the logs, the settings and rebuild specifications and the verification summary are retained.
 3. *Training*, one run per candidate from scratch under the production protocol: TRAIN 200 / TEST 50, 100
-   epochs in two legs of 50 (the second continued with `--resurrect`, chained with `afterany`), 16 nodes
-   × 4 GH200, the per-GPU batch from the smoke.
-4. *Evaluation and Posterior_Calibration* under each tag, as for the baseline and `capacity256`, under the
-   corrected MAP routine (§9.8), so the four estimators are compared on the same EVAL videos with the same
-   settings.
+   epochs in two legs of 50 (the second continued with `--resurrect`, chained with `afterany`), as many
+   nodes as the machine allows (32 × 4 GH200 on 2026-10-02), the per-GPU batch from the smoke, and the
+   control retrained under the same code and geometry (`CAP256REPRO`) beside them, so the candidates are
+   read against a control that shares every setting.
+4. *Evaluation and Posterior_Calibration* under each tag that passes the screening rule, as for the
+   baseline and `capacity256`, under the corrected MAP routine (§9.8), so the estimators are compared on
+   the same EVAL videos with the same settings.
 
 **Scorecard.** The comparison judges the whole posterior, not one parameter:
 
@@ -2145,8 +2171,21 @@ file on JUPITER's storage. The sync before the submission had left every file it
 login node that performed it reported the new content, so the tree, reported then as verified identical to the
 committed revision, was not. In 0.1.33 the fleet sync reports a failed transfer as a failure and verifies file
 content, through another host when `VERIFY_VIA_<name>` names one; on 2026-09-30 a read-back through the node
-that performed the writes returned the new content, so it does not replace a read from another node. The repair of the JUPITER tree, verified from another node, waits for the storage
-incident JSC declared on 2026-10-01 to be cleared, and resubmitting both smokes unchanged needs the user's word.
-Nothing trained, nothing adopted. Next: the repaired tree, the second smoke, the per-GPU batches and the
-provisional costs, then each of the two trainings on the user's separate word, then Evaluation and
-Posterior_Calibration per tag and the four-column compilation.
+that performed the writes returned the new content, so it does not replace a read from another node. On
+2026-10-02 the JUPITER tree was repaired by the fleet sync and verified from a compute node (a gate job that
+checks every file's sha256 against a manifest built on the reference machine, scans for zero-byte files and
+imports the package; the smokes were chained `afterok` to it). The second smoke then ran clean at batch 16 on
+one node (rank-0 peak memory 46.8 / 77.1 GiB for A, 74.9 / 89.6 GiB for B; steady epochs 45 and 65 s), the
+third candidate C was added and smoked the same way (74.9 / 92.7 GiB, 72 s), and every smoke product was
+verified (archive integrity, manifest checksums, schema-guarded loading, rebuild specification against the
+preset table, finite log-probabilities, Evaluation dry-run) and then deleted; the logs, the manifests and
+rebuild specifications, the gate records and the deletion records are retained in the data bank's
+`..._Encoder_Smoke_Record` beside the second-smoke failure record. The three candidates and the retrained
+control `CAP256REPRO` trained the same day on 32 nodes at batch 16 (global batch 2,048, 98 optimizer steps
+per epoch), two legs of 50 epochs each; their TEST-loss curves, the retrained control's lag behind the
+original `capacity256` run and the batch sweep that followed are described above ("Nodes for speed, a fixed
+global batch for comparability"). Results are read against the retrained control and recorded once the sweep
+and the runs at the sweep's best global batch complete. Nothing adopted. Next: the sweep's reading, the
+reference global batch, repeats where one run cannot separate an architecture from the slow-start regime of
+the per-epoch plateau schedule, then Evaluation and Posterior_Calibration for the candidates that pass the
+screening rule, and the compilation.

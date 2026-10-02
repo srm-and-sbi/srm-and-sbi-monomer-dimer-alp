@@ -53,6 +53,7 @@ from srm_and_sbi_monomer_dimer_alp.inference_support import (
     init_distributed,
     resolve_topology,
     setup_training,
+    resolve_accumulation_steps,
     train_loop,
 )
 from srm_and_sbi_monomer_dimer_alp.parameterization import NETWORK_PRESETS, PARAMETERS, RunTiming
@@ -159,6 +160,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --total-time-seconds : {args.total_time_seconds}")
     print(f"  --epochs             : {args.epochs}")
     print(f"  --batch-size         : {args.batch_size}")
+    print(f"  --global-batch       : {args.global_batch}   (None = one optimizer step per batch)")
     print(f"  --learning-rate      : {args.learning_rate}   "
           f"(effective: {effective_lr:.2e})")
     print(f"  --tasks              : {args.tasks}        (TRAIN-namespace tasks; gradient data)")
@@ -473,6 +475,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 "train_videos": tld_manifest["train_videos"],
                 "test_videos": tld_manifest["test_videos"],
                 "epochs": args.epochs,
+                "batch_size": args.batch_size, "global_batch": args.global_batch,
+                "world_size": training_setup["topo"].world_size,
             }
             estimator_path.parent.mkdir(parents=True, exist_ok=True)
             artifacts.save_estimator(
@@ -506,6 +510,15 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     resume_meta = {"timing_label": product_label,
                    "parameter_keys": list(spec.parameter_keys)}
 
+    # Gradient accumulation realizing --global-batch (1 = one step per batch). Resolved against
+    # the launch's rank count, so the same --global-batch gives the same optimization on any geometry.
+    accumulation_steps = resolve_accumulation_steps(
+        args.global_batch, args.batch_size, training_setup["topo"].world_size)
+    if training_setup["topo"].is_main and args.global_batch is not None:
+        print(f"Global batch {args.global_batch} = {args.batch_size} per rank x "
+              f"{training_setup['topo'].world_size} rank(s) x {accumulation_steps} accumulated batch(es) per step.",
+              flush=True)
+
     losses_train, losses_test, losses_replay, optimum_loss_test = train_loop(
         estimator=training_setup["estimator"],
         model=training_setup["model"],
@@ -526,6 +539,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         on_new_best=commit_new_best,
         resurrect_state_path=resurrect_state_path,
         resume_meta=resume_meta,
+        accumulation_steps=accumulation_steps,
     )
 
     if reporter.enabled:
@@ -557,6 +571,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "test_videos": (len(training_setup["val_loader"].dataset)
                             if training_setup["val_loader"] is not None else 0),
             "epochs": args.epochs,
+            "batch_size": args.batch_size, "global_batch": args.global_batch,
+            "world_size": topo.world_size,
         }
         estimator_path.parent.mkdir(parents=True, exist_ok=True)
         artifacts.save_estimator(
@@ -647,6 +663,14 @@ def build_inference_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--batch-size", type=int, default=PARAMETERS.inference.training.batch_size,
         help=f"DataLoader batch size (default: {PARAMETERS.inference.training.batch_size}).",
+    )
+    parser.add_argument(
+        "--global-batch", type=int, default=None,
+        help="Videos per optimizer step across all ranks, realized by gradient accumulation: "
+             "each rank sums the gradients of global_batch / (batch_size x world_size) consecutive "
+             "batches before stepping, so the optimization is the same whatever the rank count. "
+             "Must be a multiple of batch_size x world_size. Default: none (one step per batch; the "
+             "global batch then follows the rank count).",
     )
     parser.add_argument(
         "--learning-rate", type=float, default=None,
