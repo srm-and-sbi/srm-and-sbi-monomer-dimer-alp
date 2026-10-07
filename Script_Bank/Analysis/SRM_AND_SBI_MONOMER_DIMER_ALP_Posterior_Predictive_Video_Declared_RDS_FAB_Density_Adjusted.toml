@@ -11,14 +11,16 @@
 # Read by posterior_predictive_video_runner.load_declared_rds (--declared-rds); the SHA-256 of this
 # file and the origin of every value are recorded in each clip rendered from it. Every value below
 # is an explicit ASSUMPTION, stated with its basis and source. The receptor totals are rendering
-# settings scaled from the recordings' detected spot counts, capped by the prior range; they are
+# settings scaled from the recordings' detected spot counts, within the prior range; they are
 # starting values for a density-adjusted render, not estimates of the receptor number of these cells,
 # which is the biology workflow's task.
 #
 # Not set here, because the production path sets it: the imaging block is read from the tagged
 # Nuisance_DLI artifact (--nuisance-tag REF), and the labeling is the condition's production
-# observation layer (Poisson(1.64) dye counts per bound probe, derived probe occupancy 0.155,
-# visibility 0.125 per subunit; labeling.resolve_labeling).
+# observation layer: the retained population (every simulated monomer carries a Fab, every simulated
+# basal dimer at least one, with the two-Fab share 0.0074 drawn at labeling), Poisson(1.64) dye counts
+# per bound Fab; the derived occupancy 0.0148 realizes the retained population from the receptor
+# total at the RDS stage (labeling.resolve_labeling; PROJECT_CONTEXT.md sec. 2, Modeling assumptions).
 #
 # Units are physical (counts, um^2/s, 1/s, dimensionless ratios). The biology prior box of every
 # row is in PROJECT_CONTEXT.md sec. 2; a value outside it is recorded as an extrapolation.
@@ -30,24 +32,29 @@ status = "declared assumptions for posterior-predictive checks; not estimates"
 description = """The declared MET-FAB configuration with the receptor total adjusted to each \
 recording's opening spot density: the initial composition and the diffusion scale follow stated \
 external references; the receptor total is scaled per recording from its detected spot count and \
-capped by the prior range; every other value is the center of its prior, declared as a default where no \
+within the prior range; every other value is the center of its prior, declared as a default where no \
 MET-FAB evidence fixes it."""
 
 [parameters.count_total]
-per_cell = { 0 = 550.0, 4 = 1500.0, 5 = 1200.0, 16 = 3162.0, 26 = 3162.0, 32 = 3162.0, 43 = 2500.0, 45 = 1500.0, 49 = 2000.0, 53 = 3162.0 }
-basis = "scaled from the recording's opening spot count, capped by the prior range (density-adjusted starting value)"
-source = """N_R = 1000 x c_exp / c_syn, rounded to two significant figures: c_exp is the recording's \
-detected spots per frame over its first 2 s and c_syn the same count on its render at N_R 1000 (the \
-declared configuration FAB_DECLARED_RDS), both under the direct estimators' detection (stored 8-bit \
-levels, 4 sigma, fit half-width 14 px, SCOPE box center; report \
-SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Posterior_Predictive_Video_Spot_Count_REF). Unscaled counts \
-(c_exp, c_syn): cell 0 44.3, 80.2; 4 107.5, 69.8; 5 106.3, 86.4; 16 259.4, 74.6; 26 188.0, 57.7; \
-32 301.1, 82.7; 43 161.7, 64.2; 45 120.5, 80.5; 49 132.2, 64.6; 53 222.4, 69.5. Values are capped at \
-the upper end of the decided prior 316-3162: cells 16, 26, 32 and 53 (scaled 3477, 3258, 3641, 3200) \
-render at 3162 and stay less dense than their recordings. A detected count is lowered by crowding, and \
-a single render's count carries its labeling draw, so these are starting values, not matches; each \
-render's own count is measured afterwards. N_R counts subunits in the whole simulated field \
-(256 x 256 px, 40.4 um square, open lateral boundary), not in the cell footprint."""
+per_cell = { 0 = 5100.0, 4 = 14000.0, 5 = 11000.0, 16 = 32000.0, 26 = 30000.0, 32 = 34000.0, 43 = 23000.0, 45 = 14000.0, 49 = 18000.0, 53 = 30000.0 }
+basis = "scaled from the recording's opening spot count, within the prior range (density-adjusted starting value)"
+source = """N_total = N_total,REF x c_exp / c_syn, rounded to two significant figures: c_exp is the \
+recording's detected spots per frame over its first 2 s and c_syn the same count on its render at the \
+reference total (the declared configuration FAB_DECLARED_RDS), both under the direct estimators' detection \
+(stored 8-bit levels, 4 sigma, fit half-width 14 px, SCOPE box center; report \
+SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Posterior_Predictive_Video_Spot_Count_REF). The ratios were \
+measured under the earlier simulated-population reading at N_R 1000 with visibility 0.125 per subunit \
+(unscaled counts c_exp, c_syn: cell 0 44.3, 80.2; 4 107.5, 69.8; 5 106.3, 86.4; 16 259.4, 74.6; \
+26 188.0, 57.7; 32 301.1, 82.7; 43 161.7, 64.2; 45 120.5, 80.5; 49 132.2, 64.6; 53 222.4, 69.5; scaled \
+N_R 550, 1500, 1200, 3477, 3258, 3641, 2500, 1500, 2000, 3200) and converted to the true-total reading \
+by the visible-density match 0.125 N_R = q p F N_total, with q = 0.806 the Fab dye probability, p = 0.0148 \
+the derived MET-FAB occupancy and F = 1 + 2 (1 - p) f_B / (1 + f_B) = 1.137 the retained-cohort factor at \
+the declared f_B = 7.5 % (factor 9.23); no cell reaches the prior ceiling of 100,000, so none is \
+capped. A detected count is lowered by crowding, and a single render's count carries its labeling draw, so \
+these are starting values, not matches; each render's own count is measured afterwards. N_total counts the \
+TRUE receptor subunits, probe-bound and unbound, in the whole simulated field (256 x 256 px, 40.4 um square, \
+open lateral boundary), not in the cell footprint; the retained population the generator simulates is \
+about 1.7 % of it."""
 
 [parameters.ratio_dimer_monomer_initial]
 value = 0.08108

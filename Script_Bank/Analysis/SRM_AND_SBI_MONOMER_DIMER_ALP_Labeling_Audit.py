@@ -131,7 +131,7 @@ def reactive_lineage(workdir: str) -> dict:
     # MET-INLB: the condition with association switched on, so the lineage exercises every
     # channel (fusion concatenates, fission distributes, conversion preserves).
     stem = build_system(theta, "INLB")
-    smut = build_simulation(stem, theta, seed=SEED)
+    smut = build_simulation(stem, theta, "INLB", seed=SEED)
     traj = os.path.join(workdir, "labeling_audit_center.h5")
     smut.output_file = traj
     smut.progress_output_stride = timing.total_steps

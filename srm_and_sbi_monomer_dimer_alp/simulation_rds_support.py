@@ -6,25 +6,35 @@ for interacting particle reaction dynamics", PLoS Comp Bio.
 https://doi.org/10.1371/journal.pcbi.1006830) for the separated
 stoichiometry-mobility model of this sibling.
 
-Two molecular species, three mobility modes, six particle types
-(``PARAMETERS.simulation.rds.particle_types``; species x mode, species-major):
-    A_f, A_s, A_i = monomer, fast / slow / immobile
-    B_f, B_s, B_i = dimer,   fast / slow / immobile
+The simulated population is the RETAINED one: the probe-associated complexes (PROJECT_CONTEXT.md
+sec. 2, *Modeling assumptions of the MET model*). Three mobility modes; the molecular species
+depend on the condition's ligand classes (``PARAMETERS.simulation.rds.species_for``):
+    MET-FAB  (no ligand classes)   A_f, A_s, A_i = monomer;  B_f, B_s, B_i = dimer (two retained
+                                   subunits; its one-/two-Fab class is assigned at labeling)
+    MET-INLB (ligand classes)      A_f, A_s, A_i = InlB-bound monomer;
+                                   B1_f, B1_s, B1_i = one-InlB dimer (ONE retained subunit);
+                                   B2_f, B2_s, B2_i = two-InlB dimer (two retained subunits)
+so six particle types under MET-FAB and nine under MET-INLB
+(``particle_types_for(condition)``; ``particle_types`` is the union of the model family).
 
-Up to seventeen reaction channels, GENERATED from the two model blocks and the run's
-CONDITION by ``reaction_channels(theta, condition)``:
-    association    A_m + A_m' -> B_{slower(m, m')}   six fusions, one per unordered pair of
+The reaction channels are GENERATED from the two model blocks and the run's CONDITION by
+``reaction_channels(theta, condition)``:
+    association    A_m + A_m' -> B2_{slower(m, m')}  six fusions, one per unordered pair of
                                                     monomer modes, all at the same
                                                     lambda_on = R_ON[condition] * lambda_ref;
                                                     NONE when the condition's ratio is zero
-    dissociation   B_m -> A_m + A_m                 three fissions at kappa_OFF (mode conserved)
-    switching      X_f <-> X_s <-> X_i               eight conversions: the four shared rates,
-                                                    once per species
-The association ratio is a declared per-condition constant (``parameterization.ConditionSetting``):
-MET-INLB R_ON = 1 -> seventeen channels; MET-FAB R_ON = 0 -> eleven channels (no association;
-pre-existing dimers may dissociate). It is not a learnable row in either condition.
+    dissociation   B_m  -> A_m + A_m  (FAB)           three fissions at kappa_OFF (mode conserved)
+                   B2_m -> A_m + A_m  (INLB)          three fissions at kappa_OFF
+                   B1_m -> A_m       (INLB)          three CONVERSIONS at kappa_OFF: the probe-free
+                                                    partner of a one-InlB dimer is not represented,
+                                                    so no lineage entry is created or removed
+    switching      X_f <-> X_s <-> X_i               the four shared rates, once per species
+MET-INLB R_ON = 1 -> twenty-four channels (6 + 3 + 3 + 12); MET-FAB R_ON = 0 -> eleven (3 + 8;
+no association, the retained basal dimers may dissociate and both daughters stay retained).
+The association ratio is a declared per-condition constant (``parameterization.ConditionSetting``),
+not a learnable row in either condition.
 
-Diffusion: D[X, m] = D_A * (R_B if X is the dimer else 1) * (1, R_s, R_i)[m].
+Diffusion: D[X, m] = D_A * (R_B if X is a dimer class else 1) * (1, R_s, R_i)[m].
 
 Functions:
     reaction_channels(theta, condition)
@@ -34,15 +44,16 @@ Functions:
         without ReaDDy.
 
     build_system(theta, condition, ...)
-        Builds the ReaDDy ReactionDiffusionSystem: registers the six particle types with
-        their diffusion constants and adds the condition's channels. Returns the
+        Builds the ReaDDy ReactionDiffusionSystem: registers the condition's particle types
+        with their diffusion constants and adds the condition's channels. Returns the
         configured system, ready to be wrapped in a Simulation.
 
-    build_simulation(stem, theta, ...)
+    build_simulation(stem, theta, condition, ...)
         Wraps the system in a Simulation, registers observables (per-frame
         particle positions, per-step reaction counts, per-step reaction
-        records), and places the initial particles uniformly in the box: the integer
-        composition from (N_R, r) and each particle's mode from the stationary law of
+        records), and places the initial RETAINED particles uniformly in the box: the
+        integer composition realized from (N_total, r) through the condition's occupancy
+        (``realize_initial_composition``) and each particle's mode from the stationary law of
         the switching chain. Returns the runnable Simulation.
 
     extract_trajectory_poses(tray, ...)
@@ -121,6 +132,7 @@ def diffusion_coefficients(theta: np.ndarray) -> dict:
     d_a = values[rds.mobility.diffusivity_key]
     mode_factor = {mode: (1.0 if key is None else values[key])
                    for mode, key in zip(rds.mobility.modes, rds.mobility.mode_ratio_keys)}
+    # the dimer factor applies to every dimer class (B, B1, B2): pt.species is the stoichiometric class
     species_factor = {rds.stoichiometry.monomer.name: 1.0,
                       rds.stoichiometry.dimer.name: values[rds.mobility.dimer_ratio_key]}
     return {pt.name: d_a * species_factor[pt.species] * mode_factor[pt.mode]
@@ -144,16 +156,22 @@ def reaction_channels(theta: np.ndarray, condition: str) -> Tuple[ReactionChanne
     """The channels of the network for one theta under one condition, derived from the blocks.
 
     Order: the association fusions (unordered pairs of monomer modes, fastest first; NONE when
-    the condition's association ratio is zero), the dissociation fissions (one per dimer mode),
-    then the switching conversions (per species, in the block's switching order). Every channel
+    the condition's association ratio is zero; the product is the two-probe dimer class of the
+    condition), the dissociations (one per dimer class and mode: a fission into two monomers
+    for ``B`` and ``B2``, a conversion into one monomer for ``B1``), then the switching
+    conversions (per species of the condition, in the block's switching order). Every channel
     is unique by construction; the structure audit asserts the count per condition (MET-INLB
-    17, MET-FAB 11), the products, and the inherited modes. The association ratio is the
+    24, MET-FAB 11), the products, and the inherited modes. The association ratio is the
     condition's declared constant, never a theta entry.
     """
     rds = PARAMETERS.simulation.rds
     sto, mob = rds.stoichiometry, rds.mobility
     values = theta_by_key(theta)
-    mono, dim = sto.monomer.name, sto.dimer.name
+    species = rds.species_for(condition)
+    dimers = [s for s in species if s.stoichiometry == "dimer"]
+    mono = sto.monomer.name
+    # association produces the dimer class whose subunits are all ligand-bound (B2), or B under FAB
+    product_dimer = next(s for s in dimers if s.dissociation == "fission").name
     d_a = values[mob.diffusivity_key]
     reaction_distance_nm = PARAMETERS.simulation.stem.particle_diameter_nm
     r_on = rds.association_ratio_of(condition)
@@ -165,16 +183,22 @@ def reaction_channels(theta: np.ndarray, condition: str) -> Tuple[ReactionChanne
         for i, m1 in enumerate(mob.modes):
             for m2 in mob.modes[i:]:
                 product_mode = mob.inherited_mode(m1, m2)
-                e1, e2, pr = rds.type_name(mono, m1), rds.type_name(mono, m2), rds.type_name(dim, product_mode)
+                e1, e2 = rds.type_name(mono, m1), rds.type_name(mono, m2)
+                pr = rds.type_name(product_dimer, product_mode)
                 channels.append(ReactionChannel(
                     "fusion", f"{e1} + {e2} => {pr}", (e1, e2), (pr,), lamb_on, f"R_ON[{condition}]"))
-    for m in mob.modes:
-        ed, pr = rds.type_name(dim, m), rds.type_name(mono, m)
-        channels.append(ReactionChannel(
-            "fission", f"{ed} => {pr} + {pr}", (ed,), (pr, pr), kappa_off, sto.dissociation_rate_key))
-    for species in sto.species_names:
+    for dimer in dimers:
+        for m in mob.modes:
+            ed, pr = rds.type_name(dimer.name, m), rds.type_name(mono, m)
+            if dimer.dissociation == "fission":
+                channels.append(ReactionChannel(
+                    "fission", f"{ed} => {pr} + {pr}", (ed,), (pr, pr), kappa_off, sto.dissociation_rate_key))
+            else:                        # B1 -> A: one eligible daughter; the probe-free partner is not represented
+                channels.append(ReactionChannel(
+                    "conversion", f"{ed} => {pr}", (ed,), (pr,), kappa_off, sto.dissociation_rate_key))
+    for sp in species:
         for frm, to, key in mob.switching:
-            ed, pr = rds.type_name(species, frm), rds.type_name(species, to)
+            ed, pr = rds.type_name(sp.name, frm), rds.type_name(sp.name, to)
             channels.append(ReactionChannel("conversion", f"{ed} => {pr}", (ed,), (pr,), values[key], key))
     return tuple(channels)
 
@@ -243,7 +267,7 @@ def build_system(theta: np.ndarray,
     )
     stem.periodic_boundary_conditions = [False, False, True]
 
-    for type_name in rds.particle_type_names:
+    for type_name in rds.particle_type_names_for(condition):
         stem.add_species(
             name=type_name,
             diffusion_constant=coefficients[type_name] * pow(readdy.units.micrometer, 2) / readdy.units.second,
@@ -288,17 +312,21 @@ def build_system(theta: np.ndarray,
 
 def build_simulation(stem: "readdy.ReactionDiffusionSystem",
                      theta: np.ndarray,
+                     condition: str,
                      seed: Optional[int] = None,
                      skin_factor: Optional[float] = None,
                      verbose: bool = False) -> "readdy.Simulation":
     """Wrap the ReactionDiffusionSystem in a Simulation, register observables, and place
-    the initial particles.
+    the initial RETAINED particles.
 
     Args:
         stem: ReactionDiffusionSystem from ``build_system``.
         theta: The same physical parameter vector passed to ``build_system``; supplies the
-            receptor total N_R, the requested initial dimer-to-monomer ratio r, and the switching
-            rates whose stationary law draws each particle's initial mode.
+            true receptor total N_total, the requested initial dimer-to-monomer ratio r, and the
+            switching rates whose stationary law draws each particle's initial mode.
+        condition: The same condition token passed to ``build_system``; its occupancy realizes
+            the retained population from (N_total, r) and its ligand classes decide which dimer
+            species are placed (``parameterization.realize_initial_composition``).
         seed: RNG seed for the initial composition's mode draw and the placement. None ->
             non-deterministic. Note: this seed only controls the NumPy RNG; ReaDDy's own
             RNG for reactions and diffusion has its own mechanism.
@@ -313,15 +341,16 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
             - 'reaction_counts' observable at every step (stride=1),
             - 'reactions' observable at every step (stride=1): one record per event with
               its educt and product particle ids, read back by ``extract_subunit_lineage``,
-            - the initial particles: ``realize_initial_composition(N_R, r)`` gives the
-              integer monomer and dimer counts (requested ratio and realized fraction recorded by
-              the DLI stage's Labeling_Set), each particle's mode is drawn from
-              ``stationary_mode_law``, positions are uniform in the box.
+            - the initial particles: ``realize_initial_composition(N_total, r, condition)`` gives
+              the integer retained monomer and dimer counts, the dimers split into their probe
+              classes (B1 / B2 under INLB; one species B under FAB, whose classes are assigned
+              at labeling); each particle's mode is drawn from ``stationary_mode_law``, positions
+              are uniform in the box.
     """
     rds = PARAMETERS.simulation.rds
     values = theta_by_key(theta)
     composition = realize_initial_composition(
-        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key])
+        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key], condition)
     mode_law = stationary_mode_law(theta)
 
     smut = stem.simulation(kernel="CPU")
@@ -355,8 +384,7 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
 
     rng = np.random.default_rng(seed)
     initial_counts = {}
-    for species, n_particles in ((rds.stoichiometry.monomer.name, composition.n_monomers),
-                                 (rds.stoichiometry.dimer.name, composition.n_dimers)):
+    for species, n_particles in initial_species_counts(composition):
         modes = rng.choice(len(rds.mobility.modes), size=n_particles, p=mode_law)
         for mode_index, mode in enumerate(rds.mobility.modes):
             n_type = int(np.sum(modes == mode_index))
@@ -367,22 +395,39 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
                 smut.add_particles(type=type_name, positions=positions)
 
     if verbose:
-        print(f"  Initial composition: N_R={composition.n_total} subunits -> "
-              f"{composition.n_monomers} monomers + {composition.n_dimers} dimers "
-              f"(r requested {composition.ratio_requested:.4g} -> x_B {composition.fraction_requested:.4f}, realized "
-              f"{composition.fraction_realized:.4f})")
+        classes = (f" (B1 {composition.n_dimers_one_probe} + B2 {composition.n_dimers_two_probe})"
+                   if composition.ligand_classes else
+                   f" (expected two-Fab share {composition.two_probe_share:.4f}, assigned at labeling)")
+        print(f"  Initial retained composition [{condition}]: N_total={composition.n_total_true:.0f} true subunits "
+              f"at occupancy {composition.occupancy:.4f} -> N_R={composition.n_subunits} retained subunits: "
+              f"{composition.n_monomers} monomers + {composition.n_dimers} dimers{classes}; "
+              f"r requested {composition.ratio_requested:.4g} (true f_B {composition.complex_fraction_true:.4f}), "
+              f"retained ratio expected {composition.ratio_retained_expected:.4g}, realized "
+              f"{composition.ratio_realized:.4g} (retained f_B {composition.complex_fraction_retained:.4f}, "
+              f"x_B {composition.receptor_fraction_retained:.4f})")
         print("  Stationary mode law (f, s, i): " + ", ".join(f"{p:.4f}" for p in mode_law))
         print(f"  Initial particle counts per type: {initial_counts}")
 
     return smut
 
 
-def initial_composition_of(theta: np.ndarray):
-    """The ``InitialComposition`` a simulation of ``theta`` (physical) is seeded with."""
+def initial_species_counts(composition) -> Tuple[Tuple[str, int], ...]:
+    """The (molecular species, particle count) pairs a composition places: (A, B) under FAB, where
+    the one-/two-probe classes are assigned at labeling, and (A, B1, B2) under INLB."""
+    sto = PARAMETERS.simulation.rds.stoichiometry
+    if composition.ligand_classes:
+        return ((sto.monomer.name, composition.n_monomers),
+                (sto.dimer_one_probe.name, composition.n_dimers_one_probe),
+                (sto.dimer_two_probe.name, composition.n_dimers_two_probe))
+    return ((sto.monomer.name, composition.n_monomers), (sto.dimer.name, composition.n_dimers))
+
+
+def initial_composition_of(theta: np.ndarray, condition: str):
+    """The ``InitialComposition`` a simulation of ``theta`` (physical) under ``condition`` is seeded with."""
     rds = PARAMETERS.simulation.rds
     values = theta_by_key(theta)
     return realize_initial_composition(
-        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key])
+        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key], condition)
 
 
 # =============================================================================
@@ -483,11 +528,12 @@ def extract_trajectory_poses(tray, verbose: bool = False) -> np.ndarray:
 
 
 def rank_to_species(tray) -> dict:
-    """Particle-type rank (``tray.particle_types`` order) -> MOLECULAR SPECIES name.
+    """Particle-type rank (``tray.particle_types`` order) -> STOICHIOMETRIC class (``A`` or ``B``).
 
-    The observation layer selects and counts by molecular species (occupancy per species,
-    monomer versus dimer), never by mobility mode, so every consumer of ``host_rank`` maps
-    through this table rather than reading the type name.
+    The observation layer selects and counts by stoichiometric class (monomer versus dimer),
+    never by mobility mode and never by ligand class, so every consumer of ``host_rank`` maps
+    through this table rather than reading the type name; ``rank_to_molecule`` gives the
+    ligand class where a consumer needs it.
     """
     species_of_type = PARAMETERS.simulation.rds.species_of_type
     out = {}
@@ -499,8 +545,20 @@ def rank_to_species(tray) -> dict:
     return out
 
 
+def rank_to_molecule(tray) -> dict:
+    """Particle-type rank -> molecular species token (``A``, ``B``, ``B1`` or ``B2``)."""
+    molecule_of_type = PARAMETERS.simulation.rds.molecule_of_type
+    out = {}
+    for name, rank in tray.particle_types.items():
+        if name not in molecule_of_type:
+            raise ValueError(f"trajectory particle type {name!r} is not a configured particle type "
+                             f"{tuple(molecule_of_type)}; the trajectory was generated by another model.")
+        out[int(rank)] = molecule_of_type[name]
+    return out
+
+
 def monomer_ranks(tray) -> list:
-    """Particle-type ranks whose particles carry a single subunit (the monomer types)."""
+    """Particle-type ranks of the monomer types (stoichiometric class ``A``, every mode)."""
     monomer_types = set(PARAMETERS.simulation.rds.monomer_type_names)
     return sorted(int(rank) for name, rank in tray.particle_types.items() if name in monomer_types)
 

@@ -510,7 +510,13 @@ def labeling_description(record):
                  if isinstance(occupancy, dict) else compact_number(occupancy))
     a = ", ".join(f"{s} {compact_number(v)}" for s, v in record["visible_per_subunit"].items())
     kept = "; the source's labeled subunits kept" if record.get("arm") else ""
-    return (f"{record['condition']} {record['law_name']} = {_law_text(record['law'])}, occupancy "
+    if record.get("probe_rule", "coins") == "classes":
+        rule = ("probe classes by species (B1 one, B2 two)" if record.get("ligand_classes")
+                else f"probe classes drawn, two-probe share {float(record['two_probe_share']):.3f}")
+        return (f"{record['condition']} {record['law_name']} = {_law_text(record['law'])}, retained population: "
+                f"{rule}, occupancy {occupancy} ({record['occupancy_source']}{kept}); "
+                f"visible per retained subunit {a}")
+    return (f"{record['condition']} {record['law_name']} = {_law_text(record['law'])}, occupancy coins "
             f"{occupancy} ({record['occupancy_source']}{kept}); visible per subunit {a}")
 
 
@@ -1026,7 +1032,7 @@ def simulate_and_render(condition, rds_vector, imaging_physical, plan, n_frames,
     timing = RunTiming(total_time_seconds=n_frames * PARAMETERS.simulation.timing.frame_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     stem = build_system(rds_vector, condition, verbose=verbose)
-    smut = build_simulation(stem, rds_vector, seed=seed, verbose=verbose)
+    smut = build_simulation(stem, rds_vector, condition, seed=seed, verbose=verbose)
     smut.output_file = str(traj_path)
     smut.progress_output_stride = timing.total_steps
     smut.run(n_steps=timing.total_steps,

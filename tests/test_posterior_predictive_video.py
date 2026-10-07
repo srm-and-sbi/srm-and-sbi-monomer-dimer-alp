@@ -185,8 +185,9 @@ def test_the_figure_names_the_synthetic_source():
     assert (isinstance(pair, ast.Call) and _call_name(pair.func) == "tuple"
             and isinstance(pair.args[0], ast.Attribute) and pair.args[0].attr == "display_percentiles")
     # n_subunits, n_dyes, n_labeled_subunits, monomers_0, monomers_visible_0, dimers_0, dimers_visible_0,
-    # dimers_two_labeled_0, occupancy_monomer, occupancy_dimer (labeling.LABELING_SET_COLUMNS)
-    row = np.array([1000, 261, 136, 860, 124, 70, 10, 2, 0.155, 0.155])
+    # dimers_two_labeled_0, occupancy_monomer, occupancy_dimer, dimers_one_probe_0, dimers_two_probe_0,
+    # two_probe_share (labeling.LABELING_SET_COLUMNS)
+    row = np.array([1000, 261, 136, 860, 124, 70, 10, 2, 1.0, 0.5037, 68, 2, 0.00744])
     # A declared-configuration biology render: the figure names its source and shows no MAP.
     import matplotlib
     matplotlib.use("Agg")
@@ -202,7 +203,7 @@ def test_the_figure_names_the_synthetic_source():
             imaging_label="FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)",
             rds_label="DECLARED reaction-diffusion (FAB_DECLARED_RDS, absolute)",
             motion_desc="from the declared reaction-diffusion configuration (not a draw)",
-            labeling_desc="FAB_POISSON, occupancy 0.155")
+            labeling_desc="FAB_POISSON, retained population, occupancy 0.0148")
         text = re.sub(r'"data:[^"]*"', '""', path.read_text())   # drop the embedded image data
     assert "SYNTH (declared reaction-diffusion) FAB c0" in text
     assert "Posterior-predictive video check: experimental vs SYNTH (declared reaction-diffusion)" in text
@@ -285,9 +286,9 @@ def test_the_figure_names_the_synthetic_source():
 # The receptor-total match
 # ==========================================================================================
 
-V = 0.12391                    # visible hosts per subunit at the MET-FAB declared visibility, r = 0.081
-BOX = (316.2, 3162.3)
-KW = dict(initial=600, tolerance=0.03, max_iterations=6, max_count=10000, min_elasticity=0.3,
+V = 0.012391                   # visible hosts per TRUE subunit under the MET-FAB retained-population rule, r = 0.081
+BOX = (1000.0, 100000.0)
+KW = dict(initial=6000, tolerance=0.03, max_iterations=6, max_count=100000, min_elasticity=0.3,
           prior_box=BOX)
 DECIDED = dict(KW, allow_outside_prior=True)             # the user's decision to render beyond the box
 
@@ -303,10 +304,11 @@ def _linear(eta=0.67, calls=None):
 
 
 def test_linear_response_converges_to_the_predicted_count():
-    out = cm.iterate_count(44.34, V, _linear(), **KW)
+    target = 0.67 * V * 5340.0
+    out = cm.iterate_count(target, V, _linear(), **KW)
     assert out["status"] == "matched", out
-    assert abs(out["matched_count_total"] - 44.34 / (0.67 * V)) <= 1
-    assert out["matched_count_total"] == 534
+    assert abs(out["matched_count_total"] - target / (0.67 * V)) <= 1
+    assert out["matched_count_total"] == 5340
 
 
 def test_undefined_paths_carry_no_count():
@@ -325,57 +327,57 @@ def test_saturation_is_reported_not_chased():
     """Detection that caps below the recording's count cannot reach it: unresolved, no count."""
     def capped(cap):
         return lambda n_r, it: (n_r * V, min(0.67 * n_r * V, cap))
-    out = cm.iterate_count(200.0, V, capped(150.0), **dict(KW, initial=1000))
+    out = cm.iterate_count(200.0, V, capped(150.0), **dict(KW, initial=10000))
     assert out["status"] == "unresolved_saturation", out
     assert out["matched_count_total"] is None and "saturation" in out["reason"]
     assert max(r["count_total"] for r in out["iterations"]) <= BOX[1]
-    out = cm.iterate_count(400.0, V, capped(300.0), **dict(DECIDED, initial=3000))
+    out = cm.iterate_count(400.0, V, capped(300.0), **dict(DECIDED, initial=30000))
     assert out["status"] == "unresolved_saturation", out
     assert out["matched_count_total"] is None
-    assert max(r["count_total"] for r in out["iterations"]) <= 10000
+    assert max(r["count_total"] for r in out["iterations"]) <= 100000
 
 
 def test_budget_and_count_ceiling_carry_no_count():
-    # One iteration from 600 proposes 534 (11 % away): the budget ends before agreement.
-    out = cm.iterate_count(44.34, V, _linear(), **dict(KW, max_iterations=1))
+    # One iteration from 6000 proposes 5340 (11 % away): the budget ends before agreement.
+    out = cm.iterate_count(0.67 * V * 5340.0, V, _linear(), **dict(KW, max_iterations=1))
     assert out["status"] == "not_converged" and out["matched_count_total"] is None
-    assert out["last_count_total"] == 600
-    # A target needing about 20000 receptors under a 10000 ceiling, rendering beyond the box decided.
+    assert out["last_count_total"] == 6000
+    # A target needing about 200000 receptors under a 100000 ceiling, rendering beyond the box decided.
     calls = []
-    out = cm.iterate_count(1660.0, V, _linear(calls=calls), **dict(DECIDED, initial=3000, max_iterations=10))
+    out = cm.iterate_count(0.67 * V * 200000.0, V, _linear(calls=calls), **dict(DECIDED, initial=30000, max_iterations=10))
     assert out["status"] == "unresolved_max_count", out
-    assert out["matched_count_total"] is None and max(calls) <= 10000
+    assert out["matched_count_total"] is None and max(calls) <= 100000
     # The ceiling holds from the first render: an initial count above it renders nothing.
     for kw in (KW, DECIDED):
         calls = []
-        out = cm.iterate_count(44.34, V, _linear(calls=calls), **dict(kw, initial=20000))
+        out = cm.iterate_count(0.67 * V * 5340.0, V, _linear(calls=calls), **dict(kw, initial=200000))
         assert out["status"] == "unresolved_max_count" and calls == [], (out, calls)
 
 
 def test_nothing_is_rendered_outside_the_prior_without_the_users_decision():
-    target = 0.67 * V * 4000.0                  # the arithmetic's answer is N_R = 4000, outside the box
+    target = 0.67 * V * 600.0                   # the arithmetic's answer is N_total = 600, below the box floor
     calls = []
-    out = cm.iterate_count(target, V, _linear(calls=calls), **dict(KW, initial=3000))
+    out = cm.iterate_count(target, V, _linear(calls=calls), **dict(KW, initial=1000))
     assert out["status"] == "user_decision_outside_prior", out
-    assert out["matched_count_total"] is None and calls == [3000]
+    assert out["matched_count_total"] is None and calls == [1000]
     # The first count is tested before its render too.
     calls = []
-    out = cm.iterate_count(target, V, _linear(calls=calls), **dict(KW, initial=5000))
+    out = cm.iterate_count(target, V, _linear(calls=calls), **dict(KW, initial=500))
     assert out["status"] == "user_decision_outside_prior" and calls == [], (out, calls)
-    # A converged value just outside the box (rendered 3150, proposed 3200) is not adopted either.
+    # A converged value just outside the box (rendered 1050, proposed 990) is not adopted either.
     calls = []
-    out = cm.iterate_count(0.67 * V * 3200.0, V, _linear(calls=calls), **dict(KW, initial=3150))
-    assert out["status"] == "user_decision_outside_prior" and calls == [3150], (out, calls)
+    out = cm.iterate_count(0.67 * V * 990.0, V, _linear(calls=calls), **dict(KW, initial=1050))
+    assert out["status"] == "user_decision_outside_prior" and calls == [1050], (out, calls)
     # Under the user's decision the count is rendered and accepted, flagged, not clipped.
     calls = []
-    out = cm.iterate_count(target, V, _linear(calls=calls), **dict(DECIDED, initial=3000))
-    assert out["status"] == "matched_outside_prior" and out["matched_count_total"] == 4000, out
-    assert calls == [3000, 4000]
+    out = cm.iterate_count(target, V, _linear(calls=calls), **dict(DECIDED, initial=1000))
+    assert out["status"] == "matched_outside_prior" and out["matched_count_total"] == 600, out
+    assert calls == [1000, 600]
     # The render guard (the iteration's and the check renders') refuses before rendering.
-    for n, decided, allowed in ((20000, False, False), (20000, True, False), (4000, False, False),
-                                (4000, True, True), (1000, False, True)):
+    for n, decided, allowed in ((200000, False, False), (200000, True, False), (500, False, False),
+                                (500, True, True), (10000, False, True)):
         calls = []
-        render = cm.guarded_render(_linear(calls=calls), max_count=10000, prior_box=BOX,
+        render = cm.guarded_render(_linear(calls=calls), max_count=100000, prior_box=BOX,
                                    allow_outside_prior=decided)
         try:
             render(n, 100)
@@ -386,16 +388,54 @@ def test_nothing_is_rendered_outside_the_prior_without_the_users_decision():
 
 
 def test_an_initial_count_beyond_the_limits_stops_the_run_before_any_work():
+    """The entry point runs end to end but isolated from the data bank: its output folder is redirected
+    to a temporary directory, and the work function (the recording read, every render, the reports) is
+    replaced by a stub that records the call and refuses -- a guard regression trips the stub instead of
+    writing anywhere. The last case checks that the isolation is live: a count inside the limits reaches
+    the stub, under the temporary folder."""
+    from unittest import mock
+    from srm_and_sbi_monomer_dimer_alp import experiment_support
     common = ["--total-time-seconds", "2", "--kind", "MET-FAB", "--cell", "0", "--nuisance-tag", "REF",
               "--declared-rds", str(TOML), "--attempt-label", "TEST_REFUSED_BEFORE_ANY_WORK"]
-    for extra, expected in ((["--initial-count", "20000"], "exceeds --max-count"),
-                            (["--initial-count", "5000"], "outside the prior box")):
-        try:
-            cm.main(common + extra)
-        except SystemExit as exc:
-            assert expected in str(exc) and "--initial-count" in str(exc), str(exc)
-        else:
-            raise AssertionError(f"{extra} must stop the run")
+    real_context, reached = cm._context, []
+
+    def forbidden(what):
+        def _stub(*args, **kwargs):
+            raise AssertionError(f"{what} must not be reached by this test")
+        return _stub
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def isolated_context(args):
+            ctx = real_context(args)
+            ctx["folder"] = Path(tmp) / ctx["folder"].name
+            ctx["stems"] = {c: ctx["folder"] / s.name for c, s in ctx["stems"].items()}
+            return ctx
+
+        def recording_match_one(args, ctx, cell):
+            reached.append(Path(ctx["folder"]))
+            raise AssertionError("match_one must not be reached by this test")
+
+        with mock.patch.object(cm, "_context", isolated_context), \
+             mock.patch.object(cm, "match_one", recording_match_one), \
+             mock.patch.object(experiment_support, "read_recording", forbidden("read_recording")), \
+             mock.patch.object(ppv, "simulate_and_render", forbidden("simulate_and_render")):
+            for extra, expected in ((["--initial-count", "200000"], "exceeds --max-count"),
+                                    (["--initial-count", "500"], "outside the prior box")):
+                try:
+                    cm.main(common + extra)
+                except SystemExit as exc:
+                    assert expected in str(exc) and "--initial-count" in str(exc), str(exc)
+                else:
+                    raise AssertionError(f"{extra} must stop the run")
+            assert reached == [], reached
+            try:
+                cm.main(common + ["--initial-count", "10000"])
+            except AssertionError as exc:
+                assert "match_one must not be reached" in str(exc), str(exc)
+            else:
+                raise AssertionError("a count inside the limits must reach the (stubbed) work function")
+            assert len(reached) == 1 and str(reached[0]).startswith(tmp), reached
+        assert not any(Path(tmp).rglob("*")), "nothing is written before the work function"
 
 
 def test_existing_results_are_refused_before_any_work():
@@ -577,8 +617,8 @@ def _fixture_fields(experimental, synth, *, workflow="biology", map_block="rds",
         rds_outside_prior=np.array(list(rds_outside), dtype=str), condition="FAB", labeling_law=plan.law_name,
         dye_counts=np.zeros(10, dtype=np.int64), n_subunits=1000, n_dyes=261,
         labeling_columns=np.array(LABELING_SET_COLUMNS),
-        labeling_row=np.array([1000, 261, 136, 860, 124, 70, 10, 2, 0.155, 0.155]),
-        occupancy_source=plan.occupancy_source, occupancy_monomer=0.155, occupancy_dimer=0.155,
+        labeling_row=np.array([1000, 261, 136, 860, 124, 70, 10, 2, 1.0, 0.5037, 68, 2, 0.00744]),
+        occupancy_source=plan.occupancy_source, occupancy_monomer=1.0, occupancy_dimer=0.5037,
         labeling_record_json=json.dumps(labeling_record if labeling_record is not None else plan.record()),
         imaging_record_json=json.dumps(imaging_identity if imaging_identity is not None else {"artifact": "REF"}),
         synth_label=synth_label, package_version="test", kind="MET-FAB", cell=0, chunk=-1,
@@ -651,14 +691,15 @@ def test_the_figure_is_drawn_from_the_clip_alone():
     for plan in (resolve_labeling("FAB"), resolve_labeling("INLB"), resolve_labeling("INLB", None, "A=0.5,B=1.0"),
                  resolve_labeling("FAB", "FAB_BINOMIAL", "0.1422"), resolve_labeling("FAB", "poisson:1.64123")):
         line = ppv.labeling_description(json.loads(json.dumps(plan.record())))
-        assert line.startswith(f"{plan.condition} {plan.law_name} = {ppv._law_text(plan.record()['law'])}, occupancy ")
-        assert f"({plan.occupancy_source}); visible per subunit " in line
+        assert line.startswith(f"{plan.condition} {plan.law_name} = {ppv._law_text(plan.record()['law'])}, ")
+        assert f"({plan.occupancy_source}); visible per " in line
         # At most three decimal places; the law's name is an identifier, printed as stored.
         assert not re.search(r"\d\.\d{4,}", line.replace(plan.law_name, "")), line
     assert "Poisson(mean=1.641)" in ppv.labeling_description(resolve_labeling("FAB", "poisson:1.64123").record())
     assert (ppv.labeling_description(resolve_labeling("FAB").record())
-            == "FAB FAB_POISSON = Poisson(mean=1.64), occupancy 0.155 (derived); visible per subunit A 0.125, B 0.125")
-    assert "occupancy A=0.5, B=1 (override)" in ppv.labeling_description(
+            == "FAB FAB_POISSON = Poisson(mean=1.64), retained population: probe classes drawn, two-probe share 0.007, "
+               "occupancy 0.015 (derived); visible per retained subunit A 0.806, B 0.406")
+    assert "occupancy coins A=0.5, B=1 (override)" in ppv.labeling_description(
         json.loads(json.dumps(resolve_labeling("INLB", None, "A=0.5,B=1.0").record())))
     exp, syn = _partly_overlapping_clips()
     bio_cfg, det_cfg = biology_workflow(), detector_workflow()
@@ -678,8 +719,8 @@ def test_the_figure_is_drawn_from_the_clip_alone():
                       arm={"label": "BINOMIAL4"})
     x = ppv.comparison_figure_inputs(_fixture_fields(exp, syn, labeling_record=arm_record), bio_cfg)
     assert x["motion_desc"] == "the source render's trajectory (reused, not re-simulated)"
-    assert x["labeling_desc"].startswith("FAB FAB_BINOMIAL = Binomial(sites=4, mean=1.64), occupancy ")
-    assert "(derived; the source's labeled subunits kept); visible per subunit A 0.125, B 0.125" in x["labeling_desc"]
+    assert x["labeling_desc"].startswith("FAB FAB_BINOMIAL = Binomial(sites=4, mean=1.64), retained population: ")
+    assert "(derived; the source's labeled subunits kept); visible per retained subunit A 0.806, B 0.406" in x["labeling_desc"]
     # A MAP biology render names its selection.
     x = ppv.comparison_figure_inputs(_fixture_fields(exp, syn, rds_source="map", map_theta=[1.0], map_source="cell-sgm",
                                                      synth_label="SYNTH (MAP reaction-diffusion)"), bio_cfg)
@@ -1011,7 +1052,7 @@ def test_the_viewer_cells_show_the_window_and_the_labeling():
         cells = [pl._source(c) for c in copy.cells if c.cell_type == "code"]
         ns, printed = _run_config(cells[1])
         # The labeling line: a per-species occupancy (it raised before), compact numbers; an arm is marked.
-        assert "occupancy A=0.5, B=1 (override)" in printed, printed
+        assert "occupancy coins A=0.5, B=1 (override)" in printed, printed
         _, arm_printed = _run_config(_notebook_config(arm_clip))
         assert "(derived; the source's labeled subunits kept)" in arm_printed
         # The notebook's number format is the engine's.

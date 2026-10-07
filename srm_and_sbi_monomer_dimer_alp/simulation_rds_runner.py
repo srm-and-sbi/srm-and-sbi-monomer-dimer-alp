@@ -79,7 +79,7 @@ def _build_sim(theta, condition, seed, skin_factor, verbose):
     stem = build_system(theta, condition, verbose=verbose)
     # `stem` is reachable only through the returned Simulation; deleting the
     # Simulation (+ gc) in the engine loop releases the ReaDDy kernel and the system.
-    return build_simulation(stem, theta, seed=seed, skin_factor=skin_factor, verbose=verbose)
+    return build_simulation(stem, theta, condition, seed=seed, skin_factor=skin_factor, verbose=verbose)
 
 
 def _require_biology_config(cfg: WorkflowConfig) -> None:
@@ -331,7 +331,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
             # ---- Sim-0 diagnostics (debug mode) -----------------------
             if reporter.enabled and sim == 0:
-                composition = initial_composition_of(theta)
+                composition = initial_composition_of(theta, condition)
                 total_initial = composition.n_monomers + composition.n_dimers
                 theta_log10_sim = theta_log10_task[sim]
                 in_bounds = bool(np.all(theta_log10_sim >= low)
@@ -350,13 +350,16 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 reporter.stat(
                     "initial_composition",
-                    f"N_R={composition.n_total}: {composition.n_monomers} monomers + "
-                    f"{composition.n_dimers} dimers",
-                    note=f"integer realization of the sampled total and requested dimer-to-monomer "
-                         f"ratio r={composition.ratio_requested:.4g} (receptor fraction "
-                         f"x_B={composition.fraction_requested:.4f}, realized "
-                         f"{composition.fraction_realized:.4f}); conservation "
-                         f"N_R = n_A + 2 n_B holds for the realized integers.",
+                    f"N_total={composition.n_total_true:.0f} true -> N_R={composition.n_subunits} retained: "
+                    f"{composition.n_monomers} monomers + {composition.n_dimers} dimers "
+                    f"({composition.n_dimers_one_probe} one-probe + {composition.n_dimers_two_probe} two-probe)",
+                    note=f"retained population realized from the sampled true total and requested "
+                         f"dimer-to-monomer ratio r={composition.ratio_requested:.4g} (true f_B="
+                         f"{composition.complex_fraction_true:.4f}) at occupancy {composition.occupancy:.4f}; "
+                         f"retained ratio expected {composition.ratio_retained_expected:.4g}, realized "
+                         f"{composition.ratio_realized:.4g}; the retained count "
+                         f"({'n_A + n_B1 + 2 n_B2' if composition.ligand_classes else 'n_A + 2 n_B'}) is "
+                         f"conserved by every channel.",
                 )
                 reporter.check(
                     "initial_particles_positive", total_initial > 0,
@@ -384,8 +387,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 reporter.stat(
                     "total_initial_particles", total_initial,
-                    note="monomer + dimer particles placed at t=0 (the receptor-subunit "
-                         "total N_R counts each dimer twice).",
+                    note="monomer + dimer particles of the retained population placed at t=0 (the "
+                         "retained subunit total N_R counts a two-subunit dimer twice and a one-probe "
+                         "INLB dimer once).",
                 )
 
                 # Read the trajectory back for reaction-event diagnostics.

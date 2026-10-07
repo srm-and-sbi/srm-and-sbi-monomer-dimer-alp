@@ -133,10 +133,10 @@ _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
     # prior by construction; these rows declare the role and label the provenance tables.
     # The ranges live only in the biology table (DETECTOR_WORKFLOW.md sec. 6.1 points there).
     'stoichiometry': [
-        {'KEY': 'count_total', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$N_{R}$',
-         'NOTE': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the simulated patch. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+        {'KEY': 'count_total', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$N_{\mathrm{total}}$',
+         'NOTE': 'N_total, the true receptor-subunit total of the simulated patch (probe-bound and unbound); the generator realizes the retained population from it through the condition\'s occupancy. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'ratio_dimer_monomer_initial', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$r_{B/A}$',
-         'NOTE': 'Requested initial dimer-to-monomer ratio r = n_B / n_A (a log row on [-2, 2] in the biology table; receptor fraction x_B = 2r / (1 + 2r), complex fraction f_B = r / (1 + r)). RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'Requested initial dimer-to-monomer ratio r = n_B / n_A of the TRUE population (a log row on the 5-25 % band of the basal complex fraction f_B = r / (1 + r) in the biology table; the retained ratio of the initial population is (2 - p) r). RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_dissociation', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{OFF}$',
          'NOTE': 'Dimer unbinding rate kappa_OFF (B_m -> A_m + A_m, every mode), 1/s. Under the labeling model a dissociating one-dye dimer leaves one visible and one invisible daughter -- a signature the detector must see during calibration. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
     ],

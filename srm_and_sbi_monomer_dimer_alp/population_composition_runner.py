@@ -14,7 +14,7 @@ tools with different run stamps.
 
 ONE WORKFLOW. Unlike the mirrored stage runners, this analysis exists for the **biology** workflow
 only, and the asymmetry is scientific rather than incidental: the composition is a function of the
-two inferred stoichiometry coordinates (the receptor total N_R and the initial dimer-to-monomer
+two inferred stoichiometry coordinates (the receptor total N_total and the initial dimer-to-monomer
 ratio r, read as the receptor fraction x_B = 2r / (1 + 2r)),
 and the detector workflow infers imaging parameters and no stoichiometry at all -- it treats the
 population implicitly, as part of what it marginalizes. There is therefore no
@@ -60,8 +60,8 @@ class CompositionSpec:
     """Everything about this analysis that a workflow supplies."""
 
     parameter_keys: list
-    count_index: tuple                    # theta indices of (receptor total N_R, initial dimer-to-monomer ratio r)
-    to_physical: object                   # (..., 2) estimator-space stoichiometry -> physical (N_R, x_B = 2r/(1+2r))
+    count_index: tuple                    # theta indices of (receptor total N_total, initial dimer-to-monomer ratio r)
+    to_physical: object                   # (..., 2) estimator-space stoichiometry -> physical (N_total, x_B = 2r/(1+2r))
     prior_low: np.ndarray                 # prior lower bounds, estimator space (all parameters)
     prior_high: np.ndarray                # prior upper bounds, estimator space (all parameters)
     experiment_npz: object
@@ -421,7 +421,7 @@ def _write_report(args, spec, data, rng):
             "Why the composition is better identified than the counts it is built from",
             ["quantity", "MAE (dex)", "r", "n"],
             [[r["key"], f"{r['mae']:.4f}", f"{r['r']:.4f}", f"{r['n']:,}"] for r in rec["parts"]],
-            note="The species counts n_A = N_R (1 - x_B) and n_B = N_R x_B / 2 against their sum, "
+            note="The species counts n_A = N_total (1 - x_B) and n_B = N_total x_B / 2 against their sum, "
                  "all from the same posterior and the same videos. The sum being recovered far "
                  "better than either part means the parts' errors are strongly anti-correlated -- "
                  "they trade off inside the posterior -- and any quantity that divides one part by "
@@ -451,7 +451,7 @@ def _write_report(args, spec, data, rng):
                        "not species, and do not enter the composition. A dimer holds two "
                        "receptors, which is what separates f_B (a share of complexes) from f_R (a "
                        "share of receptors)")
-    reporter.stat("space", "physical stoichiometry (N_R, x_B) via parameterization.to_physical on the "
+    reporter.stat("space", "physical stoichiometry (N_total, x_B) via parameterization.to_physical on the "
                            "two log rows (total, dimer-to-monomer ratio) and x_B = 2r / (1 + 2r), "
                            "fractions formed per draw")
 
@@ -521,7 +521,7 @@ def run_population_composition(cfg, args):
         print(f"  recovery .npz   : {spec.recovery_npz}  "
               f"[{'OK' if spec.recovery_npz.exists() else 'absent (validation half skipped)'}]")
         print(f"  stoichiometry   : "
-              f"{', '.join(spec.parameter_keys[i] for i in spec.count_index)}  (N_R, r -> x_B)")
+              f"{', '.join(spec.parameter_keys[i] for i in spec.count_index)}  (N_total, r -> x_B)")
         print(f"  quantities      : "
               f"{', '.join(q.symbol + ' = ' + q.formula for q in pc.COMPOSITION)}")
         print(f"  bootstrap       : {args.bootstrap:,} resamples of recordings"
@@ -598,7 +598,7 @@ def run_population_composition(cfg, args):
     for k, kind in enumerate(kinds):
         print(f"  {condition_display(kind):9s}: "
               + ", ".join(f"{pc.COMPOSITION[i].symbol} {_pct(mean[k, i])}%" for i in pc.FRACTION_INDICES)
-              + f", T {mean[k, pc.TOTAL_INDEX]:.0f}, N_R {mean[k, pc.RECEPTORS_INDEX]:.0f}")
+              + f", T {mean[k, pc.TOTAL_INDEX]:.0f}, N_total {mean[k, pc.RECEPTORS_INDEX]:.0f}")
     print(f"  synthetic validation : "
           + ("off (no MAP_Recovery)" if recovery is None else
              f"on — f_B MAE {recovery['rows'][pc.DIMER_INDEX]['mae']:.1f} pp over "
@@ -661,7 +661,7 @@ def _population_composition_spec(cfg, args) -> CompositionSpec:
 
     keys = _wf_keys(cfg)
     rds = PARAMETERS.simulation.rds.stoichiometry
-    count_keys = (rds.count_total_key, rds.composition_ratio_key)     # (N_R, r)
+    count_keys = (rds.count_total_key, rds.composition_ratio_key)     # (N_total, r)
     missing = [k for k in count_keys if k not in keys]
     if missing:
         raise SystemExit(
@@ -673,7 +673,7 @@ def _population_composition_spec(cfg, args) -> CompositionSpec:
     table = parameter_table(cfg)
     count_index = tuple(keys.index(k) for k in count_keys)
     # The ONE conversion rule, bound to the two stoichiometry rows (both log), then the ratio row
-    # mapped to the receptor fraction the kernel is written in: (N_R, r) -> (N_R, x_B = 2r / (1 + 2r)).
+    # mapped to the receptor fraction the kernel is written in: (N_total, r) -> (N_total, x_B = 2r / (1 + 2r)).
     count_rows = [table[i] for i in count_index]
 
     def stoichiometry_to_physical(u):

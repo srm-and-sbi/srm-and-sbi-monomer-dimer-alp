@@ -231,14 +231,21 @@ record: true and visible initial composition under the MET-FAB labeling law, and
 occupancy applied, in `occupancy_monomer` / `occupancy_dimer`). `--video-dtype-bits 8` matches the bit depth the
 estimator trains on and is also the DLI default.
 
-**Occupancy.** The DLI stage applies the condition's declared probe occupancy by default —
-MET-FAB 0.155 (derived from the declared Fab/InlB visibility ratio 0.5 and the INLB anchor),
-MET-INLB 0.5 (declared) — and prints it with its source (`derived` / `declared`); no flag is
-passed, and there is no full-occupancy default (`PROJECT_CONTEXT.md` §2, *How the prior ranges
-and the declared inputs are set*). `--occupancy` is an explicit OVERRIDE for a sensitivity run
-only, recorded as `override` in the `Labeling_Set`; an override writes into the same product
-names as the default pass, so run it on a throwaway smoke tier and never over a tier that feeds
-training or calibration:
+**Probe rule.** The DLI stage labels the retained population by default: every
+simulated monomer carries a probe, a MET-INLB dimer one (`B1`) or two (`B2`) by
+species, a MET-FAB basal dimer two Fab with the declared share `p / (2 − p)` =
+0.0074 or one Fab on one random subunit; one dye draw per bound probe. The
+condition's occupancy — MET-INLB 0.0476 (the equilibrium at 0.25 nM with `K_D`
+5 nM), MET-FAB 0.0148 (derived from the declared Fab/InlB visibility ratio 0.5
+and the INLB anchor) — is a conversion that realizes the retained population from
+`N_total` at the RDS stage and sets the two-probe share; the stage prints the rule
+with its source (`equilibrium` / `derived`); no flag is passed, and there is no
+full-occupancy default (`PROJECT_CONTEXT.md` §2, *Modeling assumptions of the MET
+model*). `--occupancy` is an explicit OVERRIDE for a sensitivity run only: it
+replaces the probe classes by independent per-subunit coins, recorded as
+`override` in the `Labeling_Set`; an override writes into the same product names
+as the default pass, so run it on a throwaway smoke tier and never over a tier
+that feeds training or calibration:
 
 ```bash
 # SENSITIVITY RUN, not a training tier: re-image a throwaway INLB smoke tier under the within-dimer alternative (every InlB dimer carries two ligands: monomer subunits 0.5, dimer subunits 1.0; both-subunits-labeled share among visible dimers 1/3 instead of 1/7 (equal to the two-dye share under the one-dye-per-ligand InlB law))
@@ -261,15 +268,17 @@ Run the prior-realization audit (it reads the products and writes only its repor
 generated tier and every DLI pass before
 the products are used, and again whenever a range or a declared input changes. It reads the
 condition's `Theta_Set` (P1: every draw inside the prior box, per-row uniformity; P2: the
-composition rule from `(N_R, r)`), optionally a few trajectories (P3: frame-0 counts against
-the realized composition, subunit conservation, the stationary mode law), and the workflow's
-`Labeling_Set` (P4: the recorded occupancy equals the condition's declared or derived value,
-the per-subunit visibility, the visible fractions, the both-labeled share, and the emitters per
-subunit against the declared visibility), compares the simulated visible counts with the
-deposited recordings' spot counts descriptively (P5, Special_Analyses A9), and always
-corroborates the theoretical visibility chain through the DLI stage's own labeling functions
-on a synthetic lineage for both conditions, including the FAB/INLB visibility ratio against
-the declared one (P6). The report ends with theory, code path, and products side by side.
+retained composition realized from `(N_total, r)` and the condition's occupancy, the true
+`f_B` inside the 5–25 % band), optionally a few trajectories (P3: frame-0 counts per class
+against the realized retained composition, retained-subunit conservation, the stationary
+mode law), and the workflow's `Labeling_Set` (P4: the recorded probe rule and two-probe
+share, the realized probe classes, the visible fractions and the two-labeled share against
+the retained-population arithmetic, and the emitters per subunit), compares the simulated
+visible counts with the deposited recordings' spot counts descriptively (P5,
+Special_Analyses A9), and always corroborates the theoretical visibility chain of the
+retained population through the DLI stage's own labeling path on a synthetic lineage for
+both conditions, including the FAB/INLB visibility ratio of the true population against the
+declared one (P6). The report ends with theory, code path, and products side by side.
 Nothing is simulated or rendered; it takes seconds. `--workflow detector` reads the
 detector's `Labeling_Set` instead of the biology's.
 

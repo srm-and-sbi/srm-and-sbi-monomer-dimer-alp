@@ -5,6 +5,124 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.37 - 2026-10-05
+
+The generator simulates the retained population: the probe-associated complexes of the MET model, under the
+assumptions the experimental collaborators' answers of 2026-10-05 fixed (PROJECT_CONTEXT.md §2, *Modeling
+assumptions of the MET model*). Receptors without a probe neither react nor emit under the eligibility rule, so they
+are not simulated; the inferred count is the true receptor total `N_total`, from which each condition's occupancy
+realizes the simulated population. Tiers and estimators generated before this version describe the earlier generator
+and its priors; the parameter-set schema refuses them by their bounds, and they are regenerated.
+
+### Added
+
+- `MolecularSpecies` carries its stoichiometric class, retained subunit count, dissociation primitive and bound-subunit
+  count; `StoichiometryBlock` declares `B1` (one InlB-bound subunit, dissociating by the conversion `B1 → A`) and
+  `B2` (two, dissociating by fission) beside `A` and `B`, and `species_for(ligand_classes)` selects a condition's
+  inventory (`SimulationRDS.species_for`, `particle_types_for`, `particle_type_names_for`, `molecule_of_type`;
+  `simulation_rds_support.rank_to_molecule`). MET-INLB simulates nine particle types and twenty-four channels (six
+  fusions `A + A → B2`, three fissions `B2 → A + A`, three conversions `B1 → A` at `κ_OFF`, twelve mode switches);
+  MET-FAB keeps six types and eleven channels. Every channel conserves the retained subunit count.
+- `ConditionSetting.ligand_classes`, `probe_concentration_nm` and `dissociation_constant_nm`: MET-INLB declares the
+  ligand classes and the equilibrium occupancy `L / (L + K_D)` at 0.25 nM with `K_D` 5 nM (0.0476, source
+  `equilibrium`); MET-FAB keeps the derived occupancy from the declared visibility ratio (0.0148). New helpers
+  `two_probe_share_of` (`p / (2 − p)`) and `retained_ratio_of` (`(2 − p) r`); the import-time guards check the
+  decided values, the ligand classes and that a condition with association carries them.
+- `realize_initial_composition(count_total, ratio, condition)` realizes the retained population from the true
+  `(N_total, r)`: dimers and their classes first (`round(p (2 − p) n_B)`, `round(p² n_B)` two-probe), monomers last
+  (`round(p n_A)`); `InitialComposition` carries the true and the retained counts, the probe classes, the conserved
+  retained count (`n_A + 2 n_B` under FAB, `n_A + n_B1 + 2 n_B2` under INLB), the expected count, and the true and
+  retained fractions. `build_simulation` and `initial_composition_of` take the condition.
+- `labeling.assign_probes` (the probe rule: every retained monomer bound; `B1` / `B2` by species under INLB; one- or
+  two-Fab classes drawn at the declared share under FAB, one random subunit of a one-Fab dimer dark) and
+  `labeling.draw_dye_counts_bound` (one dye draw per bound probe). `LabelingPlan` carries `probe_rule`
+  (`classes`, or `coins` under the `--occupancy` override), `ligand_classes` and `two_probe_share`; the
+  `Labeling_Set` gains `dimers_one_probe_0`, `dimers_two_probe_0` and `two_probe_share` (thirteen columns), and
+  `occupancy_monomer` / `occupancy_dimer` record the probe probability applied per class.
+- `tests/test_retained_population.py` (inventory and channels; association by bound type, not by dye; `B1` one
+  eligible daughter and `B2` two with the retained count conserved; initialization expectations, floor and ceiling;
+  the two prior rows and the occupancies; the labeling record's probe classes).
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Training_Log_Readout.py` with its companion note and
+  `tests/test_training_log_readout.py`: the reader of the Inference stage's logs for an encoder screening (one row per
+  log, per chain of `--resurrect` legs, per configuration of preset and global batch; best-so-far TEST loss, N and the
+  spread between chains; smokes and empty logs excluded; duplicate jobs refused). The screening's evidence lives in the
+  data bank's `..._DETECTOR_FAB_2S_50FPS_Encoder_Screening_Record` (43 logs copied from JUPITER, accounting, checksums,
+  the readout), never in the repository.
+
+### Changed
+
+- Prior rows (decided 2026-10-05): `count_total` is `N_total`, the true receptor-subunit total, on one shared box
+  `log10 [3.0, 5.0]` (1,000–100,000; about 4,762 INLB and 2,060 FAB retained subunits at the ceiling);
+  `ratio_dimer_monomer_initial` keeps its row and role on `log10 [log10(0.05/0.95), log10(0.25/0.75)]`, the 5–25 %
+  band of the true initial basal complex fraction (`COUNT_TOTAL_BOX`, `COMPOSITION_BAND`, `COMPOSITION_RATIO_BOX`).
+  The earlier occupancies 0.5 / 0.155 on the whole population and the independent occupancy coin at labeling are
+  retired; `--occupancy` remains as a sensitivity override that reintroduces coins, recorded as such.
+- The model-structure audit (D1, D4, D6, D8, D9 and the run tier: R3 and R4 through the shared labeling path, R6 timing
+  and peak memory at the simulated-population ceiling for both conditions) and the prior-realization audit (P2, P3,
+  P4, P6 for the retained population; the FAB/INLB visibility ratio checked on the true population's `p q`) follow
+  the model; the posterior-predictive count match reads `N_total` with the retained-population visibility and
+  defaults to the prior center and ceiling; the declared MET-FAB posterior-predictive configurations carry
+  `N_total` (10,000; the density-adjusted totals converted from the earlier reading by the visible-density match);
+  the composition and horizon modules name the total `N_total`.
+- The horizon audit is disabled: `run_horizon_audit` refuses every phase, the dry run included
+  (`HORIZON_AUDIT_DISABLED`), because its composition metrics compare the inferred TRUE composition `(N_total, r)`
+  with the trajectory's RETAINED species census (`B1` and `B2` aggregated, every `B` counted as two subunits), which
+  are different populations under this generator; it stays disabled until its estimands are restated for the
+  retained population. Reports recorded earlier stand for the generator they were produced under.
+- The model-structure audit gains D11 (the `B1 → A` release is an in-place conversion for every mode and no channel
+  re-forms `B1`, so a lineage sees at most one such event; the one-reaction-distance kick a fission would add is
+  compared with the per-frame diffusive step per mode at the prior floor, the 29 nm localization precision and the
+  pixel) and R7 (both placements measured on the production system with diffusion switched almost off).
+- The posterior-predictive count-match test runs the entry point isolated from the data bank: outputs are
+  redirected to a temporary directory and the work function, the recording read and the renderer are replaced by
+  refusing stubs; the test also checks that a count inside the limits reaches the stub under that directory.
+
+### Documentation
+
+- The composition band is documented as a total-population fraction with the populations it maps to (probe-retained, fluorescent, detected; ratio factor `(2 − p)` against the fraction factor `(2 − p) / (1 + (1 − p) f_B)`; expected initial fractions before bleaching and detection, about 9–40 % among fluorescent complexes; published estimates inform the prior and are not interchangeable with it) in PROJECT_CONTEXT.md §2 (*Initial composition*), with pointers in the assumptions item 9 here and in DETECTOR_WORKFLOW.md §4.1.
+- PROJECT_CONTEXT.md §2 (species per condition, channels, the prior table and its rationale, the conversion inputs
+  of the visibility layer, the initial state, the implementation paragraph of the assumptions), §4 (the RDS and DLI
+  steps, emitters are dyes, probe kinetics); DETECTOR_WORKFLOW.md §4.1 consequences, §4.2, §6.1, §6.6, §6.7;
+  VALIDATION.md (the probe rule, the prior-realization audit); README.md; the module docstrings of
+  `parameterization.py`, `simulation_rds_support.py` and `labeling.py`; the player notebook's labeling line.
+- The MET model's assumptions are stated as one numbered list, with the status of each item (measured,
+  declared, assumed, scenario), in PROJECT_CONTEXT.md §2 (*Modeling assumptions of the MET model*) and
+  DETECTOR_WORKFLOW.md §4.1; the modeling specification carries the same list in its §5.0 with the dated
+  decision entry. Recorded after the experimental collaborators' answers of 2026-10-05: probe concentration
+  0.25 nM for both probes in the tracking recordings (5 nM was fixed-cell imaging); active dimers carry two
+  InlB; the Fab affinity is unknown; InlB `K_D` about 5 nM with unknown rates; both probes carry ATTO 647N
+  per the published preparation. Adopted model revision, documented ahead of its implementation: the
+  simulated population is the probe-bound one (probe-free receptors are spectators under the eligibility
+  rule), only InlB-bound monomers associate, INLB dimers carry a ligand class (`B1` one InlB, `B2` two) with
+  `B1 → A` as a conversion at `κ_OFF` (nine particle types and twenty-four channels under INLB; the conserved
+  count is the InlB-bound subunits `n_A + n_B1 + 2 n_B2`; `B1` carries one retained subunit identity; the
+  integer initialization realizes rounded retained counts, dimers and classes first, and conserves that
+  realized cohort; the true (inferred) and the retained (simulated) compositions are kept apart), FAB dimers are simulated only when they carry at least one Fab,
+  occupancy becomes a conversion constant at the independent-site equilibrium (InlB 0.0476, Fab 0.0148),
+  and the generator realizes the retained population from the inferred true totals. PROJECT_CONTEXT.md §2 states what
+  the current generator does differently (occupancy coins on the whole population at labeling; association
+  open to every monomer; the count prior derived under the old visibilities), the visibility-layer table and
+  the status paragraph record the superseded anchor, and §8 gains S7 (ligand state of preformed dimers, the
+  retained-population meaning). DETECTOR_WORKFLOW.md §4 is retitled and split into §4.1 (assumptions, with
+  the consequences for the trajectory tier, the labeling summation, the RDS nuisance and the per-condition
+  calibration) and §4.2 (the former §4 text, unchanged). No code, prior, tier or estimator changes; the stage
+  descriptions keep describing the generator as it runs until the implementation increment.
+- Two prior decisions of the same revision, documented in the same three places and not implemented:
+  `count_total` is read as the true receptor total `N_total` (probe-bound and unbound) with one shared box
+  `[3.0, 5.0]` for both conditions, realized to the retained population through the declared occupancies
+  (expected `p × N_total` under INLB, `p × N_total × [1 + 2 (1 − p) f_B / (1 + f_B)]` under FAB; about 4,762
+  and 1,600–2,100 simulated subunits at the ceiling, to be timed before tier generation); and
+  `ratio_dimer_monomer_initial` keeps its row and role with the band `[−1.27875360, −0.47712125]`, 5–25 %
+  initial basal complexes on the true population, the composition reported as a secondary quantity. The
+  deposited tiers were drawn from the superseded boxes and are regenerated with the revision.
+- `DETECTOR_WORKFLOW.md` §9.9: the screening rule becomes the screening and selection guidance, explicitly not a hard
+  rule (replicate trainings when resources allow, the Evaluation stage once per replicate, selection on the held-out
+  EVAL videos; a far worse TEST loss drops a candidate before Evaluation), and *Results of the screening* records the
+  sixteen chains of 2026-09-21 to 2026-10-07 by configuration. `PROJECT_CONTEXT.md` §8: S8 records the
+  schedule-induced variation between replicate trainings as an open question, not tested. The lead's selection
+  of the two chains at global batch 128 for the Evaluation and Posterior_Calibration stages (2026-10-07) is
+  recorded in the same section.
+
 ## 0.1.36 - 2026-10-02
 
 The Inference stage can hold the global batch fixed on any rank count. The node count is a speed knob; the
@@ -15,8 +133,9 @@ global batch.
 
 ### Added
 
-- `--global-batch N` (Inference entry points; `GLOBAL_BATCH` in both HPC Inference scripts and listed by both
-  dispatchers): gradient accumulation to a fixed global batch. Each rank sums the gradients of
+- `--global-batch N` (Inference entry points; `GLOBAL_BATCH` in both HPC Inference scripts, forwarded explicitly by
+  both dispatchers in the `--export` list so the stored submission line records it): gradient accumulation to a
+  fixed global batch. Each rank sums the gradients of
   `N / (batch_size × world_size)` consecutive batches before one optimizer step, scaling each batch's mean
   loss by that count so the step is the gradient of the mean loss over the N videos; under DDP the
   all-reduce runs only on the group's last batch (`no_sync` on the others). N must be a multiple of

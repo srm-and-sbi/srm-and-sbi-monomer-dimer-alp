@@ -1,22 +1,32 @@
-"""Static labeling stoichiometry: the degree of labeling (DOL) as an explicit input.
+"""Static labeling stoichiometry: probe classes and the degree of labeling (DOL) as explicit inputs.
 
-Every receptor subunit carries an integer dye count ``kappa`` drawn ONCE per recording from
-the condition's labeling law and held fixed for the whole recording: dye conjugation
-happened during sample preparation, long before acquisition. The draw is the single
-primitive of the observation layer's static ingredient; everything below is arithmetic on
-it, never an extra assumption:
+The simulated population is the RETAINED one (PROJECT_CONTEXT.md sec. 2, *Modeling assumptions
+of the MET model*): every initial retained complex carries at least one probe, and a probe is
+one molecule on one subunit (at most one Fab or one InlB per MET subunit, Harwardt et al. 2017).
+Labeling therefore has two steps, both drawn ONCE per recording and held fixed, because probe
+binding and dye conjugation happened before acquisition (fixed attachment, assumption 5):
 
-- a subunit with ``kappa = 0`` has no emitter and never renders (it still diffuses and
-  reacts in the RDS stage, which simulates the TRUE receptor population);
+1. PROBE ASSIGNMENT (``assign_probes``): which retained subunits carry a probe. Every monomer
+   does. Under MET-INLB the dimer classes decide it by species: a ``B1`` host carries one
+   retained subunit, bound; a ``B2`` host two, both bound; so every retained INLB subunit is
+   bound. Under MET-FAB the dimer ``B`` carries two retained subunits and its class is assigned
+   here: two Fab with the declared two-probe share s_2 = p / (2 - p) (independent binding), else
+   one Fab on one subunit chosen at random; the other subunit is probe-free, dark, and inert,
+   since nothing associates under FAB.
+2. DYE COUNT: every bound probe draws an integer dye count ``kappa`` from the condition's law
+   (``draw_dye_counts_bound``); a probe-free subunit carries ``kappa = 0``.
+
+Everything below is arithmetic on these two draws, never an extra assumption:
+
+- a subunit with ``kappa = 0`` has no emitter and never renders (a bound but dark probe still
+  reacts: eligibility follows the probe, not the dye);
 - a dimer renders the dyes of both subunits at one position, so its photons are the sum
-  of independent per-dye processes -- no brightness multiplier anywhere;
-- the visible fraction differs by species (monomer ``1 - P(0)``, dimer ``1 - P(0)^2``), so
-  the visible population is dimer-enriched relative to the true composition, and the count
-  parameters of the RDS stage are TRUE receptor abundances;
-- the dye count travels with its subunit through fusion, fission, and conversion
-  (``simulation_rds_support.extract_subunit_lineage``): a one-dye dimer that dissociates
-  leaves one visible daughter and one permanently invisible one; a mobility switch (a
-  type conversion) changes nothing about the labels.
+  of independent per-dye processes -- no brightness multiplier anywhere; a one-probe dimer has
+  no automatic brightness multiplier relative to a one-probe monomer;
+- the probe and its dyes travel with their subunit through fusion, fission, and conversion
+  (``simulation_rds_support.extract_subunit_lineage``): a one-Fab dimer that dissociates leaves
+  one daughter with the Fab and all its dyes and one permanently dark daughter; a ``B1 -> A``
+  conversion keeps the bound subunit's identity; a mobility switch changes nothing about the labels.
 
 The laws are fixed measured (or preparation-level) inputs and are never inferred: from the
 video alone the labeling probability is nearly degenerate with the receptor counts
@@ -35,38 +45,39 @@ Condition laws for the MET recordings of Harwardt et al. (2017; BioStudies S-BSS
           distribution, so a matched-mean underdispersed (binomial) and overdispersed
           (negative binomial) alternative are registered for the sensitivity grid.
 
-Derived visible fractions (arithmetic of the laws): INLB monomer 0.50 / dimer 0.75, with two
-thirds of the visible INLB dimers carrying one dye; FAB monomer 0.806 / dimer 0.962.
+Derived visible fractions of the RETAINED population (arithmetic of the laws, ``q`` = P(dye >= 1)
+of a bound probe: INLB 0.5, FAB 0.806): a retained monomer is visible with probability ``q``; a
+one-probe dimer with ``q`` and, under INLB, never with two dyes; a two-probe dimer with
+``1 - (1 - q)^2`` (INLB 0.75, FAB 0.962), and among visible two-InlB dimers one third carry two
+dyes. Under FAB a bound probe carries a Poisson number of dyes, so brightness classes do not map
+onto probe counts.
 
-A static probe-OCCUPANCY probability composes with the law: a subunit is occupied by a
-probe with probability ``p_occ``, optionally per initial molecular species, and an
-unoccupied subunit carries no dyes regardless of its draw. The occupancy is a DECLARED
-PER-CONDITION INPUT of the visibility layer, not a sensitivity knob with an inert default:
-the published protocol is uPAINT (both probes in the imaging medium at 0.25 nM, binding
-during acquisition), which labels a sparse subset of receptors by design, so full occupancy
-is not a defensible baseline. The values live on the condition settings of
-``parameterization.py`` (``ConditionSetting``; MET-INLB 0.5 declared, MET-FAB 0.155 derived
-from a declared Fab/InlB visibility ratio of 0.5 and the InlB anchor; both provisional until
-the collaborators answer the questions of 2026-09-11). Every renderer of simulated
-trajectories -- the DLI stage of both workflows, the posterior-predictive video and the horizon
-audit -- resolves them through ``resolve_labeling`` (``parameterization.occupancy_of``;
-``--occupancy`` overrides them for a sensitivity run) and labels each trajectory through
-``label_trajectory``, so no renderer can apply a law, an occupancy or a species mapping other
-than the training data's. Only the diagnostics that test the bare law on purpose (the labeling
-audit's law and draw levels, the direct estimators' synthetic scenes) call ``draw_dye_counts``
-directly, and each states its occupancy. The effective visibility per subunit is ``a = p_occ * P(kappa >= 1)`` (INLB 0.25, FAB 0.125),
-and the share of visible dimers with BOTH subunits labeled is ``a / (2 - a)`` when the two subunits
-are occupied independently -- what brightness can report about stoichiometry.
+The probe OCCUPANCY ``p`` of the TRUE population is a DECLARED PER-CONDITION conversion, not a
+labeling coin: it realizes the retained population from the inferred receptor total N_total at
+the RDS stage (``parameterization.realize_initial_composition``) and sets the one-/two-probe
+split of the initial dimers here (``two_probe_share_of``). The values live on the condition
+settings of ``parameterization.py`` (``ConditionSetting``; MET-INLB 0.0476, the independent-site
+equilibrium at the published 0.25 nM with K_D 5 nM; MET-FAB 0.0148, derived from a declared
+Fab/InlB visibility ratio of 0.5 and the InlB anchor). Every renderer of simulated trajectories
+-- the DLI stage of both workflows, the posterior-predictive video and the horizon audit --
+resolves the run's labeling through ``resolve_labeling`` and labels each trajectory through
+``label_trajectory``, so no renderer can apply a law, a probe rule or a species mapping other
+than the training data's. ``--occupancy`` is an explicit SENSITIVITY OVERRIDE that replaces the
+probe classes by independent per-subunit occupancy coins (``probe_rule = "coins"``), recorded as
+such; it is never the default. Only the diagnostics that test the bare law on purpose (the
+labeling audit's law and draw levels, the direct estimators' synthetic scenes) call
+``draw_dye_counts`` directly, and each states its occupancy.
 
-Probe kinetics (an assumption, stated). The dye count is static for the recording, so the
-observation layer removes a dye only by photobleaching and never adds one: ligand binding
-and unbinding within a recording are not modeled, and for MET-INLB the probe IS the ligand.
-First-order, state-independent unbinding is statistically indistinguishable from the
-modeled bleaching and is absorbed by the per-condition calibrated bleach parameter (the
-detector calibrates it on the condition's own recordings). Not absorbed, and declared
-rather than modeled: the appearance of a spot when free labeled ligand binds during the
-recording, and any ligand affinity that differs between monomeric and dimeric receptors.
-Partial ligand occupancy is the static occupancy multiplier above.
+Probe kinetics (an assumption, stated). A probe stays attached for the recording and its dye
+count is static, so the observation layer removes a dye only by photobleaching and never adds
+one: ligand binding and unbinding within a recording are not modeled, and for MET-INLB the probe
+IS the ligand. Photobleaching removes fluorescence and preserves the probe, hence a receptor's
+association eligibility. First-order, state-independent unbinding is statistically
+indistinguishable from the modeled bleaching and is absorbed by the per-condition calibrated
+bleach parameter (the detector calibrates it on the condition's own recordings). Not absorbed,
+and declared rather than modeled: the appearance of a spot when free labeled ligand binds
+during the recording, and any ligand affinity that differs between monomeric and dimeric
+receptors beyond the independent binding of the initial classes.
 """
 
 from __future__ import annotations
@@ -295,37 +306,94 @@ def draw_dye_counts(law: LabelingLaw, n_subunits: int, rng: np.random.Generator,
     return kappa.astype(np.int64)
 
 
+def draw_dye_counts_bound(law: LabelingLaw, probe_bound: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Draw the static dye count of every subunit given which subunits carry a probe: one draw of
+    the law per subunit, zeroed where ``probe_bound`` is False. ``int64`` array ``(n_subunits,)``."""
+    probe_bound = np.asarray(probe_bound, dtype=bool)
+    kappa = law.draw(int(probe_bound.shape[0]), rng)
+    return np.where(probe_bound, kappa, 0).astype(np.int64)
+
+
+def assign_probes(plan: "LabelingPlan", host_index_0: np.ndarray, host_rank_0: np.ndarray,
+                  species_of_rank: Dict[int, str], rng: np.random.Generator) -> np.ndarray:
+    """Which retained subunits carry a probe at the recording start: ``bool`` array ``(n_subunits,)``.
+
+    ``probe_rule = "classes"`` (the model): every monomer subunit is bound. A dimer host with ONE
+    retained subunit (``B1`` under INLB) is bound; a host with two subunits is a two-probe dimer
+    where the condition's dimer classes make it one (``B2`` under INLB), and otherwise (``B`` under
+    FAB) a two-Fab dimer with probability ``plan.two_probe_share`` or a one-Fab dimer with the
+    probe on one subunit chosen at random. ``probe_rule = "coins"`` (the ``--occupancy`` override):
+    independent per-subunit coins at the occupancy of each subunit's initial molecular species.
+    """
+    host_index_0 = np.asarray(host_index_0)
+    host_rank_0 = np.asarray(host_rank_0)
+    n = int(host_rank_0.shape[0])
+    initial_species = np.array([species_of_rank[int(rank)] for rank in host_rank_0])
+    if plan.probe_rule == "coins":
+        p = occupancy_per_subunit(plan.occupancy, initial_species)
+        return rng.random(n) < p
+    if plan.probe_rule != "classes":
+        raise ValueError(f"unknown probe rule {plan.probe_rule!r}; expected 'classes' or 'coins'.")
+    bound = np.ones(n, dtype=bool)
+    is_dimer = initial_species == plan.species_names[1]
+    if not is_dimer.any():
+        return bound
+    n_hosts = int(host_index_0.max()) + 1
+    subunits_per_host = np.bincount(host_index_0[is_dimer], minlength=n_hosts)
+    two_subunit_hosts = np.flatnonzero(subunits_per_host == 2)
+    if two_subunit_hosts.size and not plan.ligand_classes:
+        # FAB: the one-/two-Fab class of every basal dimer, drawn here; one-Fab -> one random subunit dark
+        two_probe = rng.random(two_subunit_hosts.size) < float(plan.two_probe_share)
+        one_probe_hosts = two_subunit_hosts[~two_probe]
+        if one_probe_hosts.size:
+            members = np.flatnonzero(is_dimer)
+            order = members[np.argsort(host_index_0[members], kind="stable")]
+            hosts_sorted = host_index_0[order]
+            first = np.searchsorted(hosts_sorted, one_probe_hosts)          # index of each host's first subunit
+            dark_offset = rng.integers(0, 2, size=one_probe_hosts.size)     # which of the two stays probe-free
+            bound[order[first + dark_offset]] = False
+    return bound
+
+
 # ---- Provenance summary ------------------------------------------------------------------
 # One fixed-width row per rendered simulation, persisted beside the imaging draws as the
 # Labeling_Set. The ``_0`` columns describe the initial frame (the true and visible initial
 # composition); the first three are recording-wide. Counts are of PARTICLES for the dimer
 # columns and of SUBUNITS otherwise.
 LABELING_SET_COLUMNS: Tuple[str, ...] = (
-    "n_subunits",            # true receptor count N_R (conserved)
+    "n_subunits",            # retained receptor subunit count N_R (conserved)
     "n_dyes",                # emitters rendered (sum of kappa)
     "n_labeled_subunits",    # subunits with kappa >= 1
     "monomers_0",            # monomer particles at frame 0
     "monomers_visible_0",    # ... of which labeled
-    "dimers_0",              # dimer particles (any mobility mode) at frame 0
+    "dimers_0",              # dimer particles (any class, any mobility mode) at frame 0
     "dimers_visible_0",      # ... with at least one labeled subunit
-    "dimers_two_labeled_0",  # ... with both subunits labeled
-    "occupancy_monomer",     # probe-occupancy probability applied to monomer subunits (declared/derived/override)
-    "occupancy_dimer",       # ... to dimer subunits
+    "dimers_two_labeled_0",  # ... with two labeled subunits
+    "occupancy_monomer",     # probability that a retained monomer subunit carries a probe (1 under the model; the coin under an override)
+    "occupancy_dimer",       # ... that a retained dimer subunit does ((1 + s_2) / 2 under FAB, 1 under INLB; the coin under an override)
+    "dimers_one_probe_0",    # dimer particles carrying ONE probe at frame 0 (B1 under INLB; one-Fab under FAB)
+    "dimers_two_probe_0",    # ... carrying two probes (B2 under INLB; two-Fab under FAB)
+    "two_probe_share",       # declared two-probe share s_2 = p / (2 - p) of the initial dimers (NaN under an override)
 )
 
 
 def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank_0: np.ndarray,
                      monomer_ranks: Sequence[int],
-                     occupancy_by_species_values: Tuple[float, float] = (float("nan"), float("nan"))) -> np.ndarray:
+                     occupancy_by_species_values: Tuple[float, float] = (float("nan"), float("nan")),
+                     probe_bound: Optional[np.ndarray] = None,
+                     two_probe_share: float = float("nan")) -> np.ndarray:
     """The ``LABELING_SET_COLUMNS`` row for one simulation (``float64`` array).
 
     Args:
         dye_counts: per-subunit dye counts ``(n_subunits,)``.
         host_index_0, host_rank_0: frame-0 rows of the subunit lineage.
-        monomer_ranks: particle-type ranks whose particles are single subunits (all
-            monomer modes; see ``simulation_rds_support.monomer_ranks``).
-        occupancy_by_species_values: the (monomer, dimer) occupancy probabilities actually
-            applied (``occupancy_by_species``); NaN when not recorded.
+        monomer_ranks: particle-type ranks of the monomer types (all monomer modes; see
+            ``simulation_rds_support.monomer_ranks``).
+        occupancy_by_species_values: the (monomer, dimer) per-subunit probe probabilities
+            actually applied; NaN when not recorded.
+        probe_bound: which subunits carry a probe (``assign_probes``); the probe-class columns
+            are NaN when it is not given.
+        two_probe_share: the declared s_2 the dimer classes were drawn with (NaN under an override).
     """
     dye_counts = np.asarray(dye_counts)
     labeled = dye_counts >= 1
@@ -336,6 +404,14 @@ def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank
     labeled_per_host = np.bincount(host_index_0[dimer_sub], weights=labeled[dimer_sub].astype(float),
                                    minlength=n_hosts)
     dimer_hosts = subunits_per_host > 0
+    if probe_bound is None:
+        one_probe = two_probe = float("nan")
+    else:
+        bound = np.asarray(probe_bound, dtype=bool)
+        bound_per_host = np.bincount(host_index_0[dimer_sub], weights=bound[dimer_sub].astype(float),
+                                     minlength=n_hosts)
+        one_probe = int((bound_per_host[dimer_hosts] == 1).sum())
+        two_probe = int((bound_per_host[dimer_hosts] >= 2).sum())
     return np.array([
         dye_counts.shape[0],
         int(dye_counts.sum()),
@@ -347,6 +423,9 @@ def labeling_summary(dye_counts: np.ndarray, host_index_0: np.ndarray, host_rank
         int((labeled_per_host[dimer_hosts] >= 2).sum()),
         float(occupancy_by_species_values[0]),
         float(occupancy_by_species_values[1]),
+        float(one_probe),
+        float(two_probe),
+        float(two_probe_share),
     ], dtype=np.float64)
 
 
@@ -365,30 +444,47 @@ class LabelingPlan:
     Attributes:
         condition: stored condition token (``FAB`` or ``INLB``).
         law_name, law: the resolved labeling law (``resolve_labeling_law``).
-        occupancy: the probe occupancy as applied: one probability, or a mapping by
-            molecular species.
-        occupancy_source: ``declared`` or ``derived`` (the condition setting), or
-            ``override`` (``--occupancy``).
-        species_names: the molecular species, in configuration order (monomer, dimer).
-        occupancy_pair: the occupancy applied to each molecular species, in
-            ``species_names`` order (the ``occupancy_monomer`` / ``occupancy_dimer`` columns).
+        probe_rule: ``classes`` (the model: every retained monomer bound, dimer classes by
+            species under INLB and drawn with ``two_probe_share`` under FAB) or ``coins`` (the
+            ``--occupancy`` override: independent per-subunit coins at ``occupancy``).
+        occupancy: the condition's probe occupancy p of the true population (``classes``), or
+            the override as applied, one probability or a mapping by stoichiometric class.
+        occupancy_source: ``equilibrium``, ``derived`` or ``declared`` (the condition
+            setting), or ``override`` (``--occupancy``).
+        ligand_classes: whether the condition's dimers carry their probe class as a species.
+        two_probe_share: s_2 = p / (2 - p), the declared two-probe share of the initial dimers
+            (NaN under an override).
+        species_names: the stoichiometric class names, in configuration order (monomer, dimer).
+        occupancy_pair: the probability that a retained subunit of each class carries a probe,
+            as applied, in ``species_names`` order (the ``occupancy_monomer`` /
+            ``occupancy_dimer`` columns): under ``classes`` 1 for monomers and, for dimer
+            subunits, 1 under INLB and (1 + s_2) / 2 under FAB.
     """
     condition: str
     law_name: str
     law: LabelingLaw
+    probe_rule: str
     occupancy: Occupancy
     occupancy_source: str
+    ligand_classes: bool
+    two_probe_share: Optional[float]
     species_names: Tuple[str, ...]
     occupancy_pair: Tuple[float, ...]
 
     @property
     def visible_per_subunit(self) -> Tuple[float, ...]:
-        """Per-subunit visibility ``a = p_occ * P(kappa >= 1)`` of each molecular species."""
+        """Probability that a RETAINED subunit of each class is visible: bound probability x P(kappa >= 1)."""
         return tuple(p * self.law.visible_probability for p in self.occupancy_pair)
 
     def describe(self) -> str:
         a = ", ".join(f"{s} {v:.4f}" for s, v in zip(self.species_names, self.visible_per_subunit))
-        return (f"{self.condition} {self.law_name} = {self.law.describe()}, occupancy "
+        if self.probe_rule == "classes":
+            rule = (f"probe classes by species (B1 one, B2 two)" if self.ligand_classes
+                    else f"probe classes drawn, two-probe share {self.two_probe_share:.4f}")
+            return (f"{self.condition} {self.law_name} = {self.law.describe()}, retained population: "
+                    f"{rule}, occupancy {self.occupancy:.4f} ({self.occupancy_source}); "
+                    f"visible per retained subunit {a}")
+        return (f"{self.condition} {self.law_name} = {self.law.describe()}, occupancy coins "
                 f"{self.occupancy} ({self.occupancy_source}); visible per subunit {a}")
 
     def record(self) -> dict:
@@ -398,6 +494,8 @@ class LabelingPlan:
         return {"condition": self.condition, "law_name": self.law_name,
                 "law": {"family": self.law.family, "mean": self.law.mean, "shape": self.law.shape,
                         "description": self.law.describe()},
+                "probe_rule": self.probe_rule, "ligand_classes": self.ligand_classes,
+                "two_probe_share": (None if self.two_probe_share is None else float(self.two_probe_share)),
                 "occupancy": occupancy, "occupancy_source": self.occupancy_source,
                 "occupancy_by_species": dict(zip(self.species_names, self.occupancy_pair)),
                 "visible_per_subunit": dict(zip(self.species_names, self.visible_per_subunit))}
@@ -411,22 +509,26 @@ def resolve_labeling(condition: str, law_spec: Optional[str] = None,
         condition: stored condition token (``FAB`` or ``INLB``).
         law_spec: ``--labeling-law``: None for the condition's baseline law, else a registry key
             or ``family:mean[:shape]`` (``resolve_labeling_law``).
-        occupancy_spec: ``--occupancy``: None for the condition's declared (MET-INLB) or derived
-            (MET-FAB) occupancy from ``parameterization.ConditionSetting``, else an override in the
-            ``parse_occupancy`` grammar, recorded as ``override``.
+        occupancy_spec: ``--occupancy``: None for the model's probe rule (``classes``, with the
+            condition's occupancy from ``parameterization.ConditionSetting`` setting the
+            two-probe share), else an override in the ``parse_occupancy`` grammar that replaces
+            the classes by independent per-subunit coins, recorded as ``override``.
     """
     # Local import: parameterization imports this module lazily, for the laws' dye probabilities.
-    from .parameterization import PARAMETERS, occupancy_of, occupancy_source_of
+    from .parameterization import PARAMETERS, occupancy_of, occupancy_source_of, two_probe_share_of
     law_name, law = resolve_labeling_law(condition, law_spec)
+    rds = PARAMETERS.simulation.rds
+    species_names = tuple(rds.molecular_species_names)
+    ligand_classes = bool(rds.condition_setting(condition).ligand_classes)
     if occupancy_spec is None:
-        occupancy: Occupancy = occupancy_of(condition)
-        source = occupancy_source_of(condition)
-    else:
-        occupancy = parse_occupancy(str(occupancy_spec))
-        source = "override"
-    species_names = tuple(PARAMETERS.simulation.rds.molecular_species_names)
-    return LabelingPlan(condition, law_name, law, occupancy, source, species_names,
-                        occupancy_by_species(occupancy, species_names))
+        p = float(occupancy_of(condition))
+        s2 = float(two_probe_share_of(condition))
+        dimer_subunit_bound = 1.0 if ligand_classes else 0.5 * (1.0 + s2)
+        return LabelingPlan(condition, law_name, law, "classes", p, occupancy_source_of(condition),
+                            ligand_classes, s2, species_names, (1.0, dimer_subunit_bound))
+    occupancy = parse_occupancy(str(occupancy_spec))
+    return LabelingPlan(condition, law_name, law, "coins", occupancy, "override", ligand_classes,
+                        None, species_names, occupancy_by_species(occupancy, species_names))
 
 
 def labeling_rng(seed: Optional[int], task: int = 0, sim: int = 0) -> np.random.Generator:
@@ -447,21 +549,25 @@ def labeling_rng(seed: Optional[int], task: int = 0, sim: int = 0) -> np.random.
 def label_subunits(plan: LabelingPlan, host_index_0: np.ndarray, host_rank_0: np.ndarray,
                    species_of_rank: Dict[int, str], monomer_rank_list: Sequence[int],
                    rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray]:
-    """Draw the static dye counts of every subunit under ``plan`` and summarize them.
+    """Assign the probes and draw the static dye counts of every subunit under ``plan``, and
+    summarize them.
 
-    The occupancy applies by each subunit's MOLECULAR species at frame 0 (``species_of_rank``
-    maps a particle-type rank to its species; mobility modes are not a selection axis).
+    The probe rule applies by each subunit's host at frame 0 (``species_of_rank`` maps a
+    particle-type rank to its stoichiometric class; mobility modes are not a selection axis):
+    ``assign_probes`` decides which retained subunits carry a probe, ``draw_dye_counts_bound``
+    draws one dye count per bound probe.
 
     Returns:
         ``(dye_counts, row)``: the ``int64`` dye count per subunit and the
-        ``LABELING_SET_COLUMNS`` row, with the applied occupancy recorded.
+        ``LABELING_SET_COLUMNS`` row, with the applied rule recorded.
     """
+    host_index_0 = np.asarray(host_index_0)
     host_rank_0 = np.asarray(host_rank_0)
-    initial_species = [species_of_rank[int(rank)] for rank in host_rank_0]
-    dye_counts = draw_dye_counts(plan.law, host_rank_0.shape[0], rng,
-                                 occupancy=occupancy_per_subunit(plan.occupancy, initial_species))
-    row = labeling_summary(dye_counts, np.asarray(host_index_0), host_rank_0, monomer_rank_list,
-                           occupancy_by_species_values=plan.occupancy_pair)
+    probe_bound = assign_probes(plan, host_index_0, host_rank_0, species_of_rank, rng)
+    dye_counts = draw_dye_counts_bound(plan.law, probe_bound, rng)
+    row = labeling_summary(dye_counts, host_index_0, host_rank_0, monomer_rank_list,
+                           occupancy_by_species_values=plan.occupancy_pair, probe_bound=probe_bound,
+                           two_probe_share=(float("nan") if plan.two_probe_share is None else plan.two_probe_share))
     return dye_counts, row
 
 

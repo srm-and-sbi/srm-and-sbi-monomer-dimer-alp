@@ -1,7 +1,7 @@
 """Horizon-audit kernel: does inherited latent state break the reset assumption?
 
 The estimator is trained on independently initialized model-window simulations: every training
-video begins with freshly placed particles whose stoichiometry (receptor total N_R, initial
+video begins with freshly placed particles whose stoichiometry (receptor total N_total, initial
 dimer-to-monomer ratio r) is the drawn theta. The
 experimental analysis, however, slices each long continuous recording into consecutive
 model-length windows and runs the estimator on every window. Those two ensembles are equal in

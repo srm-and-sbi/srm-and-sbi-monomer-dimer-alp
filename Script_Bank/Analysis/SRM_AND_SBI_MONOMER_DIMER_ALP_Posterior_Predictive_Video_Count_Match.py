@@ -7,7 +7,7 @@ declares the receptor total (one value for every recording) and does not use thi
 density-matched render when one is wanted.
 
 ROLE. A posterior-predictive render at a declared reaction-diffusion configuration
-(``--declared-rds``) needs a receptor total ``N_R``, and the recordings do not state one. The value
+(``--declared-rds``) needs a receptor total ``N_total``, and the recordings do not state one. The value
 chosen here is a RENDERING SETTING that approximates the recording's opening spot density, not a
 validated biological estimate. Dividing a spot count by the per-subunit visibility would ignore the
 dimers, the finite field, the missed detections and the counting saturation, so the approximation is
@@ -22,17 +22,17 @@ METHOD. A render's detected count per frame is written ``c = eta * V``: ``V`` is
 visible hosts at frame 0 (its labeling record) and ``eta`` the detected-per-visible-host ratio, which
 carries the detection losses, the overlaps, the bleaching within the window and the exits from the
 field at that density. With the plan's per-subunit visibility ``a`` and the declared initial ratio
-``r``, the expected number of visible hosts is ``N_R * v`` with
-``v = (a_A + r (1 - (1 - a_B)^2)) / (1 + 2 r)``. Each iteration renders at the current ``N_R``,
-measures ``eta``, and proposes ``N_R = c_exp / (eta * v)``; a step is limited to a factor of two.
+``r``, the expected number of visible hosts is ``N_total * v`` with
+``v = p (q + (2 - p) r v_B) / (1 + 2 r), the retained-population visibility per true subunit``. Each iteration renders at the current ``N_total``,
+measures ``eta``, and proposes ``N_total = c_exp / (eta * v)``; a step is limited to a factor of two.
 Every render -- the first, each update and the check renders -- first passes one count test
-(``count_problem``): no render exceeds ``--max-count``, and none lies outside the prior box of ``N_R``
+(``count_problem``): no render exceeds ``--max-count``, and none lies outside the prior box of ``N_total``
 (the training support) unless ``--allow-outside-prior`` records the user's decision to render there.
 Normalizing by the realized initial visibility reduces the labeling-count
 variability of a single render; the remaining simulation variability, and the dependence of
 ``eta`` on density, arrangement, overlap, dye multiplicity and motion, are not removed
 (``E[eta V]`` is not ``E[eta] E[V]`` in general). The tolerance (default 3 %) is an ITERATION
-criterion, not an uncertainty of ``N_R``. After acceptance, ``--check-renders`` independent renders at
+criterion, not an uncertainty of ``N_total``. After acceptance, ``--check-renders`` independent renders at
 the accepted value report the detected count they produce, beside the recording's.
 
 FAILURE PATHS, all explicit, recorded and returned as a non-zero exit status (the diagnostics are
@@ -43,7 +43,7 @@ kept; only an accepted status carries a count):
     undefined_no_visible_hosts              a render has no visible host at frame 0 (eta undefined)
     undefined_no_synthetic_detections       a render has no accepted spot (eta = 0)
     undefined_nonfinite_update              the proposal is not a finite positive count
-    unresolved_saturation                   the detected count no longer responds to N_R (its
+    unresolved_saturation                   the detected count no longer responds to N_total (its
                                             elasticity, from the eta trend over a step of at least
                                             25 %, is below --min-elasticity while a larger count is
                                             proposed): count matching unresolved under detector
@@ -96,15 +96,15 @@ STATUS_ACCEPTED = ("matched", "matched_outside_prior")
 N_SIGMA = 4.0
 HALF_PX = 14
 MIN_ELASTICITY_STEP = np.log(1.25)       # the elasticity is read only across a step of >= 25 %
-MAX_STEP_FACTOR = 2.0                    # one update moves N_R by at most this factor
+MAX_STEP_FACTOR = 2.0                    # one update moves N_total by at most this factor
 
 
 # ==========================================================================================
 # The iteration (pure: renders are supplied by a callable, so every path is testable)
 # ==========================================================================================
 
-def count_problem(n, *, max_count, prior_box, allow_outside_prior, what="N_R"):
-    """Why a render at ``N_R = n`` may not be made, as ``(status, reason)``, or None when it may.
+def count_problem(n, *, max_count, prior_box, allow_outside_prior, what="N_total"):
+    """Why a render at ``N_total = n`` may not be made, as ``(status, reason)``, or None when it may.
 
     Every render passes this test before it is made: the first, each update and the check renders.
     No render exceeds ``max_count`` (a resource and saturation guard), and none lies outside
@@ -128,7 +128,7 @@ def guarded_render(render_count, *, max_count, prior_box, allow_outside_prior):
     made. The iteration stops before it reaches one; the guard also covers the check renders."""
     def render(n_r, tag):
         problem = count_problem(n_r, max_count=max_count, prior_box=prior_box,
-                                allow_outside_prior=allow_outside_prior, what="the render at N_R")
+                                allow_outside_prior=allow_outside_prior, what="the render at N_total")
         if problem:
             raise RuntimeError(f"refusing to render: {problem[1]}")
         return render_count(n_r, tag)
@@ -144,7 +144,7 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
         v: expected visible hosts per receptor subunit at frame 0.
         render_count: ``(n_r, iteration) -> (visible_hosts_0, detected_per_frame)`` for one render.
         initial, tolerance, max_iterations, max_count, min_elasticity: see the parser.
-        prior_box: ``(low, high)`` of ``N_R`` in physical units (the training support).
+        prior_box: ``(low, high)`` of ``N_total`` in physical units (the training support).
         allow_outside_prior: the user's decision to render outside ``prior_box`` (default: no).
 
     Returns:
@@ -168,7 +168,7 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
         return result("undefined_no_visibility", f"expected visible hosts per subunit is {v!r}")
     n = float(initial)
     for it in range(int(max_iterations)):
-        problem = count_problem(n, **limits, what="the initial N_R" if it == 0 else "the next N_R")
+        problem = count_problem(n, **limits, what="the initial N_total" if it == 0 else "the next N_total")
         if problem:                                   # checked before the render, never after it
             return result(*problem)
         n_rendered = int(round(n))
@@ -178,10 +178,10 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
         iterations.append(rec)
         if visible <= 0:
             return result("undefined_no_visible_hosts",
-                          f"the render at N_R {n_rendered} has no visible host at frame 0")
+                          f"the render at N_total {n_rendered} has no visible host at frame 0")
         if not np.isfinite(c_syn) or c_syn <= 0:
             return result("undefined_no_synthetic_detections",
-                          f"the render at N_R {n_rendered} has {c_syn!r} detected spots per frame")
+                          f"the render at N_total {n_rendered} has {c_syn!r} detected spots per frame")
         eta = c_syn / visible
         proposal = c_exp / (eta * v)
         rec.update(eta=eta, proposed_count_total=proposal)
@@ -195,13 +195,13 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
                 rec["elasticity"] = float(elasticity)
                 if elasticity < min_elasticity and proposal > n_rendered:
                     return result("unresolved_saturation",
-                                  f"count matching unresolved under detector saturation: from N_R "
+                                  f"count matching unresolved under detector saturation: from N_total "
                                   f"{prev['count_total']} to {n_rendered} the detected count responds with "
                                   f"elasticity {elasticity:.2f} (< {min_elasticity:g}) while a larger count "
                                   f"({proposal:.0f}) is proposed")
         if abs(proposal - n_rendered) / n_rendered <= tolerance:
             matched = int(round(proposal))
-            problem = count_problem(matched, **limits, what="the converged N_R")
+            problem = count_problem(matched, **limits, what="the converged N_total")
             if problem:                               # the check renders would be made at it
                 return result(*problem)
             inside = prior_box[0] - 1e-9 <= matched <= prior_box[1] + 1e-9
@@ -223,9 +223,26 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
 
 
 def visible_hosts_per_subunit(plan, ratio: float) -> float:
-    """Expected visible hosts per receptor subunit at frame 0 for the initial ratio ``r = n_B / n_A``."""
+    """Expected visible hosts at frame 0 per TRUE receptor subunit (per unit of N_total) for the
+    initial true ratio ``r = n_B / n_A``.
+
+    The generator simulates the retained population: ``p n_A`` probe-bound monomers and
+    ``p (2 - p) n_B`` dimers carrying at least one probe (``parameterization.realize_initial_composition``),
+    with ``n_A = N_total / (1 + 2r)`` and ``n_B = r N_total / (1 + 2r)``. Under the model's probe rule a
+    monomer is visible with the law's ``q``, a one-probe dimer with ``q`` and a two-probe dimer (share
+    ``s_2 = p / (2 - p)``) with ``1 - (1 - q)^2``. Under the ``--occupancy`` override the per-class coin
+    visibilities ``plan.visible_per_subunit`` thin the retained population instead (approximate: the
+    coins act on the retained cohort).
+    """
+    from srm_and_sbi_monomer_dimer_alp.parameterization import occupancy_of
+    p = float(occupancy_of(plan.condition))
+    if plan.probe_rule == "classes":
+        q = plan.law.visible_probability
+        s2 = float(plan.two_probe_share)
+        vis_dimer = (1.0 - s2) * q + s2 * (1.0 - (1.0 - q) ** 2)
+        return p * (q + (2.0 - p) * ratio * vis_dimer) / (1.0 + 2.0 * ratio)
     a_mono, a_dim = plan.visible_per_subunit
-    return (a_mono + ratio * (1.0 - (1.0 - a_dim) ** 2)) / (1.0 + 2.0 * ratio)
+    return p * (a_mono + (2.0 - p) * ratio * (1.0 - (1.0 - a_dim) ** 2)) / (1.0 + 2.0 * ratio)
 
 
 def attempt_folder_name(scenario_name, nuisance_tag, attempt_label=None) -> str:
@@ -333,7 +350,7 @@ def match_one(args, ctx, cell: int) -> dict:
             row = dict(zip(lab.LABELING_SET_COLUMNS, clip["labeling_row"]))
             visible = row["monomers_visible_0"] + row["dimers_visible_0"]
             c_syn = float(detected_per_frame(convert_video_dtype(clip["synth"], bits_from=16, bits_to=8)).mean())
-            print(f"[cell {cell}] render {tag}: N_R {n_r} -> visible {int(visible)} (expected {n_r * v:.0f}), "
+            print(f"[cell {cell}] render {tag}: N_total {n_r} -> visible {int(visible)} (expected {n_r * v:.0f}), "
                   f"detected {c_syn:.2f}/frame ({time.time() - t1:.0f} s)", flush=True)
             return visible, c_syn
 
@@ -360,7 +377,7 @@ def match_one(args, ctx, cell: int) -> dict:
         matched_count_total=out["matched_count_total"], last_count_total=out["last_count_total"],
         interpretation=("a rendering setting approximating the recording's opening spot density, "
                         "matched by construction; not a validated biological estimate; the tolerance "
-                        "is an iteration criterion, not an uncertainty of N_R"),
+                        "is an iteration criterion, not an uncertainty of N_total"),
         prior_box_count_total=list(prior_box),
         match_seconds=args.match_seconds, match_frames=n_match,
         detection=dict(rule="direct_imaging_estimates.measure_spot_widths on stored 8-bit levels",
@@ -383,7 +400,7 @@ def match_one(args, ctx, cell: int) -> dict:
     stem = ctx["stems"][cell]
     Path(f"{stem}.json").write_text(json.dumps(result, indent=1, default=str))
     _write_md(Path(f"{stem}.md"), result, tif, plan, imaging, base_record)
-    verdict = (f"accepted N_R = {out['matched_count_total']} ({out['status']})"
+    verdict = (f"accepted N_total = {out['matched_count_total']} ({out['status']})"
                if out["status"] in STATUS_ACCEPTED else f"NO count ({out['status']}: {out['reason']})")
     print(f"[cell {cell}] {verdict}; wrote {stem}.json", flush=True)
     return result
@@ -395,7 +412,7 @@ def _write_md(path, r, tif, plan, imaging, record):
              f"The value is a rendering setting that approximates the recording's opening spot density "
              f"through the production chain (see the script's docstring). A render at it has that density "
              f"by construction, which is not evidence of realism; the tolerance is an iteration criterion, "
-             f"not an uncertainty of N_R.", "",
+             f"not an uncertainty of N_total.", "",
              f"- recording: `{tif.name}`, first {r['match_seconds']:g} s ({r['match_frames']} frames): "
              f"{r['experimental_detected_per_frame']:.2f} detected spots per frame (4 sigma, half-width 14 px, "
              f"SCOPE box center, 8-bit levels)",
@@ -404,7 +421,7 @@ def _write_md(path, r, tif, plan, imaging, record):
              f"- imaging: {imaging['description']}",
              f"- declared configuration: `{Path(record['path']).name}` (sha256 {record['sha256'][:12]}), "
              f"scenario {record['scenario']['name']}", "",
-             "| iteration | N_R rendered | visible hosts (frame 0) | expected | detected per frame | eta | proposed N_R |",
+             "| iteration | N_total rendered | visible hosts (frame 0) | expected | detected per frame | eta | proposed N_total |",
              "|---|---|---|---|---|---|---|"]
     for it in r["iterations"]:
         eta = it.get("eta")
@@ -419,7 +436,7 @@ def _write_md(path, r, tif, plan, imaging, record):
                       f"{r['experimental_detected_per_frame']:.2f})."]
     lo, hi = r["prior_box_count_total"]
     if r["matched_count_total"] is not None:
-        lines += ["", f"**Accepted N_R = {r['matched_count_total']}**; prior box {lo:.0f}-{hi:.0f}: "
+        lines += ["", f"**Accepted N_total = {r['matched_count_total']}**; prior box {lo:.0f}-{hi:.0f}: "
                       + ("inside." if r["status"] == "matched" else
                          "OUTSIDE the training support (rendered under --allow-outside-prior, the "
                          "user's decision; flagged).")]
@@ -448,19 +465,21 @@ def build_parser():
     p.add_argument("--experiment-span-seconds", type=int, default=20)
     p.add_argument("--match-seconds", type=float, default=2.0,
                    help="opening window over which the counts are compared (default 2 s).")
-    p.add_argument("--initial-count", type=float, default=1000.0, help="first N_R rendered.")
+    p.add_argument("--initial-count", type=float, default=10000.0,
+                   help="first N_total rendered (the true receptor total; the prior center by default).")
     p.add_argument("--tolerance", type=float, default=0.03,
-                   help="iteration criterion: relative agreement of the rendered and proposed N_R.")
+                   help="iteration criterion: relative agreement of the rendered and proposed N_total.")
     p.add_argument("--max-iterations", type=int, default=5)
-    p.add_argument("--max-count", type=int, default=10000,
-                   help="no render above this receptor total, the first and the check renders "
-                        "included (a resource and saturation guard).")
+    p.add_argument("--max-count", type=int, default=100000,
+                   help="no render above this true receptor total, the first and the check renders "
+                        "included (a resource and saturation guard; the prior ceiling by default, where "
+                        "the retained population is about 2,100 FAB or 4,800 INLB subunits).")
     p.add_argument("--allow-outside-prior", action="store_true",
-                   help="the user's decision to render outside the prior box of N_R (the training "
+                   help="the user's decision to render outside the prior box of N_total (the training "
                         "support). Without it nothing is rendered there: a count outside the box, the "
                         "first included, ends the cell as user_decision_outside_prior.")
     p.add_argument("--min-elasticity", type=float, default=0.3,
-                   help="below this response of the detected count to N_R, matching is unresolved "
+                   help="below this response of the detected count to N_total, matching is unresolved "
                         "(detector saturation).")
     p.add_argument("--check-renders", type=int, default=1,
                    help="independent renders at the accepted value, reported beside the recording.")

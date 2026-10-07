@@ -8,6 +8,8 @@ reverse-engineering the code.
 
 > **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A` (log10 on [−2, 2]; `x_B = 2r / (1 + 2r)` is derived) and gave every learnable row its decided prior range (`PROJECT_CONTEXT.md` §2); the composition a drawn theta sets is realized from `(N_R, r)`. Where this note names `x_B`, read the derived fraction. Results quoted from earlier runs stand as recorded.
 
+> **Note (2026-10-05).** The audit is **disabled** under the retained-population generator (`run_horizon_audit` refuses every phase, the dry run included). Its composition metrics read the trajectory's **retained** species census (`n_B / (n_A + n_B)` over the class counts, with `B1` and `B2` aggregated and every `B` counted as two subunits) and judge the estimator's **true** composition (the inferred `N_total`, `r`) against it. Under the retained population these are different quantities: at the band ceiling (true `f_B` 25 %) the MET-FAB retained complex fraction is about 40 % and the retained count about 2 % of `N_total`, and a MET-INLB `B1` carries one retained subunit, not two. The audit stays disabled until its estimands are restated for the retained population (the retained census mapped back to the true population through the condition's occupancy, `B1` counted by its one subunit). Results recorded below stand for the generator they were produced under.
+
 ## The question
 
 The estimator is trained on **independently initialized model-window simulations**: every training

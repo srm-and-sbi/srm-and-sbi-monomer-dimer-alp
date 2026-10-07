@@ -170,7 +170,7 @@ case "$STAGE" in
   inference)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}${tag_slot}_Inference"
-    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add NUM_WORKERS; _add LR; _add HEARTBEAT; _add RESURRECT; _add NETWORK_PRESET; _add ARTIFACT_TAG
+    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add GLOBAL_BATCH; _add NUM_WORKERS; _add LR; _add HEARTBEAT; _add RESURRECT; _add NETWORK_PRESET; _add ARTIFACT_TAG
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node

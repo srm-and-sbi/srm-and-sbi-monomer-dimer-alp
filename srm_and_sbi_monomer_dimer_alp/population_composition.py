@@ -7,7 +7,7 @@ to its parameter table. Pure numpy plus a lazy scipy import for the three rank t
 and unit-tests without a machine profile.
 
 WHAT THE ANALYSIS ASKS. The estimator infers the stoichiometry of the model directly: the conserved
-receptor-subunit total N_R = n_A + 2 n_B (a count) and the initial composition, parameterized as the
+receptor-subunit total N_total = n_A + 2 n_B (a count) and the initial composition, parameterized as the
 log10 dimer-to-monomer ratio r = n_B / n_A and read here as the receptor fraction in dimers
 x_B = 2r / (1 + 2r), independently in every window of every recording. The
 absolute total is the *worst*-identified coordinate the model has, and the reason is
@@ -17,13 +17,13 @@ visible spots can be few dimers or many monomers. The question this analysis ask
 "how many" but "in what proportion", because the proportions are a different -- and far better
 identified -- function of the same posterior. The model parameters ARE the composition:
 
-    monomers                n_A = N_R (1 - x_B)
-    dimer complexes         n_B = N_R x_B / 2
-    total complexes         T   = n_A + n_B = N_R (1 - x_B / 2)
+    monomers                n_A = N_total (1 - x_B)
+    dimer complexes         n_B = N_total x_B / 2
+    total complexes         T   = n_A + n_B = N_total (1 - x_B / 2)
     monomer fraction        f_A = n_A / T = 2 (1 - x_B) / (2 - x_B)
     dimer-complex fraction  f_B = n_B / T = x_B / (2 - x_B)
     receptors in dimers     f_R = 2 n_B / (n_A + 2 n_B) = x_B
-    total receptors         N_R
+    total receptors         N_total
 
 Mobility (fast / slow / immobile) is a property of particle TYPES, not of molecular species, and the
 composition is a species census: the mobility modes do not enter it.
@@ -53,7 +53,7 @@ twice -- an internal consistency check, not two independent results.
 
 SPACES. The estimator works in its own coordinates ("estimator space": log10 of the receptor total,
 log10 of the dimer-to-monomer ratio). Every function that receives estimator-space draws takes a
-``to_physical`` callable mapping the ``(..., 2)`` stoichiometry coordinates to physical ``(N_R, x_B)``;
+``to_physical`` callable mapping the ``(..., 2)`` stoichiometry coordinates to physical ``(N_total, x_B)``;
 the runner binds ``parameterization.to_physical`` to the two table rows and composes the ratio row
 with ``ratio_to_receptor_fraction``, so the per-row conversion rule lives in one place and this
 kernel never exponentiates by hand. Species COUNTS extracted from a trajectory
@@ -105,7 +105,7 @@ COMPOSITION = (
     Quantity("dimer_complex_fraction", "f_B", "n_B / T", True),
     Quantity("receptors_in_dimers", "f_R", "2 n_B / (n_A + 2 n_B) = x_B", True),
     Quantity("total_complexes", "T", "n_A + n_B", False),
-    Quantity("total_receptors", "N_R", "n_A + 2 n_B", False),
+    Quantity("total_receptors", "N_total", "n_A + 2 n_B", False),
 )
 COMPOSITION_KEYS = tuple(q.key for q in COMPOSITION)
 FRACTION_INDICES = tuple(i for i, q in enumerate(COMPOSITION) if q.is_fraction)
@@ -131,24 +131,24 @@ def _assemble(n_a, n_b):
 
 
 def composition(stoichiometry_physical):
-    """The five derived quantities from the PHYSICAL stoichiometry pair ``(N_R, x_B)``.
+    """The five derived quantities from the PHYSICAL stoichiometry pair ``(N_total, x_B)``.
 
-    ``stoichiometry_physical`` is ``(..., 2)`` holding the receptor total N_R (a count, never its
+    ``stoichiometry_physical`` is ``(..., 2)`` holding the receptor total N_total (a count, never its
     log10) and the initial receptor fraction in dimers x_B on [0, 1] (derived from the ratio row by
     the caller's binding) -- any leading shape is preserved, so the
     same call serves a single MAP vector, a window's draws, or the whole held-out set. Returns
     ``(..., 5)`` ordered as :data:`COMPOSITION`.
 
-    The pair is mapped to the species counts n_A = N_R (1 - x_B) and n_B = N_R x_B / 2 and the
+    The pair is mapped to the species counts n_A = N_total (1 - x_B) and n_B = N_total x_B / 2 and the
     quantities are formed from those, so this function and :func:`composition_from_counts` share ONE
-    definition of every derived read. N_R is strictly positive (a log-uniform coordinate), so the
+    definition of every derived read. N_total is strictly positive (a log-uniform coordinate), so the
     denominators cannot vanish. Should a caller ever pass a zero total, the division yields NaN, which
     propagates into the nan-aware aggregation rather than raising -- a missing value, which is the
     truthful outcome, instead of a crash or a fabricated zero.
     """
     pair = np.asarray(stoichiometry_physical, dtype=float)
     if pair.shape[-1] != 2:
-        raise ValueError(f"composition() needs the (N_R, x_B) pair on the last axis, "
+        raise ValueError(f"composition() needs the (N_total, x_B) pair on the last axis, "
                          f"got shape {pair.shape}.")
     n_r, x_b = pair[..., 0], pair[..., 1]
     return _assemble(n_r * (1.0 - x_b), 0.5 * n_r * x_b)
@@ -190,7 +190,7 @@ def window_composition(cloud_flow, count_index, to_physical, draw_mask=None):
     ``cloud_flow`` is ``(N, S, D)``: for each of the ``N`` (recording, window) pairs, the ``S`` draws
     the Experiment stage took from that window's posterior, in estimator space. ``count_index`` names
     the two coordinates holding the stoichiometry (receptor total, initial dimer fraction, in that
-    order); ``to_physical`` maps their ``(..., 2)`` estimator-space values to physical ``(N_R, x_B)``
+    order); ``to_physical`` maps their ``(..., 2)`` estimator-space values to physical ``(N_total, x_B)``
     (the runner binds ``parameterization.to_physical`` to those two table rows -- the receptor total
     is a log row, the fraction a linear one, and only the table knows that). The composition is
     formed inside every draw and then averaged over draws -- the ordering the module docstring
@@ -570,7 +570,7 @@ def recovery_stratum(true_comp, inferred_comp, quantity_index, threshold, above=
 def parts_versus_whole(true_flow, inferred_flow, count_index, to_physical):
     """Per-species-count error in dex beside the total's, the comparison the composition rests on.
 
-    The species counts n_A = N_R (1 - x_B) and n_B = N_R x_B / 2 and their sum T are recovered from
+    The species counts n_A = N_total (1 - x_B) and n_B = N_total x_B / 2 and their sum T are recovered from
     the same posterior by the same estimator; if the sum is recovered far better than either part,
     the parts' errors are substantially anti-correlated -- they trade off inside the posterior -- and
     any quantity that divides one part by the total inherits that cancellation. Inputs are in

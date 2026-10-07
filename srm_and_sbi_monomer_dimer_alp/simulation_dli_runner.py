@@ -253,24 +253,33 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  box_size_nm          : {geom.box_size}")
     print(f"  particle_diameter_nm : {geom.particle_diameter_nm}")
 
-    print("\nParticle types (molecular species x mobility mode):")
-    print(f"  {rds_cfg.particle_type_names}   "
-          f"species {rds_cfg.molecular_species_names} = (monomer, dimer); labeling and "
-          f"occupancy act by molecular species, never by mode")
+    print("\nParticle types of the condition (molecular species x mobility mode; the retained population):")
+    print(f"  {rds_cfg.particle_type_names_for(condition)}   "
+          f"stoichiometric classes {rds_cfg.molecular_species_names} = (monomer, dimer); labeling "
+          f"acts by stoichiometric class and probe class, never by mode")
 
-    print("\nLabeling (static degree of labeling; the condition axis of the DLI stage):")
+    print("\nLabeling (static probe classes and degree of labeling; the condition axis of the DLI stage):")
     print(f"  condition               : {condition}   ({CONDITION_DISPLAY[condition]})")
     print(f"  labeling law            : {law_name} = {law.describe()}   "
-          f"(per-subunit dye count, drawn once per recording; fixed, never inferred)")
+          f"(one dye count per bound probe, drawn once per recording; fixed, never inferred)")
     occ_pair = labeling_plan.occupancy_pair   # (monomer, dimer), rds_cfg.molecular_species_names order
     a_mono, a_dim = (p * law.visible_probability for p in occ_pair)
-    print(f"  occupancy               : {occupancy}   ({occupancy_source}; probe-occupancy probability per "
-          f"subunit, by molecular species {rds_cfg.molecular_species_names} = "
-          f"{tuple(round(p, 4) for p in occ_pair)})")
+    if labeling_plan.probe_rule == "classes":
+        classes = ("by species: B1 one probe, B2 two" if labeling_plan.ligand_classes
+                   else f"drawn per basal dimer: two-probe share {labeling_plan.two_probe_share:.4f}, else one probe on one subunit")
+        print(f"  probe rule              : retained population, every monomer bound; dimer classes {classes}")
+        print(f"  occupancy (true pop.)   : {occupancy:.4f}   ({occupancy_source}; converts N_total to the retained "
+              f"population at the RDS stage and sets the two-probe share; probe probability per retained subunit by "
+              f"class {rds_cfg.molecular_species_names} = {tuple(round(p, 4) for p in occ_pair)})")
+    else:
+        print(f"  probe rule              : OVERRIDE -- independent per-subunit occupancy coins {occupancy} "
+              f"({occupancy_source}; by stoichiometric class {rds_cfg.molecular_species_names} = "
+              f"{tuple(round(p, 4) for p in occ_pair)}); a sensitivity run, not the model")
     print(f"  P(dye >= 1 | bound)     : {law.visible_probability:.3f}   (from the law)")
-    print(f"  visible per subunit     : monomer {a_mono:.4f}, dimer subunit {a_dim:.4f}   (occupancy x P(dye >= 1))")
-    print(f"  visible fractions       : monomer {a_mono:.3f}, dimer {1 - (1 - a_dim) ** 2:.3f}; both-subunits-labeled share "
-          f"among visible dimers {a_dim / (2 - a_dim):.3f}")
+    print(f"  visible per subunit     : monomer {a_mono:.4f}, dimer subunit {a_dim:.4f}   (probe probability x P(dye >= 1))")
+    print(f"  visible fractions       : monomer {a_mono:.3f}, two-probe dimer {1 - (1 - law.visible_probability) ** 2:.3f}, "
+          f"one-probe dimer {law.visible_probability:.3f}; two-dye share among visible two-probe dimers "
+          f"{law.visible_probability / (2 - law.visible_probability):.3f}")
 
     print("\nDLI runtime defaults:")
     print(f"  optical background      : SCOPE nuisance kappa_o (drawn per sim; pre-PSF photon floor)")
@@ -846,11 +855,13 @@ def build_dli_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--occupancy", type=str, default=None,
-        help="OVERRIDE of the condition's declared probe occupancy for a sensitivity run: one value, "
-             "or per initial MOLECULAR species 'A=0.5,B=1.0' (monomer A, dimer B; mobility modes "
-             "are not a selection axis). A subunit not occupied by a probe carries no dye. Default: "
-             "the condition's declared (INLB 0.5) or derived (FAB 0.155) value from "
-             "parameterization.ConditionSetting; the value used is recorded in the Labeling_Set.",
+        help="SENSITIVITY OVERRIDE that replaces the model's probe classes by independent per-subunit "
+             "occupancy coins: one value, or per stoichiometric class 'A=0.5,B=1.0' (monomer A, dimer B; "
+             "mobility modes are not a selection axis). A subunit without a probe carries no dye. "
+             "Default (no flag): the retained-population rule -- every monomer bound, dimer probe classes "
+             "by species (INLB B1/B2) or drawn with the two-probe share p / (2 - p) (FAB), with the "
+             "condition's occupancy p from parameterization.ConditionSetting (INLB 0.0476 equilibrium, "
+             "FAB 0.0148 derived); the rule used is recorded in the Labeling_Set.",
     )
     parser.add_argument(
         "--nuisance-tag", type=str, default=None,

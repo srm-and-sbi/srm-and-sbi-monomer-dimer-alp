@@ -27,7 +27,7 @@ CLI subcommand so the expensive stages can be split across machines and resumed:
 DESIGN DECISIONS.
 
 * STATE TRUTH = THE WINDOW-START POPULATION. The estimator's stoichiometry labels (receptor total
-  N_R, initial dimer-to-monomer ratio r, read as the receptor fraction x_B) are the initial
+  N_total, initial dimer-to-monomer ratio r, read as the receptor fraction x_B) are the initial
   populations of its training windows, so the
   start state is what it was trained to report.
   The within-window mean and end populations, and the unrounded theta label, are retained as
@@ -96,7 +96,7 @@ from .simulation_rds_support import (
 from .workflow import parameter_table
 
 # The stoichiometry coordinates, in the order the composition kernel expects: the receptor total
-# N_R and the initial dimer-to-monomer ratio r (both log rows); the kernel reads the second as the
+# N_total and the initial dimer-to-monomer ratio r (both log rows); the kernel reads the second as the
 # receptor fraction x_B = 2r / (1 + 2r), so every binding below composes ratio_to_receptor_fraction.
 _COUNT_KEYS = (PARAMETERS.simulation.rds.stoichiometry.count_total_key,
                PARAMETERS.simulation.rds.stoichiometry.composition_ratio_key)
@@ -427,7 +427,7 @@ def _simulate_and_render(theta_physical, condition, timing, imaging_physical, tr
     from .simulation_dli_support import render_dli_video
 
     stem = build_system(theta_physical, condition, verbose=verbose)
-    smut = build_simulation(stem, theta_physical, seed=placement_seed, verbose=verbose)
+    smut = build_simulation(stem, theta_physical, condition, seed=placement_seed, verbose=verbose)
     if traj_path.exists():
         traj_path.unlink()
     smut.output_file = str(traj_path)
@@ -727,7 +727,7 @@ def _fd_of_counts(counts):
 def _fd_of_parameters(theta_flow, count_index, table):
     """Dimer-complex fraction from estimator-space theta rows ``(..., D)`` (draws, labels, MAPs).
 
-    Selects the two stoichiometry coordinates, maps them to physical ``(N_R, r)`` with the ONE
+    Selects the two stoichiometry coordinates, maps them to physical ``(N_total, r)`` with the ONE
     conversion rule bound to their table rows, reads the ratio as x_B = 2r / (1 + 2r), and forms
     the fraction through the same kernel definition the trajectory path uses.
     """
@@ -1201,7 +1201,7 @@ def _phase_analyze(spec, args):
                  f"{np.nanmean(fd_cov['cont_c90'][:, 0]):.2f}",
                  f"{np.nanmean(fd_cov['cont_c50'][:, -1]):.2f} / "
                  f"{np.nanmean(fd_cov['cont_c90'][:, -1]):.2f}"],
-                ["stoichiometry N_R, x_B (STALE t=0 truth -- state drift, expected to fail late)",
+                ["stoichiometry N_total, x_B (STALE t=0 truth -- state drift, expected to fail late)",
                  f"{np.nanmean(reset_c50[:, :, list(count_index)]):.2f} / "
                  f"{np.nanmean(reset_c90[:, :, list(count_index)]):.2f}",
                  f"{np.nanmean(cont_c50[:, 0, list(count_index)]):.2f} / "
@@ -1235,10 +1235,10 @@ def _phase_analyze(spec, args):
                         "(rounding) effect of the initial composition.")
 
     # ---- state-support drift + flow mass outside the training box ----
-    # The trained box is over the stoichiometry coordinates (N_R, r), so the TRUE start
+    # The trained box is over the stoichiometry coordinates (N_total, r), so the TRUE start
     # populations (species counts) are read back as (total receptors, receptors in dimers) through
     # the kernel and compared with the box mapped to physical units, the ratio edges mapped to
-    # x_B = 2r / (1 + 2r) (monotone, so the box maps to a box). N_R is conserved by construction,
+    # x_B = 2r / (1 + 2r) (monotone, so the box maps to a box). N_total is conserved by construction,
     # so only the integer realization of a draw near an edge can leave the box; the statistic is
     # kept as the honest sanity check of that.
     count_rows = [table[i] for i in count_index]
@@ -1251,9 +1251,9 @@ def _phase_analyze(spec, args):
     reporter.stat("true start-state outside the training stoichiometry box (%)",
                   f"{100 * float(outside.any(axis=2).mean()):.2f}",
                   note=f"fraction of continuous windows whose TRUE start population, read as "
-                       f"(N_R, x_B), leaves the trained box N_R in [{lo_c[0]:.3g}, {hi_c[0]:.3g}], "
+                       f"(N_total, x_B), leaves the trained box N_total in [{lo_c[0]:.3g}, {hi_c[0]:.3g}], "
                        f"x_B in [{lo_c[1]:g}, {hi_c[1]:g}] -- state-support drift, distinct from "
-                       f"any estimator behavior. N_R is conserved within a recording, so this reads "
+                       f"any estimator behavior. N_total is conserved within a recording, so this reads "
                        f"integer-realization edge effects only.")
     # Extrapolation control: is the degradation merely the estimator being asked about states
     # outside its training support, or does it persist where the state never leaves the box?
@@ -1375,7 +1375,7 @@ def _phase_selftest(spec, args):
 
     # 1b. Species aggregation over modes + the two composition paths agree. Six type ranks
     #     (A_f, A_s, A_i, B_f, B_s, B_i in an arbitrary rank order) sum to [A, B]; the fraction
-    #     from species counts equals the fraction from the (N_R, x_B) pair that realizes them.
+    #     from species counts equals the fraction from the (N_total, x_B) pair that realizes them.
     rank_map = {0: "A", 1: "B", 2: "A", 3: "B", 4: "A", 5: "B"}
     type_counts = np.array([[1, 10, 2, 20, 3, 30], [0, 0, 0, 7, 0, 0]])
     species = ha.species_counts_from_type_counts(type_counts, rank_map, ("A", "B"))
@@ -1524,8 +1524,31 @@ def _phase_selftest(spec, args):
 # Entry point + CLI
 # =============================================================================
 
+# The audit is disabled under the retained-population generator. Its composition metrics read the
+# trajectory's RETAINED species census (``n_B / (n_A + n_B)`` over the class counts ``[A, B]``, with
+# ``B1`` and ``B2`` aggregated and every ``B`` counted as two subunits) and judge the estimator's
+# TRUE composition (the inferred ``(N_total, r)``) against it. Under the retained population the
+# two are different quantities: at the band ceiling (true ``f_B`` 25 %) MET-FAB's retained complex
+# fraction is about 40 % and its retained count is about 2 % of ``N_total``, and MET-INLB's ``B1``
+# carries one retained subunit, not two. The comparison is therefore not meaningful until the
+# audit's estimands are restated for the retained population (the retained census mapped back to
+# the true population through the condition's occupancy, and ``B1`` counted by its one subunit).
+# Reports recorded before this stand for the generator they were produced under.
+HORIZON_AUDIT_DISABLED = (
+    "the horizon audit is disabled under the retained-population generator: its composition "
+    "metrics compare the inferred TRUE composition (N_total, r) with the trajectory's RETAINED "
+    "species census, which are different populations (PROJECT_CONTEXT.md sec. 2, 'Modeling "
+    "assumptions of the MET model'; Script_Bank/Analysis/..._Horizon_Audit.md). Restate the "
+    "audit's estimands for the retained population before running any phase.")
+
+
 def run_horizon_audit(cfg, args):
-    """Shared entry point. ``cfg`` is a WorkflowConfig; ``args`` the parsed CLI namespace."""
+    """Shared entry point. ``cfg`` is a WorkflowConfig; ``args`` the parsed CLI namespace.
+
+    Refuses every phase, the dry run included, while :data:`HORIZON_AUDIT_DISABLED` holds (see
+    the note above it).
+    """
+    raise SystemExit(HORIZON_AUDIT_DISABLED)
     spec = _horizon_audit_spec(cfg, args)
     if args.dry_run:
         n_theta, cid = "?", "-"

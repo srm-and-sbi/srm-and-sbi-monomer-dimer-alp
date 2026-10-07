@@ -745,36 +745,82 @@ class RunTiming:
 
 @dataclass(frozen=True)
 class MolecularSpecies:
-    """A molecular species of the stoichiometry layer: its name and its receptor-subunit count."""
+    """A molecular species of the stoichiometry layer.
+
+    ``name`` is the species token (``A``, ``B``, ``B1``, ``B2``); ``subunits`` the number of
+    RETAINED receptor subunits a particle of this species carries (the subunits the lineage
+    follows); ``stoichiometry`` the stoichiometric class, ``monomer`` or ``dimer``;
+    ``dissociation`` the ReaDDy primitive that dissociates it (``fission`` into two monomers,
+    ``conversion`` into one monomer when the other subunit is not represented, None for a
+    monomer); ``bound_subunits`` the number of ligand-bound subunits the class declares (None
+    where the probe classes are assigned at labeling rather than by species).
+    """
     name: str
     subunits: int
+    stoichiometry: str = "monomer"
+    dissociation: Optional[str] = None
+    bound_subunits: Optional[int] = None
+
+    def __post_init__(self):
+        if self.stoichiometry not in ("monomer", "dimer"):
+            raise ValueError(f"MolecularSpecies {self.name}: stoichiometry must be monomer or dimer.")
+        if self.dissociation not in (None, "fission", "conversion"):
+            raise ValueError(f"MolecularSpecies {self.name}: dissociation must be fission, conversion or None.")
+        if (self.stoichiometry == "monomer") != (self.dissociation is None):
+            raise ValueError(f"MolecularSpecies {self.name}: exactly the dimers dissociate.")
+        if self.dissociation == "fission" and self.subunits != 2:
+            raise ValueError(f"MolecularSpecies {self.name}: a fission needs two retained subunits.")
+        if self.dissociation == "conversion" and self.subunits != 1:
+            raise ValueError(f"MolecularSpecies {self.name}: a conversion carries one retained subunit.")
 
 
 @dataclass(frozen=True)
 class ParticleType:
-    """One computational particle type = (molecular species, mobility mode)."""
+    """One computational particle type = (molecular species, mobility mode).
+
+    ``species`` is the STOICHIOMETRIC class (``A`` monomer, ``B`` dimer), which every consumer of
+    the lineage counts by; ``molecule`` the molecular species token the type is built from
+    (``A``, ``B``, ``B1`` or ``B2``); ``subunits`` the retained subunits it carries.
+    """
     name: str
     species: str
     mode: str
     subunits: int
+    molecule: str = ""
 
 
 @dataclass(frozen=True)
 class StoichiometryBlock:
-    """Monomer-dimer stoichiometry, A + A -> B (per-condition setting) and B -> A + A, and the
-    parameter keys it reads.
+    """Monomer-dimer stoichiometry of the RETAINED population, and the parameter keys it reads.
 
-    - ``count_total_key``: the conserved receptor-subunit total N_R = n_A + 2 n_B (a count).
-    - ``composition_ratio_key``: the REQUESTED initial dimer-to-monomer ratio r = n_B / n_A
-      (a log10 row on [-2, 2], i.e. one dimer per hundred monomers to a hundred dimers per
-      monomer); realized as integers by ``realize_initial_composition``. The receptor fraction
-      in dimers x_B = 2r / (1 + 2r) and the complex fraction f_B = r / (1 + r) are DERIVED
-      quantities (``ratio_to_receptor_fraction``, ``ratio_to_complex_fraction``). The log ratio
-      is symmetric about an even split (f_B = 1/2), so the prior is even-handed between
-      mostly-monomer and mostly-dimer populations. Under a condition without association it
-      is read as the composition PRESENT at the start of the recording, not one formed.
+    The simulated population is the probe-associated one (PROJECT_CONTEXT.md sec. 2, *Modeling
+    assumptions of the MET model*): receptors without a probe neither react nor emit under the
+    model's eligibility rule, so they are not simulated. Two molecular species describe a
+    condition without ligand classes (MET-FAB): the monomer ``A`` (one subunit) and the dimer
+    ``B`` (two retained subunits, both daughters retained on fission; its one- or two-probe
+    class is assigned at labeling). A condition with ligand classes (MET-INLB, where only
+    ligand-bound monomers associate) uses the monomer ``A`` and two dimer classes: ``B1``, one
+    InlB-bound subunit, whose dissociation is written as the CONVERSION B1 -> A (the probe-free
+    partner is not represented, so no lineage entry is created or removed), and ``B2``, two
+    InlB-bound subunits, formed by association and dissociating by fission into two eligible
+    monomers. ``species_for(ligand_classes)`` selects the inventory of a condition; the
+    stoichiometric class of every type is ``A`` or ``B``.
+
+    - ``count_total_key``: N_total, the initial receptor-subunit total of the TRUE population,
+      probe-bound and unbound (the inferred count, shared by both conditions). The retained
+      count N_R the simulation conserves is realized from it through the condition's occupancy
+      (``realize_initial_composition``): N_R = n_A + 2 n_B under FAB and n_A + n_B1 + 2 n_B2,
+      the InlB-bound subunits, under INLB.
+    - ``composition_ratio_key``: the REQUESTED initial dimer-to-monomer ratio r = n_B / n_A of
+      the TRUE population, a log10 row on the declared band of the initial basal complex
+      fraction f_B = r / (1 + r) (``COMPOSITION_BAND``, 5-25%). The retained ratio of the
+      initial population is (2 - p) r (``retained_ratio``); the true receptor fraction in dimers
+      x_B = 2r / (1 + 2r) and f_B are DERIVED quantities (``ratio_to_receptor_fraction``,
+      ``ratio_to_complex_fraction``). Under a condition without association it is read as the
+      composition PRESENT at the start of the recording, not one formed; it is an inference
+      coordinate restricted to the literature band and reported as a secondary quantity.
     - ``dissociation_rate_key``: kappa_OFF, the dimer unbinding rate (1/s), one for every
-      dimer mode; dissociation is not governed by contact; inferred in every condition.
+      dimer class and mode; dissociation is not governed by contact; inferred in every condition.
     The association intensity is NOT a learnable row. It is a declared per-condition constant
     (``ConditionSetting.association_ratio``, read through ``SimulationRDS.association_ratio_of``):
     lambda_on = R_ON * lambda_ref with the COMPATIBILITY NORMALIZATION lambda_ref = 6 D_A / r^2
@@ -788,26 +834,49 @@ class StoichiometryBlock:
     degradation, internalization, or synthesis occurs within a recording, so N_R is conserved
     by construction.
     """
-    monomer: MolecularSpecies = MolecularSpecies("A", 1)
-    dimer: MolecularSpecies = MolecularSpecies("B", 2)
+    monomer: MolecularSpecies = MolecularSpecies("A", 1, "monomer")
+    dimer: MolecularSpecies = MolecularSpecies("B", 2, "dimer", "fission")
+    dimer_one_probe: MolecularSpecies = MolecularSpecies("B1", 1, "dimer", "conversion", 1)
+    dimer_two_probe: MolecularSpecies = MolecularSpecies("B2", 2, "dimer", "fission", 2)
     count_total_key: str = "count_total"
     composition_ratio_key: str = "ratio_dimer_monomer_initial"
     dissociation_rate_key: str = "rate_dissociation"
 
     def __post_init__(self):
-        if self.monomer.subunits != 1 or self.dimer.subunits != 2:
-            raise ValueError("StoichiometryBlock: the monomer carries one subunit and the dimer two.")
-        if self.monomer.name == self.dimer.name:
-            raise ValueError("StoichiometryBlock: monomer and dimer need distinct names.")
+        if self.monomer.stoichiometry != "monomer" or self.monomer.subunits != 1:
+            raise ValueError("StoichiometryBlock: the monomer carries one subunit.")
+        for d in (self.dimer, self.dimer_one_probe, self.dimer_two_probe):
+            if d.stoichiometry != "dimer":
+                raise ValueError(f"StoichiometryBlock: {d.name} must be a dimer class.")
+        if self.dimer.dissociation != "fission" or self.dimer_two_probe.dissociation != "fission":
+            raise ValueError("StoichiometryBlock: B and B2 dissociate by fission into two monomers.")
+        if self.dimer_one_probe.dissociation != "conversion" or self.dimer_one_probe.bound_subunits != 1:
+            raise ValueError("StoichiometryBlock: B1 carries one bound subunit and dissociates by conversion.")
+        if self.dimer_two_probe.bound_subunits != 2:
+            raise ValueError("StoichiometryBlock: B2 carries two bound subunits.")
+        names = [s.name for s in self.species]
+        if len(set(names)) != len(names):
+            raise ValueError(f"StoichiometryBlock: species names must be distinct (got {names}).")
 
     @property
     def species(self) -> tuple:
-        """The molecular species in declaration order (monomer, dimer)."""
+        """Every molecular species of the model family, in declaration order (A, B, B1, B2)."""
+        return (self.monomer, self.dimer, self.dimer_one_probe, self.dimer_two_probe)
+
+    def species_for(self, ligand_classes: bool) -> tuple:
+        """The species a condition simulates: (A, B) without ligand classes, (A, B1, B2) with them."""
+        if ligand_classes:
+            return (self.monomer, self.dimer_one_probe, self.dimer_two_probe)
         return (self.monomer, self.dimer)
+
+    def dimers_for(self, ligand_classes: bool) -> tuple:
+        return tuple(s for s in self.species_for(ligand_classes) if s.stoichiometry == "dimer")
 
     @property
     def species_names(self) -> tuple:
-        return tuple(s.name for s in self.species)
+        """The STOICHIOMETRIC class names, (monomer, dimer): the axis every census and the
+        labeling record count by, whatever the condition's ligand classes."""
+        return (self.monomer.name, self.dimer.name)
 
     @property
     def parameter_keys(self) -> tuple:
@@ -915,24 +984,39 @@ class ConditionSetting:
     each condition has its own RDS trajectory tier (``Paths.rds_alias``), shared by both
     workflows. Unbinding stays inferred in both conditions.
 
-    ``occupancy`` is the probability that a receptor subunit carries a probe at all (the
-    visibility layer's declared input; labeling.py composes it with the condition's dye-count
-    law). It is a CONVENTION with a source, not a measurement, and it is provisional until the
-    experimental collaborators answer the questions sent on 2026-09-11 (probe concentration in
-    the imaging medium, occupancy within dimers, probe residence). MET-INLB declares 0.5 (the
-    collaborators' statement: 5 nM against a 5 nM dissociation constant; the published uPAINT
-    protocol reports 0.25 nM in the medium, unreconciled). MET-FAB has no published affinity,
-    so its occupancy is DERIVED: the code stores a declared Fab/InlB VISIBILITY RATIO
-    (``visibility_ratio`` = 0.5, a rounded convention over the measured Fab/InlB spot-density
-    ratios of the deposited recordings, 0.38-0.48 depending on the window; Special_Analyses
-    A9) and the anchor condition (``visibility_ratio_to`` = INLB), and
-    ``SimulationRDS.occupancy_of`` resolves p_FAB = ratio x a_INLB / P_FAB(dye >= 1) =
-    0.5 x 0.25 / 0.806 = 0.155, so a revised InlB anchor propagates. Exactly one of
-    ``occupancy`` and ``visibility_ratio`` is set per condition. The code default of full
-    occupancy is retired: uPAINT labels a sparse subset by design.
+    ``ligand_classes`` declares whether the condition's dimers carry a ligand class (B1 / B2,
+    ``StoichiometryBlock``). A condition with association requires them: only ligand-bound
+    monomers associate, a one-ligand dimer releases one eligible monomer and a two-ligand dimer
+    two, so the retained network must distinguish the two (MET-INLB). Without association the
+    probe classes have no dynamical consequence and are assigned at labeling (MET-FAB).
+
+    The probe OCCUPANCY per receptor subunit, p, is a declared conversion between the inferred
+    receptor total N_total of the true population and the retained population the generator
+    simulates (``SimulationRDS.occupancy_of``; PROJECT_CONTEXT.md sec. 2, *Modeling assumptions
+    of the MET model*, items 4 and 14): the expected retained count is p N_total under INLB and
+    p N_total [1 + 2 (1 - p) f_B / (1 + f_B)] under FAB, and p also sets the one-/two-probe split
+    2 (1 - p) : p of the initial dimers. It enters the generator at initialization only; every
+    retained subunit of a monomer carries a probe. It is read from the independent-site
+    EQUILIBRIUM at the published probe concentration (uPAINT, 0.25 nM for both probes in the
+    imaging medium, acquisition about three minutes after addition when the authors report the
+    bound-to-unbound ratio as balanced; Harwardt et al. 2017): p = L / (L + K_D), with the
+    in-vitro K_D of InlB321, about 5 nM (``dissociation_constant_nm``), giving p_INLB = 0.0476
+    (``occupancy_source_of`` = ``equilibrium``). The Fab has no published affinity, so its
+    occupancy is DERIVED from a declared Fab/InlB VISIBILITY RATIO (``visibility_ratio`` = 0.5,
+    a rounded convention over the measured Fab/InlB spot-density ratios of the deposited
+    recordings, 0.38-0.48 depending on the window; Special_Analyses A9) and the anchor condition
+    (``visibility_ratio_to`` = INLB): p_FAB = ratio x a_INLB / P_FAB(dye >= 1) =
+    0.5 x 0.0238 / 0.806 = 0.0148, so a revised anchor propagates. A literal ``occupancy`` may
+    be declared instead for a sensitivity scenario. Exactly one of ``dissociation_constant_nm``,
+    ``visibility_ratio`` and ``occupancy`` is set per condition. The equilibrium reading is a
+    declared initialization, not a measurement: the acquisition delay and the unknown rates
+    are recorded as its caveats, and fixed attachment within a recording is its own assumption.
     """
     token: str
     association_ratio: float
+    ligand_classes: bool = False
+    probe_concentration_nm: float = 0.25
+    dissociation_constant_nm: Optional[float] = None
     occupancy: Optional[float] = None
     visibility_ratio: Optional[float] = None
     visibility_ratio_to: Optional[str] = None
@@ -950,29 +1034,52 @@ class ConditionSetting:
             raise ValueError(f"ConditionSetting {token}: association_ratio {ratio!r} is a disguised "
                              f"zero; switch association off with exactly 0.0 (no channels are "
                              f"generated), never with a small positive stand-in.")
-        declared = self.occupancy is not None
-        derived = self.visibility_ratio is not None
-        if declared == derived:
-            raise ValueError(f"ConditionSetting {token}: declare EXACTLY ONE of occupancy (a declared "
-                             f"probability) or visibility_ratio (derived from an anchor condition).")
-        if declared and not (np.isfinite(self.occupancy) and 0.0 < float(self.occupancy) <= 1.0):
+        if ratio > 0.0 and not self.ligand_classes:
+            raise ValueError(f"ConditionSetting {token}: a condition with association needs ligand "
+                             f"classes (only ligand-bound monomers associate; B1 -> A, B2 -> A + A).")
+        if not (np.isfinite(self.probe_concentration_nm) and float(self.probe_concentration_nm) > 0.0):
+            raise ValueError(f"ConditionSetting {token}: probe_concentration_nm must be finite and > 0 "
+                             f"(got {self.probe_concentration_nm!r}).")
+        sources = [self.dissociation_constant_nm is not None, self.visibility_ratio is not None,
+                   self.occupancy is not None]
+        if sum(sources) != 1:
+            raise ValueError(f"ConditionSetting {token}: declare EXACTLY ONE of dissociation_constant_nm "
+                             f"(equilibrium occupancy), visibility_ratio (derived from an anchor "
+                             f"condition) or occupancy (a literal probability).")
+        if self.dissociation_constant_nm is not None and not (
+                np.isfinite(self.dissociation_constant_nm) and float(self.dissociation_constant_nm) > 0.0):
+            raise ValueError(f"ConditionSetting {token}: dissociation_constant_nm must be finite and > 0 "
+                             f"(got {self.dissociation_constant_nm!r}).")
+        if self.occupancy is not None and not (np.isfinite(self.occupancy) and 0.0 < float(self.occupancy) <= 1.0):
             raise ValueError(f"ConditionSetting {token}: occupancy must lie in (0, 1] (got {self.occupancy!r}).")
-        if derived:
+        if self.visibility_ratio is not None:
             if not (np.isfinite(self.visibility_ratio) and float(self.visibility_ratio) > 0.0):
                 raise ValueError(f"ConditionSetting {token}: visibility_ratio must be finite and > 0 "
                                  f"(got {self.visibility_ratio!r}).")
             if not self.visibility_ratio_to or self.visibility_ratio_to == token:
                 raise ValueError(f"ConditionSetting {token}: a derived occupancy names a DIFFERENT anchor "
                                  f"condition in visibility_ratio_to (got {self.visibility_ratio_to!r}).")
+        elif self.visibility_ratio_to is not None:
+            raise ValueError(f"ConditionSetting {token}: visibility_ratio_to is set without a visibility_ratio.")
+
+    @property
+    def equilibrium_occupancy(self) -> Optional[float]:
+        """p = L / (L + K_D) when the condition declares a dissociation constant, else None."""
+        if self.dissociation_constant_nm is None:
+            return None
+        L, kd = float(self.probe_concentration_nm), float(self.dissociation_constant_nm)
+        return L / (L + kd)
 
 
 # The declared per-condition settings (see ConditionSetting for the decisions and their sources).
 CONDITION_SETTINGS: tuple = (
-    # MET-FAB: no association channels; pre-existing dimers may dissociate. Occupancy DERIVED from the
-    # declared Fab/InlB visibility ratio 0.5 and the InlB anchor (-> 0.155 under the baseline laws).
+    # MET-FAB: no association channels; the retained basal dimers (at least one Fab) may dissociate
+    # and both daughters stay retained. Occupancy DERIVED from the declared Fab/InlB visibility
+    # ratio 0.5 and the InlB anchor (-> 0.0148 under the baseline laws); used at initialization only.
     ConditionSetting("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB"),
-    # MET-INLB: lambda_on = lambda_ref, the reference convention. Occupancy 0.5 declared (provisional).
-    ConditionSetting("INLB", 1.0, occupancy=0.5),
+    # MET-INLB: lambda_on = lambda_ref, the reference convention; ligand classes B1 / B2. Occupancy =
+    # the independent-site equilibrium at 0.25 nM with K_D 5 nM (-> 0.0476); initialization only.
+    ConditionSetting("INLB", 1.0, ligand_classes=True, dissociation_constant_nm=5.0),
 )
 
 
@@ -1015,39 +1122,83 @@ class SimulationRDS:
         from .labeling import resolve_labeling_law      # local import: labeling imports only experiment_support
         return float(resolve_labeling_law(condition)[1].visible_probability)
 
-    def occupancy_of(self, condition: str) -> float:
-        """Probe occupancy per subunit of ``condition``: the declared value, or the derived one
-        p = visibility_ratio x visibility(anchor) / P(dye >= 1 | condition). Declared values are
-        conventions with sources (ConditionSetting); the derivation is one step deep by
-        construction (an anchor must itself be declared)."""
-        setting = self.condition_setting(condition)
+    def _own_occupancy(self, setting: ConditionSetting) -> Optional[float]:
+        """The occupancy a setting fixes by itself (equilibrium or literal); None when derived."""
+        if setting.dissociation_constant_nm is not None:
+            return float(setting.equilibrium_occupancy)
         if setting.occupancy is not None:
             return float(setting.occupancy)
+        return None
+
+    def occupancy_of(self, condition: str) -> float:
+        """Probe occupancy per subunit of the TRUE population under ``condition``: the equilibrium
+        value L / (L + K_D) (INLB), a literal, or the derived one p = visibility_ratio x
+        visibility(anchor) / P(dye >= 1 | condition) (FAB). It converts the inferred N_total to the
+        retained population and sets the probe classes of the initial dimers; the derivation is
+        one step deep by construction (an anchor must fix its own occupancy)."""
+        setting = self.condition_setting(condition)
+        own = self._own_occupancy(setting)
+        if own is not None:
+            return own
         anchor = self.condition_setting(setting.visibility_ratio_to)
-        if anchor.occupancy is None:
-            raise ValueError(f"ConditionSetting {condition}: anchor {anchor.token} must declare its own "
+        anchor_occupancy = self._own_occupancy(anchor)
+        if anchor_occupancy is None:
+            raise ValueError(f"ConditionSetting {condition}: anchor {anchor.token} must fix its own "
                              f"occupancy (derivations are one step deep).")
-        anchor_visibility = float(anchor.occupancy) * self.dye_probability_of(anchor.token)
+        anchor_visibility = anchor_occupancy * self.dye_probability_of(anchor.token)
         return float(setting.visibility_ratio) * anchor_visibility / self.dye_probability_of(condition)
 
     def visibility_of(self, condition: str) -> float:
-        """Probability that a receptor subunit is visible: occupancy x P(dye >= 1)."""
+        """Probability that a subunit of the TRUE population is visible: occupancy x P(dye >= 1).
+        The per-recording spot counts of the deposited recordings divided by this value are the
+        implied N_total (Special_Analyses A9, re-read for the retained-population model)."""
         return self.occupancy_of(condition) * self.dye_probability_of(condition)
 
+    def two_probe_share_of(self, condition: str) -> float:
+        """Share of the RETAINED initial dimers that carry two probes under independent binding,
+        s_2 = p / (2 - p): the B2 share of the initial dimers (INLB), the two-Fab share (FAB)."""
+        p = self.occupancy_of(condition)
+        return p / (2.0 - p)
+
+    def retained_ratio_of(self, condition: str, ratio_true) -> np.ndarray:
+        """Retained dimer-to-monomer ratio of the INITIAL population, (2 - p) r, from the true r."""
+        return (2.0 - self.occupancy_of(condition)) * np.asarray(ratio_true, dtype=float)
+
     def occupancy_source_of(self, condition: str) -> str:
-        """'declared' or 'derived' (provenance for the labeling record)."""
-        return "declared" if self.condition_setting(condition).occupancy is not None else "derived"
+        """'equilibrium', 'declared' or 'derived' (provenance for the labeling record)."""
+        setting = self.condition_setting(condition)
+        if setting.dissociation_constant_nm is not None:
+            return "equilibrium"
+        return "declared" if setting.occupancy is not None else "derived"
 
     @staticmethod
     def type_name(species: str, mode: str) -> str:
         return f"{species}_{mode}"
 
+    def _types_of(self, species: tuple) -> tuple:
+        sto = self.stoichiometry
+        return tuple(
+            ParticleType(self.type_name(sp.name, mode),
+                         sto.monomer.name if sp.stoichiometry == "monomer" else sto.dimer.name,
+                         mode, sp.subunits, sp.name)
+            for sp in species for mode in self.mobility.modes)
+
     @property
     def particle_types(self) -> tuple:
-        """All particle types: one per (molecular species, mobility mode)."""
-        return tuple(
-            ParticleType(self.type_name(sp.name, mode), sp.name, mode, sp.subunits)
-            for sp in self.stoichiometry.species for mode in self.mobility.modes)
+        """Every particle type of the model family: one per (molecular species, mobility mode),
+        over all four species (A, B, B1, B2); a condition registers ``particle_types_for``."""
+        return self._types_of(self.stoichiometry.species)
+
+    def particle_types_for(self, condition: str) -> tuple:
+        """The particle types a condition simulates: six without ligand classes, nine with them."""
+        return self._types_of(self.species_for(condition))
+
+    def species_for(self, condition: str) -> tuple:
+        """The molecular species of ``condition``: (A, B), or (A, B1, B2) with ligand classes."""
+        return self.stoichiometry.species_for(self.condition_setting(condition).ligand_classes)
+
+    def particle_type_names_for(self, condition: str) -> tuple:
+        return tuple(pt.name for pt in self.particle_types_for(condition))
 
     @property
     def particle_type_names(self) -> tuple:
@@ -1055,13 +1206,18 @@ class SimulationRDS:
 
     @property
     def subunit_counts_per_type(self) -> tuple:
-        """Receptor subunits per particle type, aligned with ``particle_type_names``."""
+        """Retained receptor subunits per particle type, aligned with ``particle_type_names``."""
         return tuple(pt.subunits for pt in self.particle_types)
 
     @property
     def species_of_type(self) -> dict:
-        """Particle-type name -> molecular species name."""
+        """Particle-type name -> STOICHIOMETRIC class (``A`` monomer or ``B`` dimer)."""
         return {pt.name: pt.species for pt in self.particle_types}
+
+    @property
+    def molecule_of_type(self) -> dict:
+        """Particle-type name -> molecular species token (``A``, ``B``, ``B1``, ``B2``)."""
+        return {pt.name: pt.molecule for pt in self.particle_types}
 
     @property
     def mode_of_type(self) -> dict:
@@ -1070,11 +1226,12 @@ class SimulationRDS:
 
     @property
     def molecular_species_names(self) -> tuple:
+        """The stoichiometric class names (monomer, dimer) every census counts by."""
         return self.stoichiometry.species_names
 
     @property
     def monomer_type_names(self) -> tuple:
-        return tuple(pt.name for pt in self.particle_types if pt.subunits == 1)
+        return tuple(pt.name for pt in self.particle_types if pt.species == self.stoichiometry.monomer.name)
 
     # ReaDDy neighbor-list (Verlet) skin, expressed as a MULTIPLE of the particle
     # diameter: the actual skin distance is
@@ -1476,22 +1633,33 @@ NUISANCE_SENTINEL = "NUISANCE"
 POSTERIOR_SENTINEL = "POSTERIOR"
 _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
+# The two prior rows the retained-population model fixes (decided 2026-10-05; PROJECT_CONTEXT.md
+# sec. 2, *Modeling assumptions of the MET model*, items 9 and 14). COUNT_TOTAL_BOX is log10 of the
+# true receptor-subunit total N_total, one box for both conditions. COMPOSITION_BAND is the declared
+# band of the initial basal complex fraction f_B of the true population; the ratio row stores
+# log10 r with r = f_B / (1 - f_B), so its box is the band mapped through that function.
+COUNT_TOTAL_BOX: tuple = (3.0, 5.0)
+COMPOSITION_BAND: tuple = (0.05, 0.25)
+COMPOSITION_RATIO_BOX: tuple = tuple(float(np.log10(f / (1.0 - f))) for f in COMPOSITION_BAND)
+
 
 _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
     # ----- Reaction-Diffusion System: the two model blocks -----
-    # DECIDED PRIOR RANGES (2026-09-14). Box-uniform in the estimator coordinate; each DOC names its
+    # DECIDED PRIOR RANGES (2026-09-14; the count and composition rows revised 2026-10-05 for the
+    # retained-population model). Box-uniform in the estimator coordinate; each DOC names its
     # source (baseline = dimer-alp 0.4.23; A9 = Special_Analyses per-recording analysis of the
     # deposited MET tables; spec = model specification sec. 9 anchors; thresholds = tracking
-    # pipelines). Rationale: PROJECT_CONTEXT.md sec. 2, "How the prior ranges and the declared
-    # inputs are set". The receptor count is CONDITIONAL on the declared occupancies.
-    'stoichiometry': [  # StoichiometryBlock: conserved total, requested initial dimer-to-monomer ratio, dissociation (the association ratio is a per-condition CONSTANT, not a row)
-        {'KEY': 'count_total', 'VALUE': 10**3.0, 'PRIOR_RANGE': (2.5, 3.5), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{R}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Conserved receptor-subunit total N_R = n_A + 2 n_B of the SIMULATED patch (the in-field count is a distinct, time-dependent quantity under the open lateral boundary). Realized as an integer by realize_initial_composition. Range 316-3162 (A9): spots per frame in the first 2 s of the 120 deposited recordings, divided by the declared visibility per subunit (INLB 0.25, FAB 0.125), give log10 N_R peaked at 3.0-3.1 (sd 0.21 InlB, 0.30 Fab), 94% inside the box; localizations UNDERCOUNT receptors (bleached bound probes, missed detections, two-dye dimers as one spot), so the tail below 2.5 is empty in truth. The box is wider than the empirical shape on purpose: posterior width comes from the data, prior width steers the training budget. CONDITIONAL on the declared occupancies. Baseline 0.4.23: three per-species counts, each (0, 2.5).'},
-        {'KEY': 'ratio_dimer_monomer_initial', 'VALUE': 10**0, 'PRIOR_RANGE': (-2.0, 2.0), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$r_{B/A}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'REQUESTED initial dimer-to-monomer ratio r = n_B(0) / n_A(0), log10 on [-2, 2]: from one dimer per hundred monomers to a hundred dimers per monomer, i.e. complex fraction f_B = r / (1 + r) from 1% to 99%, SYMMETRIC about an even split (median f_B = 1/2), so the prior is even-handed between mostly-monomer and mostly-dimer populations; the resting (5-18% complexes) and activated (63%) anchors lie inside. Realized as n_B(0) = min(round(N_R r / (1 + 2 r)), floor(N_R / 2)), n_A = N_R - 2 n_B; the receptor fraction x_B = 2 r / (1 + 2 r) and f_B are DERIVED and recorded beside the requested ratio (Labeling_Set). Rejected: log10 x_B on [-2, 0] (65% of the prior mass on f_B < 0.1 and 5% on f_B > 0.6, forcing the resting answer) and the linear x_B on [0, 1] (median f_B = 1/3). Replaces the earlier per-species counts of the baseline.'},
+    # pipelines). Rationale: PROJECT_CONTEXT.md sec. 2, "Modeling assumptions of the MET model" and
+    # "How the prior ranges and the declared inputs are set". The receptor count is the TRUE total,
+    # conditional on the declared occupancies that realize the simulated (retained) population.
+    'stoichiometry': [  # StoichiometryBlock: true receptor total, requested initial dimer-to-monomer ratio, dissociation (the association ratio is a per-condition CONSTANT, not a row)
+        {'KEY': 'count_total', 'VALUE': 10**4.0, 'PRIOR_RANGE': COUNT_TOTAL_BOX, 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{\mathrm{total}}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'N_total, the initial receptor-subunit total of the TRUE population in the simulated patch, probe-bound and unbound receptors included; one prior for both conditions, log10 on [3.0, 5.0] (1,000-100,000 subunits), decided 2026-10-05. It is NOT the number of simulated particles: the generator realizes the RETAINED population (probe-associated complexes) from it through the condition\'s occupancy p (realize_initial_composition) -- expected retained count p N_total under INLB (about 4,762 subunits at the ceiling) and p N_total [1 + 2 (1 - p) f_B / (1 + f_B)] under FAB (about 1,600-2,100), whose cohort keeps the unbound partners of one-Fab dimers. The two conditions share this quantity because they share the cell line and the probe concentration; their simulated populations differ through the occupancies. The deposited recordings (A9: spots per frame in the first 2 s, divided by the visibility p x P(dye >= 1)) imply totals of about 1,400-25,800 (FAB) and 3,000-33,300 (INLB), computed without missed detections and overlap, so the ceiling carries headroom for the undercount; it is a declared modeling choice, not an experimental maximum. Compatible N_total posteriors across the conditions are a consistency check, not independent validation (the Fab occupancy rests on the declared visibility ratio). In-field count and retained count are distinct quantities.'},
+        {'KEY': 'ratio_dimer_monomer_initial', 'VALUE': 10**(0.5 * (COMPOSITION_RATIO_BOX[0] + COMPOSITION_RATIO_BOX[1])), 'PRIOR_RANGE': COMPOSITION_RATIO_BOX, 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$r_{B/A}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'REQUESTED initial dimer-to-monomer ratio r = n_B(0) / n_A(0) of the TRUE population, log10 on the declared band of the initial basal complex fraction f_B = r / (1 + r) from 5% to 25% (COMPOSITION_BAND; bounds log10(0.05/0.95) = -1.27875 and log10(0.25/0.75) = -0.47712; decided 2026-10-05). Sampling is uniform in the log10 coordinate, so f_B itself is not uniform (median 11.7%). The band is declared from the independent resting measurements (5 +/- 1% of clusters dimeric, Baldering et al. 2021; 18% of fitted spots assigned to a dimer component in fixed cells, stated as an underestimate, Dietz et al. 2013) and constrains the initial basal pool only, not the InlB-induced dimerization that follows. The row stays an inference coordinate (eleven coordinates, ten primary quantities, the composition secondary): a calibrated, prior-like posterior is acceptable and a narrow prior is not evidence of recovery. The retained ratio of the initial population is (2 - p) r (selection, not rounding: 25% true basal dimers are about 39-40% of the retained complexes); the true x_B = 2r / (1 + 2r) and f_B are derived (ratio_to_receptor_fraction, ratio_to_complex_fraction). Under MET-FAB it is the composition PRESENT at the recording start, not one formed.'},
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{CAP}$', 'NOTE': 'Known Parameter'},
         {'KEY': 'rate_dissociation', 'VALUE': 10**(-1), 'PRIOR_RANGE': (-3, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'Dimer unbinding rate, B_m -> A_m + A_m for every mode m (dissociation conserves the mode); inferred in every condition. Range 0.001-10 per s: the lower bound is widened from the baseline (-1, 1) so that under MET-FAB, where no association exists, dimers can PERSIST through a 20 s recording (0.001 per s loses 2% in 20 s); the upper bound, a 0.1 s lifetime (five frames), is the baseline value. Under MET-FAB kappa_OFF is the dimer lifetime rate directly.'},
+         'DOC': 'Dimer unbinding rate, one rate for every dimer class and mode (dissociation conserves the mode): B_m -> A_m + A_m (FAB) and B2_m -> A_m + A_m by fission, B1_m -> A_m by conversion (the probe-free partner is not represented); inferred in every condition. Range 0.001-10 per s: the lower bound is widened from the baseline (-1, 1) so that under MET-FAB, where no association exists, dimers can PERSIST through a 20 s recording (0.001 per s loses 2% in 20 s); the upper bound, a 0.1 s lifetime (five frames), is the baseline value. Under MET-FAB kappa_OFF is the dimer lifetime rate directly.'},
     ],
     'mobility': [  # MobilityBlock: monomer scale, dimer factor, mode factors, the four shared switching rates
         {'KEY': 'diffusivity_alp', 'VALUE': 10**(-0.75), 'PRIOR_RANGE': (-1.25, -0.25), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Square Micrometer Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$D_{A}$', 'NOTE': 'Learnable Parameter',
@@ -1691,35 +1859,92 @@ def prior_center(entry: dict) -> float:
 
 @dataclass(frozen=True)
 class InitialComposition:
-    """The realized initial state of the stoichiometry layer for one simulation.
+    """The realized initial state of the stoichiometry layer for one simulation: the RETAINED
+    population the generator places, derived from the true population the parameters describe.
 
-    ``n_total`` is the integer receptor-subunit total actually placed (N_R rounded, at least
-    one); ``n_dimers`` and ``n_monomers`` the particles placed; ``ratio_requested`` the
-    sampled dimer-to-monomer ratio r; ``fraction_requested`` = 2r / (1 + 2r) the receptor
-    fraction it implies; ``fraction_realized`` = 2 n_dimers / n_total, which differs from it by
-    rounding and by the cap n_dimers <= floor(n_total / 2). Every derived fraction is
-    computed from the realized counts.
+    True population (continuum, from the sampled parameters): ``n_total_true`` = N_total,
+    ``n_monomers_true`` = N_total / (1 + 2r), ``n_dimers_true`` = r N_total / (1 + 2r),
+    ``ratio_requested`` = r and ``complex_fraction_true`` = f_B = r / (1 + r).
+
+    Retained population (integers, the particles placed): ``n_monomers`` probe-bound monomers;
+    ``n_dimers`` dimers carrying at least one probe, split into ``n_dimers_one_probe`` and
+    ``n_dimers_two_probe`` (the B1 / B2 classes under INLB; the one-/two-Fab classes assigned at
+    labeling under FAB); ``n_subunits`` = N_R, the conserved retained subunit count, n_A + 2 n_B
+    under FAB (both subunits of every retained dimer) and n_A + n_B1 + 2 n_B2 under INLB (the
+    InlB-bound subunits). ``occupancy`` is the condition's p; ``two_probe_share`` its
+    s_2 = p / (2 - p); ``ratio_retained_expected`` = (2 - p) r. The realized retained ratio and
+    fractions (``ratio_realized``, ``complex_fraction_retained``, ``receptor_fraction_retained``)
+    are computed from the integers and differ from the expectations by rounding; the difference
+    between the true and the retained composition is selection, not rounding.
     """
-    n_total: int
+    condition: str
+    ligand_classes: bool
+    n_total_true: float
+    n_monomers_true: float
+    n_dimers_true: float
+    ratio_requested: float
+    occupancy: float
+    two_probe_share: float
     n_monomers: int
     n_dimers: int
-    ratio_requested: float
-    fraction_requested: float
-    fraction_realized: float
+    n_dimers_one_probe: int
+    n_dimers_two_probe: int
+    n_subunits: int
 
     @property
     def n_complexes(self) -> int:
+        """Retained complexes placed, n_A + n_B."""
         return self.n_monomers + self.n_dimers
 
     @property
-    def complex_fraction(self) -> float:
-        """f_B = n_B / (n_A + n_B), the fraction of complexes that are dimers."""
+    def complex_fraction_true(self) -> float:
+        """f_B = r / (1 + r) of the true population (the inferred composition)."""
+        return float(ratio_to_complex_fraction(self.ratio_requested))
+
+    @property
+    def receptor_fraction_true(self) -> float:
+        """x_B = 2r / (1 + 2r) of the true population."""
+        return float(ratio_to_receptor_fraction(self.ratio_requested))
+
+    @property
+    def ratio_retained_expected(self) -> float:
+        """(2 - p) r: the retained dimer-to-monomer ratio the initial population is expected to have."""
+        return (2.0 - self.occupancy) * self.ratio_requested
+
+    @property
+    def complex_fraction_retained(self) -> float:
+        """f_B,ret = n_B / (n_A + n_B) of the realized retained counts."""
         return self.n_dimers / self.n_complexes if self.n_complexes else float("nan")
 
     @property
+    def receptor_fraction_retained(self) -> float:
+        """x_B of the realized retained counts over the retained subunit count N_R:
+        2 n_B / N_R under FAB, (n_B1 + 2 n_B2) / N_R under INLB."""
+        if not self.n_subunits:
+            return float("nan")
+        if self.ligand_classes:
+            return (self.n_dimers_one_probe + 2 * self.n_dimers_two_probe) / self.n_subunits
+        return 2.0 * self.n_dimers / self.n_subunits
+
+    @property
     def ratio_realized(self) -> float:
-        """r = n_B / n_A of the realized counts (inf when no monomer was placed)."""
+        """r_ret = n_B / n_A of the realized retained counts (inf when no monomer was placed)."""
         return self.n_dimers / self.n_monomers if self.n_monomers else float("inf")
+
+    @property
+    def expected_subunits(self) -> float:
+        """Expected retained subunit count: p N_total under ligand classes, else
+        p N_total [1 + 2 (1 - p) f_B / (1 + f_B)]."""
+        p, f_b = self.occupancy, self.complex_fraction_true
+        if self.ligand_classes:
+            return p * self.n_total_true
+        return p * self.n_total_true * (1.0 + 2.0 * (1.0 - p) * f_b / (1.0 + f_b))
+
+    # compatibility names kept for the diagnostics that print the composition
+    @property
+    def n_total(self) -> int:
+        """The conserved retained subunit count N_R (``n_subunits``)."""
+        return self.n_subunits
 
 
 def ratio_to_receptor_fraction(ratio) -> np.ndarray:
@@ -1741,25 +1966,52 @@ def receptor_fraction_to_ratio(fraction) -> np.ndarray:
         return x / (2.0 * (1.0 - x))
 
 
-def realize_initial_composition(count_total: float, ratio_dimer_monomer: float) -> InitialComposition:
-    """Integer (n_A, n_B) from the sampled receptor total and requested dimer-to-monomer ratio.
+def realize_initial_composition(count_total: float, ratio_dimer_monomer: float,
+                                condition: str) -> InitialComposition:
+    """The retained integer population from the sampled TRUE total, the requested true
+    dimer-to-monomer ratio, and the condition's occupancy p (``PROJECT_CONTEXT.md`` sec. 2,
+    *Modeling assumptions of the MET model*, items 4, 9 and 11).
 
-    n_total = max(1, round(N_R));  n_B = min(round(n_total * r / (1 + 2 r)), floor(n_total / 2));
-    n_A = n_total - 2 n_B.  Conservation N_R = n_A + 2 n_B holds exactly for the realized
-    integers. At r = 0.01 and n_total = 316 three dimers are placed (the decided box never
-    realizes zero dimers at its count floor); the cap binds only for r beyond the box.
+    True counts (continuum): n_A = N_total / (1 + 2r), n_B = r N_total / (1 + 2r). The retained
+    population is realized DIMERS AND THEIR CLASSES FIRST, then the monomers, as rounded
+    expectations of the independent-binding thinning:
+
+        n_B(0)   = round(p (2 - p) n_B)        dimers carrying at least one probe
+        n_B2(0)  = round(p^2 n_B)              two-probe dimers (B2 under INLB; two-Fab under FAB)
+        n_B1(0)  = n_B(0) - n_B2(0)            one-probe dimers
+        n_A(0)   = round(p n_A)                probe-bound monomers
+
+    and the conserved retained subunit count follows: N_R = n_A + 2 n_B under FAB (both
+    daughters of a one-Fab dimer stay retained) and n_A + n_B1 + 2 n_B2 under INLB (the
+    InlB-bound subunits; the probe-free partner of a B1 is never represented). A binomial
+    realization of the same thinning is a framework alternative. The requested true r and the
+    realized retained ratio are both recorded per simulation; the retained composition differs
+    from the true one by the selection factor (2 - p), not by rounding.
     """
     if not np.isfinite(count_total) or not np.isfinite(ratio_dimer_monomer):
         raise ValueError(f"realize_initial_composition: non-finite input ({count_total}, {ratio_dimer_monomer}).")
     if ratio_dimer_monomer < 0.0:
         raise ValueError(f"realize_initial_composition: the dimer-to-monomer ratio must be >= 0 "
                          f"(got {ratio_dimer_monomer}).")
+    if count_total <= 0.0:
+        raise ValueError(f"realize_initial_composition: the receptor total must be > 0 (got {count_total}).")
+    rds = PARAMETERS.simulation.rds
+    setting = rds.condition_setting(condition)
+    p = rds.occupancy_of(condition)
     r = float(ratio_dimer_monomer)
-    n_total = int(max(1, round(float(count_total))))
-    n_dimers = int(min(round(n_total * r / (1.0 + 2.0 * r)), n_total // 2))
-    n_monomers = n_total - 2 * n_dimers
-    return InitialComposition(n_total, n_monomers, n_dimers, r, float(ratio_to_receptor_fraction(r)),
-                              2.0 * n_dimers / n_total)
+    n_total = float(count_total)
+    n_monomers_true = n_total / (1.0 + 2.0 * r)
+    n_dimers_true = r * n_total / (1.0 + 2.0 * r)
+    n_dimers = int(round(p * (2.0 - p) * n_dimers_true))
+    n_two = int(min(round(p * p * n_dimers_true), n_dimers))
+    n_one = n_dimers - n_two
+    n_monomers = int(round(p * n_monomers_true))
+    if setting.ligand_classes:
+        n_subunits = n_monomers + n_one + 2 * n_two
+    else:
+        n_subunits = n_monomers + 2 * n_dimers
+    return InitialComposition(condition, bool(setting.ligand_classes), n_total, n_monomers_true, n_dimers_true,
+                              r, float(p), float(p / (2.0 - p)), n_monomers, n_dimers, n_one, n_two, n_subunits)
 
 
 # =============================================================================
@@ -1782,14 +2034,22 @@ def _validate_model_blocks() -> None:
             raise ValueError(f"parameter {entry['KEY']!r}: log rows are base 10.")
     ratio = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.composition_ratio_key]]
     if not is_log_row(ratio):
-        raise ValueError("the initial dimer-to-monomer ratio is a LOG row (symmetric about an even split).")
-    if abs(ratio['PRIOR_RANGE'][0] + ratio['PRIOR_RANGE'][1]) > 1e-12:
-        raise ValueError("the initial dimer-to-monomer ratio's box must be symmetric about 0 (an even split).")
+        raise ValueError("the initial dimer-to-monomer ratio is a LOG row.")
+    band = tuple(float(ratio_to_complex_fraction(entry_to_physical(ratio, b))) for b in ratio['PRIOR_RANGE'])
+    if not (np.allclose(band, COMPOSITION_BAND, atol=1e-9) and 0.0 < band[0] < band[1] < 1.0):
+        raise ValueError(f"the composition box must map to the declared basal band {COMPOSITION_BAND} "
+                         f"of the complex fraction (got {band}).")
     count = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.count_total_key]]
-    n_floor = int(round(entry_to_physical(count, count['PRIOR_RANGE'][0])))
-    if realize_initial_composition(n_floor, entry_to_physical(ratio, ratio['PRIOR_RANGE'][0])).n_dimers < 1:
-        raise ValueError("the composition box realizes zero dimers at the count floor; widen the count "
-                         "floor or raise the ratio's lower edge.")
+    if tuple(count['PRIOR_RANGE']) != COUNT_TOTAL_BOX:
+        raise ValueError(f"count_total must carry the declared box {COUNT_TOTAL_BOX} (got {count['PRIOR_RANGE']}).")
+    n_floor = float(entry_to_physical(count, count['PRIOR_RANGE'][0]))
+    r_floor = float(entry_to_physical(ratio, ratio['PRIOR_RANGE'][0]))
+    for token in rds.condition_tokens:
+        floor = realize_initial_composition(n_floor, r_floor, token)
+        if floor.n_dimers < 1 or floor.n_monomers < 1:
+            raise ValueError(f"{token}: the boxes realize {floor.n_monomers} monomers and {floor.n_dimers} "
+                             f"dimers at the count floor and the band's lower edge; every permitted draw "
+                             f"must place both.")
     # Mobility ordering R_immobile < R_slow <= 1 and 0 < R_dimer <= 1, by the declared ranges.
     def phys_range(key):
         e = PARAMETERIZATION[PARAMETER_FIND[key]]
@@ -1820,19 +2080,23 @@ def _validate_model_blocks() -> None:
     if not any(rds.association_ratio_of(t) > 0.0 for t in tokens):
         raise ValueError("SimulationRDS.conditions: no condition has association switched on; the "
                          "model family is A + A -> B in at least one condition.")
-    # Occupancy: declared or derived, every value a probability in (0, 1]; the derived MET-FAB
-    # value guards the anchor arithmetic (0.5 x 0.25 / 0.806 = 0.155 under the baseline laws).
+    # Occupancy: equilibrium, literal or derived, every value a probability in (0, 1]; the derived
+    # MET-FAB value guards the anchor arithmetic (0.5 x 0.0238 / 0.806 = 0.0148 under the baseline
+    # laws) and the MET-INLB value the equilibrium 0.25 / 5.25 = 0.0476.
     for t in tokens:
         p = rds.occupancy_of(t)
         if not (np.isfinite(p) and 0.0 < p <= 1.0):
             raise ValueError(f"SimulationRDS.conditions: occupancy of {t} resolves to {p!r}, not a probability.")
-        if rds.condition_setting(t).visibility_ratio_to is not None and \
-                rds.condition_setting(rds.condition_setting(t).visibility_ratio_to).occupancy is None:
+        anchor = rds.condition_setting(t).visibility_ratio_to
+        if anchor is not None and rds.condition_setting(anchor).visibility_ratio is not None:
             raise ValueError(f"SimulationRDS.conditions: {t} derives its occupancy from an anchor that is itself derived.")
-    if abs(rds.occupancy_of("FAB") - 0.155) > 5e-4 or abs(rds.occupancy_of("INLB") - 0.5) > 1e-12:
-        raise ValueError(f"SimulationRDS.conditions: occupancies resolve to FAB {rds.occupancy_of('FAB'):.4f} / "
-                         f"INLB {rds.occupancy_of('INLB'):.4f}; the decided values are 0.155 (derived) / 0.5. "
-                         f"Change the declared settings AND this guard together.")
+    if abs(rds.occupancy_of("FAB") - 0.0148) > 5e-5 or abs(rds.occupancy_of("INLB") - 0.25 / 5.25) > 1e-12:
+        raise ValueError(f"SimulationRDS.conditions: occupancies resolve to FAB {rds.occupancy_of('FAB'):.5f} / "
+                         f"INLB {rds.occupancy_of('INLB'):.5f}; the decided values are 0.0148 (derived) / "
+                         f"0.0476 (equilibrium at 0.25 nM, K_D 5 nM). Change the declared settings AND this guard "
+                         f"together.")
+    if rds.condition_setting("INLB").ligand_classes is not True or rds.condition_setting("FAB").ligand_classes:
+        raise ValueError("SimulationRDS.conditions: MET-INLB carries the ligand classes B1 / B2 and MET-FAB does not.")
 
 
 _validate_model_blocks()
@@ -1845,20 +2109,34 @@ def association_ratio_of(condition: str) -> float:
 
 
 def occupancy_of(condition: str) -> float:
-    """Probe occupancy per subunit of ``condition`` (``SimulationRDS.occupancy_of``): INLB 0.5
-    declared; FAB 0.155 derived from the declared Fab/InlB visibility ratio and the InlB anchor."""
+    """Probe occupancy per subunit of the TRUE population under ``condition``
+    (``SimulationRDS.occupancy_of``): INLB 0.0476, the equilibrium at 0.25 nM with K_D 5 nM;
+    FAB 0.0148, derived from the declared Fab/InlB visibility ratio and the InlB anchor. It
+    converts the inferred N_total to the retained population and sets the initial probe classes."""
     return PARAMETERS.simulation.rds.occupancy_of(condition)
 
 
 def occupancy_source_of(condition: str) -> str:
-    """'declared' or 'derived': how the condition's occupancy is set (``SimulationRDS.occupancy_source_of``)."""
+    """'equilibrium', 'declared' or 'derived': how the condition's occupancy is set
+    (``SimulationRDS.occupancy_source_of``)."""
     return PARAMETERS.simulation.rds.occupancy_source_of(condition)
 
 
 def visibility_of(condition: str) -> float:
-    """Probability that a receptor subunit is visible under ``condition``: occupancy x P(dye >= 1)
-    (INLB 0.25, FAB 0.125 under the baseline labeling laws)."""
+    """Probability that a subunit of the TRUE population is visible under ``condition``:
+    occupancy x P(dye >= 1) (INLB 0.0238, FAB 0.0119 under the baseline labeling laws)."""
     return PARAMETERS.simulation.rds.visibility_of(condition)
+
+
+def two_probe_share_of(condition: str) -> float:
+    """Share of the retained initial dimers carrying two probes, s_2 = p / (2 - p)
+    (``SimulationRDS.two_probe_share_of``): INLB 0.0244, FAB 0.0074."""
+    return PARAMETERS.simulation.rds.two_probe_share_of(condition)
+
+
+def retained_ratio_of(condition: str, ratio_true) -> np.ndarray:
+    """Retained dimer-to-monomer ratio of the initial population, (2 - p) r, from the true r."""
+    return PARAMETERS.simulation.rds.retained_ratio_of(condition, ratio_true)
 
 
 # =============================================================================

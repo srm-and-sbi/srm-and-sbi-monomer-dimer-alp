@@ -691,7 +691,7 @@ _PARAM_MEANING_DETECTOR = _PARAM_MEANING
 
 _PARAM_MEANING_BIOLOGY = {
     # stoichiometry block
-    "count_total": "stoichiometry: conserved receptor-subunit total N_R = n_A + 2 n_B of the simulated patch",
+    "count_total": "stoichiometry: true receptor-subunit total N_total of the simulated patch (the retained population is realized from it)",
     "ratio_dimer_monomer_initial": "stoichiometry: initial dimer-to-monomer ratio r = n_B / n_A (log10 on [-2, 2]; receptor fraction x_B = 2r / (1 + 2r))",
     "rate_dissociation": "dissociation: dimer unbinding rate kappa_OFF (B -> A + A, mode conserved), per second",
     # mobility block

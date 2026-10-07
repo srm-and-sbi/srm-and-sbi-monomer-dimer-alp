@@ -16,7 +16,7 @@ entering at the RDS stage through the condition's declared association setting a
 stage through its labeling law, and carried by a condition slot in every product name), a detector
 calibration that marginalizes the full reactive biology prior, and the separated
 stoichiometry–mobility model (two molecular species × three mobility modes; the reaction channels
-generated from the model blocks and the condition's association setting, seventeen under MET-INLB
+generated from the model blocks and the condition's association setting, twenty-four under MET-INLB
 and eleven under MET-FAB; eleven learnable parameters, identical for both conditions, led by the
 conserved receptor total `N_R` and the initial dimer-to-monomer ratio `r`, from which the receptor
 fraction `x_B` is derived), and the decided prior ranges of every learnable row together with the

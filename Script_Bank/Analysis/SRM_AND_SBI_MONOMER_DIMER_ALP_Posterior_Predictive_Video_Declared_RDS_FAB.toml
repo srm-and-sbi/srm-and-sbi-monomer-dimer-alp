@@ -14,8 +14,10 @@
 #
 # Not set here, because the production path sets it: the imaging block is read from the tagged
 # Nuisance_DLI artifact (--nuisance-tag REF), and the labeling is the condition's production
-# observation layer (Poisson(1.64) dye counts per bound probe, derived probe occupancy 0.155,
-# visibility 0.125 per subunit; labeling.resolve_labeling).
+# observation layer: the retained population (every simulated monomer carries a Fab, every simulated
+# basal dimer at least one, with the two-Fab share 0.0074 drawn at labeling), Poisson(1.64) dye counts
+# per bound Fab; the derived occupancy 0.0148 realizes the retained population from the receptor
+# total at the RDS stage (labeling.resolve_labeling; PROJECT_CONTEXT.md sec. 2, Modeling assumptions).
 #
 # Units are physical (counts, um^2/s, 1/s, dimensionless ratios). The biology prior box of every
 # row is in PROJECT_CONTEXT.md sec. 2; a value outside it is recorded as an extrapolation.
@@ -30,12 +32,14 @@ references; every other value, the receptor total included, is the center of its
 default where no MET-FAB evidence fixes it."""
 
 [parameters.count_total]
-value = 1000.0
+value = 10000.0
 basis = "prior center (declared default)"
-source = """Center of the decided prior 316-3162 receptor subunits, one value for every recording. It is \
-not matched to a recording: the rendered spot density can differ from a recording's, and inferring the \
-receptor total is the biology workflow's task. N_R counts subunits in the whole simulated field \
-(256 x 256 px, 40.4 um square, open lateral boundary), not in the cell footprint."""
+source = """Center of the decided prior 1,000-100,000 receptor subunits (log10 [3.0, 5.0]), one value for every \
+recording. It is not matched to a recording: the rendered spot density can differ from a recording's, and \
+inferring the receptor total is the biology workflow's task. N_total counts the TRUE receptor subunits, \
+probe-bound and unbound, in the whole simulated field (256 x 256 px, 40.4 um square, open lateral boundary), \
+not in the cell footprint; the generator simulates the retained population realized from it through the \
+derived MET-FAB occupancy 0.0148 (about 180 retained subunits at this value)."""
 
 [parameters.ratio_dimer_monomer_initial]
 value = 0.08108
