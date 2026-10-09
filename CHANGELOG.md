@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Documentation
+
+- `DETECTOR_WORKFLOW.md` §9.9: the results of the Evaluation, Posterior_Calibration and embedding probe of the two
+  chains selected on 2026-10-07 (`CAP256KERNEL7EARLYCONVSTATSGB128`, `CAP256GB128`), the four-column scorecard
+  against the `capacity256` and baseline records, and their reading under the selection rule, with its scope
+  (the Fab, 2 s dataset generated before the retained-population revision) and its calibration qualifications;
+  the adoption of `CAP256KERNEL7EARLYCONVSTATSGB128` (2026-10-08) as the detector estimator of record for the Fab
+  condition and the 2 s window, replacing the baseline in that role, and its MAP_Experiment on the 60 MET-FAB
+  recordings (JUPITER job 2233366, completed on 2026-10-08). The screening record's README gains the outcome and
+  adoption paragraphs and the stage logs (`evidence/logs_evaluation_2026-10-08/`, `evidence/logs_experiment_2026-10-08/`).
+
 ## 0.1.37 - 2026-10-05
 
 The generator simulates the retained population: the probe-associated complexes of the MET model, under the

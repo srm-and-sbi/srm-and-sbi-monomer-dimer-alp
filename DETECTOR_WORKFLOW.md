@@ -2240,6 +2240,132 @@ guidance; B is indistinguishable from `capacity256` at 2,048 and below its best 
 adopted here: the selection among the chains at 128, with the Evaluation and Posterior_Calibration stages
 once per chain, is the lead's call.
 
+**Results of the Evaluation and Posterior_Calibration of the selected chains (2026-10-08; scorecard in the data
+bank's `..._FAB_2S_50FPS_Estimator_Scorecard_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128_CAP256GB128`).**
+The two chains selected on 2026-10-07 ran the Evaluation (32 nodes × 4 GH200, 128 ranks, 30 min each, jobs 2208611
+and 2208613) and the Posterior_Calibration (16 nodes, 64 ranks, 1 h 52 and 2 h 16, jobs 2208612 and 2208614) on
+JUPITER behind a compute-node tree gate (job 2208610, manifest of the committed 0.1.37 tree), on the same 25 EVAL
+tasks (25,000 videos), bounded pool, 1,000 draws per video for the calibration, as the `capacity256` record; every
+stage `COMPLETED` with its checks passed (Evaluation 3 of 3, calibration 2 of 2) and no traceback. The embedding
+probe ran on rcl01 for both chains under the split of the probe of record (fit task 0, held-out task 1). The
+weights evaluated are the chains' best TEST checkpoints (sha256 `0181f163…` for `CAP256KERNEL7EARLYCONVSTATSGB128`,
+`468803fe…` for `CAP256GB128`), and the scorecard's identity check found one checkpoint across the Evaluation, the
+estimator artifact and the probe of each column; the calibration product carries no checkpoint provenance and is
+recorded as unverified, as for the columns of record. The compiler (0.1.37) reports the four columns below; its
+thresholds are the defaults (`min_effect` 0.01 dex, `coverage_tolerance` 0.05, floor 0.3, drop 0.3).
+
+*Recovery, posterior-median view, every recording (MAE dex · signed bias · slope · correlation).*
+
+| parameter | baseline | `capacity256` (CAP256) | C at 128 | `capacity256` at 128 |
+|---|---|---|---|---|
+| `mu_r` | 0.025 · +0.021 · 0.93 · 0.96 | 0.018 · −0.001 · 0.94 · 0.96 | 0.009 · −0.000 · 0.97 · 0.99 | 0.009 · +0.001 · 0.97 · 0.99 |
+| `sigma_r` | 0.186 · −0.016 · 0.04 · 0.17 | 0.180 · +0.012 · 0.10 · 0.27 | 0.026 · −0.002 · 0.96 · 0.99 | 0.026 · +0.001 · 0.96 · 0.99 |
+| `mu_pc` | 0.054 · +0.031 · 0.86 · 0.95 | 0.044 · −0.009 · 0.92 · 0.97 | 0.020 · +0.006 · 0.96 · 0.99 | 0.025 · +0.002 · 0.97 · 0.99 |
+| `sigma_pc` | 0.081 · +0.002 · 0.78 · 0.89 | 0.082 · +0.008 · 0.79 · 0.89 | 0.021 · +0.001 · 0.97 · 0.99 | 0.042 · +0.007 · 0.91 · 0.97 |
+| `prob_photo_bleach` | 0.206 · +0.028 · 0.59 · 0.79 | 0.369 · +0.004 · 0.03 · 0.16 | 0.153 · +0.017 · 0.76 · 0.88 | 0.185 · +0.032 · 0.68 · 0.82 |
+| `lambda_rate` | 0.201 · −0.008 · 0.29 · 0.54 | 0.199 · −0.005 · 0.31 · 0.55 | 0.055 · −0.010 · 0.91 · 0.96 | 0.102 · −0.022 · 0.74 · 0.88 |
+
+The MAP and SGM views agree with the median view on every parameter (median absolute gaps between the three point
+estimates at most 0.04 dex, on bleaching; 0 % of MAPs outside the central 90 % interval of their draws; MAPs outside
+the prior on any parameter 0.7 % and 0.9 %, against 0.7 % for `capacity256` and 5.8 % for the baseline). The signed
+bias of C at 128 lies within ±0.02 dex on all six parameters; `capacity256` at 128 carries +0.032 dex on bleaching
+and −0.022 dex on `lambda_rate`, small but larger. In the regime tables (both halves of the `mu_r` and `sigma_r`
+priors, the operating subgroup of `mu_pc`) the main advantages persist across the evaluated regimes, with no
+parameter recovered in one half of its prior only; `mu_r` and `sigma_r` remain effectively tied between the two
+candidates (MAE differences at most 0.0013 dex, in favor of `capacity256` at 128 by 0.0001 dex in the upper
+halves of `mu_r` and `sigma_r` and in favor of C elsewhere).
+
+*Marginal coverage of the central 50 % / 90 % intervals, and the median 90 % interval width (dex; share of the prior
+width).*
+
+| parameter | baseline | CAP256 | C at 128 | `capacity256` at 128 |
+|---|---|---|---|---|
+| `mu_r` | 23 / 59 %; 0.051 (17 %) | 43 / 85 %; 0.070 (23 %) | 57 / 93 %; 0.035 (12 %) | 57 / 92 %; 0.036 (12 %) |
+| `sigma_r` | 34 / 76 %; 0.579 (77 %) | 44 / 83 %; 0.624 (83 %) | 54 / 93 %; 0.110 (15 %) | 57 / 92 %; 0.124 (16 %) |
+| `mu_pc` | 40 / 80 %; 0.162 (22 %) | 44 / 86 %; 0.152 (20 %) | 53 / 92 %; 0.080 (11 %) | 56 / 93 %; 0.108 (14 %) |
+| `sigma_pc` | 42 / 86 %; 0.301 (40 %) | 44 / 84 %; 0.301 (40 %) | 56 / 94 %; 0.093 (12 %) | 56 / 92 %; 0.185 (25 %) |
+| `prob_photo_bleach` | 48 / 88 %; 0.831 (55 %) | 45 / 85 %; 1.273 (85 %) | 51 / 90 %; 0.663 (44 %) | 52 / 89 %; 0.832 (55 %) |
+| `lambda_rate` | 42 / 83 %; 0.741 (74 %) | 44 / 84 %; 0.749 (75 %) | 56 / 93 %; 0.234 (23 %) | 56 / 92 %; 0.444 (44 %) |
+
+*Joint tests, lifted from the calibration reports, and the truth log-density on the EVAL recordings.*
+
+| quantity | baseline | CAP256 | C at 128 | `capacity256` at 128 |
+|---|---|---|---|---|
+| expected coverage, largest gap (nominal → empirical at 0.50, 0.90) | 0.308 (0.24, 0.62) | 0.065 (0.44, 0.87) | 0.190 (0.69, 0.97) | 0.194 (0.68, 0.94) |
+| TARP area-to-curve | −0.053 | −0.025 | −0.020 | −0.013 |
+| L-C2ST rejection fraction; median p | 0.998; 0.000 | 0.000; 0.920 | 0.687; 0.000 | 0.958; 0.000 |
+| worst 1D / 2D marginal; dependence excess | 0.049 / 0.054; 0.011 | 0.028 / 0.024; 0.009 | 0.014 / 0.018; 0.004 | 0.007 / 0.007; 0.000 |
+| SBC KS D above 0.05 | `mu_r` 0.45, `sigma_r` 0.12, `mu_pc` 0.18, `sigma_pc` 0.06, `lambda_rate` 0.05 | `mu_r` 0.10, `mu_pc` 0.12, `sigma_pc` 0.06 | `mu_pc` 0.11, `sigma_pc` 0.05, `lambda_rate` 0.08 | `mu_r` 0.06, `sigma_pc` 0.07, `lambda_rate` 0.08 |
+| spread z (1 = width equals error; < 1 too wide); largest bias z | 1.02 to 1.33; +1.22 | 1.05 to 1.13; +0.53 | 0.85 to 0.96; +0.23 | 0.86 to 0.98; −0.16 |
+| truth log-density, mean (median) | 5.67 (6.70) | 7.80 (8.06) | 12.67 (12.85) | 11.42 (11.73) |
+| paired difference against CAP256 (95 % bootstrap interval; share of recordings higher) | −2.13 (−2.17, −2.09; 23 %) | — | +4.87 (+4.85, +4.90; 99 %) | +3.62 (+3.60, +3.64; 98 %) |
+
+C at 128 against `capacity256` at 128 on the same recordings: +1.25 (+1.24 to +1.27), higher on 86 % of them
+(computed from the scorecard's aligned arrays, 2,000 resamples, seed 0).
+
+*Encoder row (frozen-encoder linear probe, held-out task 1; MAE dex · slope · correlation; selects nothing).*
+`sigma_r`: 0.177 · 0.11 · 0.34 (baseline), 0.184 · 0.07 · 0.24 (CAP256), 0.029 · 0.99 · 0.99 (C at 128), 0.030 ·
+0.98 · 0.98 (`capacity256` at 128); `lambda_rate`: 0.198 · 0.32 · 0.58, 0.202 · 0.28 · 0.55, 0.060 · 0.93 · 0.96,
+0.129 · 0.66 · 0.83; `sigma_pc`: 0.079 · 0.81 · 0.90, 0.082 · 0.80 · 0.89, 0.026 · 0.99 · 0.99, 0.052 · 0.94 ·
+0.95; `prob_photo_bleach`: 0.224 · 0.56 · 0.75, 0.354 · 0.05 · 0.19, 0.170 · 0.73 · 0.86, 0.201 · 0.62 · 0.80;
+`mu_r` and `mu_pc` are accessible in every embedding (correlation 0.95 to 0.98).
+
+*Flags* (median view, against the base `capacity256`): both candidates *improved* on `sigma_r`, `mu_pc`,
+`sigma_pc`, `prob_photo_bleach` and `lambda_rate` (MAE better by at least 0.01 dex with the 90 % coverage gap not
+worse) and *under threshold* on `mu_r` (0.009 against 0.018 dex, a difference of 0.009); nothing worsened, no
+"points better, uncertainty worse", no large correlation drop, no collapse, no parameter below the floor. The
+base itself carries `sigma_r` and `prob_photo_bleach` below the floor and the baseline `sigma_r`.
+
+*Reading, under the selection rule above.* (i) Both chains at global batch 128 recover every parameter: `sigma_r`,
+below the floor in every estimator of record (correlation 0.17 to 0.27, interval width 77 to 83 % of the prior),
+is recovered with correlation 0.99, MAE 0.026 dex and a 90 % interval of 15 % of the prior; the bleaching collapse
+of `capacity256` (0.16) is absent (0.88 and 0.82). The probe places both gains in the embedding of both chains, so
+the C modifications are not necessary for them: the recovery accompanies the small-batch training regimen. The
+probes do not isolate the batch as the cause, since the smaller batch also changed the number of optimizer updates
+and the run-to-run variation remains. (ii) At that batch, C leads `capacity256` on
+`sigma_pc` (MAE 0.021 against 0.042), `lambda_rate` (0.055 against 0.102; interval 23 % against 44 % of the prior)
+and bleaching (0.153 against 0.185), ties on `mu_r` and `sigma_r`, and the probe shows the same ordering in the
+embeddings; its truth log-density is higher by 1.25 on average, on 86 % of the recordings. (iii) The joint calibration of both chains is
+predominantly conservative, with residual calibration errors: the joint expected coverage overshoots at every
+level (nominal 0.50 covered 0.69 and 0.68, nominal 0.90 covered 0.97 and 0.94; largest discrepancies 0.19, an
+appreciable overcoverage despite the marginal coverage close to nominal, generally mildly conservative), the spread z lies between 0.85 and 0.98
+(intervals 2 to 18 % wider than the errors), and the location errors are small (bias z at most 0.23, physical
+offsets at most a factor 1.06); the calibration reports diagnose "intervals too wide" on `mu_r`, `sigma_pc` and
+`lambda_rate` (C) and on `sigma_pc` and `lambda_rate` (`capacity256` at 128) and "calibrated" on the others.
+L-C2ST rejects on 69 % and 96 % of the videos where `capacity256` rejects on none; it tests the agreement of the
+posterior with the truth in general, so its rejection rate is neither an error magnitude nor an attribution to a
+cause, and the width diagnostics only suggest overdispersion as the likely one. These results do not establish
+conservative behavior for every recording or joint parameter combination. `capacity256` has residual
+calibration discrepancies of its own (largest coverage gap 0.065, SBC KS D above 0.05 on three parameters) with
+intervals 2 to 6 times wider; the truth log-density, which scores sharpness and accuracy together, places both
+chains far above it (+4.87 and +3.62, on 98 to 99 % of the recordings). C is the stronger estimator overall, not
+the winner of every calibration diagnostic. (iv) C at 128 (`CAP256KERNEL7EARLYCONVSTATSGB128`) has the strongest
+balanced profile of the four columns: the best recovery and the narrowest intervals on every parameter, marginal
+coverage close to nominal and generally mildly conservative, the highest joint score against every column, and no
+flag against it. The stage checks passing attest to the integrity of the products, not to any calibration
+diagnostic; and the calibration products carry no checkpoint provenance, so the identity of the calibrated weights
+with the evaluated ones is recorded as unverified. The replicate caveat of the screening stands: one Evaluation per
+chain, and the two chains of each configuration at 128 differed by 1.2 to 2.4 nats in TEST loss, so the margin of
+C over `capacity256` at the same batch (1.25 nats of truth log-density) is of the order of the run-to-run
+variation seen in training; the narrow bootstrap intervals establish differences between these selected
+checkpoints over the EVAL recordings, not a repeatable superiority of the architecture across training runs.
+These results apply to the Fab, 2 s dataset generated before the retained-population revision. Adopting this
+checkpoint does not replace retraining and evaluation on the revised dataset; its architecture and training
+configuration provide the starting point.
+
+**Adoption (2026-10-08).** After an independent review of these results, the lead adopted
+`CAP256KERNEL7EARLYCONVSTATSGB128` (C at global batch 128, the checkpoint evaluated above, sha256 `0181f163…`) as the
+detector estimator of record for the Fab condition and the 2 s window, on the dataset generated before the
+retained-population revision, with the scope and the calibration qualifications recorded above. It replaces the
+baseline in that role (§6.9, §9.7). The estimator keeps its artifact tag: every stage reads it with
+`ARTIFACT_TAG=CAP256KERNEL7EARLYCONVSTATSGB128`, and the untagged estimator (the baseline) is neither renamed nor
+replaced. The adoption changes no other record: the working imaging vector of §7.6 stands until the adopted
+estimator's estimates on the experimental recordings have been read, and biology training remains a separate
+decision (selection rule above). Its MAP_Experiment on the 60 MET-FAB recordings ran the same day as JUPITER job
+2233366, with the settings of the `capacity256` Experiment of record (job 1972333: 4 nodes × 4 GH200,
+the unrestricted pool, ten 2 s windows per recording), on the JUPITER tree verified by the gate of the Evaluation
+stage (no sync in between; a login-node read-back matched all 208 files of its manifest).
+
 **Status.** Presets, probe and tests in 0.1.27 and 0.1.28; the scorecard compiler and its control
 compilation in 0.1.29, its input safeguards in 0.1.30; the probe and the first smoke run and read. The second
 smoke (jobs 2123225 and 2123226, submitted on 2026-09-30 for code 0.1.28) failed after three and a half
@@ -2264,6 +2390,13 @@ original `capacity256` run and the batch sweep that followed are described above
 global batch for comparability"). The results are recorded above (*Results of the screening*). Nothing adopted. On 2026-10-07 the lead
 selected, under the screening and selection guidance, the two chains with the best TEST losses, both at
 global batch 128: `CAP256KERNEL7EARLYCONVSTATSGB128` (C, −12.67) and `CAP256GB128` (`capacity256`, −11.40).
-Next: the Evaluation and Posterior_Calibration stages once per selected chain, on the same EVAL videos and
-with the same settings as the `capacity256` record (25 EVAL tasks, the bounded pool), then the compilation
-of the scorecard against the `capacity256` and baseline records.
+On 2026-10-08 the Evaluation and Posterior_Calibration stages ran once per selected chain, on the same EVAL videos
+and with the same settings as the `capacity256` record (25 EVAL tasks, the bounded pool), the embedding probe ran
+for both, and the scorecard was compiled against the `capacity256` and baseline records; the results and their
+reading are recorded above (*Results of the Evaluation and Posterior_Calibration of the selected chains*). The
+same day the lead adopted `CAP256KERNEL7EARLYCONVSTATSGB128` (*Adoption* above), and its MAP_Experiment ran as
+JUPITER job 2233366 (8 min 12 s on 4 nodes: the 600 windows of the 60 recordings, 16 of 16 shards merged, both
+checks passed, every ascent stopped on patience); the MAP_Experiment runs for the adopted estimator only. Its product
+`..._2S_50FPS_CAP256KERNEL7EARLYCONVSTATSGB128_MAP_Experiment` is on the PC Posit tier, and the job log is in the
+screening record. Next: the reading of that Experiment against the `capacity256` and baseline Experiment records
+(`..._2S_50FPS_CAP256_vs_Baseline_Experiment`).
