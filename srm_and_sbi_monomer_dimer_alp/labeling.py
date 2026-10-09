@@ -3,6 +3,8 @@
 The simulated population is the RETAINED one (PROJECT_CONTEXT.md sec. 2, *Modeling assumptions
 of the MET model*): every initial retained complex carries at least one probe, and a probe is
 one molecule on one subunit (at most one Fab or one InlB per MET subunit, Harwardt et al. 2017).
+In this code a ``subunit`` is one simulated receptor identity, the persistent object of
+``SubunitLineage`` (DETECTOR_WORKFLOW.md sec. 6.2), not a part of a receptor.
 Labeling therefore has two steps, both drawn ONCE per recording and held fixed, because probe
 binding and dye conjugation happened before acquisition (fixed attachment, assumption 5):
 
@@ -72,9 +74,12 @@ Probe kinetics (an assumption, stated). A probe stays attached for the recording
 count is static, so the observation layer removes a dye only by photobleaching and never adds
 one: ligand binding and unbinding within a recording are not modeled, and for MET-INLB the probe
 IS the ligand. Photobleaching removes fluorescence and preserves the probe, hence a receptor's
-association eligibility. First-order, state-independent unbinding is statistically
-indistinguishable from the modeled bleaching and is absorbed by the per-condition calibrated
-bleach parameter (the detector calibrates it on the condition's own recordings). Not absorbed,
+association eligibility. First-order, state-independent unbinding can produce the same expected
+fluorescence decline as the modeled bleaching under matched assumptions, so a per-condition
+calibrated bleach parameter (the detector calibrates it on the condition's own recordings) may
+contain such a contribution without measuring it; the two are not statistically identical mechanisms, since unbinding
+removes all the dyes of a probe at once while bleaching removes one dye at a time, so spot
+persistence and its variability differ. Not absorbed,
 and declared rather than modeled: the appearance of a spot when free labeled ligand binds
 during the recording, and any ligand affinity that differs between monomeric and dimeric
 receptors beyond the independent binding of the initial classes.

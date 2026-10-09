@@ -577,6 +577,20 @@ prior-center reaction-diffusion settings and are withdrawn as a validation (`DET
 synthetic validation of this statistic, and its interpretation as a bleaching proxy, are checked again under the
 corrected rendering configuration.
 
+**What the decay analysis measures, and the expected decline under the renderer.** The analysis uses the
+background-subtracted total fluorescence of the field; it is not a count of surviving probes and not a count of
+detected spots. The renderer's `prob_photo_bleach` is the probability that one active dye enters the absorbing
+dark state within the 100-frame reference interval, applied per dye and independently of the dye's brightness
+and of the other dyes of its probe (`DETECTOR_WORKFLOW.md` §6.2). Under that independent bleaching and a
+stationary mean dye brightness the expected normalized fluorescence follows E[F(t)]/E[F(0)] = (1 − p)^(t/100),
+t in frames. Grouping the dyes onto probes and complexes changes probe persistence and the statistical
+variability of the signal, not this expectation, so no dye-multiplicity correction applies to the mean-decline
+formula. The expression converts a per-dye value into an expected *fluorescence* retention, not a spot
+retention: over the 19 s (950 frames) between the opening and closing windows it gives about 75 % at p = 0.03,
+61 % at 0.05 and 6 % at 0.255, against the 56 to 57 % the recordings keep. Such a figure is an analytical
+expectation, not a measured outcome of a render, and the field fluorescence remains a proxy for the per-dye
+process, for the reasons listed above.
+
 ## Essential notes
 
 - **A passing estimator is a candidate, not a decision.** `DETECTOR_WORKFLOW.md` §9.4 gates

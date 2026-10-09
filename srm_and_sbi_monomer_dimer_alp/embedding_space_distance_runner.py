@@ -67,12 +67,12 @@ _PARAM_MEANING = {
     "kappa_b": "camera baseline: constant ADU added after gain",
     "kappa_s": "read noise: post-register Gaussian sigma (ADU)",
     "kappa_q": "quantum efficiency: photon->photoelectron probability (marginalized as SCOPE camera nuisance; only gamma*kappa_q identifiable)",
-    "mu_r": "PSF width: median of the per-emitter PSF-width distribution (pixels)",
+    "mu_r": "PSF width: median of the PSF-width distribution across simulated receptors (pixels; one width per simulated receptor, shared by the dyes of its probe)",
     "sigma_r": "PSF-width spread: log-spread of that distribution",
-    "mu_pc": "emitter brightness: median photon count per emitter",
-    "sigma_pc": "emitter-brightness spread: log-spread of that distribution",
-    "prob_photo_bleach": "photobleaching probability over a 100-frame reference window",
-    "lambda_rate": "flicker rate: base rate of emitter brightness-state transitions",
+    "mu_pc": "dye brightness: median photon contribution of one active dye per frame, before the camera",
+    "sigma_pc": "dye-brightness spread: spread of a dye's ln-brightness",
+    "prob_photo_bleach": "per-dye photobleaching probability over the 100-frame reference interval",
+    "lambda_rate": "flicker rate: correlation-decay rate of a dye's ln-brightness (correlation time 1/lambda_rate; not a transition count)",
 }
 
 

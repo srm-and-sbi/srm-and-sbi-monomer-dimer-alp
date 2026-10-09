@@ -795,7 +795,9 @@ class StoichiometryBlock:
 
     The simulated population is the probe-associated one (PROJECT_CONTEXT.md sec. 2, *Modeling
     assumptions of the MET model*): receptors without a probe neither react nor emit under the
-    model's eligibility rule, so they are not simulated. Two molecular species describe a
+    model's eligibility rule, so they are not simulated, except that the probe-free partner
+    within a retained Fab dimer stays represented (both daughters of ``B`` are retained) while
+    the probe-free partner of a one-InlB dimer is never represented. Two molecular species describe a
     condition without ligand classes (MET-FAB): the monomer ``A`` (one subunit) and the dimer
     ``B`` (two retained subunits, both daughters retained on fission; its one- or two-probe
     class is assigned at labeling). A condition with ligand classes (MET-INLB, where only

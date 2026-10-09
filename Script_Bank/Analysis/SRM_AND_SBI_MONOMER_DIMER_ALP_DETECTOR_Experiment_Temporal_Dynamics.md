@@ -30,8 +30,9 @@ together, and do not let either report's numbers be quoted as a causal claim.
 ## Reference scoping for the imaging parameters
 
 Several imaging references are valid for the monomer control alone and are drawn only there: the
-dimer condition's localization brightness is a two-label **per-detection sum** rather than a
-per-emitter property, and its PSF width is **dimer-broadened**. The two population log-spreads
+dimer condition's per-detection brightness and PSF width are higher and wider at the spot level, a
+difference whose cause is not established, and each condition's imaging parameters are inferred
+independently on its own recordings (`DETECTOR_WORKFLOW.md` §6.7 caveat 3). The two population log-spreads
 (`sigma_r`, `sigma_pc`) carry an errors-in-variables inflation, so their fitted values are drawn as
 **upper bounds** rather than targets — a calibration is expected to land below them. `lambda_rate` is
 photophysical and condition-independent, so it applies to both conditions. **`prob_photo_bleach` has

@@ -20,6 +20,17 @@ by the subunit lineage of `simulation_rds_support.extract_subunit_lineage`. A su
 without a dye never renders; a dimer's dyes render at one position, so a dimer's
 brightness is the sum of independent per-dye processes, with no multiplier anywhere.
 
+Vocabulary (DETECTOR_WORKFLOW.md sec. 6.2 and 6.6): a SUBUNIT here is one simulated receptor
+identity, the persistent object of `SubunitLineage` that the reactions conserve while the
+engine assigns new particle ids, not a part of a receptor; an EMITTER is one dye, the object
+the PSF width and the brightness process attach to; a PARTICLE is the engine's host object, a
+monomer or a dimer; a PROBE is the Fab or InlB bound to a receptor, carrying that receptor's
+dyes. One PSF width is drawn per simulated receptor and shared by every dye of its probe for
+the whole recording; one brightness process and one bleaching draw belong to each dye. The
+hierarchy is dye -> probe -> receptor -> complex: brightness and bleaching live at the dye level,
+the dye count at the probe level, the PSF width at the receptor level (DETECTOR_WORKFLOW.md
+sec. 6.2, *The unit hierarchy of the observation model*).
+
 Module contents:
 
     Point-spread function
@@ -686,7 +697,8 @@ def render_dli_video(soul_poses: np.ndarray,
     )
 
     # --- PSF params + per-SUBUNIT widths (mu_r, sigma_r from the vector) ---
-    # One width per subunit, carried by every dye of that subunit for the whole recording.
+    # One width per subunit (one simulated receptor), carried by every dye of its probe for the
+    # whole recording.
     subunit_sqrt2sigma = sample_psf_width(
         n_subunits,
         PARAMETERS.simulation.dli.sqrt_2sigma_dist_label,
@@ -707,7 +719,7 @@ def render_dli_video(soul_poses: np.ndarray,
     if verbose:
         rho = np.exp(-img["lambda_rate"] * delta_frame)
         print(f"[render_dli_video] emitters: {ndyes} dyes on {int((np.asarray(dye_counts) > 0).sum())} "
-              f"of {n_subunits} subunits; OU brightness: mu_pc={mu_pc:.4g} photons, "
+              f"of {n_subunits} simulated receptors (subunits); OU brightness: mu_pc={mu_pc:.4g} photons, "
               f"sigma_pc={sigma_pc:.4g} (ln), lambda_rate={img['lambda_rate']:.4g}/s "
               f"(per-frame rho={rho:.4f}), prob_photo_bleach={img['prob_photo_bleach']:.4g} "
               f"per {_fixed('numb_photo_bleach')} frames")

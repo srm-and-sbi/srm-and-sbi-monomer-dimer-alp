@@ -121,9 +121,11 @@ _REFERENCE_DETECTOR = {
         "applies_to": ["MET-FAB"],
         "note": "median PSF width from a location-zero log-normal fit of the ThunderSTORM "
                 "sigma[nm] column (accession S-BSST712), converted by sqrt(2)*sigma/158 nm to "
-                "the model's pixel convention: 1.36 (Fab). The InlB value 1.47 is "
-                "dimer-broadened -- two labels in one diffraction-limited spot -- so it is not a "
-                "reference for the per-emitter PSF the model infers. DETECTOR_WORKFLOW.md 6.2/6.5",
+                "the model's pixel convention: 1.36 (Fab). The InlB value 1.47 is a wider "
+                "per-detection value of the dimer condition, a spot-level observation whose cause is "
+                "not established, not a reference for the per-receptor PSF width the model infers "
+                "(each condition's imaging parameters are inferred independently on its own "
+                "recordings). DETECTOR_WORKFLOW.md 6.2/6.7 caveat 3",
     },
     "sigma_r": {
         "unit": "log-spread", "estimates": [(0.15, None, "fit-corrected")],
@@ -140,12 +142,12 @@ _REFERENCE_DETECTOR = {
         "unit": "photons", "estimates": [(386.0, None, "Fab per-detection")],
         "applies_to": ["MET-FAB"],
         "note": "median brightness from a location-zero log-normal fit of the ThunderSTORM "
-                "intensity[photon] column: 386 photons (Fab). MET-INLB's 690 is a PER-DETECTION "
-                "sum -- an activated dimer carries two labels within one spot, which the "
-                "single-emitter fit reports as one detection whose photons add -- so it is not a "
-                "reference for the per-emitter brightness the model infers, and the ratio is a "
-                "lower bound because 23.7% of InlB localizations pile up at the 1225-photon "
-                "acceptance ceiling. DETECTOR_WORKFLOW.md 6.4/6.5 caveat 3",
+                "intensity[photon] column: 386 photons (Fab). MET-INLB's 690 is a per-detection "
+                "value of the dimer condition, a spot-level observation whose cause is not "
+                "established, not a reference for the per-dye brightness the model infers (each "
+                "condition's imaging parameters are inferred independently on its own recordings); "
+                "the ratio to Fab is a lower bound because 23.7% of InlB localizations pile up at "
+                "the 1225-photon acceptance ceiling. DETECTOR_WORKFLOW.md 6.7 caveat 3",
     },
     "sigma_pc": {
         "unit": "log-spread", "estimates": [(0.5, None, "fit-corrected")],
@@ -182,7 +184,7 @@ _DISPLAY_BIOLOGY = {
 }
 _DISPLAY_DETECTOR = {
     "mu_r": "Median PSF width", "sigma_r": "PSF-width log-spread",
-    "mu_pc": "Median emitter brightness", "sigma_pc": "Brightness log-spread",
+    "mu_pc": "Median dye brightness", "sigma_pc": "Brightness log-spread",
     "prob_photo_bleach": "Photobleaching probability", "lambda_rate": "Flicker rate",
 }
 # Axis unit per parameter KEY, for tables that carry no UNIT string (the detector table sets

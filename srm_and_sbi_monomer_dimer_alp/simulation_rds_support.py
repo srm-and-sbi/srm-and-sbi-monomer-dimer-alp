@@ -583,7 +583,8 @@ def collapse_species_axis(tray_poses: np.ndarray) -> np.ndarray:
 class SubunitLineage(NamedTuple):
     """Which particle hosts each receptor subunit at each frame.
 
-    The receptor SUBUNIT is the persistent physical object of the model: the reaction
+    The receptor SUBUNIT, one simulated receptor identity (not a part of a receptor), is the
+    persistent physical object of the model: the reaction
     network (association, dissociation, mobility switching) conserves the number of
     subunits, while ReaDDy assigns a NEW particle id to every reaction product -- including
     the product of a plain type conversion (a mobility switch keeps the molecule, not the id). Static

@@ -285,8 +285,8 @@ in `DETECTOR_WORKFLOW.md` §6.2/§6.5/§6.7:
 
 | parameter | reference | scope | caveat that fixes the scope |
 |---|---|---|---|
-| `mu_r` | 1.36 px | **MET-FAB only** | the InlB value 1.47 is **dimer-broadened** — two labels in one diffraction-limited spot — so it is not a reference for the per-emitter PSF the model infers |
-| `mu_pc` | 386 photons | **MET-FAB only** | MET-INLB's 690 is a **per-detection sum**: a dimer's two labels are reported as one detection whose photons add. It is also a lower bound, since 23.7 % of InlB localizations pile up at the 1225-photon acceptance ceiling |
+| `mu_r` | 1.36 px | **MET-FAB only** | the InlB value 1.47 is a wider per-detection value of the dimer condition, a spot-level observation whose cause is not established, so it is not a reference for the per-receptor PSF width the model infers; each condition's imaging parameters are inferred independently on its own recordings (`DETECTOR_WORKFLOW.md` §6.7 caveat 3) |
+| `mu_pc` | 386 photons | **MET-FAB only** | MET-INLB's 690 is a per-detection value of the dimer condition, a spot-level observation whose cause is not established, so it is not a reference for the per-dye brightness the model infers. It is also a lower bound, since 23.7 % of InlB localizations pile up at the 1225-photon acceptance ceiling (`DETECTOR_WORKFLOW.md` §6.7 caveat 3) |
 | `sigma_r` | ≈ 0.15 fit-corrected, with 0.37 drawn as an **upper bound** | MET-FAB only | the fitted log-spread is **upper-biased**: each per-spot width is itself a noisy fit, and the variance of noisy estimates is the true variance plus the fitting-error variance |
 | `sigma_pc` | ≈ 0.5 fit-corrected, with 0.61 as an **upper bound** | MET-FAB only | the same errors-in-variables inflation |
 | `lambda_rate` | ≈ 5 s⁻¹ | **both conditions** | from the flicker correlation time of the track `intensity[photon]` series (τ_corr ≈ 0.13 s), a photophysical quantity and hence condition-independent |

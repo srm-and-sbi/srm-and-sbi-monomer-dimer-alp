@@ -92,7 +92,9 @@ stage consumes the real recordings under
 **The retained population.** The simulation holds the probe-associated
 complexes (*Modeling assumptions of the MET model*, below): under the model's
 eligibility rule a receptor without a probe neither reacts nor emits, so it is
-not simulated. The inferred count `N_total` is the true receptor-subunit total,
+not simulated unless it is the probe-free partner within a retained Fab dimer,
+which stays represented (item 11 below); the probe-free partner of a one-InlB
+dimer is never represented. The inferred count `N_total` is the true receptor-subunit total,
 probe-bound and unbound; the generator realizes the retained population from it
 through the condition's occupancy at initialization.
 
@@ -297,6 +299,16 @@ for the first implementation. The list is the one the modeling specification
 carries (its §5.0) and `DETECTOR_WORKFLOW.md` §4.1 repeats; the decision that
 produced it is dated 2026-10-05, after the experimental collaborators answered
 the questions of 2026-09-11.
+
+**The unit hierarchy of the observation model.** Each dye contributes its own fluctuating brightness and
+bleaches independently. Each bound probe receives a dye count once per recording: Poisson with mean 1.64 for
+Fab, zero or one for InlB. The measured degree of labeling constrains these laws; their distributional forms
+are modeling assumptions. A receptor carries at most one probe. Each simulated receptor receives one
+point-spread function (PSF) width, shared by all dyes of its probe and fixed throughout the recording;
+receptor widths are sampled independently and are not redrawn when complexes associate or dissociate. A
+simulated dimer carries one or two probes, and its dyes contribute fluorescence at the same simulated
+position. A detected spot is an output of image detection, not a molecular object and not automatically one
+complex, one probe or one dye.
 
 1. **Population at onset (declared).** The model describes the receptor
    population present when recording begins, about three minutes after the

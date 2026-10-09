@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Comparison.py` and its note: for any
+  set of detector estimators named by their artifact tags, a matched comparison of their Experiment products on
+  the same windows of the experimental recordings (`..._Experiment_Comparison_<COLUMNS>/`): location and
+  prior-box shares of the three point estimates, posterior widths, the agreement of the three estimates of one
+  posterior, movement between the windows of one recording, drift with window position (the Experiment stage's
+  kernel), structure between recordings, and window-by-window and recording-by-recording agreement between the
+  estimators, beside the localization-table references and an optional `selection_user` vector; exact counts
+  beside every share, the range of the window medians and of the per-recording medians, the farthest reach of
+  the estimates beyond the prior box and the windows whose whole stored 90 % (and 50 %) interval lies beyond
+  it, the typical and the largest discrepancies of the three point estimates of one posterior, and the shift
+  from the selected vector in dex and as a percentage, with the reading rules in the note (an estimate outside
+  the box under unrestricted sampling is an extrapolation of the learned density; crossing the box does not
+  show the box too narrow; agreement of the three point estimates says nothing about the number of modes; a
+  statement about every window position is not one about every window). No ground truth, no accuracy claim;
+  mismatched windows, window geometry or pool mode and a checkpoint that is not the estimator artifact's
+  weights are refused. `tests/test_experiment_comparison.py` (5 tests).
+
+### Changed
+
+- Parameter descriptions, report labels, docstrings and comments use the MET vocabulary (receptor and
+  simulated receptor, complex, probe, dye, detected spot): `detector_parameterization` notes define `mu_pc`
+  as the median photon contribution of one active dye in one frame before the camera (mean
+  `mu_pc·exp(sigma_pc²/2)`; a spot sums the contributions of its dyes, whose count per bound probe follows the
+  labeling law), `sigma_pc` as the spread of a dye's ln-brightness, `mu_r` and `sigma_r` as the PSF-width
+  distribution across simulated receptors (one width per simulated receptor, shared by the dyes of its probe),
+  `prob_photo_bleach` as the per-dye probability of entering the absorbing dark state within the 100-frame
+  reference interval (accumulating as `1 − (1 − p)^(n/100)`), and `lambda_rate` as neither a bleaching rate nor
+  a count of blinking events; the embedding-distance and temporal-dynamics report labels follow. The renderer,
+  lineage and labeling docstrings state that a `subunit` in the code is one simulated receptor identity, not a
+  part of a receptor, and that an emitter is one dye. The labeling note on probe unbinding is corrected:
+  first-order unbinding can produce the same expected fluorescence decline as independent dye bleaching
+  under matched assumptions, so a calibrated value may contain such a contribution without measuring it, but
+  the two are not statistically identical (unbinding removes all the dyes of a probe at once). The
+  InlB-to-Fab difference of the per-detection localization values is stated as a spot-level observation
+  whose cause is not established, with each condition's imaging parameters inferred independently on its own
+  recordings, in §6.2, §6.7 caveat 3, the parameter notes and the temporal-dynamics reference note. The
+  retained-population statements that receptors without a probe are not simulated are qualified: the
+  probe-free partner within a retained Fab dimer stays represented, the probe-free partner of a one-InlB dimer
+  never is. No public name, persisted field, artifact key, parameter value, prior or random draw changes:
+  fixed-seed dye counts, PSF widths, brightness processes and rendered frames are bit-identical before and
+  after.
+
 ### Documentation
 
 - `DETECTOR_WORKFLOW.md` §9.9: the results of the Evaluation, Posterior_Calibration and embedding probe of the two
@@ -16,7 +60,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the adoption of `CAP256KERNEL7EARLYCONVSTATSGB128` (2026-10-08) as the detector estimator of record for the Fab
   condition and the 2 s window, replacing the baseline in that role, and its MAP_Experiment on the 60 MET-FAB
   recordings (JUPITER job 2233366, completed on 2026-10-08). The screening record's README gains the outcome and
-  adoption paragraphs and the stage logs (`evidence/logs_evaluation_2026-10-08/`, `evidence/logs_experiment_2026-10-08/`).
+  adoption paragraphs and the stage logs (`evidence/logs_evaluation_2026-10-08/`,
+  `evidence/logs_experiment_2026-10-08/`). The estimator file checksums and the weights checksums that the
+  products record as their checkpoint are named apart.
+- `DETECTOR_WORKFLOW.md` §6.2 opens with the unit hierarchy of the observation model (dye, probe, simulated
+  receptor, complex, detected spot: what each is, what is drawn once and what evolves, and which inputs govern
+  it), repeated in `PROJECT_CONTEXT.md` §2 before the numbered modeling assumptions and in the renderer's
+  module docstring; the §6.2 definitions state that receptor PSF widths are sampled independently and are not
+  redrawn when complexes associate or dissociate.
+- `DETECTOR_WORKFLOW.md` §6.2: the definitions of the six imaging parameters as the renderer implements them,
+  in the MET vocabulary (what `mu_pc` is and is not; one PSF width per simulated receptor; the accumulation of
+  the per-dye bleaching probability; the correlation time of `lambda_rate`), the probes-dyes-spots paragraph
+  (a complex's dye count is the sum over its bound probes, so a monomer or a dimer can carry zero, one, two or
+  more dyes; bleaching removes one dye's contribution and nothing else), and how estimates of these parameters
+  are read; the table rows follow. §6.6 and §6.7: the same vocabulary, and the probe-unbinding sentence
+  corrected as in the labeling note. §9.9: the reading of the adopted estimator's Experiment against the
+  `capacity256` and baseline products (record
+  `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128`): the aggregate
+  values beside the working vector with exact window counts, the boundary behavior of the brightness and
+  PSF-width estimates, the high short-window bleaching estimate and its inconsistency with the measured 20 s
+  decline under the renderer's assumptions (cause not established), the broad compatibility of three
+  parameters with the working values, the temporal drift, the conclusion that the working vector is retained
+  provisionally as a documented simulation scenario with no privileged correctness, the two mandatory checks
+  that follow (per-recording comparison with the measured decline; matched predictive renders), and the
+  reading rules carried to the retraining. §7.6: the status of the vector after that comparison. The
+  fluorescence-loss companion: what the decay analysis measures and the expected normalized decline under the
+  renderer, `E[F(t)]/E[F(0)] = (1 − p)^(t/100)`, unchanged by the grouping of dyes onto probes, as an analytical
+  expectation of fluorescence retention and not of spot retention; its closing decision is unchanged.
+  `PROJECT_CONTEXT.md` §2: the retained-population qualification above. The comparison record was regenerated
+  with the extended statistics (every previously reported number verified unchanged, 2455 values) and the
+  earlier record archived beside it as `_Superseded_20261009`.
 
 ## 0.1.37 - 2026-10-05
 
