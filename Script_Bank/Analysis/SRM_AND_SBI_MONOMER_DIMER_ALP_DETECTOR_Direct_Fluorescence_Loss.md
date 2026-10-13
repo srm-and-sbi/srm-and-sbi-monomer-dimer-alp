@@ -425,48 +425,49 @@ follows.
 
 **Raw-domain diagnostic (same day; `raw_domain_diagnostic/` in the record, with the script that produced it,
 `raw_domain_diag.py`, kept beside its outputs).** Read on the 16-bit raw frames of all sixty recordings, the
-opening against the closing 50 frames, median over recordings with the IQR. The background treatment is fixed
-and recorded so that the decline stays auditable: the background of a 50-frame window is the median over all of
-its pixels, and the emitter excess is the window's mean minus that median (per pixel; multiplied by the pixel
-count it is a field sum, and the factor cancels in every ratio); no camera model, gain or offset enters. The
-background level falls to 0.91 of its opening value [0.89, 0.93]; the emitter excess to 0.57 [0.53, 0.67]; the
-99.9th percentile to 0.71 [0.68, 0.75]; the bright-pixel area (pixels above the window median by five robust
-standard deviations, 1.4826 times the median absolute deviation) to 0.54 [0.47, 0.60]. For the time course the
-same subtraction is applied frame by frame (per-frame mean minus per-frame median), averaged over 50-frame
-windows centered at each time and divided by the opening window: 0.91 of the opening value at 2 s, 0.80 at 5 s,
-0.69 at 10 s, 0.62 at 15 s and 0.57 in the closing window (centered at 19.5 s), medians over recordings, so the
-fall is fast in the first seconds and slower later. Applying this note's fit to
-the raw excess curves (`raw_domain_fits.json`; a diagnostic use of the arithmetic on a different domain, not the
-estimator's observable) gives an effective loss parameter of 0.21 per interval (56 of 60 usable; 0.18 with the
-first 2 s excluded; 0.17 to 0.19 after dividing the excess by the background level to remove the illumination
-decline): the fitted rate describes the fast initial component, which the free offset separates from a slower
-remainder. A single-rate renderer at 0.2 per interval would lose 89 % of its dyes in 20 s where the recordings lose
-43 % of their excess signal (36 % after dividing the excess by the background level); the model-free rate over
-the second half of the recordings, computed per recording between the windows centered at 10 to 11 s and at
+opening against the closing 50 frames, median over recordings with the IQR. The background treatment is fixed and
+recorded so that the decline stays auditable: the background of a 50-frame window is the median over all of its
+pixels, and the emitter excess is the window's mean minus that median (per pixel; multiplied by the pixel count
+it is a field sum, and the factor cancels in every ratio); no camera model, gain or offset enters. The background
+level falls to 0.91 of its opening value [0.89, 0.93]; the emitter excess to 0.57 [0.53, 0.67]; the 99.9th
+percentile to 0.71 [0.68, 0.75]; the bright-pixel area (pixels above the window median by five robust standard
+deviations, 1.4826 times the median absolute deviation) to 0.54 [0.47, 0.60]. For the time course the same
+subtraction is applied frame by frame (per-frame mean minus per-frame median), averaged over 50-frame windows
+centered at each time and divided by the opening window: 0.91 of the opening value at 2 s, 0.80 at 5 s, 0.69 at
+10 s, 0.62 at 15 s and 0.57 in the closing window (centered at 19.5 s), medians over recordings, so the fall is
+fast in the first seconds and slower later. Applying this note's fit to the raw excess curves
+(`raw_domain_fits.json`; a diagnostic use of the arithmetic on a different domain, not the estimator's
+observable) gives an effective loss parameter of 0.21 per interval (56 of 60 usable; 0.18 with the first 2 s
+excluded; 0.17 to 0.19 after dividing the excess by the background level to remove the illumination decline): the
+fit lets a fast decay and a free offset share the curve, and on two single-rate renders at 0.05 it returns 0.19
+and 0.23 with 0.79 and 0.86 of the opening flux in its offset, so the fit alone does not establish a fast initial
+component. A single-rate renderer at 0.2 per interval would lose 89 % of its dyes in 20 s where the recordings
+lose 43 % of their excess signal (36 % after dividing the excess by the background level); the model-free rate
+over the second half of the recordings, computed per recording between the windows centered at 10 to 11 s and at
 19.5 s and aggregated as the median over recordings, is 0.034 to 0.036 per interval (IQR about 0.02 to 0.05;
-0.029 to 0.032 after the background division), and the single rate that reproduces the whole decline is 0.054
-to 0.057 (over 20 s, or over the 19 s between the opening and closing window centers; 0.044 to 0.046 after the
-background division). Three qualifications stay attached: the 9 % background decline shows that the
-illumination or the floor is not constant, so part of the excess decline is not emitter loss; emitters leaving
-the field and label exchange are not separable from bleaching in a field measure; and the excess is a crude flux
-measure with no uncertainty attached beyond the spread across recordings. Across recordings the decline is
-coupled to brightness: the fraction of the excess remaining falls as the opening excess rises (Spearman −0.85
-over the sixty; 0.69 in the dimmest third, 0.50 in the brightest) and as the opening 99.9th percentile rises
-(−0.87), and it tracks each recording's own background decline (+0.89). That is consistent with excitation
-intensity differing between recordings, or with a bleachable diffuse component, which a field measure cannot
-separate; either way one effective rate is a population compromise.
+0.029 to 0.032 after the background division), and the single rate that reproduces the whole decline is 0.054 to
+0.057 (over 20 s, or over the 19 s between the opening and closing window centers; 0.044 to 0.046 after the
+background division). Three qualifications stay attached: the 9 % background decline shows that the illumination
+or the floor is not constant, so part of the excess decline is not emitter loss; emitters leaving the field and
+label exchange are not separable from bleaching in a field measure; and the excess is a crude flux measure with
+no uncertainty attached beyond the spread across recordings. Across recordings the decline is coupled to
+brightness: the fraction of the excess remaining falls as the opening excess rises (Spearman −0.85 over the
+sixty; 0.69 in the dimmest third, 0.50 in the brightest) and as the opening 99.9th percentile rises (−0.87), and
+it tracks each recording's own background decline (+0.89). That is consistent with excitation intensity differing
+between recordings, with a bleachable diffuse component, or with properties of the measurement itself, which a
+field measure cannot separate; either way one effective rate is a population compromise.
 
-**What this settles for the working vector.** The decline of fluorescence over a recording is not
-single-exponential: a fast component in the first seconds, then a near-constant rate of about 0.035 per interval
-that matches the neural baseline's plateau over windows 2 to 9. Two single-rate readings follow, both rounded
-because the parameter is poorly constrained (neural MAE 0.21 dex, a non-exponential decline): 0.03 over the
-fixed 100-frame reference interval (2 s at 50 fps) matches the late slope, and a single-rate renderer at that
-value loses 26 % of its dyes over 20 s against the 43 % signal loss measured; 0.05 matches the loss over the
-whole recording, 40 % over 20 s. The two are working scenarios, not an uncertainty bracket: the brightest
-recordings decline beyond both, and the initial transient and the brightness coupling are the features one
-per-interval probability does not represent. The bleaching row of `DETECTOR_WORKFLOW.md` §7.6 carried 0.03 as
-the selected value and 0.05 as the variant until 2026-10-01, when the overlay figure below reversed the choice
-(the measurement paragraph of that date).
+**What this settles for the working vector.** The field decline of a recording is not single-exponential: it is
+faster in the first seconds, then near-constant at about 0.035 per interval that matches the neural baseline's
+plateau over windows 2 to 9. Two single-rate readings follow, both rounded because the parameter is poorly
+constrained (neural MAE 0.21 dex, a non-exponential decline): 0.03 over the fixed 100-frame reference interval
+(2 s at 50 fps) matches the late slope, and a single-rate renderer at that value loses 26 % of its dyes over 20
+s against the 43 % signal loss measured; 0.05 matches the loss over the whole recording, 40 % over 20 s. The two
+are working scenarios, not an uncertainty bracket: on this statistic the brightest recordings decline beyond
+both, and whether the initial transient and the brightness coupling belong to the dyes, where one per-interval
+probability would not represent them, is not established. The bleaching row of `DETECTOR_WORKFLOW.md` §7.6
+carried 0.03 as the selected value and 0.05 as the variant until 2026-10-01, when the overlay figure below
+reversed the choice (the measurement paragraph of that date).
 
 **The raw domain as the estimator's experimental input (2026-10-01).** The arithmetic of that diagnostic is
 now the estimator's own experimental path under `--domain raw` (*How to run*): the 16-bit frames are read as
@@ -488,54 +489,53 @@ recordings' floor falls through a level boundary. The ad hoc script that produce
 its outputs: scripts do not live in the data bank, and its arithmetic is the utility's `--domain raw` path.
 The files it produced stay, with its log.
 
-**Experimental measurement in the raw domain (2026-10-01; JUWELS job 14282553 on one batch node, 108 s,
-repeated the same day as job 14282877 once the report carried the window table and the scenario figure, the
-per-recording arrays identical between the two runs; record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW`
-on the JUWELS and PC Posit tiers, checksums identical, the first run kept beside it as
+**Experimental measurement in the raw domain (2026-10-01; JUWELS job 14282553 on one batch node, 108 s, repeated
+the same day as job 14282877 once the report carried the window table and the scenario figure, the per-recording
+arrays identical between the two runs; record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW` on the
+JUWELS and PC Posit tiers, checksums identical, the first run kept beside it as
 `..._Experiment_RAW_Superseded_20261001a`; the recordings now live in the JUWELS data bank, 121 files identical
-to the rcl01 originals by sha256).** The sixty MET-FAB recordings, one 1000-frame window each, the field observable on the 16-bit
-frames, the flicker correction at its default (the prior center, as in the development run). Outcomes: no
-failed fit, 56 usable, 4 valid but uninformative (cells 1, 21, 40 and 57, fitted values 0.006 to 0.051). The
-estimator's value, the whole-window fit, is 0.21 per 100-frame interval as the median over the usable
-recordings (log10 −0.676, IQR [−0.747, −0.568], 0.18 to 0.27; 7 of 56 above the prior ceiling of 0.316; median
-standard error 0.063 dex, median nominal range 0.21 dex wide). That value sits in the upper prior quarter,
+to the rcl01 originals by sha256).** The sixty MET-FAB recordings, one 1000-frame window each, the field
+observable on the 16-bit frames, the flicker correction at its default (the prior center, as in the development
+run). Outcomes: no failed fit, 56 usable, 4 valid but uninformative (cells 1, 21, 40 and 57, fitted values 0.006
+to 0.051). The estimator's value, the whole-window fit, is 0.21 per 100-frame interval as the median over the
+usable recordings (log10 −0.676, IQR [−0.747, −0.568], 0.18 to 0.27; 7 of 56 above the prior ceiling of 0.316;
+median standard error 0.063 dex, median nominal range 0.21 dex wide). That value sits in the upper prior quarter,
 where the development run recovers the parameter within the threshold (bias +0.016 dex, MAE 0.053), but the
-synthetic recordings it was recovered on decay as a single exponential of the whole flux, and the recordings
-do not: the fit lets a median 0.50 of the opening flux decay (IQR 0.42 to 0.59) and holds the other half in
-the free offset, and a single rate of 0.21 would leave 0.11 of the flux after 19 s where the recordings keep
-0.56. The estimator's value describes the fast component of a two-component decline, the one the curve's
-first seconds show, not the loss of the dye population over the recording; the synthetic accuracy at that
-level does not transfer to this reading. The disclosed variants of the same fit say the same: 0.185 with the
-first 2 s left out (46 usable of 57 valid), 0.187 on the background-normalized flux (50 of 56). The model-free
-readings, now part of the report, repeat the diagnostic of 2026-09-25 exactly: whole recording 0.0567 per
-interval (0.0462 after dividing by the background level), late phase 0.0341 (0.0289), background level at
-0.909 of its opening value, emitter excess at 0.574, bright tail (99.9th percentile) at 0.707, bright-pixel
-area at 0.538. The brightness coupling stands: the fraction of the flux remaining falls with the opening
-excess (Spearman −0.81 over the usable recordings) and the late-phase rate rises with it (+0.75); the dimmest
-third gives a late-phase rate of 0.017 and keeps 0.68 of its flux, the brightest third 0.051 and 0.50, while
-the fast-component value moves the other way (0.26 dim, 0.20 bright). The late-phase rate of 0.034 lies in the
-band where the development run leaves most synthetic recordings uninformative and biases the admitted ones
-by +0.37 dex, so on a synthetic recording of that true value this estimator would mostly return no usable
-value; here it returns a usable value in 56 of 60 recordings because the fast component is well above the
-residual scatter. Reading for the working vector: the direct estimator's value is not a candidate for the
-single-rate bleaching parameter of the renderer; the two readings of the measured decline are the late-phase
-slope (0.029 to 0.034) and the whole-recording loss (0.046 to 0.057), working scenarios and not an uncertainty
-bracket. The record's `figures/field_flux_curves_FAB.png` shows the choice between them at once: the measured
-curves with the ideal single-rate declines at 0.03 and 0.05 drawn over them (the 0.03 line runs above the
-median from the first second and ends at 0.75 against 0.57; the 0.05 line is too steep in the opening seconds,
-crosses the median near 10 s and ends at 0.61), the same for the dimmest and brightest thirds (the dimmest
-third ends near the 0.03 line at 0.70, the brightest falls below the 0.05 line to 0.50), and the background
-level and the fitted values beside them. The scenario lines look nearly straight although a single-rate
-decay is an exponential, (1 − p)^(t/100): over the 20 s shown the decay is shallow (0.05 per interval takes
-the signal to 0.61 in ten intervals), and in that range an exponential departs from a straight line by a
-few percent of the signal; the fast component of the recordings, about 0.21 per interval, would reach 0.10
-in the same time with an evident bow. On a logarithmic signal axis every single-rate decay is a straight
-line of slope log(1 − p) per interval, and the recordings' knee appears as a change of slope between the
-opening seconds and the rest. The two readings are two cases of one dependence, which the report now states
-for every documented duration: each recording tiled into non-overlapping windows of 1, 2, 5, 10 and 20 s (20,
-10, 4, 2 and 1 windows per recording, as the Experiment stage tiles them) and, inside each window, the single
-rate that takes the mean of its opening quarter to the mean of its closing quarter, no fit. Computed with that
-arithmetic from the sixty saved curves:
+synthetic recordings it was recovered on decay as a single exponential of the whole flux, and the recordings do
+not: the fit lets a median 0.50 of the opening flux decay (IQR 0.42 to 0.59) and holds the other half in the free
+offset, and a single rate of 0.21 would leave 0.11 of the flux after 19 s where the recordings keep 0.56. The
+estimator's value is not the loss of the dye population over the recording, and the fit alone does not establish
+a fast component: on two single-rate renders at 0.05 the same fit returns 0.19 and 0.23; the synthetic accuracy
+at that level does not transfer to this reading. The disclosed variants of the same fit say the same: 0.185 with
+the first 2 s left out (46 usable of 57 valid), 0.187 on the background-normalized flux (50 of 56). The
+model-free readings, now part of the report, repeat the diagnostic of 2026-09-25 exactly: whole recording 0.0567
+per interval (0.0462 after dividing by the background level), late phase 0.0341 (0.0289), background level at
+0.909 of its opening value, emitter excess at 0.574, bright tail (99.9th percentile) at 0.707, bright-pixel area
+at 0.538. The brightness coupling stands: the fraction of the flux remaining falls with the opening excess
+(Spearman −0.81 over the usable recordings) and the late-phase rate rises with it (+0.75); the dimmest third
+gives a late-phase rate of 0.017 and keeps 0.68 of its flux, the brightest third 0.051 and 0.50, while the fitted
+value moves the other way (0.26 dim, 0.20 bright). The late-phase rate of 0.034 lies in the band where the
+development run leaves most synthetic recordings uninformative and biases the admitted ones by +0.37 dex, so on a
+synthetic recording of that true value this estimator would mostly return no usable value; here it returns a
+usable value in 56 of 60 recordings because the fitted decay is well above the residual scatter. Reading for the
+working vector: the direct estimator's value is not a candidate for the single-rate bleaching parameter of the
+renderer; the two readings of the measured decline are the late-phase slope (0.029 to 0.034) and the
+whole-recording loss (0.046 to 0.057), working scenarios and not an uncertainty bracket. The record's
+`figures/field_flux_curves_FAB.png` shows the choice between them at once: the measured curves with the ideal
+single-rate declines at 0.03 and 0.05 drawn over them (the 0.03 line runs above the median from the first second
+and ends at 0.75 against 0.57; the 0.05 line is too steep in the opening seconds, crosses the median near 10 s
+and ends at 0.61), the same for the dimmest and brightest thirds (the dimmest third ends near the 0.03 line at
+0.70, the brightest falls below the 0.05 line to 0.50), and the background level and the fitted values beside
+them. The scenario lines look nearly straight although a single-rate decay is an exponential, (1 − p)^(t/100):
+over the 20 s shown the decay is shallow (0.05 per interval takes the signal to 0.61 in ten intervals), and in
+that range an exponential departs from a straight line by a few percent of the signal; a single rate of 0.21 per
+interval, the fitted value, would reach 0.10 in the same time with an evident bow. On a logarithmic signal axis
+every single-rate decay is a straight line of slope log(1 − p) per interval, and the recordings' knee appears as
+a change of slope between the opening seconds and the rest. The two readings are two cases of one dependence,
+which the report now states for every documented duration: each recording tiled into non-overlapping windows of
+1, 2, 5, 10 and 20 s (20, 10, 4, 2 and 1 windows per recording, as the Experiment stage tiles them) and, inside
+each window, the single rate that takes the mean of its opening quarter to the mean of its closing quarter, no
+fit. Computed with that arithmetic from the sixty saved curves:
 
 | window | windows | median | IQR | share below zero | median by window position |
 |---|---|---|---|---|---|
@@ -546,25 +546,28 @@ arithmetic from the sixty saved curves:
 | 20 s | 60 | 0.052 | [0.041, 0.061] | 0 % | 0.05 |
 
 The record's `figures/window_rates_FAB.png` draws this table: one series per duration against the window's
-position, the median over recordings with the interquartile band, the pooled medians as horizontal lines
-that fall on top of one another just above the 0.05 line, the 1 s band wide and the 20 s value a single bar
-at 10 s. Pooled over the windows of a recording the median is 0.052 to 0.057 at every duration, because the tiling
-covers the whole recording and the fast opening windows and the slow late ones enter together; the spread
-narrows with the window length (a 1 s window is too short to read a few percent of loss above the frame
-noise, hence the negative values), and by position the local rate falls from 0.12 to 0.14 in the first second
-or two to about 0.03 after 15 s. For the production tier, 2 s videos, this is the relevant reading: the
-biology estimator reads the recordings in 2 s windows from every position, whose local loss runs from 0.12 to
-0.03, and a renderer starting every video fresh at one rate reproduces the typical window at about 0.055 and
-none of the extremes. On that figure the user decided (2026-10-01) that the renderer's
-value is the whole-recording one: the bleaching row of `DETECTOR_WORKFLOW.md` §7.6 now selects **0.05**, with
-0.03 as the late-time variant `VAR_PB`, and the `REF` artifact was rebuilt with it (the artifact built with
-0.03 is kept under `..._REF_Nuisance_DLI_Superseded_20261001/`; the posterior-predictive renders made before
-that date under `REF` used 0.03, as their provenance records). The two-component shape and the brightness
-coupling remain unrepresented by one per-interval probability; the value is carried as a working scenario, and
-by the user's decision no predictive render at 0.05 is made to check it. The bleaching work closes here: the
-estimator is a cross-check whose fitted value reads the fast component, the window readings are the
-measurement of record, and the parameter is reopened only if the biological conclusion turns out to depend on
-the choice between 0.05 and 0.03.
+position, the median over recordings with the interquartile band, the pooled medians as horizontal lines that
+fall on top of one another just above the 0.05 line, the 1 s band wide and the 20 s value a single bar at 10 s.
+Pooled over the windows of a recording the median is 0.052 to 0.057 at every duration, because the tiling covers
+the whole recording and the fast opening windows and the slow late ones enter together; the spread narrows with
+the window length (a 1 s window is too short to read a few percent of loss above the frame noise, hence the
+negative values), and by position the local rate falls from 0.12 to 0.14 in the first second or two to about 0.03
+after 15 s. For the production tier, 2 s videos, this is the relevant reading: the biology estimator reads the
+recordings in 2 s windows from every position, whose local loss runs from 0.12 to 0.03, and a renderer starting
+every video fresh at one rate reproduces the typical window at about 0.055 and none of the extremes. On that
+figure the user decided (2026-10-01) that the renderer's value is the whole-recording one: the bleaching row of
+`DETECTOR_WORKFLOW.md` §7.6 now selects **0.05**, with 0.03 as the late-time variant `VAR_PB`, and the `REF`
+artifact was rebuilt with it (the artifact built with 0.03 is kept under
+`..._REF_Nuisance_DLI_Superseded_20261001/`; the posterior-predictive renders made before that date under `REF`
+used 0.03, as their provenance records). Whether the two-component shape and the brightness coupling of the field
+statistic belong to the dyes is not established, and the value is carried as a working scenario. When it was
+selected, by the user's decision, no predictive render at 0.05 was made to check it; the renders made since
+(`DETECTOR_WORKFLOW.md` §9.9) give substantially closer detected-spot retention at 0.05 than at 0.255 within
+`REF` in five tested recordings, which supports the scenario and does not establish the per-dye probability. The
+bleaching work closes here: the estimator is a cross-check whose free-offset fit also returns 0.19 and 0.23 on
+two single-rate renders at 0.05, so the fit alone does not establish a fast component; the window readings are
+the measurement of record, and the parameter is revisited under the provisional Fab imaging treatment of
+`DETECTOR_WORKFLOW.md` §7.6.
 
 **What the raw-domain measurement is, and what remains to be checked.** The raw-recording decline measurements
 above stand as measured. Their reading as a bleaching proxy rests on the ideal relation for identical,

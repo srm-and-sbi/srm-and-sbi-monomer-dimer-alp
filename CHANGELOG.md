@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mismatched windows, window geometry or pool mode and a checkpoint that is not the estimator artifact's
   weights are refused. `tests/test_experiment_comparison.py` (5 tests).
 
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Raw_Decline_Cross_Check.py` and its note: one
+  detector estimator's Experiment estimates on the experimental recordings beside the raw-domain
+  fluorescence-decline record of the same recordings, recording by recording and window by window at the same
+  frame starts: the per-dye bleaching probability against the free-offset fitted, whole-recording, late-phase
+  and local direct rates of the median-subtracted field statistic (counts, medians and correlations over every
+  finite pair, with raw rates of zero or below counted apart; shifts in dex over the positive pairs, with
+  their own counts); the analytical dye retention at the estimator's value beside the experimental field
+  retention, with the raw record's comparison values, placed side by side and not tested; the per-dye
+  brightness beside the opening field excess, and the ranking of the estimator's bleaching and of the raw
+  rates with it. Different quantities side by side, never an equality; a diagnostic that assumes neither the
+  estimator nor a selected vector correct, with the authorization recorded in the provenance; unequal
+  recording sets, unmatched window starts and a record that is not the raw domain are refused.
+  `tests/test_raw_decline_cross_check.py` (2 tests, with windows and recordings whose raw rate is below zero).
+  The record of the adopted estimator
+  (`..._FAB_2S_50FPS_Raw_Decline_Cross_Check_CAP256KERNEL7EARLYCONVSTATSGB128`) was compiled with these
+  statistics; the first compilation is archived beside it as `_Superseded_20261012`.
+
 ### Changed
 
 - Parameter descriptions, report labels, docstrings and comments use the MET vocabulary (receptor and
@@ -68,28 +85,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it), repeated in `PROJECT_CONTEXT.md` §2 before the numbered modeling assumptions and in the renderer's
   module docstring; the §6.2 definitions state that receptor PSF widths are sampled independently and are not
   redrawn when complexes associate or dissociate.
-- `DETECTOR_WORKFLOW.md` §6.2: the definitions of the six imaging parameters as the renderer implements them,
-  in the MET vocabulary (what `mu_pc` is and is not; one PSF width per simulated receptor; the accumulation of
-  the per-dye bleaching probability; the correlation time of `lambda_rate`), the probes-dyes-spots paragraph
-  (a complex's dye count is the sum over its bound probes, so a monomer or a dimer can carry zero, one, two or
-  more dyes; bleaching removes one dye's contribution and nothing else), and how estimates of these parameters
-  are read; the table rows follow. §6.6 and §6.7: the same vocabulary, and the probe-unbinding sentence
-  corrected as in the labeling note. §9.9: the reading of the adopted estimator's Experiment against the
-  `capacity256` and baseline products (record
+- `DETECTOR_WORKFLOW.md` §6.2: the definitions of the six imaging parameters as the renderer implements them, in
+  the MET vocabulary (what `mu_pc` is and is not; one PSF width per simulated receptor; the accumulation of the
+  per-dye bleaching probability; the correlation time of `lambda_rate`), the probes-dyes-spots paragraph (a
+  complex's dye count is the sum over its bound probes, so a monomer or a dimer can carry zero, one, two or more
+  dyes; bleaching removes one dye's contribution and nothing else), and how estimates of these parameters are
+  read; the table rows follow. §6.6 and §6.7: the same vocabulary, and the probe-unbinding sentence corrected as
+  in the labeling note. §9.9: the reading of the adopted estimator's Experiment against the `capacity256` and
+  baseline products (record
   `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128`): the aggregate
   values beside the working vector with exact window counts, the boundary behavior of the brightness and
-  PSF-width estimates, the high short-window bleaching estimate and its inconsistency with the measured 20 s
-  decline under the renderer's assumptions (cause not established), the broad compatibility of three
-  parameters with the working values, the temporal drift, the conclusion that the working vector is retained
-  provisionally as a documented simulation scenario with no privileged correctness, the two mandatory checks
-  that follow (per-recording comparison with the measured decline; matched predictive renders), and the
-  reading rules carried to the retraining. §7.6: the status of the vector after that comparison. The
-  fluorescence-loss companion: what the decay analysis measures and the expected normalized decline under the
-  renderer, `E[F(t)]/E[F(0)] = (1 − p)^(t/100)`, unchanged by the grouping of dyes onto probes, as an analytical
-  expectation of fluorescence retention and not of spot retention; its closing decision is unchanged.
-  `PROJECT_CONTEXT.md` §2: the retained-population qualification above. The comparison record was regenerated
-  with the extended statistics (every previously reported number verified unchanged, 2455 values) and the
-  earlier record archived beside it as `_Superseded_20261009`.
+  PSF-width estimates, the high short-window bleaching estimate (the defined per-dye probability inferred
+  persistently high; narrow intervals do not establish that it transfers to the recordings) and a five-recording
+  bleaching sensitivity check within `REF` in which 0.05 gives substantially closer detected-spot retention than
+  0.255 (records `..._Spot_Count_RETAINED_0137_DENSITY` and `..._Spot_Count_RETAINED_0137_DENSITY_PB0255`; the
+  earlier cell-0 records archived as `_Superseded_20261012`), the broad compatibility of three parameters with
+  the working values, the temporal drift, the conclusion that the working vector is retained as the provisional
+  Fab imaging scenario with no privileged correctness, no Fab `Nuisance_DLI` being settled until the detector
+  datasets are regenerated with the current model and the estimator is retrained on them (the adopted estimator
+  was trained and tested on datasets of the previous model version), and the reading rules carried to the
+  retraining. §7.6: the status of the vector after that comparison; the provisional Fab imaging treatment (`REF`
+  fixed, the camera sampled, three selected sensitivity scenarios, a half-width screening flag on the `REF`
+  posterior; not a settled Fab `Nuisance_DLI`); the remaining spot-retention discrepancy and the initialization
+  difference as limitations; the selection of 0.05 recorded as made without a predictive check, with the renders
+  since; the free-offset fit no longer read as a fast component, and the two-component shape and the brightness
+  coupling no longer stated as effects of the dyes. The fluorescence-loss companion: what the decay analysis
+  measures and the expected normalized decline under the renderer, `E[F(t)]/E[F(0)] = (1 − p)^(t/100)`,
+  unchanged by the grouping of dyes onto probes, as an analytical expectation of fluorescence retention and not
+  of spot retention; the same corrections of the fit and of the decline features, and a closing decision that
+  records the renders made since the selection. `PROJECT_CONTEXT.md` §2: the retained-population qualification
+  above. The comparison record was regenerated with the extended statistics (every previously reported number
+  verified unchanged, 2455 values) and the earlier record archived beside it as `_Superseded_20261009`.
 
 ## 0.1.37 - 2026-10-05
 

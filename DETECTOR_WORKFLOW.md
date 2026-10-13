@@ -879,20 +879,39 @@ width, synthetic slope at most 0.10) and to `prob_photo_bleach` (at the prior ce
 | `sigma_r` | `capacity256` 0.22 (−0.658); baseline 0.165 | direct PSF-width estimator 0.21 (−0.679; 600 of 600 windows valid); fit-corrected localization reference about 0.15 | **0.22**, the neural point estimate retained as produced, supported by the direct cross-check | the neural median lies 0.03 dex from the prior center and its synthetic recovery is poor (correlation at most 0.27, slope at most 0.10), so on its own it says little about the recordings, and its proximity to the prior center is not evidence of recovery; the selection rests on the direct estimate 0.21, whose synthetic recovery tracks the truth (slope 0.90, MAE 0.046 dex, bias −0.011; nominal ranges uncalibrated, 65 % coverage at nominal 90 %, §9.6) and which lands 0.02 dex away, far inside the between-recording spread (0.14 dex, standard deviation of the per-recording medians, against 0.05 within); the direct window values spread over an IQR of 0.22 dex, fall by 0.05 in linear units first-to-last, and 4 % lie below the prior floor |
 | `mu_pc` | `capacity256` 139 photons per dye (+2.143) | none independent of the neural estimate on the recordings (the diagnostic renders of 2026-09-25 are not used; below) | **139**, the neural point estimate retained as produced | synthetic bias −0.009 dex, +0.003 in the operating subgroup where the baseline carries +0.055; brightness falls 0.11 dex along a recording on every estimate, so the fixed value is a median across windows; a per-dye value, not the per-detection reference of §6.7 |
 | `sigma_pc` | `capacity256` 0.64 (−0.193) | fit-corrected localization reference about 0.5 (the diagnostic renders of 2026-09-25 are not used; below) | **0.64**, the neural point estimate retained as produced | comparable synthetic recovery in both estimators (correlation 0.89); experimental accuracy remains model-dependent |
-| `prob_photo_bleach` | `capacity256` 0.055 (−1.257, the prior center); baseline 0.034 (−1.47, median over windows 2 to 9) | raw-domain field decline of the same recordings (photobleaching note): the per-window rate slows from about 0.12 per interval in the first 2 s to about 0.03 in the last, late-phase rate 0.034 to 0.036, whole-recording single rate about 0.055, and the decline is stronger in brighter recordings (Spearman −0.85); the direct photobleaching estimator on the 16-bit frames of the same recordings (record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW`; its stored-domain path yields no usable value, the quantized floor stepping during the recording): 56 of 60 recordings usable, whole-window value 0.21 per interval (IQR 0.18 to 0.27), which describes the fast component of a two-component decline (the fit lets half the opening flux decay and holds the rest in its offset; a single rate of 0.21 would leave 0.11 of the flux after 19 s where the recordings keep 0.56) and is not a candidate for the renderer's single-rate parameter; its model-free readings give the late-phase rate 0.034 (0.029 after dividing by the background level) and the whole-recording rate 0.057 (0.046), the late-phase rate rising with the opening brightness (Spearman +0.75; dimmest third 0.017, brightest 0.051); the public swift `p_bleach` of Rahm et al. 2021 (0.010 per frame for Fab; §6.2) is a track-termination reference under the tracker's rules, not a transferable per-dye calibration | **0.05** over the fixed 100-frame reference interval (2 s at 50 fps; per frame about 0.0005), the rounded whole-recording rate (0.054 to 0.057), 40 % dye loss over 20 s, a departure from the baseline neural value 0.034; variant `VAR_PB` = **0.03**, the rounded late-phase rate (0.034 to 0.036), 26 % dye loss over 20 s, the late-time effective scenario | poorly constrained, so rounded: the neural estimates carry MAE 0.21 dex on synthetic data, `capacity256` does not learn the parameter at all (correlation 0.16; its value is not evidence about the recordings), and the recorded decline is not single-exponential, so no one value describes a whole recording. The two readings of the measured decline, the late-phase slope (0.034 to 0.036) and the whole-recording loss (0.054 to 0.057), are working scenarios, not an uncertainty bracket, and the choice between them is a modeling decision, made on 2026-10-01 from the overlay of both single-rate declines on the measured curves (record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW`, `figures/field_flux_curves_FAB.png`): for identical independent dyes of stationary mean brightness the expected emitted signal follows E[F(t)]/E[F(0)] = (1 − p)^(t/100), t in frames, whatever the grouping of the dyes into monomers and dimers, and over the 19 s between the opening and closing windows the 0.03 line runs above the median recording from the first second and ends at 0.75 where the recordings keep 0.57, while the 0.05 line is too steep in the opening seconds, crosses the median near 10 s and ends at 0.61. A 20 s render must lose what the recordings lose, so the whole-recording value is selected and the baseline neural value, which matches the late slope, becomes the variant; the dimmest third of the recordings ends near the 0.03 line and the brightest third below the 0.05 line, so one rate is a population compromise either way. The measured quantity is not that ideal expectation but a finite-field, camera-rendered, background-subtracted statistic, which particles entering or leaving the field, composition-dependent motion and overlap, the median background estimate, quantization and clipping, and finite-sample fluctuation can all move, and part of it is not emitter loss (the background falls 9 %). How it relates to the per-dye probability in a render is not checked by a predictive render (the user's decision, 2026-10-01): the value is carried as a working scenario, the opening transient and the brightness coupling are unrepresented by one per-interval probability, and the parameter is reopened only if the biological conclusion depends on the choice between 0.05 and 0.03 |
+| `prob_photo_bleach` | `capacity256` 0.055 (−1.257, the prior center); baseline 0.034 (−1.47, median over windows 2 to 9) | raw-domain field decline of the same recordings (photobleaching note): the per-window rate slows from about 0.12 per interval in the first 2 s to about 0.03 in the last, late-phase rate 0.034 to 0.036, whole-recording single rate about 0.055, and the decline is stronger in brighter recordings (Spearman −0.85); the direct photobleaching estimator on the 16-bit frames of the same recordings (record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW`; its stored-domain path yields no usable value, the quantized floor stepping during the recording): 56 of 60 recordings usable, whole-window value 0.21 per interval (IQR 0.18 to 0.27), from a free-offset fit that lets half the opening flux decay and holds the rest in its offset (a single rate of 0.21 would leave 0.11 of the flux after 19 s where the recordings keep 0.56); on two single-rate renders at 0.05 the same fit returns 0.19 and 0.23 and holds 0.79 and 0.86 of the opening flux in its offset, so the fit alone does not establish a fast component, and the value is not a candidate for the renderer's single-rate parameter; its model-free readings give the late-phase rate 0.034 (0.029 after dividing by the background level) and the whole-recording rate 0.057 (0.046), the late-phase rate rising with the opening brightness (Spearman +0.75; dimmest third 0.017, brightest 0.051); the public swift `p_bleach` of Rahm et al. 2021 (0.010 per frame for Fab; §6.2) is a track-termination reference under the tracker's rules, not a transferable per-dye calibration | **0.05** over the fixed 100-frame reference interval (2 s at 50 fps; per frame about 0.0005), the rounded whole-recording rate (0.054 to 0.057), 40 % dye loss over 20 s, a departure from the baseline neural value 0.034; variant `VAR_PB` = **0.03**, the rounded late-phase rate (0.034 to 0.036), 26 % dye loss over 20 s, the late-time effective scenario | poorly constrained, so rounded: the neural estimates carry MAE 0.21 dex on synthetic data, `capacity256` does not learn the parameter at all (correlation 0.16; its value is not evidence about the recordings), and a single ideal exponential does not describe the measured field curve directly. The two readings of the measured decline, the late-phase slope (0.034 to 0.036) and the whole-recording loss (0.054 to 0.057), are working scenarios, not an uncertainty bracket, and the choice between them is a modeling decision, made on 2026-10-01 from the overlay of both single-rate declines on the measured curves (record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW`, `figures/field_flux_curves_FAB.png`): for identical independent dyes of stationary mean brightness the expected emitted signal follows E[F(t)]/E[F(0)] = (1 − p)^(t/100), t in frames, whatever the grouping of the dyes into monomers and dimers, and over the 19 s between the opening and closing windows the 0.03 line runs above the median recording from the first second and ends at 0.75 where the recordings keep 0.57, while the 0.05 line is too steep in the opening seconds, crosses the median near 10 s and ends at 0.61. A 20 s render must lose what the recordings lose, so the whole-recording value is selected and the baseline neural value, which matches the late slope, becomes the variant; the dimmest third of the recordings ends near the 0.03 line and the brightest third below the 0.05 line, so one rate is a population compromise either way. The measured quantity is not that ideal expectation but a finite-field, camera-rendered, background-subtracted statistic, which particles entering or leaving the field, composition-dependent motion and overlap, the median background estimate, quantization and clipping, and finite-sample fluctuation can all move, and part of it is not emitter loss (the background falls 9 %). When the value was selected (the user's decision, 2026-10-01), no predictive render checked how that statistic relates to the per-dye probability, and the overlay sets an analytical dye retention beside the statistic, which is not like for like. Renders made since (§9.9) give substantially closer detected-spot retention at 0.05 than at 0.255 within `REF` in five tested recordings, which supports the scenario and does not establish the per-dye probability. Whether the opening transient and the brightness coupling belong to the dyes is not established; single-rate renders show that the measurement can produce a fast fitted decay (0.19 and 0.23 at 0.05). The value is carried as a working scenario, and the parameter is revisited under the provisional Fab treatment below |
 | `lambda_rate` | `capacity256` 4.3 per second (+0.631); baseline 5.1 (+0.704) | localization-autocorrelation anchor about 5.0 (§6.5; the same evidence chain as the derivation of record, not an independent source); the direct flicker estimator is a biased cross-check, not a source; the diagnostic render comparison of 2026-09-25 is not used (below) | **5**, an explicitly chosen approximate nominal value — a documented departure from `capacity256`'s 4.3 | `lambda_rate` = 5 per second is an explicitly chosen approximate nominal value given weak recovery and inconclusive predictive comparisons; it is not a uniquely measured rate. Neither estimator has a synthetic advantage (correlation 0.55 against 0.54, MAE 0.20 dex, no average bias), the two neural values differ by 0.07 dex, well inside that error, and nothing on the recordings validates 4.3 or justifies a specific replacement; 5 corresponds to a log-brightness correlation time of 0.20 s against 0.23 s at 4.3; rises 0.09 dex along a recording |
 
 **Status after the Experiment comparison of the adopted estimator (2026-10-09).** The vector above remains the
-selected simulation values, provisionally and as a documented simulation scenario. The adopted detector
-estimator (§9.9) places `sigma_r`, `sigma_pc` and `lambda_rate` about 0.05 dex or less from these values in aggregate (0.029, 0.0503 and 0.018 dex),
-which is compatibility and not confirmation, and departs on `mu_pc` (−27.7 %, clustering near the lower
-training boundary), `mu_r` (+17.5 %, above the working value in 597 of 600 windows, 99.5 %) and `prob_photo_bleach`
-(0.255 against 0.05, inconsistent with the measured 20 s decline under the renderer's constant-rate
-assumption). Neither the vector nor those estimates has been established as correct on the recordings, and the
-vector carries no privileged correctness. The vector for the revised generator is chosen after the
-per-recording comparison with the measured decline and the matched predictive-render comparison (§9.9); until
-then the neural reference named above remains `capacity256`, and the comparison record
+selected simulation values, provisionally and as a documented simulation scenario. The adopted detector estimator
+(§9.9) places `sigma_r`, `sigma_pc` and `lambda_rate` about 0.05 dex or less from these values in aggregate
+(0.029, 0.0503 and 0.018 dex), which is compatibility and not confirmation, and departs on `mu_pc` (−27.7 %,
+clustering near the lower training boundary), `mu_r` (+17.5 %, above the working value in 597 of 600 windows, 99.5
+%) and `prob_photo_bleach` (0.255 against 0.05; used within `REF`, 0.255 gives substantially greater detected-spot
+loss than five tested recordings show, and 0.05 substantially closer retention, §9.9). Neither the vector nor
+those estimates has been established as correct on the recordings, and the vector carries no privileged
+correctness. The vector is retained as the provisional Fab imaging scenario declared below; the neural reference
+named above remains `capacity256`, and the comparison record
 `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128` holds the numbers.
+
+**Provisional Fab imaging treatment (declared 2026-10-12).** No Fab `Nuisance_DLI` is settled. The adopted
+detector estimator (§9.9) was trained and tested on detector datasets generated with the simulation model before
+the retained-population revision, and the checks of the current model in §9.9 are encouraging but do not replace
+retraining: the detector datasets are regenerated with the current model, the estimator is retrained and evaluated
+on them, and the Fab `Nuisance_DLI` is decided after that. Until then, `REF` is the provisional imaging scenario:
+the six values above are fixed from the `REF` `Nuisance_DLI`, and the camera block is sampled as the SCOPE
+nuisance (§9.3). It is a chosen working treatment, not a calibration, and any biophysical posterior computed under
+it is conditional on it. Three selected sensitivity scenarios explore its effect: bleaching 0.03 and 0.10, which
+test the directions of slower and faster loss, and the adopted estimator's PSF width and brightness together
+(`mu_r` 1.86, `mu_pc` 100). They are selected scenarios, not an uncertainty distribution or measured bounds, and
+they do not marginalize the imaging uncertainty. As a practical warning rule, a reaction-diffusion posterior
+median that moves under a scenario by more than half the 90 % width of the `REF` posterior is flagged, with shifts
+and widths calculated in the same parameter coordinates; shifts are reported beside the widths, because a broad
+posterior can pass the rule despite a consequential shift. Further Fab imaging diagnostics are deferred. The
+treatment is revisited if the sensitivity checks, or other material evidence, threaten a reaction-diffusion
+conclusion. The half-width criterion is a screening flag, not the sole basis for that decision. Neither the
+vector, earlier estimates nor the adopted estimator's values are numerical targets that later inference must
+reproduce, and none of them is ground truth. The InlB condition is treated separately.
 
 **Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
 full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the
@@ -909,15 +928,19 @@ path, and take the reaction-diffusion block from one declared configuration that
 **Two separate decisions.** The vector above is selected for generation. The recordings show temporal features
 that the selection does not represent, and they stay in this record as the observation-model limitations every
 biological conclusion carries until their impact is assessed: (i) the detected spot count of a recording falls
-over 20 s almost in proportion to its signal (last-to-first 0.62 to 0.66 on cells 0, 26 and 16); whether spots
-rendered under the declared labeling persist longer, as the superseded renders suggested, is measured on the
-corrected renders, and if it is confirmed it is a potential confounder for the biology that points at the
-labeling law or at emitters leaving the field or detaching, which no bleaching value can fix; (ii) the decline of
-the bright recordings exceeds what either bleaching scenario implies for ideal emission; (iii) the recorded spot
-width narrows along a recording; (iv) the recorded background falls 5 to 12 % over 20 s where the renderer's is
-constant. For generation, the reference and each variant are identified by their tags,
-the other settings are kept matched, and the PSF width and the bleaching value are never changed together when
-an effect is attributed.
+over 20 s almost in proportion to its signal (last-to-first 0.62 to 0.66 on cells 0, 26 and 16); on the corrected
+renders within `REF` at 0.05 (§9.9), rendered spots persist longer than recorded ones in three of the five
+recordings checked (retention higher by 0.09 to 0.15), a remaining discrepancy and a potential confounder for the
+biology that may point at the labeling law, at emitters leaving the field or detaching, or at the bleaching
+value, whose 0.10 sensitivity scenario tests the direction of faster loss; (ii) on the field statistic, the
+decline of the bright recordings exceeds what either bleaching scenario implies for ideal emission, a comparison
+that is not like for like, and whether this brightness coupling belongs to the dyes is not established; (iii) the
+fitted PSF-width estimates decrease along a recording; (iv) the recorded background falls 5 to 12 % over 20 s
+where the renderer's is constant; (v) synthetic recordings initialize every assigned dye as active, while later
+experimental windows inherit earlier illumination, which can change the number and distribution of active dyes;
+this initialization difference is a possible source of mismatch, and its effect on inference has not been
+established. For generation, the reference and each variant are identified by their tags, the other settings are
+kept matched, and the PSF width and the bleaching value are never changed together when an effect is attributed.
 
 **What the vector is and is not.** It is a user-selected, fixed vector with a documented source per coordinate.
 It carries no calibrated joint uncertainty: `capacity256`'s joint coverage (0.87 at nominal 0.90) supports
@@ -926,7 +949,8 @@ coordinate. The biology reference inference is conditional on these six values; 
 variation is not marginalized in that run, and the camera block remains the separately sampled SCOPE nuisance
 (§9.3). The pooled representations of §7.2 are retained for a marginalizing run. The within-recording falls of
 brightness, width and bleaching, and the between-recording coupling of brightness and decline, stay in this
-record as the stated limitations of a time-invariant imaging model (§8).
+record as stated limitations; whether they are physical effects that a time-invariant imaging model lacks or
+features of the measurement is not established (§8).
 
 **Construction and consumers.** The vector is constructed as a `Nuisance_DLI` under the `selection_user`
 choice of §7.2 (`--emit-selection-user` writes the spec skeleton, `--build` mints the artifact, both CPU only):
@@ -2501,47 +2525,80 @@ in §6.2; `mu_pc` is per dye and per frame, not the per-detection reference of �
 
 What the comparison shows, every statement conditional on this estimator and this generator (the dataset
 generated before the retained-population revision): (i) the adopted estimator's posteriors are narrow, 90 %
-widths of 8 to 19 % of the prior width against 24 to 87 % for `capacity256`, and its three point estimates
-agree typically within 0.007 dex, with the largest discrepancy 0.110 dex (bleaching, MAP against SGM); close
-point estimates do not establish single-peaked posteriors. (ii) Brightness estimates cluster near, and
-frequently cross, the lower training boundary: 408 of the 600 window medians lie within 0.02 dex of the
-100-photon floor, the medians below it range from 95.5 to 100 photons, and no window's whole 90 % interval
-lies below it. There is no hard floor under unrestricted sampling, and this clustering alone does not
-establish whether the brightness prior should be extended. (iii) The PSF-width median exceeds the working
-value in 597 of 600 windows, by 17.5 % in aggregate, and 80 windows have their whole 90 % interval above the
-training top; the disagreement is not dismissed because windows cross the boundary, and it cannot determine
-the correct width beyond the trained range. (iv) Bleaching is high in aggregate, 0.255 over the 100-frame
-interval, with window medians from 0.096 to 0.540 and per-recording medians from 0.205 to 0.303 (a statement
-about every window position describes the median across recordings at that position, not every window). Under
-the renderer's constant per-dye rate that value predicts about 6 % expected fluorescence retention after 19 s
-where the recordings keep 56 to 57 % (§6.2; the fluorescence-loss companion), and it exceeds the direct
-per-window loss rates of the same recordings, about 0.12 in the first 2 s window and 0.03 in the last. The
-supported statement is that the 2 s estimates are inconsistent with the measured decline under the renderer's
-assumptions. What process the estimator reads as bleaching, and whether the cause is limited information in
-experimental 2 s windows, a mismatch between simulated and experimental recordings, or the inadequacy of one
-constant rate, is not established; 2 s inputs are not inherently insufficient, since the synthetic Evaluation
-recovers the parameter from 2 s clips under the simulator, and proximity to the fast component of the
-raw-domain fit (0.21) is not confirmation. (v) `sigma_r`, `sigma_pc` and `lambda_rate` are broadly compatible
-with the working values (0.029, 0.050 and 0.018 dex in aggregate; the `sigma_pc` difference is 0.0503 dex, about
-0.05), which is compatibility, not confirmation; the aggregate conceals temporal structure, `sigma_r` falling
-from about 0.35 to 0.21 first-to-last in 60 of 60 recordings and `lambda_rate` from 6.4 to 4.2 per second (a
-correlation time rising from 0.16 to 0.24 s) in 54 of 60, where the two earlier estimators had `lambda_rate`
-rising. Neither the PSF narrowing nor the `lambda_rate` decline is
-established as a consequence of bleaching. (vi) Window by window the adopted estimator follows `capacity256`
-on `mu_r` (r +0.80) and partly on `mu_pc` (+0.64), runs opposite on `sigma_r` (−0.78), and is weak or negative
-on the other three.
+widths of 8 to 19 % of the prior width against 24 to 87 % for `capacity256`, and its three point estimates agree
+typically within 0.007 dex, with the largest discrepancy 0.110 dex (bleaching, MAP against SGM); close point
+estimates do not establish single-peaked posteriors. (ii) Brightness estimates cluster near, and frequently
+cross, the lower training boundary: 408 of the 600 window medians lie within 0.02 dex of the 100-photon floor,
+the medians below it range from 95.5 to 100 photons, and no window's whole 90 % interval lies below it. There is
+no hard floor under unrestricted sampling, and this clustering alone does not establish whether the brightness
+prior should be extended. (iii) The PSF-width median exceeds the working value in 597 of 600 windows, by 17.5 %
+in aggregate, and 80 windows have their whole 90 % interval above the training top; the disagreement is not
+dismissed because windows cross the boundary, and it cannot determine the correct width beyond the trained
+range. (iv) Bleaching is high in aggregate, 0.255 over the 100-frame interval, with window medians from 0.096 to
+0.540 and per-recording medians from 0.205 to 0.303 (a statement about every window position describes the
+median across recordings at that position, not every window). The estimator persistently infers a high value for
+the defined per-dye bleaching probability: the 90 % interval contains 0.05 in 1 of 600 windows, and the
+intervals are typically 0.23 dex wide (the widest 1.03 dex, in that one window). Narrow intervals do not
+establish that this value transfers to the experimental recordings; on synthetic 2 s clips the intervals are
+wide at low true values (median 0.77 dex at 0.035 to 0.07) and narrower at 0.14 to 0.32 (0.29 dex), and the
+bleaching sensitivity check below compares the value with the recordings. (v) `sigma_r`, `sigma_pc` and
+`lambda_rate` are broadly compatible with the working values (0.029, 0.050 and 0.018 dex in aggregate; the
+`sigma_pc` difference is 0.0503 dex, about 0.05), which is compatibility, not confirmation; the aggregate
+conceals temporal structure, `sigma_r` falling from about 0.35 to 0.21 first-to-last in 60 of 60 recordings and
+`lambda_rate` from 6.4 to 4.2 per second (a correlation time rising from 0.16 to 0.24 s) in 54 of 60, where the
+two earlier estimators had `lambda_rate` rising. Neither the PSF narrowing nor the `lambda_rate` decline is
+established as a consequence of bleaching. (vi) Window by window the adopted estimator follows `capacity256` on
+`mu_r` (r +0.80) and partly on `mu_pc` (+0.64), runs opposite on `sigma_r` (−0.78), and is weak or negative on
+the other three.
+
+**Bleaching sensitivity check.** Five recordings (cells 0, 5, 26, 16 and 32), selected beforehand to span
+opening spot density and brightness, were each compared with two renders within the `REF` scenario that differ
+only in the bleaching value, 0.05 and 0.255, under one spot-detection rule (records
+`..._FAB_2S_50FPS_Posterior_Predictive_Video_Spot_Count_RETAINED_0137_DENSITY` and
+`..._FAB_2S_50FPS_Posterior_Predictive_Video_Spot_Count_RETAINED_0137_DENSITY_PB0255`). The two renders of a
+recording share their declared settings, initial dye counts and other imaging values, but not their motion,
+since the reaction-diffusion simulator cannot be seeded, so this is not a matched-trajectory comparison; it
+tests 0.255 within `REF`, not the adopted estimator's complete imaging vector. The receptor totals are
+density-adjusted starting values, not matches, and the renders at 0.05 open 1 to 31 % below the recordings in
+detected spots per frame. Retention is the mean detected-spot count per frame of the closing 2 s of the 20 s
+recording over that of the opening 2 s.
+
+In cells 0, 5, 26 and 16 the recordings keep 0.59 to 0.66 of their detected spots, the renders at 0.05 keep 0.65
+to 0.77 and the renders at 0.255 keep 0.14 to 0.18. Cell 32 gains detected spots while its field signal declines
+(retention 1.05, field signal 0.42 of its opening value; its renders keep 0.81 and 0.14). Its count ratio
+therefore cannot be interpreted directly as fluorescent-complex survival. Crowding-related detection effects are
+a possible explanation, but their contribution has not been established. Over the five recordings the retention
+at 0.05 differs from the experimental retention by a median of +0.09 (range −0.24 to +0.15; median absolute
+difference 0.15) and at 0.255 by a median of −0.48 (range −0.91 to −0.43; median absolute difference 0.48); over
+the other four recordings, by −0.02 to +0.15 and by −0.50 to −0.43. 0.05 is closer in all five.
+
+Across five tested recordings, 0.05 within `REF` gives substantially closer detected-spot retention than 0.255.
+`REF` is retained as a provisional Fab imaging scenario, with remaining discrepancies documented and sensitivity
+assessed through the reaction-diffusion results (§7.6). The renders use the current model, so the check is an
+encouraging test of the current model with `REF`; the value 0.255 comes from an estimator trained and tested on
+datasets of the previous model version, and the Fab `Nuisance_DLI` is decided only after the detector datasets
+are regenerated with the current model and the estimator is retrained on them. This does not establish the
+correct per-dye bleaching probability or validate the full imaging vector, and neither `REF`, earlier estimates
+nor the adopted estimator's values are ground truth. The spread describes variation in predictive agreement
+across the tested recordings, with one render per scenario and recording, and is not a credible interval for the
+bleaching probability. In three of the five recordings the renders at 0.05 keep 0.09 to 0.15 more of their
+detected spots than the recordings; the 0.10 sensitivity scenario of §7.6 tests the direction of faster loss.
+The opening window separates the two values weakly: mean dye fluorescence over the first 2 s is 97.5 % of its
+starting level at 0.05 and 86.6 % at 0.255. Synthetic recordings initialize every assigned dye as active. Later
+experimental windows inherit earlier illumination, which can change the number and distribution of active dyes.
+This initialization difference is a possible source of mismatch; its effect on inference has not been
+established.
 
 The adopted estimator gives broadly similar aggregate values for three imaging parameters, but also reveals
-systematic differences and temporal drift. Boundary behavior and the inconsistency between short-window
-bleaching estimates and the measured 20 s decline prevent treating these results as a validated replacement
-calibration. The working vector of §7.6 is therefore retained provisionally, as a documented simulation
-scenario with no privileged correctness of its own, pending the per-recording comparison of the adopted
-estimator's bleaching and brightness with the measured fluorescence decline of each recording and a matched
-predictive-render comparison, both mandatory and each separately authorized, and then the evaluation under the
-revised generator. No prior change and no vector replacement follows from this comparison; lower brightness
-and higher width bounds merit consideration at regeneration, a higher bleaching bound does not. The
-out-of-range synthetic check of the estimator (recordings rendered below the brightness floor and above the
-width top) is deferred behind those two checks.
+systematic differences and temporal drift. Boundary behavior, and a short-window bleaching estimate that, used
+within `REF`, gives substantially greater detected-spot loss than the recordings show (the sensitivity check
+above), prevent treating these results as a validated replacement calibration. The working vector of §7.6 is
+therefore retained as the provisional Fab imaging scenario (§7.6), a documented simulation scenario with no
+privileged correctness of its own, until the detector datasets are regenerated with the current model and the
+estimator is retrained and evaluated on them; the Fab `Nuisance_DLI` is decided after that. No prior change
+and no vector replacement follows from this comparison; lower brightness and higher width bounds merit
+consideration at regeneration, a higher bleaching bound does not. The out-of-range synthetic check of the
+estimator (recordings rendered below the brightness floor and above the width top) is deferred.
 
 **Lessons carried to the retraining.** The detector and imaging process is unchanged between the present
 training data and the retraining on the revised generator, so the parameter definitions of §6.2 carry over, and
