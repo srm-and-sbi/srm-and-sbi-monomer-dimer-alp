@@ -5,7 +5,13 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.38 - 2026-10-13
+
+The release before the regeneration of the Fab 2 s detector datasets under the retained-population generator: the
+campaign specification (`DETECTOR_WORKFLOW.md` §9.10), the campaign-membership check of the prior-realization audit
+(P7), the simulated-population and species wording aligned with the collaborator glossary, and the stage banners.
+Products generated under this version carry `0.1.38` in their theta-set schemas, which P7 compares against the
+campaign's declared version; no persisted field, draw or frame changes.
 
 ### Added
 
