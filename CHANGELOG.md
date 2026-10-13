@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- P7 of the prior-realization audit (`--campaign-version`, `--expected-tasks`, `--task-simulations`,
+  `--campaign-window`): campaign membership of a generated tier and DLI pass against a frozen specification, because
+  the theta-set schema guard compares keys, bounds, scales and the condition when supplied, records the package
+  version without comparing it and inspects no video, so an earlier generator's detector dataset under the same
+  imaging box passes it. Per task: the tier's and the detector's theta-set schemas (package version, condition,
+  timing label, generator, written time inside the window, row count) and the `Labeling_Set` (thirteen columns, row
+  count, the declared per-class probe probabilities and two-probe share); every expected task present, tasks beyond
+  the expected range reported. `collect_provenance` gathers the inputs in `load_products`; the other checks are
+  unchanged. `tests/test_prior_realization_audit_campaign.py` (3 tests).
+
 - `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Comparison.py` and its note: for any
   set of detector estimators named by their artifact tags, a matched comparison of their Experiment products on
   the same windows of the experimental recordings (`..._Experiment_Comparison_<COLUMNS>/`): location and
@@ -67,6 +77,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never is. No public name, persisted field, artifact key, parameter value, prior or random draw changes:
   fixed-seed dye counts, PSF widths, brightness processes and rendered frames are bit-identical before and
   after.
+- The RDS banner lists the condition's particle types and names its channels (MET-FAB: three fissions and eight
+  mobility switches; MET-INLB: six fusions, three fissions, three `B1 → A` conversions and twelve mobility switches,
+  where it named eight conversions and seventeen channels), and the DLI banner prints the initial fluorescence
+  probabilities before bleaching and detection per complex class and per represented receptor within a dimer,
+  labeled as such, in one branch for the probe-class rule and another for the `--occupancy` override (the override
+  carries no two-probe share, which the first draft of the banner divided by); the share among fluorescent two-probe
+  dimers is labeled the both-probes-fluorescent share, which equals a two-dye share only under a one-dye-per-probe
+  law. Under MET-INLB the banner reports `B1` (one represented receptor) and `B2` apart, and the probe-free-partner
+  explanation is given for Fab only. The RDS banner names the condition's molecular species apart from the
+  monomer/dimer classification, and its reaction-event figure caption names no channel count. Print strings only; no
+  persisted field, draw or frame changes.
+
 
 ### Documentation
 
@@ -85,37 +107,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it), repeated in `PROJECT_CONTEXT.md` §2 before the numbered modeling assumptions and in the renderer's
   module docstring; the §6.2 definitions state that receptor PSF widths are sampled independently and are not
   redrawn when complexes associate or dissociate.
-- `DETECTOR_WORKFLOW.md` §6.2: the definitions of the six imaging parameters as the renderer implements them, in
-  the MET vocabulary (what `mu_pc` is and is not; one PSF width per simulated receptor; the accumulation of the
-  per-dye bleaching probability; the correlation time of `lambda_rate`), the probes-dyes-spots paragraph (a
-  complex's dye count is the sum over its bound probes, so a monomer or a dimer can carry zero, one, two or more
-  dyes; bleaching removes one dye's contribution and nothing else), and how estimates of these parameters are
-  read; the table rows follow. §6.6 and §6.7: the same vocabulary, and the probe-unbinding sentence corrected as
-  in the labeling note. §9.9: the reading of the adopted estimator's Experiment against the `capacity256` and
-  baseline products (record
-  `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128`): the aggregate
-  values beside the working vector with exact window counts, the boundary behavior of the brightness and
-  PSF-width estimates, the high short-window bleaching estimate (the defined per-dye probability inferred
-  persistently high; narrow intervals do not establish that it transfers to the recordings) and a five-recording
-  bleaching sensitivity check within `REF` in which 0.05 gives substantially closer detected-spot retention than
-  0.255 (records `..._Spot_Count_RETAINED_0137_DENSITY` and `..._Spot_Count_RETAINED_0137_DENSITY_PB0255`; the
-  earlier cell-0 records archived as `_Superseded_20261012`), the broad compatibility of three parameters with
-  the working values, the temporal drift, the conclusion that the working vector is retained as the provisional
-  Fab imaging scenario with no privileged correctness, no Fab `Nuisance_DLI` being settled until the detector
-  datasets are regenerated with the current model and the estimator is retrained on them (the adopted estimator
-  was trained and tested on datasets of the previous model version), and the reading rules carried to the
-  retraining. §7.6: the status of the vector after that comparison; the provisional Fab imaging treatment (`REF`
-  fixed, the camera sampled, three selected sensitivity scenarios, a half-width screening flag on the `REF`
-  posterior; not a settled Fab `Nuisance_DLI`); the remaining spot-retention discrepancy and the initialization
-  difference as limitations; the selection of 0.05 recorded as made without a predictive check, with the renders
-  since; the free-offset fit no longer read as a fast component, and the two-component shape and the brightness
-  coupling no longer stated as effects of the dyes. The fluorescence-loss companion: what the decay analysis
-  measures and the expected normalized decline under the renderer, `E[F(t)]/E[F(0)] = (1 − p)^(t/100)`,
-  unchanged by the grouping of dyes onto probes, as an analytical expectation of fluorescence retention and not
-  of spot retention; the same corrections of the fit and of the decline features, and a closing decision that
-  records the renders made since the selection. `PROJECT_CONTEXT.md` §2: the retained-population qualification
-  above. The comparison record was regenerated with the extended statistics (every previously reported number
-  verified unchanged, 2455 values) and the earlier record archived beside it as `_Superseded_20261009`.
+- `DETECTOR_WORKFLOW.md` §6.2: the definitions of the six imaging parameters as the renderer implements them, in the
+  MET vocabulary (what `mu_pc` is and is not; one PSF width per simulated receptor; the accumulation of the per-dye
+  bleaching probability; the correlation time of `lambda_rate`), the probes-dyes-spots paragraph (a complex's dye
+  count is the sum over its bound probes, so a monomer or a dimer can carry zero, one, two or more dyes; bleaching
+  removes one dye's contribution and nothing else), and how estimates of these parameters are read; the table rows
+  follow. §6.6 and §6.7: the same vocabulary, and the probe-unbinding sentence corrected as in the labeling note.
+  §9.9: the reading of the adopted estimator's Experiment against the `capacity256` and baseline products (record
+  `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128`): the aggregate values
+  beside the working vector with exact window counts, the boundary behavior of the brightness and PSF-width
+  estimates, the high short-window bleaching estimate (the defined per-dye probability inferred persistently high;
+  narrow intervals do not establish that it transfers to the recordings) and a five-recording bleaching sensitivity
+  check within `REF` in which 0.05 gives substantially closer detected-spot retention than 0.255 (records
+  `..._Spot_Count_RETAINED_0137_DENSITY` and `..._Spot_Count_RETAINED_0137_DENSITY_PB0255`; the earlier cell-0
+  records archived as `_Superseded_20261012`), the broad compatibility of three parameters with the working values,
+  the temporal drift, the conclusion that the working vector is retained as the provisional Fab imaging scenario
+  with no privileged correctness, no Fab nuisance treatment being approved for production under the current model
+  until the detector datasets are regenerated with it and the estimator is retrained on them (the adopted estimator
+  was trained and tested on datasets of the previous model version; the existence of the `REF` artifact is not its
+  approval), and the reading rules carried to the retraining. §7.6: the status of the vector after that comparison;
+  the provisional Fab imaging treatment (`REF` fixed, the camera sampled, three selected sensitivity scenarios, a
+  half-width screening flag on the `REF` posterior; not a settled Fab `Nuisance_DLI`); the remaining spot-retention
+  discrepancy and the initialization difference as limitations; the selection of 0.05 recorded as made without a
+  predictive check, with the renders since; the free-offset fit no longer read as a fast component, and the
+  two-component shape and the brightness coupling no longer stated as effects of the dyes. The fluorescence-loss
+  companion: what the decay analysis measures and the expected normalized decline under the renderer,
+  `E[F(t)]/E[F(0)] = (1 − p)^(t/100)`, unchanged by the grouping of dyes onto probes, as an analytical expectation
+  of fluorescence retention and not of spot retention; the same corrections of the fit and of the decline features,
+  and a closing decision that records the renders made since the selection. `PROJECT_CONTEXT.md` §2: the
+  retained-population qualification above. The comparison record was regenerated with the extended statistics (every
+  previously reported number verified unchanged, 2455 values) and the earlier record archived beside it as
+  `_Superseded_20261009`.
+
+- `PROJECT_CONTEXT.md` §2 and `DETECTOR_WORKFLOW.md` §4.1: the simulated population stated once, in the terms of
+  the collaborator glossary: at initialization the generator simulates the complexes carrying at least one probe;
+  reactions conserve the number of represented receptors, not the number of complexes; all simulated monomers carry
+  a probe at initialization, and in the Fab condition the dissociation of a dimer carrying one Fab produces one
+  monomer carrying that Fab and one carrying no probe, both simulated; probes remain attached and bleaching changes
+  neither receptor identity nor association eligibility. The species `A` and §6.6 are qualified the same way, the
+  mobility-switching channels are named apart from the `B1 → A` conversions, and §6.6 and the labeling docstring
+  state the initial fluorescence probabilities before bleaching and detection with their denominators (under Fab:
+  simulated monomer 0.806, simulated dimer 0.807, represented receptor within a dimer 0.406, which is not the
+  dimer's fluorescence probability). The schema guard's scope is stated exactly (keys, bounds, scales, and the
+  condition when the reader supplies one; the package version recorded, not compared; the earlier biology theta sets
+  refused by their bounds, the earlier detector theta and video sets not), and membership in a generation campaign
+  is established by an inventory check against the campaign's specification. §4.1 (iii): the imaging box is
+  unchanged at regeneration, the video distribution is not. §9.10: the campaign specification for the regeneration
+  of the Fab detector datasets under the current model (sizes, machines, estimates labeled as estimates,
+  preservation by archiving with deletion a separate decision, the provenance check, the training configuration, the
+  selection rule as an open decision of the lead). Terminology aligned with the collaborator glossary where the text
+  covered both conditions: two molecular species under MET-FAB and three under MET-INLB, each in three mobility
+  modes, with the species-and-mode pairs as particle types (`README.md`, `CLAUDE.md`, §2, §4.1, §6.1, the parameter
+  notes and report descriptions); the switching rates "shared by all molecular species of the condition"; the
+  descriptions of `rank_to_species` (the monomer/dimer classification) and `rank_to_molecule` (the molecular
+  species) made accurate, the identifiers unchanged; §6.6: the imaging model renders the fluorescence contributed by
+  the simulated population, which is not what the videos show. The MET-INLB channel count is twenty-four wherever an
+  active text still said seventeen (`CLAUDE.md`, the RDS entry point's docstring, the structure audit's scope); the
+  implementation map in `PROJECT_CONTEXT.md` §5 describes `rank_to_species` as the monomer/dimer classification and
+  the `Labeling_Set` as thirteen columns; the prior-realization audit's P6 docstring calls `q/(2 − q)` the
+  both-probes-fluorescent share.
 
 ## 0.1.37 - 2026-10-05
 

@@ -16,8 +16,8 @@ as two frozen configurations of one codebase, entering at the RDS stage through
 the condition's declared association setting and at the DLI stage through its
 labeling law, and carried by a condition slot in every product name), a detector
 calibration that marginalizes the full reactive biology prior, and the separated
-stoichiometry–mobility model of §2 (two molecular species × three mobility
-modes; the reaction channels generated from the model blocks and the condition's
+stoichiometry–mobility model of §2 (two molecular species under MET-FAB and three
+under MET-INLB, each in three mobility modes; the reaction channels generated from the model blocks and the condition's
 association setting — twenty-four under MET-INLB, eleven under MET-FAB; eleven
 learnable parameters, identical for both conditions, led by the conserved
 receptor total `N_R` and the initial dimer-to-monomer ratio `r = n_B / n_A`, from
@@ -89,17 +89,28 @@ points. The pipeline is applied to single-particle-tracking microscopy of the
 stage consumes the real recordings under
 `Experiment/SPT_Data_MET_FAB_INLB_S-BSST712` (BioStudies accession S-BSST712).
 
-**The retained population.** The simulation holds the probe-associated
-complexes (*Modeling assumptions of the MET model*, below): under the model's
-eligibility rule a receptor without a probe neither reacts nor emits, so it is
-not simulated unless it is the probe-free partner within a retained Fab dimer,
-which stays represented (item 11 below); the probe-free partner of a one-InlB
-dimer is never represented. The inferred count `N_total` is the true receptor-subunit total,
-probe-bound and unbound; the generator realizes the retained population from it
+**The simulated population.** The simulation holds the complexes carrying at
+least one probe (*Modeling assumptions of the MET model*, below; the code's
+identifiers call this the retained population). Under the model's eligibility
+rule a receptor without a probe neither reacts nor emits, so at initialization
+the generator simulates the monomers carrying a probe and the dimers carrying at
+least one probe, and no probe-free complex. Reactions conserve the number of
+represented receptors, not the number of complexes. All simulated monomers carry
+a probe at initialization. In the Fab condition, dissociation of a dimer
+carrying one Fab produces two monomers: one carrying that Fab, and one carrying
+no probe. Both remain simulated. In the InlB condition only probe-bound
+receptors are represented, and the probe-free partner of a one-InlB dimer never
+is (item 11 below). Probes remain attached throughout a recording; bleaching
+removes fluorescence and changes neither receptor identity nor association
+eligibility (item 5). The inferred count `N_total` is the true receptor total,
+probe-bound and unbound; the generator realizes the simulated population from it
 through the condition's occupancy at initialization.
 
 **Molecular species (the stoichiometry layer), per condition:**
-- **A (monomer):** a single, probe-bound receptor subunit (both conditions).
+- **A (monomer):** one represented receptor. Every monomer carries a probe at
+  initialization in both conditions; in the Fab condition the dissociation of a
+  dimer carrying one Fab produces one monomer carrying that Fab and one carrying
+  no probe, and both remain simulated.
 - **B (dimer; MET-FAB):** two retained receptor subunits; its one- or two-Fab
   class is assigned at labeling.
 - **B1 (one-InlB dimer; MET-INLB):** a physical dimer of which ONE subunit is
@@ -118,7 +129,7 @@ available to monomers and dimers alike.
 **i** (immobile). A mode is a value on the diffusion-coefficient axis — Brownian
 motion within the mode, with no mechanism of its own (a slow or immobile mode
 represents reduced motion, not the membrane structure that may cause it). The
-modes are shared by both species.
+modes are shared by all molecular species of the condition.
 
 **Six or nine particle types.** The reaction-diffusion stage simulates
 *particle types* = molecular species × mobility mode: `A_f`, `A_s`, `A_i`,
@@ -159,7 +170,7 @@ condition*, below). Every channel conserves the retained subunit count:
   monomer is one, whatever its dye draw. The dimer inherits the *slower parent's*
   mode (the declared working hypothesis; alternatives are comparators, not built
   here).
-- **Dissociation (three fissions, plus three conversions under MET-INLB):**
+- **Dissociation (three fissions, plus the three `B1 → A` conversions under MET-INLB):**
   `B_m → A_m + A_m` (MET-FAB) and `B2_m → A_m + A_m` (MET-INLB) at `κ_OFF`, one
   per dimer mode, the mode conserved (both daughters keep the dimer's mode); and
   `B1_m → A_m` at the same `κ_OFF`, a CONVERSION: a one-InlB dimer releases one
@@ -178,7 +189,9 @@ condition*, below). Every channel conserves the retained subunit count:
   both placements on the production system (R7: conversion products move
   0.1 nm, the residual diffusion of the test; fission daughters land at the
   declared distance). Dissociation is not governed by contact.
-- **Switching (eight or twelve conversions):** `X_f ↔ X_s ↔ X_i` for every
+- **Switching (eight or twelve mobility-switching channels; conversions in the
+  simulator's sense, which change the mode and conserve the species):**
+  `X_f ↔ X_s ↔ X_i` for every
   species of the condition — the four rates `k_fs`, `k_sf`, `k_si`, `k_is` are
   shared by all species (the working hypothesis that switching is a
   membrane-environment process independent of stoichiometric state). The chain
@@ -279,10 +292,10 @@ touching any consumer.
 | `relative_diffusivity_dimer` | `R_B` | dimer factor within a mode, `D[B, m] = R_B · D[A, m]` | log10 | [−1, 0] | 0.1–1 |
 | `relative_diffusivity_slow` | `R_s` | slow-mode factor, `D[X, s] = R_s · D[X, f]` | log10 | [−1, 0] | 0.1–1 |
 | `relative_diffusivity_immobile` | `R_i` | immobile-mode factor, `D[X, i] = R_i · D[X, f]`; immobile by construction, a full decade below `R_s` | log10 | [−3, −2] | 0.001–0.01 |
-| `rate_fast_slow` | `k_fs` | switching f → s, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
-| `rate_slow_fast` | `k_sf` | switching s → f, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
-| `rate_slow_immobile` | `k_si` | switching s → i, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
-| `rate_immobile_slow` | `k_is` | switching i → s, both species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_fast_slow` | `k_fs` | switching f → s, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_slow_fast` | `k_sf` | switching s → f, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_slow_immobile` | `k_si` | switching s → i, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
+| `rate_immobile_slow` | `k_is` | switching i → s, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
 
 The fixed `capture_radius` row (10 nm, display-only; `build_system` derives the
 active reaction distance from `particle_diameter_nm`) is the Smoluchowski
@@ -377,18 +390,22 @@ complex, one probe or one dye.
    two-InlB dimers may already have formed.
 10. **One dissociation rate and one set of mobility rules for every dimer
     (declared).** Dimers are classified by ligand occupancy, not by origin.
-11. **Spectator reduction (exact given items 6 and 7 and the absence of
-    inter-particle potentials in the simulator).** Receptors without probes
-    are not simulated when they cannot affect the retained population: every
-    probe-free monomer and every probe-free dimer at onset. Every initial
-    retained complex carries at least one probe. Both daughters of a Fab dimer
-    stay retained, so a retained Fab monomer may be probe-free; the probe-free
-    subunit of a one-InlB dimer is never part of the retained population (`B1`
-    carries one retained subunit from initialization and `B1 → A` preserves
-    it, so no lineage entry is created or removed). The conserved
-    count is therefore `N_R = n_A + 2 n_B` under FAB and the number of
-    InlB-bound subunits `N_R = n_A + n_B1 + 2 n_B2` under INLB, a `B1` being a
-    physical dimer that contributes one subunit to it. **The inferred count
+11. 11. **Spectator reduction (exact given items 6 and 7 and the absence of
+    inter-particle potentials in the simulator).** At initialization the
+    generator simulates the complexes carrying at least one probe; every
+    probe-free monomer and every probe-free dimer at onset is left out, because
+    under items 6 and 7 it can neither react with the simulated population nor
+    emit. Reactions conserve the number of represented receptors, not the number
+    of complexes. All simulated monomers carry a probe at initialization. In the
+    Fab condition, dissociation of a dimer carrying one Fab produces two
+    monomers: one carrying that Fab, and one carrying no probe. Both remain
+    simulated. In the InlB condition only probe-bound receptors are represented:
+    the probe-free partner of a one-InlB dimer never is (`B1` carries one
+    represented receptor from initialization and `B1 → A` preserves it, so no
+    lineage entry is created or removed). The conserved count is therefore `N_R
+    = n_A + 2 n_B` under FAB and the number of InlB-bound receptors `N_R = n_A +
+    n_B1 + 2 n_B2` under INLB, a `B1` being a physical dimer that contributes
+    one receptor to it. **The inferred count
     `N_total` (item 14) and composition `f_B` (item 9) describe the true
     population; the generator realizes the retained population from them
     through the declared occupancies (item 4), so `N_total` is not the
@@ -684,11 +701,17 @@ attributes, or as a JSON sidecar beside a plain `.npy`. Every reader of a
 `Theta_Set` (the training dataset, the DLI stage's read of the RDS labels,
 evaluation, calibration, the embedding-distance analysis, the prior-realization
 audit) goes through `io.load_theta_set` with its own table and refuses a file
-whose schema is absent or differs in keys, bounds, scales, or condition, naming
-what differs. Two tables with the same number of rows are indistinguishable by
-shape, which is why the schema exists: a tier generated before the decided
-ranges carries no schema and is refused by every reader, so a fresh
-per-condition tier under the decided ranges is required (none exists yet).
+whose schema is absent or differs in keys, bounds or scales, or in condition
+when the reader supplies one, naming what differs. The guard records the package
+version and does not compare it, and it inspects no video. Two tables with the
+same number of rows are indistinguishable by shape, which is why the schema
+exists: a tier generated before the schema carries none and is refused by every
+reader, and the biology theta sets drawn before the retained-population revision
+are refused because the count and composition bounds changed; the detector theta
+sets and video sets rendered before it are not refused, because the imaging box
+is unchanged. Membership in a generation campaign is therefore established
+before training by an inventory of every selected task against the campaign's
+frozen specification (`DETECTOR_WORKFLOW.md` §9.10), not by the guard.
 Prior bounds are part of the schema on purpose — a tier drawn from a different
 box is a different training distribution even when the keys agree. Estimator
 artifacts and resurrect states carry the same `parameter_keys` guard
@@ -1643,8 +1666,8 @@ shared runner, and produces a defined on-disk artifact. Module paths are relativ
 | --- | --- | --- |
 | The separated stoichiometry–mobility model (§2): the two model blocks `StoichiometryBlock` / `MobilityBlock` and the derived particle types per condition (six under MET-FAB, nine under MET-INLB); the channels generated per condition (twenty-four under MET-INLB, eleven under MET-FAB); per-type diffusion; the association normalization and the per-condition association setting (`ConditionSetting` / `CONDITION_SETTINGS`); the realized initial composition and stationary initial modes | `parameterization.py` → `PARAMETERS.simulation.rds` (blocks, `conditions`, `particle_types`, `association_ratio_of()`), `realize_initial_composition()`; `simulation_rds_support.py` → `reaction_channels(theta, condition)`, `diffusion_coefficients()`, `association_reference_rate()`, `stationary_mode_law()`, `build_system(theta, condition)` (registers exactly the condition's generated channels); the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
 | RDS trajectory recording (particle positions, particle type, time over the recording length) — one tier per condition (`--condition`; the sibling alias plus the condition token, no qualifier), shared by both workflows | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`, the only RDS entry point, run once per condition (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
-| Trajectory extraction (per-frame poses for the audits; per-subunit host positions for the DLI stage, gathered without the dense pose tensor whose id axis grows with every reaction), the type-rank → molecular-species map the visibility layer selects by, and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records, subunit counts read per particle type) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `extract_subunit_positions()`, `rank_to_species()`, `monomer_ranks()`, `extract_subunit_lineage()` | (the lineage table and the subunit positions passed to imaging) |
-| Static labeling stoichiometry: the condition's dye-count law, the once-per-recording draw composed with the condition's declared probe occupancy (`--occupancy` overrides for a sensitivity run), the applied occupancy recorded | `labeling.py` → `LABELING_LAWS`, `resolve_labeling_law()`, `draw_dye_counts()`, `labeling_summary()`; `parameterization.py` → `occupancy_of()`, `occupancy_source_of()`, `visibility_of()` | `Labeling_Set` `.zarr` per task (one `LABELING_SET_COLUMNS` row per simulation; ten columns, `occupancy_monomer` / `occupancy_dimer` among them) |
+| Trajectory extraction (per-frame poses for the audits; per-subunit host positions for the DLI stage, gathered without the dense pose tensor whose id axis grows with every reaction), the type-rank → monomer/dimer classification (`rank_to_species`; `rank_to_molecule` gives the molecular species) the visibility layer selects by, and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records, subunit counts read per particle type) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `extract_subunit_positions()`, `rank_to_species()`, `monomer_ranks()`, `extract_subunit_lineage()` | (the lineage table and the subunit positions passed to imaging) |
+| Static labeling stoichiometry: the condition's dye-count law, the once-per-recording draw composed with the condition's declared probe occupancy (`--occupancy` overrides for a sensitivity run), the applied occupancy recorded | `labeling.py` → `LABELING_LAWS`, `resolve_labeling_law()`, `draw_dye_counts()`, `labeling_summary()`; `parameterization.py` → `occupancy_of()`, `occupancy_source_of()`, `visibility_of()` | `Labeling_Set` `.zarr` per task (one `LABELING_SET_COLUMNS` row per simulation; thirteen columns, `occupancy_monomer` / `occupancy_dimer`, the probe classes and `two_probe_share` among them) |
 | Diffraction-limited imaging forward model: dyes as emitters following their subunit's host particle, Gaussian PSF, per-dye brightness photo-physics with photobleaching, Poisson + EMCCD readout noise | `simulation_dli_support.py` → `render_dli_video()` (dye-centric, source-agnostic renderer of the poses, the lineage, the dye counts, and an assembled 11-key imaging vector; shared by both DLI stages), with `build_dye_tracks()` (per-dye emitter tracks), `Gaussian` / `sample_psf_width()` (PSF), `compute_intensity()` + `add_pixel_counts()` (intensity accumulation, in 2 s frame blocks), `generate_brightness_photons()` (brightness photo-physics: stationary OU ln-brightness flicker + absorbing photobleaching), `EMCCD` / `add_noise()` / `generate_frames()` (detector noise) | (noised video array passed to writer below) |
 | DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (per `--condition`; drives `extract_subunit_lineage()` + `extract_subunit_positions()` → `draw_dye_counts()` → `render_dli_video()`, with the imaging block marginalized from the condition's `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
 | Parameter prior and specification (the decided prior ranges, the per-condition settings — association ratio, occupancy — the per-row scale `LOG_FLAG`, units, labels; box-uniform prior in the estimator space) and the one conversion rule between estimator space and physical values | `parameterization.py` → `PARAMETERS` (a `Parameters` singleton) with `build_prior()`, `theta_lower_bound()`, `theta_upper_bound()`, `parameter_find()`, `to_physical()` / `to_flow()`, `prior_center()`; `ConditionSetting` / `CONDITION_SETTINGS` with `association_ratio_of()`, `occupancy_of()` | (configuration in code; sampled theta persisted in the RDS theta-set `.zarr`) |

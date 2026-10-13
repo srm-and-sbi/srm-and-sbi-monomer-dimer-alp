@@ -164,7 +164,7 @@ def reactive_lineage(workdir: str) -> dict:
     _, recs = tray.read_observable_reactions()
     n_records = int(sum(len(r) for r in recs))
     mono_ranks = monomer_ranks(tray)          # every single-subunit type (all monomer modes)
-    species_of_rank = rank_to_species(tray)   # particle-type rank -> molecular species (Level 3b)
+    species_of_rank = rank_to_species(tray)   # particle-type rank -> monomer/dimer classification, the stoichiometric class (Level 3b)
     del tray, smut, stem
     return dict(
         n_subunits=lineage.n_subunits, n_particle_ids=int(lineage.soul_ids.shape[0]),

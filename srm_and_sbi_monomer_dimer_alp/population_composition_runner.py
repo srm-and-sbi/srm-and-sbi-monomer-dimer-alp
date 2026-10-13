@@ -446,7 +446,7 @@ def _write_report(args, spec, data, rng):
                   f"{data['n_chunks']} windows)")
     reporter.stat("posterior draws per window", f"{data['n_draws']:,}")
     reporter.stat("species mapping", "A = monomer (one receptor), B = dimer (two receptors)",
-                  note="the two molecular species of the reaction-diffusion model, each present in "
+                  note="the monomer/dimer classification of the reaction-diffusion model (B1 and B2 are both dimers under MET-INLB), each class present in "
                        "the fast / slow / immobile mobility modes; the modes are particle TYPES, "
                        "not species, and do not enter the composition. A dimer holds two "
                        "receptors, which is what separates f_B (a share of complexes) from f_R (a "

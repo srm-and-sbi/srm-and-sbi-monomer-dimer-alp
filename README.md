@@ -1,6 +1,6 @@
 # srm-and-sbi-monomer-dimer-alp
 
-Simulation-based inference of receptor reaction-diffusion parameters from single-particle-tracking microscopy videos: the **MONOMER_DIMER** model family — the separated stoichiometry–mobility model, two molecular species (A monomer, B dimer) × three mobility modes (fast, slow, immobile) — with an explicit observation layer — measured degree of labeling (DOL), per-subunit label draws, and probe occupancy — where MET-FAB and MET-INLB are two frozen configurations of one codebase.
+Simulation-based inference of receptor reaction-diffusion parameters from single-particle-tracking microscopy videos: the **MONOMER_DIMER** model family — the separated stoichiometry–mobility model, two molecular species under MET-FAB (A monomer, B dimer) and three under MET-INLB (A, B1, B2), each in three mobility modes (fast, slow, immobile) — with an explicit observation layer — measured degree of labeling (DOL), per-subunit label draws, and probe occupancy — where MET-FAB and MET-INLB are two frozen configurations of one codebase.
 
 This repository is a self-contained pipeline within the `srm-and-sbi` project: it simulates the reaction-diffusion system, renders the trajectories as diffraction-limited microscopy videos, and trains a neural posterior to recover the underlying parameters from a video. It pairs that inference with a leak-proof train/test/eval data split, held-out MAP-recovery validation on synthetic data with known ground truth, and application of the trained posterior to experimental microscopy recordings (no ground truth). See **[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md)** for the full scientific treatment.
 
@@ -15,7 +15,7 @@ are dyes), the condition axis (MET-FAB and MET-INLB as two frozen configurations
 entering at the RDS stage through the condition's declared association setting and at the DLI
 stage through its labeling law, and carried by a condition slot in every product name), a detector
 calibration that marginalizes the full reactive biology prior, and the separated
-stoichiometry–mobility model (two molecular species × three mobility modes; the reaction channels
+stoichiometry–mobility model (two molecular species under MET-FAB and three under MET-INLB, each in three mobility modes; the reaction channels
 generated from the model blocks and the condition's association setting, twenty-four under MET-INLB
 and eleven under MET-FAB; eleven learnable parameters, identical for both conditions, led by the
 conserved receptor total `N_R` and the initial dimer-to-monomer ratio `r`, from which the receptor

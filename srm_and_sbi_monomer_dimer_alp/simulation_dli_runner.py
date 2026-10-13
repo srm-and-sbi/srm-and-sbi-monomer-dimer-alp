@@ -276,10 +276,30 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"({occupancy_source}; by stoichiometric class {rds_cfg.molecular_species_names} = "
               f"{tuple(round(p, 4) for p in occ_pair)}); a sensitivity run, not the model")
     print(f"  P(dye >= 1 | bound)     : {law.visible_probability:.3f}   (from the law)")
-    print(f"  visible per subunit     : monomer {a_mono:.4f}, dimer subunit {a_dim:.4f}   (probe probability x P(dye >= 1))")
-    print(f"  visible fractions       : monomer {a_mono:.3f}, two-probe dimer {1 - (1 - law.visible_probability) ** 2:.3f}, "
-          f"one-probe dimer {law.visible_probability:.3f}; two-dye share among visible two-probe dimers "
-          f"{law.visible_probability / (2 - law.visible_probability):.3f}")
+    q = law.visible_probability
+    q_two = 1 - (1 - q) ** 2
+    print("  initial fluorescence probabilities (before bleaching and detection; complexes present at initialization):")
+    if labeling_plan.probe_rule == "classes":
+        s_two = float(labeling_plan.two_probe_share)
+        print(f"    per complex           : monomer {a_mono:.3f} (probe-bound at initialization; a probe-free monomer produced "
+              f"later by a Fab-dimer dissociation never is), one-probe dimer {q:.3f}, two-probe dimer {q_two:.3f}, "
+              f"simulated dimer {(1 - s_two) * q + s_two * q_two:.3f} (averaged over its classes at the two-probe share "
+              f"{s_two:.4f})")
+        if labeling_plan.ligand_classes:
+            print(f"    per represented receptor within a dimer: {a_dim:.4f}   (every represented InlB receptor carries a probe; "
+                  f"B1 represents one receptor, B2 two)")
+        else:
+            print(f"    per represented receptor within a dimer: {a_dim:.4f}   (probe probability x P(dye >= 1); averages over "
+                  f"the probe-free partner of a one-Fab dimer and is not the dimer's fluorescence probability)")
+    else:   # the --occupancy override: independent per-receptor coins, no probe classes and no two-probe share
+        print(f"    per receptor (coins)  : monomer {a_mono:.4f}, dimer receptor {a_dim:.4f}   (occupancy coin x P(dye >= 1))")
+        if labeling_plan.ligand_classes:
+            print(f"    per complex           : monomer {a_mono:.3f}, B1 {a_dim:.3f} (one represented receptor), "
+                  f"B2 {1 - (1 - a_dim) ** 2:.3f} (two independent coins)")
+        else:
+            print(f"    per complex           : monomer {a_mono:.3f}, dimer {1 - (1 - a_dim) ** 2:.3f}   (two independent coins)")
+    print(f"    both-probes-fluorescent share among fluorescent two-probe dimers: {q / (2 - q):.3f}   "
+          f"(both probes carry at least one dye; equals a two-dye share only under a one-dye-per-probe law)")
 
     print("\nDLI runtime defaults:")
     print(f"  optical background      : SCOPE nuisance kappa_o (drawn per sim; pre-PSF photon floor)")

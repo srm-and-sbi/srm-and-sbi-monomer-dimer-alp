@@ -3,9 +3,9 @@ validation on synthetic data.
 
 ROLE. The Experiment stage infers the stoichiometry of the monomer-dimer model -- the conserved
 receptor-subunit total N_R = n_A + 2 n_B and the initial fraction of receptors in dimers x_B -- in
-every window of every experimental MET recording (the two molecular species, A monomer and B dimer,
-each occupy fast / slow / immobile mobility modes, which are particle types rather than species and
-do not enter the composition). The absolute total is the worst-identified coordinate the model has,
+every window of every experimental MET recording (the monomer/dimer classification, A monomer and B dimer,
+with B1 and B2 both dimers under MET-INLB; every molecular species occupies fast / slow / immobile
+mobility modes, which are particle types rather than species and do not enter the composition). The absolute total is the worst-identified coordinate the model has,
 for an information-theoretic reason rather than a defect: counting few emitters in a
 diffraction-limited scene is a square-root-of-n problem, and the total trades off against the
 fraction because the same visible-spot count can be few dimers or many monomers. This analysis asks

@@ -471,7 +471,7 @@ def extract_trajectory_poses(tray, verbose: bool = False) -> np.ndarray:
           recording; `extract_subunit_lineage` maps subunits onto these indices.
         - The "rank" axis of `tray_poses` is the PARTICLE-TYPE index assigned by
           ReaDDy (from `tray.particle_types`, one rank per (species, mode) type);
-          `rank_to_species` maps it back to the molecular species.
+          `rank_to_species` maps it back to the monomer/dimer classification (the stoichiometric class), `rank_to_molecule` to the molecular species.
         - The last frame in the ReaDDy trajectory is dropped (the
           `n_frames - 1` slice) because ReaDDy writes an extra final
           observable that doesn't correspond to a fully evolved frame.

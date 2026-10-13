@@ -82,7 +82,7 @@ def species_counts_from_type_counts(type_counts, rank_to_species, species_order=
     """Sum per-type counts over the mobility modes into per-species counts.
 
     ``type_counts`` is ``(..., n_types)`` with the particle-type rank on the last axis (the output
-    of :func:`species_counts_per_frame`); ``rank_to_species`` maps each rank to its molecular
+    of :func:`species_counts_per_frame`); ``rank_to_species`` maps each rank to its monomer/dimer
     species name (``simulation_rds_support.rank_to_species(tray)``); ``species_order`` fixes the
     output column order, monomer first. Returns ``(..., len(species_order))`` of the same dtype:
     ``[n_A, n_B]`` per frame for the default order. Every rank must map to one of the requested

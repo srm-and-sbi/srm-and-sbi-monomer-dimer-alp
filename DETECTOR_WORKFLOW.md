@@ -80,12 +80,12 @@ Both workflows rest on one set of assumptions about the MET model, stated in ful
 8. **MET-INLB: independent binding to preformed dimers (assumed; the reference, "I-A"):** initial dimers carry one or two InlB; a one-InlB dimer releases one eligible monomer on dissociation, a two-InlB dimer two. "I-B", no InlB on preformed dimers, is the declared sensitivity scenario.
 9. **Initial composition (inferred within a declared band; scenario for the probe classes):** the true initial basal complex fraction `f_B` stays an inference coordinate (`ratio_dimer_monomer_initial`, `log10 r` with `r = f_B / (1 − f_B)`) restricted to 5–25 %, bounds `[−1.27875360, −0.47712125]`, uniform in the log10 coordinate; eleven coordinates, ten primary quantities, composition secondary, a prior-like calibrated posterior acceptable; the band constrains the initial basal pool only and is a total-population fraction, corresponding to about 9–40 % among initial fluorescent complexes before bleaching and detection (PROJECT_CONTEXT.md §2, *Initial composition*). Initial dimers are basal dimers with the conditional one-/two-probe split `2 (1 − p) : p`; the incubation before acquisition is not reconstructed.
 10. **One dissociation rate and one set of mobility rules for all dimers (declared);** dimers are classified by ligand occupancy, not by origin.
-11. **Spectator reduction (exact given items 6 and 7 and the absence of inter-particle potentials):** probe-free monomers and probe-free dimers are not simulated at onset; every initial retained complex carries at least one probe, a retained Fab monomer may be probe-free after a dissociation, and the probe-free subunit of a one-InlB dimer is never represented (`B1` carries one retained subunit identity that `B1 → A` preserves). The conserved count is `n_A + 2 n_B` under FAB and the InlB-bound subunits `n_A + n_B1 + 2 n_B2` under INLB. The inferred count `N_total` (item 14) and composition `f_B` (item 9) describe the true population; the generator realizes the retained population from them through the occupancies, so `N_total` is not the number of simulated particles, and `count_total` changes meaning from the simulated to the true total.
+11. **Spectator reduction (exact given items 6 and 7 and the absence of inter-particle potentials):** at initialization the generator simulates the complexes carrying at least one probe, and no probe-free complex. Reactions conserve the number of represented receptors, not the number of complexes. All simulated monomers carry a probe at initialization. In the Fab condition, dissociation of a dimer carrying one Fab produces two monomers: one carrying that Fab, and one carrying no probe. Both remain simulated. In the InlB condition only probe-bound receptors are represented, and the probe-free partner of a one-InlB dimer never is (`B1` carries one represented receptor that `B1 → A` preserves). The conserved count is `n_A + 2 n_B` under FAB and the InlB-bound receptors `n_A + n_B1 + 2 n_B2` under INLB. The inferred count `N_total` (item 14) and composition `f_B` (item 9) describe the true population; the generator realizes the retained population from them through the occupancies, so `N_total` is not the number of simulated particles, and `count_total` changes meaning from the simulated to the true total.
 14. **Receptor total and its prior (declared):** `count_total` is `N_total`, the initial receptor-subunit total in the patch, probe-bound and unbound included, with one prior for both conditions, `log10 N_total ∈ [3.0, 5.0]` (1,000–100,000 subunits), uniform in the log10 coordinate; the conditions share this quantity through the cell line and the probe concentration and differ in simulated population through the occupancies. The ceiling is a declared modeling choice with headroom for the localization undercount (the recordings imply about 1,400–25,800 FAB and 3,000–33,300 INLB); at the ceiling the expected simulated population is about 4,762 retained subunits under INLB and 1,600–2,100 under FAB, and timing and memory at that simulated ceiling are checked before any tier is generated. Compatible `N_total` posteriors across conditions are a consistency check, not independent validation.
 12. **Receptor association intensity (declared convention):** `λ_ref = 6 D_A / r²`, `R_ON = 1` under InlB; a normalization, not a probability and not a diffusion-limited regime. Ligand binding from solution is a different rate, represented through item 4 only.
 13. **Brightness is assessed at the spot level (declared):** imaging parameters are calibrated per condition and interpreted within that condition's labeling and rendering assumptions; they are not measurements of isolated fluorophores, and nothing is transferred from Fab to InlB.
 
-**Consequences for this workflow.** Three things the Detector uses follow from these assumptions. (i) The trajectory tier's species inventory under INLB carries the one-InlB dimer `B1` beside the two-InlB `B2`, with `B1 → A` as a conversion at `κ_OFF` (a compact approximation of the fission whose sub-pixel displacement is documented and checked); every simulated INLB monomer is InlB-bound, the INLB network has nine particle types and twenty-four channels while FAB keeps six and eleven, and the conserved count is the retained one (the InlB-bound subunits under INLB). (ii) The labeling summation of §6.6 reads dye counts by probe class instead of composing a per-subunit occupancy coin with the law: a two-probe dimer carries two dyes with probability one quarter under INLB, a one-probe dimer never, and the 25/50/25 % arithmetic of §6.6 holds for two-probe dimers only. (iii) The RDS nuisance the Detector marginalizes (§6.1) carries `count_total` as the true total `N_total` on the shared box `[3.0, 5.0]`, realized to the retained population through the occupancies, and `ratio_dimer_monomer_initial` on the band `[−1.27875, −0.47712]` (5–25 % initial basal complexes); the other nine rows and the Detector's own six imaging ranges are unchanged. The calibrated imaging block is conditional on the labeling model under which it was inferred, so the per-condition calibration is repeated on tiers generated under this model; the encoder screening of §9.9 is a study of architecture and global batch on the earlier data and stays valid as such.
+**Consequences for this workflow.** Three things the Detector uses follow from these assumptions. (i) The trajectory tier's species inventory under INLB carries the one-InlB dimer `B1` beside the two-InlB `B2`, with `B1 → A` as a conversion at `κ_OFF` (a compact approximation of the fission whose sub-pixel displacement is documented and checked); every simulated INLB monomer is InlB-bound, the INLB network has nine particle types and twenty-four channels while FAB keeps six and eleven, and the conserved count is the retained one (the InlB-bound subunits under INLB). (ii) The labeling summation of §6.6 reads dye counts by probe class instead of composing a per-subunit occupancy coin with the law: a two-probe dimer carries two dyes with probability one quarter under INLB, a one-probe dimer never, and the 25/50/25 % arithmetic of §6.6 holds for two-probe dimers only. (iii) The RDS nuisance the Detector marginalizes (§6.1) carries `count_total` as the true total `N_total` on the shared box `[3.0, 5.0]`, realized to the retained population through the occupancies, and `ratio_dimer_monomer_initial` on the band `[−1.27875, −0.47712]` (5–25 % initial basal complexes); the other nine rows and the Detector's own six imaging ranges are unchanged. The calibrated imaging block is conditional on the labeling model under which it was inferred, so the per-condition calibration is repeated on tiers generated under this model; the encoder screening of §9.9 is a study of architecture and global batch on the earlier data and stays valid as such. The imaging prior box (§6.2) is unchanged at regeneration; the video distribution is not, because receptor counts, composition and probe retention follow the current rules, so neither the earlier estimator nor the `REF` vector supplies a numerical target (§9.10).
 
 ### 4.2 The reactive physics model and the per-condition trajectory tier
 
@@ -93,7 +93,7 @@ Stage 1 renders the SAME reactive trajectories the biology workflow renders. The
 
 **Why reactive, not diffusion-only.** A diffusion-only variant — the condition's particle types registered with their diffusion constants and the reaction registrations skipped — would be congruent with the reactive system in species set, diffusion constants, initial placement, and the entire imaging pipeline, and it would still be misspecified for the calibration in two ways that the labeling model (§6.6) makes decisive. First, under incomplete labeling a dissociating one-dye dimer leaves one visible and one permanently invisible daughter, so track disappearance is partly a kinetic event; a detector shown only static composition could explain such disappearances as photobleaching alone and would bias `prob_photo_bleach` upward on the experimental recordings, where dissociation happens. Second, the DOL-explicit rendering follows every receptor subunit through the reactions via the reaction records (`extract_subunit_lineage`), and ReaDDy writes no reaction-record dataset for a system with no registered reactions — a diffusion-only trajectory cannot be rendered at all.
 
-**What the calibration marginalizes.** Eleven parameters — the whole reaction-diffusion model of the separated stoichiometry–mobility family (`PROJECT_CONTEXT.md` §2): the stoichiometry block (the true receptor total `N_total`, from which the retained population is realized; the requested initial dimer-to-monomer ratio `r` of the true population; the dissociation rate `κ_OFF`; the association ratio is the condition's declared constant, not a row) and the mobility block (the monomer scale `D_A`, the dimer factor `R_B`, the slow and immobile mode factors `R_s`, `R_i`, and the four switching rates shared by both species; §6.1), all drawn per simulation from the biology's decided prior ranges, identical for both conditions. Population dynamics are therefore realistic rather than frozen: the monomer–dimer composition and the mode occupancies evolve through the condition's generated channels — under MET-INLB dimers form and dissociate, under MET-FAB pre-existing dimers dissociate and none form — and the visible population carries the labeling statistics of §6.6. The imaging parameters remain species-agnostic and are applied per dye by identical code in both workflows: both workflows use the same observation model, which establishes implementation consistency. The condition-specific calibration supplies imaging-parameter distributions for downstream marginalization; their adequacy under the revised model remains to be assessed.
+**What the calibration marginalizes.** Eleven parameters — the whole reaction-diffusion model of the separated stoichiometry–mobility family (`PROJECT_CONTEXT.md` §2): the stoichiometry block (the true receptor total `N_total`, from which the retained population is realized; the requested initial dimer-to-monomer ratio `r` of the true population; the dissociation rate `κ_OFF`; the association ratio is the condition's declared constant, not a row) and the mobility block (the monomer scale `D_A`, the dimer factor `R_B`, the slow and immobile mode factors `R_s`, `R_i`, and the four switching rates shared by all molecular species of the condition; §6.1), all drawn per simulation from the biology's decided prior ranges, identical for both conditions. Population dynamics are therefore realistic rather than frozen: the monomer–dimer composition and the mode occupancies evolve through the condition's generated channels — under MET-INLB dimers form and dissociate, under MET-FAB pre-existing dimers dissociate and none form — and the visible population carries the labeling statistics of §6.6. The imaging parameters remain species-agnostic and are applied per dye by identical code in both workflows: both workflows use the same observation model, which establishes implementation consistency. The condition-specific calibration supplies imaging-parameter distributions for downstream marginalization; their adequacy under the revised model remains to be assessed.
 
 **Cost.** The Detector adds no RDS compute at all: each condition's tier is generated once and both workflows re-image it, so a two-condition, two-workflow campaign is two RDS tiers and four DLI passes. Sharing also yields matched pairs within a condition for free — a condition's held-out trajectories are identical under both workflows, so its biology and detector estimators are compared on the same latent motion; across conditions, held-out recordings are matched by parameter draw, not by trajectory.
 
@@ -142,7 +142,7 @@ Two groups: the **RDS nuisance** (biology marginalized during detector calibrati
 
 ### 6.1 RDS nuisance (the biology prior, supplied by the condition's trajectory tier)
 
-These are the biology table's ranges, reproduced here for reading. The Detector table carries these eleven rows without ranges (nuisance-from-object, §5; grouped `stoichiometry` / `mobility` like the biology table), and the condition's tier's `Theta_Set` is the draw; the authoritative ranges are the biology table in `parameterization.py`, and changing one there changes the tiers both workflows read. The association ratio has no row: it is the condition's declared constant (MET-FAB 0, MET-INLB 1; §4), so the MET-FAB calibration videos contain no association event and the MET-INLB videos associate at the reference intensity. **Every range below is a decided prior** (2026-09-14; rationale: `PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*): box-uniform in the estimator coordinate, covering the plausible support with a margin and never encoding a condition's expected answer, and shared by both conditions (condition-specific ranges remain permissible but unused). The receptor count is the true total `N_total`, from which the generator realizes the retained population through the declared per-condition occupancies (MET-INLB 0.0476, the equilibrium at 0.25 nM with `K_D` 5 nM; MET-FAB 0.0148, derived; §4.1, §6.6), which the DLI stages of both workflows apply by default through the probe rule. The model itself (two molecular species × three mobility modes, the channels generated per condition, the association normalization and the per-condition setting, the boundary behavior) is described in `PROJECT_CONTEXT.md` §2.
+These are the biology table's ranges, reproduced here for reading. The Detector table carries these eleven rows without ranges (nuisance-from-object, §5; grouped `stoichiometry` / `mobility` like the biology table), and the condition's tier's `Theta_Set` is the draw; the authoritative ranges are the biology table in `parameterization.py`, and changing one there changes the tiers both workflows read. The association ratio has no row: it is the condition's declared constant (MET-FAB 0, MET-INLB 1; §4), so the MET-FAB calibration videos contain no association event and the MET-INLB videos associate at the reference intensity. **Every range below is a decided prior** (2026-09-14; rationale: `PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*): box-uniform in the estimator coordinate, covering the plausible support with a margin and never encoding a condition's expected answer, and shared by both conditions (condition-specific ranges remain permissible but unused). The receptor count is the true total `N_total`, from which the generator realizes the retained population through the declared per-condition occupancies (MET-INLB 0.0476, the equilibrium at 0.25 nM with `K_D` 5 nM; MET-FAB 0.0148, derived; §4.1, §6.6), which the DLI stages of both workflows apply by default through the probe rule. The model itself (two molecular species under MET-FAB and three under MET-INLB, each in three mobility modes, the channels generated per condition, the association normalization and the per-condition setting, the boundary behavior) is described in `PROJECT_CONTEXT.md` §2.
 
 | parameter | scale | prior range (estimator coordinate, log10) | absolute | role in the calibration videos |
 |---|---|---|---|---|
@@ -153,10 +153,10 @@ These are the biology table's ranges, reproduced here for reading. The Detector 
 | `relative_diffusivity_dimer` (R_B) | log10 | [−1, 0] | 0.1–1 | The dimer factor within a mode, `D[B, m] = R_B · D[A, m]`, `0 < R_B ≤ 1` (at 1 dimerization adds no slowdown; population-level differences then come from mode occupancy and inheritance). |
 | `relative_diffusivity_slow` (R_s) | log10 | [−1, 0] | 0.1–1 | The slow-mode factor, `D[X, s] = R_s · D[X, f]`, for monomers and dimers alike. |
 | `relative_diffusivity_immobile` (R_i) | log10 | [−3, −2] | 0.001–0.01 | The immobile-mode factor, `D[X, i] = R_i · D[X, f]` — immobile by construction: `D_i` stays below the tracking pipelines' immobility thresholds (0.0028 and 0.0065 µm²/s) over nearly the whole `D_A` range, and the lower half of the range lies below the 2 s resolution floor. A full decade below the slow range, so `R_i < R_s` for every draw (checked at import). |
-| `rate_fast_slow` (k_fs) | log10 | [−1, 1] | 0.1–10 /s | Switching f → s, shared by both species. |
-| `rate_slow_fast` (k_sf) | log10 | [−1, 1] | 0.1–10 /s | Switching s → f, shared by both species. |
-| `rate_slow_immobile` (k_si) | log10 | [−1, 1] | 0.1–10 /s | Switching s → i, shared by both species. |
-| `rate_immobile_slow` (k_is) | log10 | [−1, 1] | 0.1–10 /s | Switching i → s, shared by both species. There is no direct f ↔ i channel; each particle's initial mode is drawn from the stationary law of the isolated chain. |
+| `rate_fast_slow` (k_fs) | log10 | [−1, 1] | 0.1–10 /s | Switching f → s, shared by all molecular species of the condition. |
+| `rate_slow_fast` (k_sf) | log10 | [−1, 1] | 0.1–10 /s | Switching s → f, shared by all molecular species of the condition. |
+| `rate_slow_immobile` (k_si) | log10 | [−1, 1] | 0.1–10 /s | Switching s → i, shared by all molecular species of the condition. |
+| `rate_immobile_slow` (k_is) | log10 | [−1, 1] | 0.1–10 /s | Switching i → s, shared by all molecular species of the condition. There is no direct f ↔ i channel; each particle's initial mode is drawn from the stationary law of the isolated chain. |
 
 No equality with the biology prior is checked any more, because none needs to be: the Detector re-images the biology's own trajectories, so the marginalized biology is the biology prior by construction.
 
@@ -316,7 +316,7 @@ By induction the per-frame marginal is exactly `LogNormal(ln mu_pc, sigma_pc²)`
 
 The renderer's emitters are dyes, not particles. Every simulated receptor (a `subunit` in the code: one receptor identity of the lineage, not a part of a receptor) carries an integer dye count `kappa`, drawn once per recording for its bound probe from the condition's measured labeling law (`labeling.py`: MET-INLB Bernoulli with labeling probability 0.5, one engineered attachment site per InlB probe; MET-FAB Poisson at the measured mean of 1.64 dyes per Fab, with matched-mean dispersion alternatives for sensitivity runs) and zero for a probe-free receptor, and held fixed, because dye conjugation happened during sample preparation. The dye count travels with its simulated receptor through fusion, fission, and conversion via the subunit lineage the DLI stage replays from the reaction records. A simulated receptor with no dye has no emitter and never renders; a dimer's dyes render at one position, so a visible spot's per-frame brightness is the **sum of independent per-dye brightness processes** — each drawn from the same log-normal single-dye law (`mu_pc`, `sigma_pc`) with its own flicker trajectory (§6.5). For independent emitters, brightness distributions combine by convolution: the intensity distribution of an *n*-dye spot is the *n*-fold convolution of the single-dye distribution (Mutch et al. 2007, *Biophys. J.* 92(8):2926–2943), the additivity that underlies number-and-brightness analysis (Digman, Dalal, Horwitz, Gratton 2008, *Biophys. J.* 94(6):2320–2332).
 
-Three consequences follow from the law and the probe rule of the retained population (`PROJECT_CONTEXT.md` §2, *Modeling assumptions of the MET model*), none an assumption of its own. The law applies per bound probe: every simulated monomer carries a probe, a retained dimer one or two (`B1` / `B2` by species under MET-INLB; the one-/two-Fab classes drawn at labeling under MET-FAB at the two-probe share `p / (2 − p)`, 0.0074). A two-InlB dimer carries zero, one, or two dyes with probabilities 25/50/25 %, so among visible two-InlB dimers two thirds carry one dye and one third two, and the visible-dimer brightness is a mixture of one-dye and two-dye emission, not a doubled monomer; a one-InlB dimer never carries two dyes. A retained monomer is visible with `q = P(dye ≥ 1)` (0.50 under MET-INLB, 0.81 under MET-FAB), a one-probe dimer with `q` and a two-probe dimer with `1 − (1 − q)²`, so the retained population is what the videos show and the count parameter `N_total` is the true receptor total the retained population is realized from. Both DLI stages apply the rule by default (`labeling.resolve_labeling`), `--occupancy` is an explicit override that replaces the classes by independent coins for sensitivity runs, and the `Labeling_Set` records the probe probability applied per class (`occupancy_monomer`, `occupancy_dimer`) and the realized classes (`dimers_one_probe_0`, `dimers_two_probe_0`, `two_probe_share`). And a one-Fab dimer that dissociates leaves one daughter with the Fab and all its dyes and one permanently dark daughter, while a `B1 → A` conversion keeps the bound subunit — the kinetic track disappearance of §5. A fixed brightness multiplier for dimers would misstate both the mean (a half-labeled dimer is as bright as a monomer) and the tail (doubling a single draw quadruples its variance where summing two independent draws doubles it); the summation needs no multiplier and no dimer-specific code path. Perfect independence of co-located dyes is an idealization — quenching or energy transfer between nearby dyes would add correlation the sum omits — so the sum is the first-order model, with a bounded within-probe sensitivity reserved for the model-comparison gates.
+Three consequences follow from the law and the probe rule of the retained population (`PROJECT_CONTEXT.md` §2, *Modeling assumptions of the MET model*), none an assumption of its own. The law applies per bound probe: every simulated monomer carries a probe at initialization (in the Fab condition, dissociation of a dimer carrying one Fab produces one monomer carrying that Fab and one carrying no probe, and both remain simulated), a retained dimer one or two (`B1` / `B2` by species under MET-INLB; the one-/two-Fab classes drawn at labeling under MET-FAB at the two-probe share `p / (2 − p)`, 0.0074). A two-InlB dimer carries zero, one, or two dyes with probabilities 25/50/25 %, so among visible two-InlB dimers two thirds carry one dye and one third two, and the visible-dimer brightness is a mixture of one-dye and two-dye emission, not a doubled monomer; a one-InlB dimer never carries two dyes. The initial fluorescence probabilities, before bleaching and detection, of the complexes present at initialization: a simulated monomer, probe-bound at initialization, is fluorescent with `q = P(dye ≥ 1)` (0.50 under MET-INLB, 0.806 under MET-FAB; a probe-free monomer produced later by the dissociation of a Fab dimer never is), a one-probe dimer with `q`, a two-probe dimer with `1 − (1 − q)²` (0.75, 0.962), and a simulated dimer, averaged over its classes at the two-probe share, with 0.807 under MET-FAB; a represented receptor within a simulated Fab dimer carries a fluorescent probe with probability 0.406, which averages over the probe-free partner and is not the dimer's fluorescence probability. The imaging model renders the fluorescence contributed by the simulated population, and the count parameter `N_total` is the true receptor total the retained population is realized from. Both DLI stages apply the rule by default (`labeling.resolve_labeling`), `--occupancy` is an explicit override that replaces the classes by independent coins for sensitivity runs, and the `Labeling_Set` records the probe probability applied per class (`occupancy_monomer`, `occupancy_dimer`) and the realized classes (`dimers_one_probe_0`, `dimers_two_probe_0`, `two_probe_share`). And a one-Fab dimer that dissociates leaves one daughter with the Fab and all its dyes and one permanently dark daughter, while a `B1 → A` conversion keeps the bound subunit — the kinetic track disappearance of §5. A fixed brightness multiplier for dimers would misstate both the mean (a half-labeled dimer is as bright as a monomer) and the tail (doubling a single draw quadruples its variance where summing two independent draws doubles it); the summation needs no multiplier and no dimer-specific code path. Perfect independence of co-located dyes is an idealization — quenching or energy transfer between nearby dyes would add correlation the sum omits — so the sum is the first-order model, with a bounded within-probe sensitivity reserved for the model-comparison gates.
 
 ### 6.7 Imaging values from single-molecule localization data, and their caveats
 
@@ -894,24 +894,25 @@ correctness. The vector is retained as the provisional Fab imaging scenario decl
 named above remains `capacity256`, and the comparison record
 `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128` holds the numbers.
 
-**Provisional Fab imaging treatment (declared 2026-10-12).** No Fab `Nuisance_DLI` is settled. The adopted
-detector estimator (§9.9) was trained and tested on detector datasets generated with the simulation model before
-the retained-population revision, and the checks of the current model in §9.9 are encouraging but do not replace
-retraining: the detector datasets are regenerated with the current model, the estimator is retrained and evaluated
-on them, and the Fab `Nuisance_DLI` is decided after that. Until then, `REF` is the provisional imaging scenario:
-the six values above are fixed from the `REF` `Nuisance_DLI`, and the camera block is sampled as the SCOPE
-nuisance (§9.3). It is a chosen working treatment, not a calibration, and any biophysical posterior computed under
-it is conditional on it. Three selected sensitivity scenarios explore its effect: bleaching 0.03 and 0.10, which
-test the directions of slower and faster loss, and the adopted estimator's PSF width and brightness together
-(`mu_r` 1.86, `mu_pc` 100). They are selected scenarios, not an uncertainty distribution or measured bounds, and
-they do not marginalize the imaging uncertainty. As a practical warning rule, a reaction-diffusion posterior
-median that moves under a scenario by more than half the 90 % width of the `REF` posterior is flagged, with shifts
-and widths calculated in the same parameter coordinates; shifts are reported beside the widths, because a broad
-posterior can pass the rule despite a consequential shift. Further Fab imaging diagnostics are deferred. The
-treatment is revisited if the sensitivity checks, or other material evidence, threaten a reaction-diffusion
-conclusion. The half-width criterion is a screening flag, not the sole basis for that decision. Neither the
-vector, earlier estimates nor the adopted estimator's values are numerical targets that later inference must
-reproduce, and none of them is ground truth. The InlB condition is treated separately.
+**Provisional Fab imaging treatment (declared 2026-10-12).** No Fab nuisance treatment is approved for production
+under the current model: the `REF` artifact exists, and its existence is not its approval for current-model
+inference. The adopted detector estimator (§9.9) was trained and tested on detector datasets generated with the
+simulation model before the retained-population revision, and the checks of the current model in §9.9 are
+encouraging but do not replace retraining: the detector datasets are regenerated with the current model, the
+estimator is retrained and evaluated on them, and the Fab `Nuisance_DLI` is decided after that. Until then, `REF`
+is the provisional imaging scenario: the six values above are fixed from the `REF` `Nuisance_DLI`, and the camera
+block is sampled as the SCOPE nuisance (§9.3). It is a chosen working treatment, not a calibration, and any
+biophysical posterior computed under it is conditional on it. Three selected sensitivity scenarios explore its
+effect: bleaching 0.03 and 0.10, which test the directions of slower and faster loss, and the adopted estimator's
+PSF width and brightness together (`mu_r` 1.86, `mu_pc` 100). They are selected scenarios, not an uncertainty
+distribution or measured bounds, and they do not marginalize the imaging uncertainty. As a practical warning rule,
+a reaction-diffusion posterior median that moves under a scenario by more than half the 90 % width of the `REF`
+posterior is flagged, with shifts and widths calculated in the same parameter coordinates; shifts are reported
+beside the widths, because a broad posterior can pass the rule despite a consequential shift. Further Fab imaging
+diagnostics are deferred. The treatment is revisited if the sensitivity checks, or other material evidence,
+threaten a reaction-diffusion conclusion. The half-width criterion is a screening flag, not the sole basis for
+that decision. Neither the vector, earlier estimates nor the adopted estimator's values are numerical targets that
+later inference must reproduce, and none of them is ground truth. The InlB condition is treated separately.
 
 **Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
 full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the
@@ -925,22 +926,24 @@ through the production labeling path, read the imaging from the tagged `REF` art
 path, and take the reaction-diffusion block from one declared configuration that the user confirms
 (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`).
 
-**Two separate decisions.** The vector above is selected for generation. The recordings show temporal features
-that the selection does not represent, and they stay in this record as the observation-model limitations every
-biological conclusion carries until their impact is assessed: (i) the detected spot count of a recording falls
-over 20 s almost in proportion to its signal (last-to-first 0.62 to 0.66 on cells 0, 26 and 16); on the corrected
-renders within `REF` at 0.05 (§9.9), rendered spots persist longer than recorded ones in three of the five
-recordings checked (retention higher by 0.09 to 0.15), a remaining discrepancy and a potential confounder for the
-biology that may point at the labeling law, at emitters leaving the field or detaching, or at the bleaching
-value, whose 0.10 sensitivity scenario tests the direction of faster loss; (ii) on the field statistic, the
-decline of the bright recordings exceeds what either bleaching scenario implies for ideal emission, a comparison
-that is not like for like, and whether this brightness coupling belongs to the dyes is not established; (iii) the
-fitted PSF-width estimates decrease along a recording; (iv) the recorded background falls 5 to 12 % over 20 s
-where the renderer's is constant; (v) synthetic recordings initialize every assigned dye as active, while later
-experimental windows inherit earlier illumination, which can change the number and distribution of active dyes;
-this initialization difference is a possible source of mismatch, and its effect on inference has not been
-established. For generation, the reference and each variant are identified by their tags, the other settings are
-kept matched, and the PSF width and the bleaching value are never changed together when an effect is attributed.
+**Two separate decisions.** The vector above was selected for the diagnostic renders and the generation planned
+before the retained-population revision; under the current model it is the provisional scenario of the treatment
+above, not a selection for production generation. The recordings show temporal features that the selection does
+not represent, and they stay in this record as the observation-model limitations every biological conclusion
+carries until their impact is assessed: (i) the detected spot count of a recording falls over 20 s almost in
+proportion to its signal (last-to-first 0.62 to 0.66 on cells 0, 26 and 16); on the corrected renders within `REF`
+at 0.05 (§9.9), rendered spots persist longer than recorded ones in three of the five recordings checked
+(retention higher by 0.09 to 0.15), a remaining discrepancy and a potential confounder for the biology that may
+point at the labeling law, at emitters leaving the field or detaching, or at the bleaching value, whose 0.10
+sensitivity scenario tests the direction of faster loss; (ii) on the field statistic, the decline of the bright
+recordings exceeds what either bleaching scenario implies for ideal emission, a comparison that is not like for
+like, and whether this brightness coupling belongs to the dyes is not established; (iii) the fitted PSF-width
+estimates decrease along a recording; (iv) the recorded background falls 5 to 12 % over 20 s where the renderer's
+is constant; (v) synthetic recordings initialize every assigned dye as active, while later experimental windows
+inherit earlier illumination, which can change the number and distribution of active dyes; this initialization
+difference is a possible source of mismatch, and its effect on inference has not been established. For generation,
+the reference and each variant are identified by their tags, the other settings are kept matched, and the PSF
+width and the bleaching value are never changed together when an effect is attributed.
 
 **What the vector is and is not.** It is a user-selected, fixed vector with a documented source per coordinate.
 It carries no calibrated joint uncertainty: `capacity256`'s joint coverage (0.87 at nominal 0.90) supports
@@ -2609,3 +2612,74 @@ box edge within its own interval is undecided, and a confident extrapolation bey
 an out-of-range synthetic check is run; conclusions are stated as conditional on the estimator and the
 generator; agreement with a selected vector is compatibility; and a statement about every window position is
 not a statement about every window.
+
+### 9.10 Regeneration of the Fab detector datasets under the current model (campaign specification, 2026-10-13)
+
+**Purpose.** The detector estimator of record (§9.9) was trained and tested on datasets generated before the
+retained-population revision. This campaign regenerates the Fab 2 s trajectory tier and the detector datasets
+under the current model, retrains the estimator from the adopted architecture and training configuration,
+evaluates it, applies it to the experimental Fab recordings, and only then puts the Fab nuisance treatment to the
+lead's decision (§7.6). Retraining does not mean accepting the new estimator's experimental estimates: that
+remains a decision informed by recovery, calibration and experimental compatibility. Neither the `REF` vector, the
+earlier estimates nor the adopted estimator's values are numerical targets.
+
+**Assumptions.** The model is the one stated in §4.1 and `PROJECT_CONTEXT.md` §2, in the terms of the collaborator
+glossary (`Special_Analyses/MET_NEXT_MODEL_DESIGN_PRESENTATION/DOCUMENT.md` §0); this section restates none of it.
+The imaging prior box (§6.2) and the camera boxes (§6.3) are unchanged; the video distribution is not (§4.1).
+
+**Datasets.** Condition FAB, 2 s at 50 fps, 1000 simulations per task: TRAIN 200 tasks, TEST 50, EVAL 25 (200,000
+/ 50,000 / 25,000 videos), 8-bit, seedless: the sizes of the datasets of record, so the retrained estimator is
+compared on equal data volume. TRAIN and TEST on the scratch root, EVAL on the project root (`PROJECT_CONTEXT.md`
+§4, two-tier storage).
+
+**Machines and submissions.** Generation on JUWELS (CPU). The trajectory tier through the biology controller
+(`SIM_STAGE=rds CASES=2s CONDITION=FAB`): 20 + 5 arrays of 10 tasks per node for TRAIN and TEST and 3 arrays for
+EVAL gated on their completion, 24 h limits. Then the detector render pass through the detector controller
+(`CASES=2s CONDITION=FAB`): the same 28 arrays under the detector job names, submitted after every trajectory
+array has `COMPLETED`. Both controllers are dry-run first (their default) and go live on the lead's approval, one
+controller at a time. The GPU stages run on JUPITER (`booster`, 12 h walls) once its maintenance ends: the JUPITER
+tree synced to the campaign's commit and verified by the compute-node gate, the datasets staged from the JUWELS
+roots to the `/e` roots on a login node. No prototyping machine runs any stage of this campaign.
+
+**Estimates, not measurements.** From the campaign of 2026-09-16 under the earlier generator at the same sizing:
+about 2 h per trajectory node and about 1.3 h per render node; storage about 1.5 TB and 500,000 files for TRAIN
+and TEST and about 150 GB and 50,000 files for EVAL (3.6 GB of trajectories and 2.3 GB of videos per task). The
+scratch file-count quota (4.0 M soft; 2.59 M in use on 2026-10-13) leaves room for the new tier beside the
+archived one. The production logs and the accounting give the measurements; no separate resource smoke is run.
+
+**Preservation.** Before any submission the datasets of the earlier generator are moved aside, never overwritten:
+the RDS stage deletes an existing trajectory before writing, and the set writers open in overwrite mode. The EVAL
+products of the earlier Fab 2 s tier (25 trajectory folders, 25 biology theta sets, and 25 detector video, theta,
+camera-nuisance and labeling sets: 150 entries, no destination collision, one filesystem) move to
+`Superseded_0.1.6/` under the project root, and the TRAIN and TEST products (200 + 50 of each kind) to
+`Superseded_0.1.6/` under the scratch root, each with a README naming what was moved and why, following the
+`Superseded_0.1.18` precedent. The one-dye products and the 20 s EVAL tier are not touched. Deletion of any
+archived data is a separate decision of the lead on exact targets; none is required by this campaign.
+
+**Campaign membership (the provenance check).** The schema guard does not establish it (`PROJECT_CONTEXT.md` §2,
+*The one parameter-conversion rule*). After the render pass and before training (the detector theta sets and the
+labeling sets exist only then), every selected task is checked against this specification: the biology and the
+detector theta set of the task carry, in their schemas, the package version of the campaign's release, condition
+`FAB`, timing `2S_50FPS`, the generators `rds` and `dli_detector`, a written time inside the campaign's window and
+1000 rows; the labeling set, which carries no version or time, is checked for the thirteen documented columns,
+1000 rows, the probe rule `classes`, the two-probe share 0.0074 and the per-class probe probabilities (1, 0.5037);
+every expected task of every split is present (TRAIN 0 to 199, TEST 0 to 49, EVAL 0 to 24). A task failing any
+item excludes the dataset from training until it is regenerated. The check is a seventh item of the
+prior-realization audit, which already runs after every tier and render pass; it is added before the campaign in a
+PATCH release.
+
+**Training.** The adopted configuration as the starting point: preset `capacity256_kernel7_earlyconv_stats`, 16
+nodes × 4 GH200, batch 2 per rank (64 ranks, global batch 128), 100 epochs as two legs of 50 (the second with
+`--resurrect`, chained `afterany`), the default peak learning rate, TRAIN 200 / TEST 50. Two chains when the
+allocation allows, each under its own artifact tag assigned by the lead; the adopted estimator keeps its tag and
+is not overwritten. The selection between the chains and of the checkpoint is the lead's decision, recorded here
+before training: either the guidance of §9.9 (selection on the held-out EVAL videos, which then take part in model
+selection) or selection on TEST with EVAL reserved for the recovery and calibration assessment.
+
+**Assessment and application.** Evaluation (25 EVAL tasks, the bounded pool), Posterior_Calibration (1000
+posterior samples per video, all four tests) and the embedding probe under each tag, with the checkpoint
+identities (the estimator file and weights checksums) recorded in every product, and a scorecard of the retrained
+estimators on the new EVAL videos (the earlier records sit on the earlier EVAL videos and are read beside it, not
+pooled). The Experiment on the 60 Fab recordings (the unrestricted pool, ten 2 s windows), then the
+Experiment-comparison and raw-decline cross-check companions, read under the rules of §9.9 (*Lessons carried to
+the retraining*). The Fab nuisance treatment is decided after that reading (§7.6).

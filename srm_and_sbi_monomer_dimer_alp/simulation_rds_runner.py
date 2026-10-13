@@ -169,14 +169,15 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  box_size_nm          : {geom.box_size}")
     print(f"  particle_diameter_nm : {geom.particle_diameter_nm}")
 
-    print("\nParticle types (molecular species x mobility mode):")
-    print(f"  {rds_cfg.particle_type_names}")
-    print(f"  species {rds_cfg.molecular_species_names} = (monomer, dimer); "
+    print(f"\nParticle types of the condition (molecular species x mobility mode, {condition}):")
+    print(f"  {rds_cfg.particle_type_names_for(condition)}")
+    print(f"  molecular species of the condition: {tuple(sp.name for sp in rds_cfg.species_for(condition))}; "
+          f"monomer/dimer classification {rds_cfg.molecular_species_names} (the census axis); "
           f"modes {rds_cfg.mobility.modes} = (fast, slow, immobile); "
           f"inheritance: {rds_cfg.mobility.inheritance}")
     _n_channels = len(reaction_channels(np.array([para['VALUE'] for para in PARAMETERIZATION], dtype=float), condition))
     print(f"  reaction channels under {condition}: {_n_channels} "
-          f"({'3 fissions + 8 conversions, no association' if r_on == 0.0 else '6 fusions + 3 fissions + 8 conversions'})")
+          f"({'3 fissions + 8 mobility switches, no association' if r_on == 0.0 else '6 fusions + 3 fissions + 3 conversions B1 -> A + 12 mobility switches'})")
 
     timing_label = timing.label
     print("\nOutput destinations:")
@@ -413,9 +414,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     )
                     reporter.save_figure(
                         "reaction_events", figure_reaction_events(reaction_counts),
-                        caption="Total firings of each of the seventeen reaction channels "
+                        caption="Total firings of each reaction channel of the condition "
                                 "over the trajectory (association fusions, dissociation "
-                                "fissions, mobility-switching conversions).",
+                                "fissions and B1 -> A conversions, mobility switches).",
                     )
                     poses = collapse_species_axis(extract_trajectory_poses(tray))
                     # Replay the reaction records into the subunit lineage the DLI stage

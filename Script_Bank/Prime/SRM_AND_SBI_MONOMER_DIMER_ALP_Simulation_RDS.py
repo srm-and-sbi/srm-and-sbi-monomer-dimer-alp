@@ -1,7 +1,8 @@
 """Entry-point script: generate one condition's ReaDDy reaction-diffusion trajectory tier.
 
 Samples the eleven reaction-diffusion parameters of the separated stoichiometry-mobility
-model (two molecular species A monomer / B dimer x three mobility modes f / s / i = six
+model (two molecular species under MET-FAB, A monomer and B dimer, three under MET-INLB with
+the one- and two-InlB dimers B1 and B2, each in three mobility modes f / s / i: six or nine
 particle types; the reaction channels generated from the model blocks and the run's
 condition) from the box-uniform prior in the estimator space (log10 for log rows, the
 value itself for the linear initial dimer fraction), maps them to physical values with
@@ -11,7 +12,7 @@ files and the parameter samples as a .zarr (compressed) or .npy (uncompressed) t
 
 This is the ONE RDS entry point of the pipeline, run once PER CONDITION (``--condition``):
 the association ratio is a declared per-condition constant (MET-FAB 0: no association
-channel, eleven channels; MET-INLB 1: the reference convention, seventeen channels), so the
+channel, eleven channels; MET-INLB 1: the reference convention, twenty-four channels), so the
 two conditions' trajectories differ. Within a condition the tier is shared by both
 workflows, which re-image it at their DLI stages (the biology under the calibrated imaging
 nuisance, the detector with the imaging drawn as its inference target) under the

@@ -47,10 +47,15 @@ Condition laws for the MET recordings of Harwardt et al. (2017; BioStudies S-BSS
           distribution, so a matched-mean underdispersed (binomial) and overdispersed
           (negative binomial) alternative are registered for the sensitivity grid.
 
-Derived visible fractions of the RETAINED population (arithmetic of the laws, ``q`` = P(dye >= 1)
-of a bound probe: INLB 0.5, FAB 0.806): a retained monomer is visible with probability ``q``; a
-one-probe dimer with ``q`` and, under INLB, never with two dyes; a two-probe dimer with
-``1 - (1 - q)^2`` (INLB 0.75, FAB 0.962), and among visible two-InlB dimers one third carry two
+Initial fluorescence probabilities of the simulated population, before bleaching and detection
+(arithmetic of the laws, ``q`` = P(dye >= 1) of a bound probe: INLB 0.5, FAB 0.806), for the
+complexes present at initialization: a simulated monomer, probe-bound at initialization, is
+fluorescent with probability ``q`` (a probe-free monomer produced later by the dissociation of a
+Fab dimer never is); a one-probe dimer with ``q`` and, under INLB, never with two dyes; a two-probe
+dimer with ``1 - (1 - q)^2`` (INLB 0.75, FAB 0.962); a simulated dimer, averaged over its classes at
+the two-probe share, with 0.807 under FAB. A represented receptor within a simulated Fab dimer
+carries a fluorescent probe with probability 0.406, which averages over the probe-free partner and
+is not the dimer's fluorescence probability. Among fluorescent two-InlB dimers one third carry two
 dyes. Under FAB a bound probe carries a Poisson number of dyes, so brightness classes do not map
 onto probe counts.
 

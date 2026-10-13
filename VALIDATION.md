@@ -280,7 +280,13 @@ retained population through the DLI stage's own labeling path on a synthetic lin
 both conditions, including the FAB/INLB visibility ratio of the true population against the
 declared one (P6). The report ends with theory, code path, and products side by side.
 Nothing is simulated or rendered; it takes seconds. `--workflow detector` reads the
-detector's `Labeling_Set` instead of the biology's.
+detector's `Labeling_Set` instead of the biology's. With `--campaign-version` it also
+establishes campaign membership (P7, run after the render pass): every expected task present,
+every task's theta sets carrying in their schemas the campaign's package version, condition,
+timing, generator and written time with the row count, and every task's `Labeling_Set` (which
+carries no version or time) its columns, row count and the declared probe rule, because the schema guard
+compares keys, bounds, scales and condition only and does not refuse an earlier generator's
+detector dataset under the same imaging box (`DETECTOR_WORKFLOW.md` §9.10).
 
 ```bash
 # the FAB TRAIN tier after the RDS + DLI smokes (biology Labeling_Set); <profile> is the machine profile, as everywhere in this file
@@ -291,6 +297,9 @@ MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SB
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --selftest
 # the visibility chain alone (P6, both conditions): theory vs the DLI code path, no tier needed
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --visibility
+# campaign membership (P7) of a detector pass before training: the package version of the campaign's release,
+# every task 0..199 present with 1000 rows per set, written inside the campaign's window
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --condition FAB --split train --total-time-seconds 2 --workflow detector --campaign-version <version> --expected-tasks 200 --task-simulations 1000 --campaign-window <start>..<end>
 ```
 
 **Expected**: a report `.md` and `prior_realization_summary.json` under

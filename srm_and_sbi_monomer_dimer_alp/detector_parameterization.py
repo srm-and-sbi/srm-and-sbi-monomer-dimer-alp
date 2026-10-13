@@ -150,13 +150,13 @@ _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
         {'KEY': 'relative_diffusivity_immobile', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$R_{i}$',
          'NOTE': 'Immobile-mode factor: D[X, i] = R_i * D[X, f]; a resolution floor, not zero. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_fast_slow', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{fs}$',
-         'NOTE': 'Mobility switching fast -> slow, shared by both species, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'Mobility switching fast -> slow, shared by all molecular species of the condition, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_slow_fast', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{sf}$',
-         'NOTE': 'Mobility switching slow -> fast, shared by both species, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'Mobility switching slow -> fast, shared by all molecular species of the condition, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_slow_immobile', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{si}$',
-         'NOTE': 'Mobility switching slow -> immobile, shared by both species, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'Mobility switching slow -> immobile, shared by all molecular species of the condition, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_immobile_slow', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{is}$',
-         'NOTE': 'Mobility switching immobile -> slow, shared by both species, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'Mobility switching immobile -> slow, shared by all molecular species of the condition, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
     ],
     # ----- Fixed geometry -----
     'geometry': [

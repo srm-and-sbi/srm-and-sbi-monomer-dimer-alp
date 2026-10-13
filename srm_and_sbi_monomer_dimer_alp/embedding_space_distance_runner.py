@@ -685,8 +685,8 @@ def build_parser(description):
 
 # Concise report-facing descriptions. The detector's are distilled from the long-form NOTE fields of
 # detector_parameterization; the biology entries state each parameter's role in the separated
-# stoichiometry-mobility model documented in PROJECT_CONTEXT.md (two molecular species, A monomer
-# and B dimer, each in three mobility modes f / s / i; six particle types).
+# stoichiometry-mobility model documented in PROJECT_CONTEXT.md (the molecular species of the condition, A monomer
+# and B dimer under MET-FAB, A, B1 and B2 under MET-INLB, each in three mobility modes f / s / i; six or nine particle types).
 _PARAM_MEANING_DETECTOR = _PARAM_MEANING
 
 _PARAM_MEANING_BIOLOGY = {
@@ -699,10 +699,10 @@ _PARAM_MEANING_BIOLOGY = {
     "relative_diffusivity_dimer": "mobility ratio: dimer factor R_B within a mode, D[B, m] = R_B D[A, m]",
     "relative_diffusivity_slow": "mobility ratio: slow-mode factor R_s, D[X, s] = R_s D[X, f]",
     "relative_diffusivity_immobile": "mobility ratio: immobile-mode factor R_i, D[X, i] = R_i D[X, f] (resolution floor, not zero)",
-    "rate_fast_slow": "switching: fast -> slow rate k_fs, shared by both species, per second",
-    "rate_slow_fast": "switching: slow -> fast rate k_sf, shared by both species, per second",
-    "rate_slow_immobile": "switching: slow -> immobile rate k_si, shared by both species, per second",
-    "rate_immobile_slow": "switching: immobile -> slow rate k_is, shared by both species, per second",
+    "rate_fast_slow": "switching: fast -> slow rate k_fs, shared by all molecular species of the condition, per second",
+    "rate_slow_fast": "switching: slow -> fast rate k_sf, shared by all molecular species of the condition, per second",
+    "rate_slow_immobile": "switching: slow -> immobile rate k_si, shared by all molecular species of the condition, per second",
+    "rate_immobile_slow": "switching: immobile -> slow rate k_is, shared by all molecular species of the condition, per second",
 }
 
 

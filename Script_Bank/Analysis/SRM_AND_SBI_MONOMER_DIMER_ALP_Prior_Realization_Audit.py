@@ -53,7 +53,9 @@ Checks:
                        lineage of 10^5 monomers and 10^5 dimers per condition (B1 / B2 at the declared
                        two-probe share under INLB; B hosts classed at labeling under FAB): visible
                        monomers q, visible one-probe dimers q, visible two-probe dimers 1 - (1-q)^2,
-                       two-dye share among visible two-probe dimers q/(2-q), the FAB two-probe share
+                       both-probes-fluorescent share among visible two-probe dimers q/(2-q) (both
+                       probes carry at least one dye; a two-dye share only under the one-dye-per-probe
+                       InlB law; the JSON key keeps its name), the FAB two-probe share
                        s_2, emitters per bound probe E[dye], and the dye-count law among visible
                        subunits (zero-truncated); each within four standard errors. The FAB/INLB
                        visibility ratio of the TRUE population, p q, is checked against the DECLARED
@@ -69,10 +71,21 @@ Usage (from the repo root; MACHINE_PROFILE set):
                         # labeled through the DLI stage's path; verifies the checks
                         # themselves (P1, P2, P4, P5, P6) without any tier on disk
     ... --visibility    # P6 only, both conditions: theory vs code path (no tier needed)
+    ... --campaign-version 0.1.38 --expected-tasks 200 --task-simulations 1000 \\
+        --campaign-window 2026-10-14T00:00:00+00:00..2026-10-21T00:00:00+00:00
+                        # P7 campaign membership, run after the render pass: every expected task
+                        # present; the tier's Theta_Set and, under --workflow detector, the
+                        # detector's own Theta_Set carrying in their schemas the campaign's package
+                        # version, condition, timing, generator and a written time inside the
+                        # window, with the row count; the workflow's Labeling_Set (which carries no
+                        # version or time) checked for its columns, row count and the declared
+                        # probe rule; the schema guard does not establish membership
+                        # (DETECTOR_WORKFLOW.md 9.10)
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import json
 import os
@@ -517,6 +530,124 @@ def p3_trajectories(paths, data_bank_root, timing, split, tasks, theta_by_task, 
 
 
 # ----------------------------------------------------------------------------------------------
+# P7: campaign membership (DETECTOR_WORKFLOW.md section 9.10)
+# ----------------------------------------------------------------------------------------------
+
+def parse_campaign_window(spec: str | None) -> tuple:
+    """``"<iso>..<iso>"`` (timezone-aware) -> (start, end) datetimes; (None, None) when absent."""
+    if not spec:
+        return (None, None)
+    a, b = spec.split("..")
+    start, end = (datetime.datetime.fromisoformat(a), datetime.datetime.fromisoformat(b))
+    if start.tzinfo is None or end.tzinfo is None or end <= start:
+        raise ValueError(f"--campaign-window must be two timezone-aware ISO times, start before end: {spec!r}")
+    return (start, end)
+
+
+def _in_window(written: str | None, window: tuple) -> bool | None:
+    start, end = window
+    if start is None:
+        return None
+    if not written:
+        return False
+    try:
+        t = datetime.datetime.fromisoformat(written)
+    except ValueError:
+        return False
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    return bool(start <= t <= end)
+
+
+def _check_schema(reasons: list, label: str, schema: dict | None, *, version: str, condition: str,
+                  timing_label: str, generator: str, window: tuple, rows: int | None, task_simulations: int | None):
+    if schema is None:
+        reasons.append(f"{label}: no schema")
+        return
+    if schema.get("package_version") != version:
+        reasons.append(f"{label}: package_version {schema.get('package_version')!r} != campaign {version!r}")
+    if schema.get("condition") != condition:
+        reasons.append(f"{label}: condition {schema.get('condition')!r} != {condition!r}")
+    if schema.get("timing_label") != timing_label:
+        reasons.append(f"{label}: timing_label {schema.get('timing_label')!r} != {timing_label!r}")
+    if schema.get("generator") != generator:
+        reasons.append(f"{label}: generator {schema.get('generator')!r} != {generator!r}")
+    if _in_window(schema.get("written_utc"), window) is False:
+        reasons.append(f"{label}: written_utc {schema.get('written_utc')!r} outside the campaign window")
+    if task_simulations is not None and rows is not None and rows != task_simulations:
+        reasons.append(f"{label}: {rows} rows != {task_simulations}")
+
+
+def p7_campaign(provenance: list, *, condition: str, timing_label: str, workflow: str, version: str,
+                expected_tasks: int | None, task_simulations: int | None, window: tuple) -> dict:
+    """Campaign membership of every task against the frozen specification.
+
+    ``provenance`` is one dict per task found: ``task``, ``rds_schema``, ``rds_rows``, and, under the
+    detector workflow, ``det_schema`` / ``det_rows``, plus ``labeling`` (the task's Labeling_Set rows
+    or None). The schema guard compares keys, bounds, scales and condition only, so a dataset of an
+    earlier generator with the same imaging box passes it; membership is this inventory instead.
+    """
+    plan = lab.resolve_labeling(condition)
+    col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
+    found = sorted(int(e["task"]) for e in provenance)
+    missing = [] if expected_tasks is None else [t for t in range(int(expected_tasks)) if t not in set(found)]
+    unexpected = [] if expected_tasks is None else [t for t in found if t >= int(expected_tasks)]
+    failures = {}
+    for e in provenance:
+        reasons = []
+        _check_schema(reasons, "tier Theta_Set", e.get("rds_schema"), version=version, condition=condition,
+                      timing_label=timing_label, generator="rds", window=window, rows=e.get("rds_rows"),
+                      task_simulations=task_simulations)
+        if workflow == "detector":
+            _check_schema(reasons, "detector Theta_Set", e.get("det_schema"), version=version, condition=condition,
+                          timing_label=timing_label, generator="dli_detector", window=window, rows=e.get("det_rows"),
+                          task_simulations=task_simulations)
+        L = e.get("labeling")
+        if L is None:
+            reasons.append("Labeling_Set: absent")
+        else:
+            L = np.asarray(L, dtype=float)
+            if L.ndim != 2 or L.shape[1] != len(lab.LABELING_SET_COLUMNS):
+                reasons.append(f"Labeling_Set: {L.shape[1] if L.ndim == 2 else '?'} columns != {len(lab.LABELING_SET_COLUMNS)}")
+            else:
+                if task_simulations is not None and L.shape[0] != task_simulations:
+                    reasons.append(f"Labeling_Set: {L.shape[0]} rows != {task_simulations}")
+                occ_m, occ_d, share = L[:, col["occupancy_monomer"]], L[:, col["occupancy_dimer"]], L[:, col["two_probe_share"]]
+                if not (np.isfinite(occ_m).all() and np.isfinite(occ_d).all()
+                        and np.allclose(occ_m, plan.occupancy_pair[0]) and np.allclose(occ_d, plan.occupancy_pair[1])):
+                    reasons.append(f"Labeling_Set: probe probabilities per class {(float(np.nanmean(occ_m)), float(np.nanmean(occ_d)))} "
+                                   f"!= the declared rule {tuple(plan.occupancy_pair)} (an override, or another model)")
+                if not (np.isfinite(share).all() and np.allclose(share, plan.two_probe_share)):
+                    reasons.append(f"Labeling_Set: two_probe_share != declared {plan.two_probe_share:.4f}")
+        if reasons:
+            failures[int(e["task"])] = reasons
+    ok = bool(not missing and not failures)
+    return dict(campaign_version=version, expected_tasks=expected_tasks, task_simulations=task_simulations,
+                window=tuple(w.isoformat() if w is not None else None for w in window), workflow=workflow,
+                n_tasks_found=len(found), missing_tasks=missing, unexpected_tasks=unexpected,
+                n_tasks_failing=len(failures), failures=failures, ok=ok)
+
+
+def collect_provenance(base, paths, root, timing_label, split, tasks, workflow, theta_by_task) -> list:
+    """Per task: the tier's Theta_Set schema and rows, the detector's own Theta_Set (detector workflow),
+    and the workflow's Labeling_Set rows -- the inputs of P7; nothing is validated here."""
+    out = []
+    for t in tasks:
+        e = dict(task=int(t), rds_schema=read_theta_set_schema(base.theta_set_path(t, root, timing_label, True, split)),
+                 rds_rows=int(theta_by_task[t].shape[0]), det_schema=None, det_rows=None, labeling=None)
+        if workflow == "detector":
+            dp = paths.theta_set_path(t, root, timing_label, True, split)
+            if os.path.exists(dp):
+                e["det_schema"] = read_theta_set_schema(dp)
+                e["det_rows"] = int(np.asarray(load_data(dp)).shape[0])
+        lp = paths.record_set_path("Labeling_Set", t, root, timing_label, True, split)
+        if os.path.exists(lp):
+            e["labeling"] = np.asarray(load_data(lp)[:], dtype=float)
+        out.append(e)
+    return out
+
+
+# ----------------------------------------------------------------------------------------------
 # Products on disk
 # ----------------------------------------------------------------------------------------------
 
@@ -575,11 +706,8 @@ def load_products(args):
               written_utc_range=(min(sc.get("written_utc", "") for sc in schemas.values()),
                                  max(sc.get("written_utc", "") for sc in schemas.values())),
               ok=True)
-    labeling = []
-    for t in tasks:
-        p = paths.record_set_path("Labeling_Set", t, root, timing.label, True, split)
-        if os.path.exists(p):
-            labeling.append(np.asarray(load_data(p)[:], dtype=float))
+    provenance = collect_provenance(base, paths, root, timing.label, split, tasks, args.workflow, theta_by_task)
+    labeling = [e["labeling"] for e in provenance if e["labeling"] is not None]
     labeling = np.vstack(labeling) if labeling else None
     if labeling is not None and labeling.shape[1] != len(lab.LABELING_SET_COLUMNS):
         sys.exit(f"Labeling_Set has {labeling.shape[1]} columns; this audit expects the "
@@ -587,7 +715,8 @@ def load_products(args):
     out_dir = (PARAMETERS.machine.data_bank_root / paths.posit_subdir      # the report stays on the permanent tier
                / f"{paths.project_alias}_{timing.label}_Prior_Realization_Audit_{split}")
     return dict(condition=condition, split=split, timing=timing, tasks=tasks, base=base, paths=paths, root=root,
-                theta=theta, theta_by_task=theta_by_task, labeling=labeling, out_dir=out_dir, p0=p0)
+                theta=theta, theta_by_task=theta_by_task, labeling=labeling, out_dir=out_dir, p0=p0,
+                provenance=provenance)
 
 
 def synthetic_products(condition: str, n: int = 2000, seed: int = SEED) -> dict:
@@ -656,6 +785,13 @@ def write_report(out_dir, header: dict, res: dict) -> str:
                  f"q75 {r['q75']:.0f}, max {r['max']:.0f}; share of recordings inside the simulated range: "
                  f"{p5['share_of_recordings_inside_simulated_range']}; empirical median inside simulated 5-95%: "
                  f"{p5['empirical_median_inside_simulated_5_95']} |")
+    if res.get("p7") is not None:
+        p7 = res["p7"]
+        fails = "; ".join(f"task {t}: " + " / ".join(r) for t, r in sorted(p7["failures"].items())) or "none"
+        L.append(f"| P7 campaign membership | {passed(p7['ok'])} | package {p7['campaign_version']}, {p7['workflow']} workflow, "
+                 f"{p7['n_tasks_found']} task(s) found, expected {p7['expected_tasks']} (missing {p7['missing_tasks'] or 'none'}, "
+                 f"beyond the expected range {p7['unexpected_tasks'] or 'none'}), {p7['task_simulations']} rows per set, "
+                 f"window {p7['window'][0]} .. {p7['window'][1]}; failing tasks {p7['n_tasks_failing']}: {fails} |")
     if res.get("p6") is not None:
         p6 = res["p6"]
         L.append(f"| P6 visibility (code path) | {passed(p6['ok'])} | {p6['n_monomers']} monomers + {p6['n_dimers']} dimers of the retained "
@@ -704,7 +840,16 @@ def main() -> None:
     ap.add_argument("--visibility", action="store_true", help="P6 only, both conditions: theory vs the DLI code path; no tier needed")
     ap.add_argument("--out-dir", default=None, help="selftest only: where to write the report (default: repo scratch is NOT used; "
                                                   "the Posit dir of the biology alias)")
+    ap.add_argument("--campaign-version", default=None,
+                    help="P7: the package version every product of the campaign must carry (DETECTOR_WORKFLOW.md section 9.10)")
+    ap.add_argument("--expected-tasks", type=int, default=None, help="P7: tasks 0..N-1 must all be present")
+    ap.add_argument("--task-simulations", type=int, default=None, help="P7: rows per Theta_Set and Labeling_Set")
+    ap.add_argument("--campaign-window", default=None,
+                    help="P7: '<iso>..<iso>' timezone-aware bounds of the campaign's written times")
     args = ap.parse_args()
+    if any(v is not None for v in (args.expected_tasks, args.task_simulations, args.campaign_window)) \
+            and args.campaign_version is None:
+        ap.error("--campaign-version is required with --expected-tasks / --task-simulations / --campaign-window")
 
     if args.selftest or args.visibility:
         mode = "selftest" if args.selftest else "visibility"
@@ -743,6 +888,10 @@ def main() -> None:
     if prod["labeling"] is not None:
         res["p4"] = p4_labeling(prod["labeling"], prod["condition"], prod["theta"] if prod["labeling"].shape[0] == prod["theta"].shape[0] else None)
         res["p5"] = p5_predictive(prod["labeling"], prod["condition"])
+    if args.campaign_version is not None:
+        res["p7"] = p7_campaign(prod["provenance"], condition=prod["condition"], timing_label=prod["timing"].label,
+                                workflow=args.workflow, version=args.campaign_version, expected_tasks=args.expected_tasks,
+                                task_simulations=args.task_simulations, window=parse_campaign_window(args.campaign_window))
     res["p6"] = p6_visibility(prod["condition"])
     # the FAB/INLB visibility ratio of the TRUE population (p q), the derivation of the Fab occupancy; the retained
     # records carry only the retained population's visibility, so the check is on the declared settings
