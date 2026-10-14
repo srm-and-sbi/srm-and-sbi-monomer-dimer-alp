@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `DETECTOR_WORKFLOW.md` §9.10, Training: the lead's decision of 2026-10-14 recorded before the Fab retraining: two
+  identical chains of the adopted configuration under the tags `C128V39A` and `C128V39B`; TRAIN learns, TEST selects
+  the checkpoint within a chain, EVAL compares the chains and determines the adoption; an architecture variant only as
+  a later addition beside them.
 - `DETECTOR_WORKFLOW.md` §9.10: the InlB 2 s trajectory tier and detector datasets are generated in parallel with the
   Fab campaign under the same release, sizes, machines, submissions and audits (P7 under the InlB labeling); the InlB
   calibration is independent of the Fab one; the InlB biology videos wait for the InlB nuisance treatment; cost

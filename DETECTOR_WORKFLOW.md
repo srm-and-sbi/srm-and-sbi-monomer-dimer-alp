@@ -2676,6 +2676,21 @@ is not overwritten. The selection between the chains and of the checkpoint is th
 before training: either the guidance of §9.9 (selection on the held-out EVAL videos, which then take part in model
 selection) or selection on TEST with EVAL reserved for the recovery and calibration assessment.
 
+**Decision of 2026-10-14 (the lead).** Two identical chains of the adopted configuration, no change of
+architecture in this retraining, under the tags `C128V39A` and `C128V39B` (the adopted arm at global batch 128 on
+the 0.1.39 datasets, chains A and B). The roles of the splits: TRAIN learns the weights; TEST selects the
+checkpoint within each chain, which keeps its best TEST-loss checkpoint; EVAL compares the two chains by the
+recovery and calibration assessment of §9.9 and determines the adoption, and the selected chain proceeds to the
+Experiment. A completed, healthy chain is not discarded for a worse TEST loss, since TEST does not select between
+chains; a technical failure can exclude a chain. Before the assessment, the hot restart of each second leg and the
+completion of 100 global epochs are verified in the job logs. An architecture variant (more spatial convolutions
+before the pooling of the first blocks, a one-entry preset of the encoder's declared knobs) is a later addition
+beside these two chains, never a replacement of the second identical one, because the spread between identical
+runs (−12.67 against −10.30 for the adopted arm's repeat) is what a single run per architecture cannot resolve.
+The submissions reproduce the adopted run's own lines (JUPITER jobs 2195036 and 2195037) through the detector
+dispatcher, with the tag as the only difference, after the compute-node gate of the synced tree has passed and the
+staged datasets have been verified store by store and probed by the entry point's dry-run.
+
 **Assessment and application.** Evaluation (25 EVAL tasks, the bounded pool), Posterior_Calibration (1000
 posterior samples per video, all four tests) and the embedding probe under each tag, with the checkpoint
 identities (the estimator file and weights checksums) recorded in every product, and a scorecard of the retrained
