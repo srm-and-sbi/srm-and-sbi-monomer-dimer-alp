@@ -242,10 +242,11 @@ def build_system(theta: np.ndarray,
     ``PARAMETERS.simulation.rds`` through ``diffusion_coefficients`` and
     ``reaction_channels`` (module docstring). Association fires within the reaction distance
     (one particle diameter, the Smoluchowski contact distance, derived from
-    ``SimulationStem.particle_diameter_nm``); fission products are placed OUTSIDE that distance,
-    at ``SimulationStem.fission_product_distance_nm`` (2 x the reaction distance), so that a
-    freshly dissociated pair is not re-fused deterministically at the next sub-step (see the
-    field's comment in ``parameterization.py``).
+    ``SimulationStem.particle_diameter_nm``); fission daughters are placed
+    ``SimulationStem.fission_product_distance_nm`` apart (4 x the reaction distance) along an
+    axis ReaDDy orients uniformly in three dimensions, so that a freshly dissociated pair lies
+    outside the reaction distance in the plane in about 97% of the events; the remaining 3% is
+    the accepted residual (see the field's comment in ``parameterization.py``).
 
     Boundary conditions: ``[False, False, True]`` -- open in x and y (the observation plane)
     and periodic in z (the thin membrane normal). No potential confines the particles, so a

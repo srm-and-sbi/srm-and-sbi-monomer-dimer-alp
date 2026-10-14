@@ -620,16 +620,22 @@ class SimulationStem:
     length_unit: str = "nanometer"
     time_unit: str = "nanosecond"
     particle_diameter_nm: int = 10
-    # Fission products are placed at fission_product_distance_factor x the reaction distance
-    # (2 x 10 nm = 20 nm), i.e. OUTSIDE the fusion radius. Declared convention (2026-09-09):
-    # at the 2 ms sub-step the per-step reaction probability of an eligible pair is ~1 for
-    # every D_A in range, so daughters placed AT the reaction distance would re-fuse at the
-    # next step unless they diffused apart within one step -- ~3% for fast daughters but
-    # ~50% per step for immobile ones, which would make the effective unbinding rate mode
-    # dependent (immobile dimers effectively never dissociating). Starting the daughters
-    # outside the radius removes that deterministic rebinding; diffusive re-encounter remains.
-    # Both the reaction distance and this factor are declared conventions, not measurements.
-    fission_product_distance_factor: int = 2
+    # Fission daughters are placed fission_product_distance_factor x the reaction distance apart
+    # (4 x 10 nm = 40 nm: four times the sum of the two daughters' radii). Declared convention
+    # (2026-09-09; the distance revised from 2 x on 2026-10-13). Why apart at all: at the 2 ms
+    # sub-step an eligible pair reacts with probability ~1, so daughters placed AT the reaction
+    # distance would re-fuse at the next step unless they diffused apart (~50% per step for
+    # immobile daughters), making the effective unbinding mode dependent. Why 40 nm: ReaDDy
+    # orients the daughter axis uniformly in three dimensions inside the 2 nm periodic slab, so
+    # the in-plane separation is d sin(theta) and a fraction 1 - sqrt(1 - (r/d)^2) of the pairs
+    # still lies within the reaction distance after the z wrap -- 13% at 20 nm, 3% at 40 nm; the
+    # 3% residual is accepted in exchange for a daughter displacement from the parent (d/2 =
+    # 20 nm) that stays below the 29 nm localization precision of the recordings. No slab
+    # thickness removes the residual: a slab thin enough for planar association wraps z, and
+    # one thick enough to keep the daughters apart lets z enter the association condition. The
+    # reaction distance and this factor are declared conventions, not measurements; the
+    # structure audit states the arithmetic (D7) and measures the geometry (R8).
+    fission_product_distance_factor: int = 4
 
     @property
     def fission_product_distance_nm(self) -> float:

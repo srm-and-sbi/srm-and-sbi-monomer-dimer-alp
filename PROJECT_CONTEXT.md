@@ -177,18 +177,17 @@ condition*, below). Every channel conserves the retained subunit count:
   eligible monomer, its probe-free partner is not represented, and the retained
   subunit keeps its identity (no lineage entry is created or removed). The
   conversion is a compact approximation of the fission — the retained daughter
-  keeps the host's position instead of a placement at twice the reaction
-  distance. The difference is one kick of one reaction distance (10 nm, a fixed
-  3D distance in a random direction, 7.9 nm in-plane on average) at most once
-  per `B1` lineage, since no channel re-forms `B1`: a third of the 29 nm
-  localization precision of the recordings and 6 % of a pixel, so it is below
+  keeps the host's position instead of a placement at four times the reaction
+  distance. The difference is one kick of two reaction distances (20 nm, a fixed
+  3D distance in a random direction, 15.7 nm in-plane on average) at most once
+  per `B1` lineage, since no channel re-forms `B1`: two thirds of the 29 nm
+  localization precision of the recordings and 13 % of a pixel, so it is below
   the observable resolution; against the per-frame diffusive step of a monomer
-  at the prior floor it is 15 % in the fast mode, 47 % in the slow mode and
-  about five times the 2 nm immobile-mode step, a difference the localization
-  noise covers. The structure audit states the arithmetic (D11) and measures
-  both placements on the production system (R7: conversion products move
-  0.1 nm, the residual diffusion of the test; fission daughters land at the
-  declared distance). Dissociation is not governed by contact.
+  at the prior floor it is 30 % in the fast mode, 94 % in the slow mode and
+  about ten times the 2 nm immobile-mode step, a difference below the
+  localization noise. The structure audit states the arithmetic (D11) and
+  measures both placements on the production system (R7). Dissociation is not
+  governed by contact.
 - **Switching (eight or twelve mobility-switching channels; conversions in the
   simulator's sense, which change the mode and conserve the species):**
   `X_f ↔ X_s ↔ X_i` for every
@@ -238,25 +237,41 @@ two settings produce different trajectories, each condition has its own RDS
 trajectory tier (§4), shared by both workflows; the eleven learnable parameters
 and the estimator layout are the same for both conditions.
 
-**Fission placement.** The two daughters of a dissociation are placed at
-`SimulationStem.fission_product_distance_nm` = 2 × `r` = 20 nm, *outside* the
-fusion radius. Declared convention (2026-09-09): at the 2 ms sub-step the
-per-step reaction probability of an eligible pair, `1 − exp(−λ_on δt)`, is ≈ 1
-for every `D_A` in range under MET-INLB (`λ_on δt` ≈ 7–67), so daughters
-placed *at* `r`
-would re-fuse at the next step unless they diffused apart within one step —
-≈ 3% for fast daughters but ≈ 50% per step for immobile ones — which would make
-the effective unbinding rate mode dependent (immobile dimers effectively never
-dissociating) and couple the mobility layer to the stoichiometry layer through
-a numerical artifact. Starting the daughters outside the radius removes that
-deterministic rebinding; diffusive re-encounter remains possible, largest for
-slow daughters. The reaction distance and the placement factor are both
-declared conventions, not measurements. The 2 ms sub-step itself is kept as an
-efficiency choice: at this resolution association is contact-detection
-limited ("react when a pair is detected within `r`"), encounters that begin
-and end between two sub-steps are not seen, and the MET-INLB association ratio
-is not lowered to satisfy a numerical criterion (that would change the
-biological assumption without recovering missed encounters).
+**Fission placement.** The two daughters of a dissociation are placed
+`SimulationStem.fission_product_distance_nm` = 4 × `r` = 40 nm apart, four times
+the sum of their radii, symmetrically about the parent's position along an axis
+ReaDDy orients uniformly in three dimensions. Declared convention (2026-09-09;
+the distance revised from 2 × `r` on 2026-10-13). Why apart at all: at the 2 ms
+sub-step the per-step reaction probability of an eligible pair, `1 − exp(−λ_on
+δt)`, is ≈ 1 for every `D_A` in range under MET-INLB (`λ_on δt` ≈ 7–67), so
+daughters placed *at* `r` would re-fuse at the next step unless they diffused
+apart within one step — ≈ 3 % for fast daughters but ≈ 50 % per step for
+immobile ones — which would make the effective unbinding rate mode dependent
+(immobile dimers effectively never dissociating) and couple the mobility layer
+to the stoichiometry layer through a numerical artifact. Why 40 nm rather than
+20 nm: because the daughter axis is isotropic inside the 2 nm periodic slab, the
+in-plane separation is `d sin θ`, and a fraction `1 − sqrt(1 − (r/d)²)` of the
+pairs lies within the reaction distance after the z wrap — 13 % at 20 nm
+(measured with 4,000 immobile dimers in the slab: 13.1 % of the pairs within the
+reaction distance, 13.5 % of the fissions followed by a fusion at the next step)
+and 3 % at 40 nm; the 3 % residual is accepted in exchange for a daughter
+displacement of `d/2` = 20 nm that stays below the 29 nm localization precision.
+No slab thickness removes the residual: a slab thin enough for planar
+association wraps z, and one thick enough to keep the daughters apart in three
+dimensions lets the z separation enter the association condition and changes the
+association model. Under MET-FAB no fusion channel exists, so the residual has
+no consequence there, while the placement still sets where the daughters appear;
+under MET-INLB a pair within the reaction distance re-fuses at the next step
+unless diffusion separates it, and the same pair can repeat the cycle. The
+structure audit states the arithmetic (D7) and measures the daughter-pair
+geometry and the next-step re-fusion of the same immobile daughter pair (R8).
+The reaction distance and the placement factor are both declared conventions,
+not measurements. The 2 ms sub-step itself is kept as an efficiency choice: at
+this resolution association is contact-detection limited ("react when a pair is
+detected within `r`"), encounters that begin and end between two sub-steps are
+not seen, and the MET-INLB association ratio is not lowered to satisfy a
+numerical criterion (that would change the biological assumption without
+recovering missed encounters).
 
 **Boundary behavior.** The simulation box is open laterally (`x`, `y`, the
 observation plane) and periodic axially (`z`, the thin membrane normal), with
@@ -459,7 +474,7 @@ share under MET-FAB) with one dye draw per bound probe
 (`labeling.draw_dye_counts_bound`); the occupancies as declared conversions
 (`ConditionSetting`: MET-INLB from the probe concentration and `K_D`, MET-FAB
 from the visibility ratio); and the two prior rows. Six checks accompany it
-(`tests/test_retained_population.py`, the structure audit D1–D9 and R1–R6, the
+(`tests/test_retained_population.py`, the structure audit D1–D11 and R1–R8, the
 prior-realization audit P2–P6): nonfluorescent bound receptors associate; `B1`
 releases one eligible daughter and `B2` two; the retained count is conserved
 under both conditions; the realized retained counts equal the expectations from

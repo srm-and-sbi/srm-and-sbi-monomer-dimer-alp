@@ -71,7 +71,7 @@ Usage (from the repo root; MACHINE_PROFILE set):
                         # labeled through the DLI stage's path; verifies the checks
                         # themselves (P1, P2, P4, P5, P6) without any tier on disk
     ... --visibility    # P6 only, both conditions: theory vs code path (no tier needed)
-    ... --campaign-version 0.1.38 --expected-tasks 200 --task-simulations 1000 \\
+    ... --campaign-version 0.1.39 --expected-tasks 200 --task-simulations 1000 \\
         --campaign-window 2026-10-14T00:00:00+00:00..2026-10-21T00:00:00+00:00
                         # P7 campaign membership, run after the render pass: every expected task
                         # present; the tier's Theta_Set and, under --workflow detector, the

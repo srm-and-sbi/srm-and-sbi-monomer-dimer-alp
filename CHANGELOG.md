@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.39 - 2026-10-14
+
+The campaign's release: the fission daughters are placed four times the reaction distance apart, measured and
+documented, before the Fab 2 s trajectory tier is generated. Products generated under this version carry `0.1.39`
+in their theta-set schemas, which P7 compares against the campaign's declared version; the priors, the reaction
+channels, the conservation rules and the imaging box are unchanged.
+
+### Changed
+
+- **Fission daughters are placed four times the reaction distance apart** (40 nm,
+  `SimulationStem.fission_product_distance_factor = 4`; 20 nm before). ReaDDy orients the daughter axis uniformly in
+  three dimensions inside the 2 nm periodic slab, so the in-plane separation is `d sin θ` and a fraction
+  `1 − sqrt(1 − (r/d)²)` of the daughter pairs lies within the 10 nm reaction distance after the z wrap: 13 % at
+  20 nm (measured with 4,000 immobile dimers in the slab: 13.1 % of the pairs within the reaction distance and
+  13.5 % of the fissions followed by a fusion at the next step), 3 % at 40 nm, the accepted residual. The
+  daughter displacement from the parent grows from 10 to 20 nm, below the 29 nm localization precision. Under
+  MET-FAB no fusion channel exists, so only the daughters' placement changes; under MET-INLB the next-step re-fusion
+  of immobile daughters falls from about 13 % to about 3 %. No slab thickness removes the residual (a slab thin
+  enough for planar association wraps z; one thick enough to keep the daughters apart lets z enter the association
+  condition). The Fab 2 s tier of the regeneration campaign (`DETECTOR_WORKFLOW.md` §9.10) is generated under this
+  convention.
+- Model-structure audit: D7 states the placement geometry (the fraction of daughter pairs within the reaction
+  distance at the declared and at the former distance, the next-step re-fusion per daughter mode at the prior
+  center, and the at-radius reference) and requires the geometric fraction at or below 4 %; D11 compares the 20 nm
+  kick with a fifth of a pixel instead of a tenth; R8 (run tier) measures the daughter-pair in-plane separation and
+  the next-step re-fusion of the same daughter pair, by particle identity, for 20,000 immobile dimers in the
+  production box, within about 0.5 % of the geometric fraction. The geometric fraction and the identity-checked
+  count are covered without a simulation by `tests/test_model_structure_audit_placement.py`.
+
+### Documentation
+
+- `PROJECT_CONTEXT.md` §2: the fission-placement paragraph carries the revised distance, its justification, the
+  measured residual and why no slab thickness removes it; the dissociation bullet's conversion-versus-fission
+  arithmetic is updated to the 20 nm kick. The structure audit's companion note gains the D11, R7 and R8 rows.
+
 ## 0.1.38 - 2026-10-13
 
 The release before the regeneration of the Fab 2 s detector datasets under the retained-population generator: the

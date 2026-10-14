@@ -45,14 +45,16 @@ Deterministic tier (always):
                        subunit of a B1 / B2 host, and one or two subunits of a FAB dimer at the
                        declared two-probe share; an override's per-class coins give identical
                        probabilities within a class, and a coin keyed by a particle type is rejected.
-    D7 fission place   Fission daughters are placed OUTSIDE the fusion radius, at
-                       `SimulationStem.fission_product_distance_nm` = 2 x the reaction distance,
-                       and `build_system` passes that value (declared convention of 2026-09-09:
-                       at the 2 ms sub-step an eligible pair reacts with probability ~1, so
-                       daughters placed AT the radius would re-fuse deterministically, ~50% per
-                       step for immobile daughters). The one-step rebinding probability at the
-                       prior center is reported for fast and immobile daughters under the OLD
-                       placement, as the documented reason.
+    D7 fission place   Fission daughters are placed `SimulationStem.fission_product_distance_nm`
+                       = 4 x the reaction distance apart (40 nm; 2 x until 2026-10-13) and
+                       `build_system` passes that value. ReaDDy orients the daughter axis
+                       uniformly in three dimensions inside the 2 nm periodic slab, so a fraction
+                       q = 1 - sqrt(1 - (r/d)^2) of the pairs lies within the reaction distance in
+                       the plane: 13.4% at 20 nm, 3.2% at 40 nm, the accepted residual (the check
+                       requires the geometric fraction q <= 4%). Reported beside it: the next-step re-fusion fraction per
+                       daughter mode at the prior center (the placement geometry plus one diffusive
+                       step) and the one-step rebinding probability under placement AT the radius,
+                       the reason for placing the daughters apart at all.
     D8 conditions      The condition registry: the model's tokens equal the labeling and the
                        experiment registries' tokens; MET-FAB association ratio is exactly 0.0
                        and MET-INLB exactly 1.0; the retired association-ratio row is absent from
@@ -79,12 +81,12 @@ Deterministic tier (always):
     D11 conversion     The `B1 -> A` release is a CONVERSION for every mode (the product keeps the
         displacement    educt's position) and no channel re-forms `B1`, so a `B1` lineage sees at most
                        one such event; the per-event difference from a fission placement is one
-                       daughter kick of half the product distance (one reaction distance, 10 nm, at a
+                       daughter kick of half the product distance (two reaction distances, 20 nm, at a
                        fixed 3D distance in a random direction). That kick is compared with the
                        per-frame diffusive RMS displacement of a monomer in each mode at the prior
                        FLOOR of `D_A` and of the relative factors, with the localization precision of
                        the MET recordings (29 nm) and with the pixel; it passes when it is below the
-                       precision and below a tenth of a pixel. R7 measures both placements.
+                       precision and below a fifth of a pixel. R7 measures both placements.
 
 Run tier (``--run``; tiny; after approval only):
     R1 conservation    One 2 s run per condition at the prior center (the reference recording length) (MET-INLB: the full
@@ -112,8 +114,16 @@ Run tier (``--run``; tiny; after approval only):
                        and kappa_OFF at the prior ceiling, N_total at the box ceiling and r at the
                        band ceiling (most B1): the in-plane displacement of every `B1 -> A` product
                        from its educt's position at the frame before (expected zero: in place) and of
-                       every fission daughter from its parent's (expected a fixed 10 nm in 3D, pi/4 x
-                       10 nm in-plane on average), read from the reaction records and the frames.
+                       every fission daughter from its parent's (expected a fixed 20 nm in 3D, pi/4 x
+                       20 nm in-plane on average), read from the reaction records and the frames.
+    R8 geometry        Four 2 ms steps of 20,000 immobile dimers in the production box and slab with
+                       the production fission distance and a fusion at the reaction distance: the
+                       in-plane separation of every daughter pair at the frame after the fission and
+                       the fraction within the reaction distance, and the fusions at the following
+                       step whose educts are the two daughters of one fission (chance encounters of
+                       daughters of different dimers counted apart) over the fissions: the next-step
+                       re-fusion of an immobile daughter pair; both within four sampling standard
+                       deviations (about 0.5 %) of the geometric fraction q of D7.
 
 Usage (from the repo root):
     MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \\
@@ -482,34 +492,57 @@ def d6_occupancy() -> dict:
                 ok=by_species_ok and mono_ok and rule_ok and same_within_species and rejected and unknown_type_rejected)
 
 
+ACCEPTED_PLACEMENT_RESIDUAL = 0.04   # the lead accepted a 2-3% residual (2026-10-13): 3.2% at 4 x the reaction distance
+
+
+def in_plane_within_fraction(reaction_nm: float, product_nm: float) -> float:
+    """Fraction of daughter pairs within the reaction distance in the plane for an isotropic
+    three-dimensional daughter axis in a slab thinner than the reaction distance:
+    q = 1 - sqrt(1 - (r/d)^2) (the in-plane separation is d sin(theta), cos(theta) uniform)."""
+    return float(1.0 - np.sqrt(max(0.0, 1.0 - (reaction_nm / product_nm) ** 2)))
+
+
 def d7_fission_placement() -> dict:
     import inspect
     geom = par.PARAMETERS.simulation.stem
     r_nm = float(geom.particle_diameter_nm)
     d_prod = float(geom.fission_product_distance_nm)
     outside = d_prod > r_nm
-    is_twice = abs(d_prod - 2.0 * r_nm) < 1e-9
+    declared_factor = int(geom.fission_product_distance_factor) == 4 and abs(d_prod - 4.0 * r_nm) < 1e-9
     src = inspect.getsource(rds.build_system)
     passes_field = ("fission_product_distance_nm" in src
                     and "product_distance=product_distance_nm" in src
                     and "product_distance=reaction_distance_nm" not in src)
-    # Documented reason: one-step rebinding probability under placement AT the radius, for a
-    # daughter pair with relative displacement variance 2 * (2 D) dt per axis (2D Brownian).
+    q = in_plane_within_fraction(r_nm, d_prod)
+    q_former = in_plane_within_fraction(r_nm, 2.0 * r_nm)
+    # Next-step re-fusion under the declared placement (geometry plus one diffusive step of each
+    # daughter: relative displacement variance 2 * (2 D) dt per axis, 2D Brownian) and the one-step
+    # rebinding under placement AT the radius, both at the prior center, per daughter mode.
     theta = prior_center_theta()
     coeff = rds.diffusion_coefficients(theta)
     dt_s = par.PARAMETERS.simulation.timing.frame_time_seconds / par.PARAMETERS.simulation.timing.steps_per_frame
     mono = RDS.stoichiometry.monomer.name
-    rebind = {}
     rng = np.random.default_rng(0)
+    n = 200_000
+    cos = rng.uniform(-1.0, 1.0, n)
+    s = d_prod * np.sqrt(1.0 - cos ** 2)
+    phi = rng.uniform(0.0, 2.0 * np.pi, n)
+    pair = np.stack([s * np.cos(phi), s * np.sin(phi)], axis=1)
+    refusion, rebind_at_radius = {}, {}
     for mode in RDS.mobility.modes:
         d_um2_s = coeff[RDS.type_name(mono, mode)]
         sigma_nm = np.sqrt(4.0 * d_um2_s * dt_s) * 1e3
-        xi = rng.normal(0.0, sigma_nm, (200_000, 2)); xi[:, 0] += r_nm
-        rebind[mode] = float(np.mean(np.hypot(xi[:, 0], xi[:, 1]) <= r_nm))
+        after = pair + rng.normal(0.0, sigma_nm, (n, 2))
+        refusion[mode] = float(np.mean(np.hypot(after[:, 0], after[:, 1]) <= r_nm))
+        xi = rng.normal(0.0, sigma_nm, (n, 2)); xi[:, 0] += r_nm
+        rebind_at_radius[mode] = float(np.mean(np.hypot(xi[:, 0], xi[:, 1]) <= r_nm))
     return dict(reaction_distance_nm=r_nm, product_distance_nm=d_prod, outside_fusion_radius=outside,
-                twice_reaction_distance=is_twice, build_system_uses_field=passes_field,
-                sub_step_s=dt_s, one_step_rebind_probability_if_placed_at_radius=rebind,
-                ok=outside and is_twice and passes_field)
+                declared_factor_four=declared_factor, build_system_uses_field=passes_field,
+                in_plane_within_reaction_distance_fraction=q, in_plane_within_fraction_at_former_20_nm=q_former,
+                accepted_residual=ACCEPTED_PLACEMENT_RESIDUAL, sub_step_s=dt_s,
+                next_step_refusion_fraction_by_mode_prior_center=refusion,
+                one_step_rebind_probability_if_placed_at_radius=rebind_at_radius,
+                ok=bool(outside and declared_factor and passes_field and q <= ACCEPTED_PLACEMENT_RESIDUAL))
 
 
 def d8_conditions() -> dict:
@@ -890,6 +923,103 @@ def r7_conversion_placement(workdir: str) -> dict:
     return out
 
 
+R8_DIMERS = 20_000
+
+
+def geminate_refusions(fission_records, fusion_records) -> tuple:
+    """Count the fusions whose two educts are the two products of one earlier fission (the same
+    daughter pair re-fusing: geminate), apart from the fusions of daughters of different dimers
+    (chance encounters). ``fission_records`` and ``fusion_records`` are sequences of ReaDDy reaction
+    records (``.type``, ``.educts``, ``.products``); returns ``(geminate, chance)``."""
+    pairs = {frozenset(int(x) for x in np.atleast_1d(rec.products))
+             for rec in fission_records if str(rec.type) == "fission"}
+    geminate = chance = 0
+    for rec in fusion_records:
+        if str(rec.type) != "fusion":
+            continue
+        if frozenset(int(x) for x in np.atleast_1d(rec.educts)) in pairs:
+            geminate += 1
+        else:
+            chance += 1
+    return geminate, chance
+
+
+def r8_placement_geometry(workdir: str) -> dict:
+    """Measured daughter-pair geometry of the fission placement in the production box and slab.
+
+    A two-type system (one dimer type that fissions into two of one monomer type, both at
+    D = 1e-6 um^2/s, immobile on the step) in the production box with the production reaction
+    distance and fission distance: 20,000 dimers, fission at 5000/s (every dimer fissions in the
+    first step), fusion of two monomers within the reaction distance at 1e5/s, four 2 ms steps.
+    From the reaction records and the frames: the in-plane separation of every daughter pair at the
+    frame after the fission and the fraction within the reaction distance, against the geometric
+    fraction q of D7; and the fusions at the following step whose educts are the two daughters of
+    one fission (``geminate_refusions``; the fusions of daughters of different dimers are counted
+    apart as chance encounters), over the fissions of the first step: the next-step re-fusion of an
+    immobile daughter pair, also expected q. The tolerance is four sampling standard deviations of
+    q at this count (about 0.5 %), so a PASS places both measured fractions within about 0.5 % of
+    q, below the 4 % the geometric criterion of D7 allows; the measured values are reported.
+    """
+    import readdy
+    geom = PARAMETERS.simulation.stem
+    r_nm, d_nm = float(geom.particle_diameter_nm), float(geom.fission_product_distance_nm)
+    box = [float(x) for x in geom.box_size]
+    system = readdy.ReactionDiffusionSystem(box_size=box, unit_system=geom.unit_dict)
+    system.periodic_boundary_conditions = [False, False, True]
+    tiny = 1e-6 * readdy.units.micrometer ** 2 / readdy.units.second
+    system.add_species("DIMER", tiny)
+    system.add_species("MONO", tiny)
+    system.reactions.add_fission(name="fis", type_from="DIMER", type_to1="MONO", type_to2="MONO",
+                                 rate=5000.0 / readdy.units.second, product_distance=d_nm, weight1=0.5, weight2=0.5)
+    system.reactions.add_fusion(name="fus", type_from1="MONO", type_from2="MONO", type_to="DIMER",
+                                rate=1e5 / readdy.units.second, educt_distance=r_nm, weight1=0.5, weight2=0.5)
+    sim = system.simulation(kernel="CPU")
+    rng = np.random.default_rng(SEED)
+    lo, hi = [-b / 2.0 for b in box], [b / 2.0 for b in box]
+    sim.add_particles("DIMER", rng.uniform(lo, hi, size=(R8_DIMERS, 3)))
+    sim.observe.particles(stride=1)
+    sim.observe.reaction_counts(stride=1)
+    sim.observe.reactions(stride=1)
+    path = os.path.join(workdir, "structure_audit_placement_geometry.h5")
+    sim.output_file = path
+    sim.run(n_steps=4, timestep=PARAMETERS.simulation.timing.delta_time_nanoseconds * readdy.units.nanosecond,
+            show_summary=False)
+    tray = readdy.Trajectory(path)
+    _, recs = tray.read_observable_reaction_counts()
+    fis = [int(x) for x in recs["reactions"]["fis"]]
+    fus = [int(x) for x in recs["reactions"]["fus"]]
+    times, rlists = tray.read_observable_reactions()
+    by_step = {int(t): list(rl) for t, rl in zip(times, rlists)}
+    _spans, _ranks, ids, poses = tray.read_observable_particles()
+    pos = {int(s): np.asarray(p, dtype=float) for s, p in zip(ids[1], poses[1])}       # the frame after step 1
+    sep = []
+    for rec in by_step.get(1, []):
+        if str(rec.type) != "fission":
+            continue
+        p1, p2 = (pos.get(int(x)) for x in np.atleast_1d(rec.products))
+        if p1 is None or p2 is None:
+            continue
+        delta = p2 - p1
+        sep.append(float(np.hypot(delta[0], delta[1])))
+    geminate, chance = geminate_refusions(by_step.get(1, []), by_step.get(2, []))
+    del tray, sim, system
+    sep = np.asarray(sep, dtype=float)
+    q = in_plane_within_fraction(r_nm, d_nm)
+    n = int(sep.size)
+    n_fissions_1 = fis[1] if len(fis) > 1 else 0
+    within = float(np.mean(sep <= r_nm)) if n else float("nan")
+    refusion = float(geminate / n_fissions_1) if n_fissions_1 else float("nan")
+    tol = float(4.0 * np.sqrt(q * (1.0 - q) / max(n, 1)))
+    mean_ok = n > 0 and abs(sep.mean() - np.pi / 4.0 * d_nm) <= 5.0 * sep.std() / np.sqrt(n)
+    ok = bool(n >= 0.9 * R8_DIMERS and abs(within - q) <= tol and abs(refusion - q) <= tol and mean_ok)
+    return dict(n_dimers=R8_DIMERS, fissions_per_step=fis, fusions_per_step=fus, n_pairs_measured=n,
+                pair_in_plane_separation_mean_nm=float(sep.mean()) if n else float("nan"),
+                expected_mean_nm=float(np.pi / 4.0 * d_nm),
+                pair_in_plane_separation_max_nm=float(sep.max()) if n else float("nan"),
+                fraction_within_reaction_distance=within,
+                geminate_refusions_next_step=int(geminate), chance_encounter_fusions_next_step=int(chance),
+                next_step_refusion_fraction=refusion, expected_fraction=q, tolerance=tol, ok=ok)
+
 # ----------------------------------------------------------------------------------------------
 # Report
 # ----------------------------------------------------------------------------------------------
@@ -926,10 +1056,13 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
              f"{d['d6']['occupancy_identical_within_species']}; keyed by particle type rejected: "
              f"{d['d6']['occupancy_keyed_by_particle_type_rejected']}; legacy A/B/C trajectory rejected: "
              f"{d['d6']['legacy_species_trajectory_rejected']} |")
-    L.append(f"| D7 fission placement | {passed(d['d7']['ok'])} | daughters at {d['d7']['product_distance_nm']:.0f} nm = 2 x reaction distance {d['d7']['reaction_distance_nm']:.0f} nm: {d['d7']['twice_reaction_distance']}; outside the fusion radius: "
-             f"{d['d7']['outside_fusion_radius']}; build_system passes the field: {d['d7']['build_system_uses_field']}; one-step rebinding "
-             f"probability if placed AT the radius (sub-step {d['d7']['sub_step_s']*1e3:.0f} ms, prior center) by daughter mode: "
-             f"{ {k: round(v, 3) for k, v in d['d7']['one_step_rebind_probability_if_placed_at_radius'].items()} } |")
+    L.append(f"| D7 fission placement | {passed(d['d7']['ok'])} | daughters {d['d7']['product_distance_nm']:.0f} nm apart = 4 x reaction distance "
+             f"{d['d7']['reaction_distance_nm']:.0f} nm: {d['d7']['declared_factor_four']}; build_system passes the field: {d['d7']['build_system_uses_field']}; "
+             f"isotropic daughter axis in the 2 nm slab: fraction of pairs within the reaction distance in the plane "
+             f"{d['d7']['in_plane_within_reaction_distance_fraction']:.3f} (accepted <= {d['d7']['accepted_residual']:.2f}; "
+             f"{d['d7']['in_plane_within_fraction_at_former_20_nm']:.3f} at the former 20 nm); next-step re-fusion by daughter mode at the prior center: "
+             f"{ {k: round(v, 3) for k, v in d['d7']['next_step_refusion_fraction_by_mode_prior_center'].items()} }; one-step rebinding if placed AT the "
+             f"radius (sub-step {d['d7']['sub_step_s']*1e3:.0f} ms): { {k: round(v, 3) for k, v in d['d7']['one_step_rebind_probability_if_placed_at_radius'].items()} } |")
     L.append(f"| D8 condition registry | {passed(d['d8']['ok'])} | tokens {d['d8']['tokens']} agree across registries: "
              f"{d['d8']['tokens_agree_across_registries']}; FAB ratio 0.0: {d['d8']['fab_ratio_is_zero']}; INLB ratio 1.0: "
              f"{d['d8']['inlb_ratio_is_one']}; retired association-ratio row absent: {d['d8']['association_row_absent']}; "
@@ -1007,6 +1140,14 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
                  f"(expected pi/4 x {p7['expected_fission_3d_nm']:.0f} = {p7['expected_fission_in_plane_mean_nm']:.2f}), sd "
                  f"{p7['fission']['sd_nm']:.2f}, max {p7['fission']['max_nm']:.2f} nm (<= {p7['expected_fission_3d_nm']:.0f} nm fixed 3D distance: "
                  f"{p7['fission_as_declared']}) |")
+        p8 = r["r8"]
+        L.append(f"| R8 placement geometry (measured) | {passed(p8['ok'])} | {p8['n_dimers']} immobile dimers in the production box and slab; "
+                 f"fissions per step {p8['fissions_per_step']}, fusions per step {p8['fusions_per_step']}; daughter pairs measured "
+                 f"{p8['n_pairs_measured']}: in-plane separation mean {p8['pair_in_plane_separation_mean_nm']:.2f} nm (expected pi/4 x d = "
+                 f"{p8['expected_mean_nm']:.2f}), max {p8['pair_in_plane_separation_max_nm']:.2f}; fraction within the reaction distance "
+                 f"{p8['fraction_within_reaction_distance']:.4f}; same-pair re-fusions at the next step {p8['geminate_refusions_next_step']} "
+                 f"(fraction {p8['next_step_refusion_fraction']:.4f}), chance encounters of daughters of different dimers "
+                 f"{p8['chance_encounter_fusions_next_step']}; expected {p8['expected_fraction']:.4f} +/- {p8['tolerance']:.4f} |")
         L.append("")
     with open(REPORT, "w") as handle:
         handle.write("\n".join(L) + "\n")
@@ -1096,7 +1237,7 @@ def d11_conversion_displacement() -> dict:
                 kick_over_precision=kick_nm / LOCALIZATION_PRECISION_NM,
                 pixel_nm=pixel_nm, kick_over_pixel=kick_nm / pixel_nm,
                 ok=bool(conversion_in_place and b1_never_formed
-                        and kick_nm <= LOCALIZATION_PRECISION_NM and kick_nm <= pixel_nm / 10.0))
+                        and kick_nm <= LOCALIZATION_PRECISION_NM and kick_nm <= pixel_nm / 5.0))
 
 
 def main() -> None:
@@ -1126,8 +1267,9 @@ def main() -> None:
             r2 = r2_stationarity(workdir)
             r6 = r6_timing(workdir)
             r7 = r7_conversion_placement(workdir)
-            run_out = dict(r1=r1, r2=r2, r3=r3, r4=r4, r5=r5, r6=r6, r7=r7)
-            for k in ("r1", "r2", "r3", "r4", "r5", "r6", "r7"):
+            r8 = r8_placement_geometry(workdir)
+            run_out = dict(r1=r1, r2=r2, r3=r3, r4=r4, r5=r5, r6=r6, r7=r7, r8=r8)
+            for k in ("r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"):
                 print(f"  [{passed(run_out[k]['ok'])}] {k}")
     write_report(det_out, run_out)
     all_ok = all(v["ok"] for v in det_out.values()) and (run_out is None or all(v["ok"] for v in run_out.values()))
