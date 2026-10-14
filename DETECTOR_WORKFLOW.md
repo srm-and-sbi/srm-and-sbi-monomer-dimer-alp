@@ -2683,3 +2683,24 @@ estimators on the new EVAL videos (the earlier records sit on the earlier EVAL v
 pooled). The Experiment on the 60 Fab recordings (the unrestricted pool, ten 2 s windows), then the
 Experiment-comparison and raw-decline cross-check companions, read under the rules of §9.9 (*Lessons carried to
 the retraining*). The Fab nuisance treatment is decided after that reading (§7.6).
+
+**The InlB datasets, generated in parallel (2026-10-14).** The InlB 2 s trajectory tier and the InlB detector
+datasets are generated beside the Fab ones under the same release, sizes, machines and submission lines (those of
+`SIM_STAGE=rds CASES=2s CONDITION=INLB` for the tier and of the detector controller with `CASES=2s
+CONDITION=INLB`, captured from the controllers' dry-runs and submitted by a resumable chain on the login node with
+an 8 h wall time, so that every request fits before the JUWELS maintenance of 2026-10-15 to 2026-10-21 and a
+restart of the chain resumes at the unfinished stage instead of resubmitting), with the same audits: the biology
+prior-realization audit on the tier and the detector audit with P7, which reads the InlB labeling of the condition
+(`B1` and `B2` by species, every simulated InlB receptor probe-bound, the two-probe share 0.0244, the Bernoulli
+dye law). Nothing of the Fab calibration is imposed on InlB: its detector estimator is trained and calibrated on
+its own datasets and recordings, and neither the Fab estimates nor the `REF` vector supplies a numerical target
+(§4.1, item 13). The InlB biology-workflow videos are not part of this generation, because they require the InlB
+imaging nuisance treatment, decided after the InlB calibration like the Fab one (§7.6). No InlB dataset of an
+earlier generator exists on either JUWELS root (inventory of 2026-10-14), so nothing is archived. The cost is
+higher than the Fab tier's: the structure audit's ceiling run (R6) takes 18.8 s per 2 s simulation under InlB
+against 2.8 s under Fab on the reference machine, the simulated population being 4,761 against 2,058 receptors at
+the count ceiling, so the per-node estimates are about 1.5 to 3 h per trajectory node and 2 to 3 h per render node
+(estimates, not measurements; the measured values of the run replace them). The two campaigns share the user's
+queue caps (40 running, 50 in system), which the submitters respect by waiting for room, and the scratch inode
+headroom (3.0 M of the 4.0 M soft limit used at the InlB preparation, the hard limit at 4.4 M, about 0.5 M per
+campaign still to come; the chain refuses to submit above 4.3 M).

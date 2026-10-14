@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Documentation
+
+- `DETECTOR_WORKFLOW.md` §9.10: the InlB 2 s trajectory tier and detector datasets are generated in parallel with the
+  Fab campaign under the same release, sizes, machines, submissions and audits (P7 under the InlB labeling); the InlB
+  calibration is independent of the Fab one; the InlB biology videos wait for the InlB nuisance treatment; cost
+  estimates from the structure audit's ceiling run; no earlier InlB dataset to archive.
+
 ## 0.1.39 - 2026-10-14
 
 The campaign's release: the fission daughters are placed four times the reaction distance apart, measured and
