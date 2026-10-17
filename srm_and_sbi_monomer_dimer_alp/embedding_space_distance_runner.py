@@ -37,7 +37,7 @@ from . import artifacts
 from . import embedding_space_distance as esd
 from .diagnostics import DiagnosticReporter
 from .inference_support import resolve_topology
-from .io import convert_video_dtype
+from .io import ThetaSetSchemaError, check_theta_set_schema, convert_video_dtype
 from .parameterization import PARAMETERS, RunTiming
 from .workflow import parameter_keys, parameter_table
 
@@ -165,13 +165,44 @@ def _embed_eval(R, posterior, device, eval_tasks, n_frames):
     return np.vstack(embs), n_tasks
 
 
+def _eval_theta_paths(R, eval_tasks):
+    """The EVAL Theta_Set paths beside the video sets ``_embed_eval`` will embed (task by task,
+    stopping at the first missing video set or at ``eval_tasks``)."""
+    paths, task = [], 0
+    while eval_tasks is None or task < eval_tasks:
+        video = R["paths"].video_set_path(task, R["data_bank_root"], R["timing_label"],
+                                          compress=True, split="EVAL")
+        if not video.exists():
+            break
+        paths.append(R["paths"].theta_set_path(task, R["data_bank_root"], R["timing_label"],
+                                               compress=True, split="EVAL"))
+        task += 1
+    return paths
+
+
+def _check_eval_theta_schema(R, eval_tasks):
+    """Check the schema of every EVAL Theta_Set the run will read, BEFORE the embedding pass: a
+    Theta_Set of another condition or of a superseded table is refused here, not after every
+    window has been embedded. A missing Theta_Set is tolerated (the PC1 tracking is then
+    skipped, as before); a present one must match the estimator condition's table. Returns the
+    number of records checked."""
+    checked = 0
+    for path in _eval_theta_paths(R, eval_tasks):
+        if not path.exists():
+            continue
+        check_theta_set_schema(path, R["parameterization"], condition=R["condition"])   # raises ThetaSetSchemaError
+        checked += 1
+    return checked
+
+
 def _load_eval_theta(R, n_tasks):
-    """Imaging parameters for the embedded EVAL tasks, in the same task/video order as ``_embed_eval``.
+    """Target parameters for the embedded EVAL tasks, in the same task/video order as ``_embed_eval``.
 
     Returns ``([N, P] physical-unit theta, keys, labels)`` with columns 1:1 to
-    the workflow's parameter keys, or ``(None, None, None)`` if any task's theta set is absent -- in
-    which case the PC1 parameter tracking is skipped (it is an optional add-on to the distance
-    measure, needing the theta that generated the exact videos embedded).
+    the workflow's parameter keys under the estimator's condition, or ``(None, None, None)`` if
+    any task's theta set is absent -- in which case the PC1 parameter tracking is skipped (it is
+    an optional add-on to the distance measure, needing the theta that generated the exact
+    videos embedded). The schema was checked before the embedding pass.
     """
     from srm_and_sbi_monomer_dimer_alp.io import load_theta_set
     rows = []
@@ -180,7 +211,7 @@ def _load_eval_theta(R, n_tasks):
                                          compress=True, split="EVAL")
         if not path.exists():
             return None, None, None
-        rows.append(np.asarray(load_theta_set(str(path), R["parameterization"])))
+        rows.append(np.asarray(load_theta_set(str(path), R["parameterization"], condition=R["condition"])))
     keys = R["parameter_keys"]
     labmap = {e["KEY"]: (e.get("LABEL") or e["KEY"]) for e in R["parameterization"]}
     return np.vstack(rows), keys, [labmap.get(k, k) for k in keys]
@@ -577,11 +608,23 @@ def run_embedding_space_distance(cfg, args):
               f"[task 0 {'OK' if ev0.exists() else 'MISSING'}]  (--eval-tasks {args.eval_tasks or 'all'})")
         print(f"    window        : {n_frames} frames, step {step_frames}; mix={args.mix}, "
               f"alpha={args.alpha}")
+        print(f"    parameters    : {len(R['parameter_keys'])} learnable keys under {R['condition']} "
+              f"({R['parameter_keys']})")
+        theta_paths = _eval_theta_paths(R, args.eval_tasks)
+        for tp in theta_paths[:1]:
+            from .io import theta_set_status
+            print(f"    EVAL Theta_Set: {tp}  [{theta_set_status(tp, R['parameterization'], condition=R['condition'])}]")
         print(f"    writes        : {R['posit_dir']}/{R['paths'].project_alias}_"
               f"{R['timing_label']}_Embedding_Space_Distance/")
         print("[DRY RUN] no compute performed.")
         return 0
 
+    try:
+        n_checked = _check_eval_theta_schema(R, args.eval_tasks)
+    except ThetaSetSchemaError as exc:
+        raise SystemExit(f"EVAL Theta_Set refused before the embedding pass: {exc}")
+    print(f"EVAL Theta_Set schema checked for {n_checked} task(s) under {R['condition']} "
+          f"({len(R['parameter_keys'])} keys).")
     posterior, device = _load_posterior(R)
     print("Embedding experimental recordings (one recording at a time) ...")
     exp = _embed_experimental(R, posterior, device, kinds, args.experiment_span_seconds,
@@ -691,8 +734,8 @@ _PARAM_MEANING_DETECTOR = _PARAM_MEANING
 
 _PARAM_MEANING_BIOLOGY = {
     # stoichiometry block
-    "count_total": "stoichiometry: true receptor-subunit total N_total of the simulated patch (the retained population is realized from it)",
-    "ratio_dimer_monomer_initial": "stoichiometry: initial dimer-to-monomer ratio r = n_B / n_A (log10 on [-2, 2]; receptor fraction x_B = 2r / (1 + 2r))",
+    "count_total": "stoichiometry: receptor-subunit total N_total of the underlying population (the reference probe-bound population is realized from it)",
+    "fraction_basal_dimers_reference": "stoichiometry: basal reference fraction f of the underlying population (linear on [0, 1]; M_ref = N_total (1 - f) / (1 + f) monomers, D_ref = N_total f / (1 + f) dimers)",
     "rate_dissociation": "dissociation: dimer unbinding rate kappa_OFF (B -> A + A, mode conserved), per second",
     # mobility block
     "diffusivity_alp": "mobility: monomer scale diffusion coefficient D_A = D[A, fast] (um^2/s)",
@@ -703,11 +746,17 @@ _PARAM_MEANING_BIOLOGY = {
     "rate_slow_fast": "switching: slow -> fast rate k_sf, shared by all molecular species of the condition, per second",
     "rate_slow_immobile": "switching: slow -> immobile rate k_si, shared by all molecular species of the condition, per second",
     "rate_immobile_slow": "switching: immobile -> slow rate k_is, shared by all molecular species of the condition, per second",
+    # initialization block (window start)
+    "relative_count_active_dimers_initial": "initialization: window-start allocation R_active (linear on [0, 1]; inferred under MET-INLB, the declared 0 under MET-FAB): the share of the reference's probe-bound monomer pairs (capacity A_ref // 2) turned into two-InlB dimers at the window start, c = round(R_active x capacity)",
 }
 
 
 def _esd_spec(cfg, args):
-    """Resolve the workflow-specific half of the analysis."""
+    """Resolve the workflow-specific half of the analysis, bound to the ESTIMATOR's condition
+    (``args.condition``): the keys and the table come from the workflow resolvers (eleven rows
+    under MET-FAB, twelve under MET-INLB for the biology; six for the detector)."""
+    keys = parameter_keys(cfg, args.condition)         # validates the condition first (required)
+    table = parameter_table(cfg, args.condition)
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     data_bank_root = PARAMETERS.machine.data_bank_root
@@ -715,11 +764,11 @@ def _esd_spec(cfg, args):
     posit_dir = data_bank_root / paths.posit_subdir
     return dict(
         timing=timing, timing_label=timing.label, data_bank_root=data_bank_root,
-        paths=paths, posit_dir=posit_dir,
+        paths=paths, posit_dir=posit_dir, condition=str(args.condition),
         experiment_dir=data_bank_root / paths.experiment_subdir,
         estimator_path=posit_dir / f"{paths.project_alias}_{timing.label}_Estimator.npz",
-        parameter_keys=parameter_keys(cfg),
-        parameterization=parameter_table(cfg),
+        parameter_keys=keys,
+        parameterization=table,
         param_meaning=(_PARAM_MEANING_DETECTOR if cfg.tag == "detector"
                        else _PARAM_MEANING_BIOLOGY),
         workflow=cfg.tag,

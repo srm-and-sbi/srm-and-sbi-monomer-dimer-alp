@@ -284,6 +284,49 @@ def test_probe_classes_follow_the_retained_population_rule():
     assert np.isnan(col["two_probe_share"]) and abs((dyes >= 1).mean() - 0.4 * over.law.visible_probability) < 0.05
 
 
+def test_allocated_and_degenerate_lineages_label_under_the_probe_rule():
+    """Two further lineages. (1) An InlB window-start lineage whose B2 count lies ABOVE the
+    independent-binding share s_2 of the dimers (the allocation turned probe-bound monomer pairs into
+    two-InlB dimers): every represented subunit is bound, the class counts are recorded as placed,
+    and ``occupancy_dimer`` is 1.0 -- the allocation changes no labeling rule. (2) Zero-monomer and
+    zero-dimer lineages for both conditions label without error and record the degenerate counts."""
+    tray = _TrajectoryStub()
+    species_of_rank = {r: TYPE_NAMES[r][0] for r in range(len(TYPE_NAMES))}
+    # (1) the starting counts of the InlB prior center at N = 10,000: 79 A + 302 B1 + 48 B2 (c = 40),
+    #     whose B2 share 48 / 350 is far above s_2 = p / (2 - p) = 0.0244
+    plan = lab.resolve_labeling("INLB")
+    start = par.realize_initial_composition(count_total=1e4, fraction_basal_dimers_reference=0.5,
+                                            relative_count_active_dimers_initial=0.5, condition="INLB")
+    assert (start.n_monomers, start.n_dimers_one_probe, start.n_dimers_two_probe) == (79, 302, 48)
+    assert start.n_pairs_allocated > 0 and start.n_dimers_two_probe / start.n_dimers > plan.two_probe_share
+    lineage = _lineage(start.n_monomers, start.n_dimers, np.random.default_rng(6), "INLB",
+                       n_dimers_two_probe=start.n_dimers_two_probe)
+    assert lineage.n_subunits == start.n_subunits
+    bound = lab.assign_probes(plan, lineage.host_index[0], lineage.host_rank[0], species_of_rank, np.random.default_rng(1))
+    assert bound.all(), "every represented InlB subunit is bound, the allocated B2 included"
+    dyes, row = lab.label_trajectory(plan, tray, lineage, lab.labeling_rng(4))
+    col = dict(zip(lab.LABELING_SET_COLUMNS, row))
+    assert (col["monomers_0"], col["dimers_0"]) == (start.n_monomers, start.n_dimers)
+    assert (col["dimers_one_probe_0"], col["dimers_two_probe_0"]) == (start.n_dimers_one_probe, start.n_dimers_two_probe)
+    assert col["occupancy_dimer"] == 1.0 and col["occupancy_monomer"] == 1.0 and col["n_subunits"] == start.n_subunits
+    assert col["two_probe_share"] == plan.two_probe_share           # the declared share, not the starting B2 share
+    assert col["dimers_two_labeled_0"] <= start.n_dimers_two_probe
+    # (2) zero monomers, and zero dimers, under both conditions
+    for condition in lab.LABELING_CONDITIONS:
+        plan = lab.resolve_labeling(condition)
+        for n_monomers, n_dimers in ((0, 120), (150, 0)):
+            lineage = _lineage(n_monomers, n_dimers, np.random.default_rng(8), condition)
+            dyes, row = lab.label_trajectory(plan, tray, lineage, lab.labeling_rng(5))
+            col = dict(zip(lab.LABELING_SET_COLUMNS, row))
+            assert (col["monomers_0"], col["dimers_0"]) == (n_monomers, n_dimers), (condition, n_monomers, n_dimers)
+            assert dyes.shape == (lineage.n_subunits,) and col["n_subunits"] == lineage.n_subunits
+            assert col["monomers_visible_0"] <= n_monomers and col["dimers_visible_0"] <= n_dimers
+            if n_dimers == 0:
+                assert col["dimers_one_probe_0"] == 0 and col["dimers_two_probe_0"] == 0
+            else:
+                assert col["dimers_one_probe_0"] + col["dimers_two_probe_0"] == n_dimers
+
+
 # ---- 4. the draw is reached only through the shared path -------------------------------------
 
 # Where `draw_dye_counts` may be called directly, and why.

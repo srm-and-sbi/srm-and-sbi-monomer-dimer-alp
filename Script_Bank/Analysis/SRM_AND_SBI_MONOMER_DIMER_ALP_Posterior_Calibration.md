@@ -4,8 +4,6 @@ Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py` (biology) 
 `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Calibration.py` (detector). This is the
 authoritative reference for both; the detector companion points here.
 
-> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r` (`x_B = 2r / (1 + 2r)` is derived) and gave every learnable row its decided prior range, so the decided biology table has no linear row; the per-row `LOG_FLAG` rule and `to_flow` stay the one conversion. Earlier calibration results stand as recorded.
-
 ## What it does
 
 The Inference stage trains a neural posterior `q(theta | x)` over a workflow's target
@@ -36,14 +34,16 @@ serves both, following the codebase's shared-engine pattern:
 - **Runner** `posterior_calibration_runner.py` — `run_posterior_calibration(cfg, args)`:
   streams EVAL, draws each video's calibration inputs, calls the kernel, writes the
   report. All per-workflow differences (which parameterization supplies the target keys +
-  prior, the alias-qualified paths) are resolved from the `WorkflowConfig` in
-  `_posterior_calibration_spec(cfg)`.
+  prior, the alias-qualified paths) are resolved from the `WorkflowConfig` and the
+  estimator's condition in `_posterior_calibration_spec(cfg, condition)`: the biology table is
+  per condition, the detector's six keys are not.
 - **Two thin shims** — the biology and detector entry points, each ~10 lines that build
   the workflow config and call the runner. Their **names carry the namespace** (the
   detector one adds the `_DETECTOR` alias), matching the data files, so a run and its
   outputs are never ambiguous about which workflow they belong to.
 
-The biology shim scores the 11 reaction-diffusion parameters; the detector shim scores
+The biology shim scores the condition's reaction-diffusion parameters (eleven under MET-FAB,
+twelve under MET-INLB, whose window-start allocation is inferred); the detector shim scores
 the 6 imaging parameters. Same engine, same report structure, correct namespace each.
 
 ## The four diagnostics
@@ -123,10 +123,11 @@ that accept pre-drawn inputs (`check_sbc`, `check_tarp`, `LC2ST`, the samples-ba
 (`#{samples < truth}`), which are definitions, not algorithms.
 
 All theta live in the estimator space (the flow's and the prior's space: `log10` of the
-physical value for a log row, the value itself for a linear row, of which the decided biology
-table has none); the ground-truth theta sets are stored as physical values, so calibration
-is scored on `to_flow(theta_true)` — the workflow table's one sanctioned conversion, never a
-blanket `log10`.
+physical value for a log row, the value itself for a linear row — in the biology table the
+basal reference fraction and, under MET-INLB, the window-start allocation, both on [0, 1]);
+the ground-truth theta sets are stored as physical values, so calibration is scored on
+`to_flow(theta_true)` — the condition table's one sanctioned conversion, never a blanket
+`log10`.
 
 ## Stratification — by the inferred value, not the truth
 
@@ -156,7 +157,7 @@ no parameter of either workflow and the two never appear in the same report.
 
 ### The digest, and why the profile shape is the point
 
-With `--n-strata=10`, four diagnostics and a six- or eleven-parameter target vector, the
+With `--n-strata=10`, four diagnostics and a six-, eleven- or twelve-parameter target vector, the
 per-bin results number in the hundreds. Tabulating them one bin per row is the wrong
 presentation twice over: no reader holds hundreds of rows, and the thing the stratification
 exists to reveal — *how* the statistic varies across a parameter's range — is exactly what a
@@ -195,8 +196,9 @@ python SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py \
     --total-time-seconds 2.0 --eval-tasks 10 --dry-run
 ```
 
-**3 — Run.** Biology (11 reaction-diffusion parameters) or detector (6 imaging
-parameters) — identical options; the entry-point name selects the workflow and namespace:
+**3 — Run.** Biology (the condition's reaction-diffusion parameters: eleven under MET-FAB,
+twelve under MET-INLB) or detector (6 imaging parameters) — identical options; the entry-point
+name selects the workflow and namespace:
 
 ```bash
 # biology
@@ -329,7 +331,7 @@ different defects with different fixes, so always read the histogram before conc
 | **Diagnosis — `bias (z)`** | systematic offset in units of the posterior's **own** standard deviation; positive = the parameter is over-estimated | ≈ 0 (bar: 0.30) | large \|z\| — the posterior sits in the wrong **place** |
 | **Diagnosis — `spread (z)`** | actual error ÷ claimed standard deviation | ≈ 1 (bars: 0.87–1.15) | **> 1** intervals too narrow (overconfident); **< 1** too wide (conservative) |
 | **Diagnosis — `sharpness`** | posterior SD as a fraction of the prior width — how much the data constrained the parameter | context, not a verdict | — (a very small value amplifies any offset into a large `bias (z)`) |
-| **Diagnosis — `physical bias`** | the offset as a multiplicative factor on the physical value | ≈ 1.000× | the number to weigh against the precision the downstream use needs |
+| **Diagnosis — `physical bias`** | the offset on the physical scale: a multiplicative factor for a log row; for a linear row (a fraction) the signed offset in percentage points, which has no multiplicative form | ≈ 1.000× (log row); ≈ 0 pp (linear row) | the number to weigh against the precision the downstream use needs |
 | **Diagnosis — `defect`** | the dominant error: `ok` / `location (high\|low)` / `width (too narrow\|too wide)` | `ok` | names which of the two errors dominates |
 | **`marginal_1d_worst` / `marginal_2d_worst`** | worst \|ATC\| over the 1-D marginals / over the 2-D pairs | both small | see the ladder above |
 | **`dependence_excess`** | how much the worst pair exceeds *both* of its own marginals | `none` | positive — a **dependence** error localized to that pair |
@@ -385,7 +387,10 @@ The draw over 10^4 videos × ~10^3 samples is heavy, so the runner shards exactl
 Evaluation stage: each rank draws a round-robin slice of the EVAL tasks and writes a
 partial `_shard_*_of_*.npz`; a single `--merge` pass concatenates the shards and runs the
 calibration statistics on the full set (SBC / TARP / L-C2ST are global, so the merge is
-where the diagnostic actually runs). The code path is identical on one GPU (single
+where the diagnostic actually runs). Every shard records the parameter keys and the
+condition its draws were made under, and the merge refuses a shard whose keys are missing
+or differ from the estimator's, or whose condition differs: shards of another table or
+condition are never merged into one report. The code path is identical on one GPU (single
 process, no shards), one node with several GPUs, and several nodes. The
 `SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Posterior_Calibration.sh` wrapper runs both phases (the sharded
 draw and the merge) in one job.

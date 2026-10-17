@@ -8,38 +8,50 @@ stage's ``Labeling_Set`` -- against the prior box, the composition rule, the sta
 and the declared occupancies. Run it after any tier or DLI pass; it costs seconds.
 
 Checks:
-    P0 schema          Every Theta_Set of the tier carries the schema of the current biology table
+    P0 schema          Every Theta_Set of the tier carries the schema of the condition's biology table
                        (ordered keys, prior bounds, scales, condition); the loader refuses one that
                        does not, so a tier drawn under another table never reaches P1-P5. The
                        report records the stored generator, package version, and write dates.
-    P1 prior box       Every stored theta (physical) maps back inside the estimator box; per row the
-                       empirical marginal in estimator space against Uniform(lo, hi): the
-                       Kolmogorov-Smirnov p-value and the share of draws per quarter of the box
-                       (expected 25% each). A flagged row is evidence to investigate (sampler, conversion,
-                       or an undersized tier), not a verdict.
-    P2 composition     From the stored (N_total, r) and the condition's occupancy p: every draw realizes
-                       at least one retained monomer and one retained dimer; the requested true f_B lies
-                       in the declared 5-25 % band; the retained count equals the rounded expectation
-                       (p N_total under INLB, p N_total [1 + 2(1-p) f_B/(1+f_B)] under FAB) within
-                       rounding; the realized retained ratio follows (2 - p) r within rounding; the
-                       median of the requested log10 r lies within three standard errors of the box
-                       center (uniform sampling in the log coordinate); true and retained f_B medians
-                       are reported side by side (the difference is selection, not rounding).
+    P1 prior box       Every stored theta (physical) maps back inside the condition's estimator box
+                       (eleven rows under MET-FAB, twelve under MET-INLB); per row, in the ESTIMATOR
+                       coordinate (log10 for the log rows, the value for the two linear fraction
+                       rows), the empirical marginal against Uniform(lo, hi): the Kolmogorov-Smirnov
+                       p-value and the share of draws per quarter of the box (expected 25% each). A
+                       flagged row is evidence to investigate (sampler, conversion, or an undersized
+                       tier), not a verdict.
+    P2 composition     The window-start composition realized from the stored (N_total, f) and, under
+                       MET-INLB, R_active through the canonical helper (``population_from_theta``):
+                       the represented receptor count N_R lies within 1.5 subunits of its expectation
+                       (three roundings); N_R = A_ref + B1 + 2 B2_ref = A_start + B1 + 2 B2_start
+                       (INLB) or A + 2 D_sim (FAB) EXACTLY, with A_start = A_ref - 2c and
+                       B2_start = B2_ref + c; B1 and the reference counts are unchanged by the
+                       allocation; 0 <= c <= capacity with c = round(R_active x capacity); c = 0 for
+                       every MET-FAB draw; M_start + 2 D_start = N_total; the median of each LINEAR
+                       row lies at 0.5 within 3 / (2 sqrt n) (a uniform's sample median); reported:
+                       quantiles of f, the capacity, c, the share of draws without a pair (capacity 0)
+                       and with an allocation, the derived starting fraction f_start and the active
+                       share c / D_start.
     P3 trajectories    (--trajectories K) K trajectory files, evenly spaced over the tier: the frame-0
                        particle counts per stoichiometric class (and per probe class B1 / B2 under
-                       INLB) equal the retained composition realized from the stored theta; the
-                       per-frame retained subunit total is constant (conservation through fusion,
-                       fission, B1 -> A and mode switches); the pooled frame-0 mode occupancies agree
-                       with the stationary law averaged over the K thetas.
-    P4 labeling        The workflow's ``Labeling_Set``: n_subunits equals the realized retained N_R per
-                       simulation; the recorded probe-probability columns equal the model's rule (1 for
+                       INLB) equal the STARTING counts the helper realizes from the stored theta (the
+                       allocation included; the files with c > 0 are counted); the per-frame
+                       represented subunit total is constant (conservation through fusion, fission,
+                       B1 -> A and mode switches); the pooled frame-0 mode occupancies agree with the
+                       stationary law averaged over the K thetas.
+    P4 labeling        The workflow's ``Labeling_Set``: n_subunits equals the realized N_R per
+                       simulation and the frame-0 class counts equal the helper's (INLB: A_start, B1,
+                       B2_start; FAB: A and the dimers at reference, whose classes are drawn at
+                       labeling); the recorded probe-probability columns equal the model's rule (1 for
                        monomer subunits; (1 + s_2)/2 under FAB and 1 under INLB for dimer subunits; a
                        differing value is reported as an override); the probe classes (one- and
                        two-probe dimers) split the dimers, with the FAB two-probe share at the
-                       declared s_2 = p/(2-p) and the INLB classes exhaustive; the pooled visible
-                       fractions against q = P(dye >= 1) for monomers and the class mix for dimers;
-                       the two-labeled share of visible dimers against the two-probe dimers' q^2; the
-                       emitters per subunit against E[dye] x the bound share.
+                       declared s_2 = p/(2-p) and the INLB classes exhaustive; ``two_probe_share`` is
+                       the declared share of the REFERENCE dimers (the share Fab labeling draws with;
+                       under INLB the starting B2 share also carries the allocation and is read from
+                       the counts); the pooled visible fractions against q = P(dye >= 1) for monomers
+                       and the class mix for dimers; the two-labeled share of visible dimers against
+                       the two-probe dimers' q^2; the emitters per subunit against E[dye] x the bound
+                       share.
     P5 predictive      Visible hosts at frame 0 (monomers_visible_0 + dimers_visible_0) per simulation
                        against the per-recording first-2 s spot counts of the 60 deposited recordings
                        of the condition (Special_Analyses A9): quantiles side by side and the share of
@@ -67,12 +79,14 @@ Usage (from the repo root; MACHINE_PROFILE set):
     PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py \\
         --condition FAB --split train --total-time-seconds 2 [--workflow biology|detector] \\
         [--tasks all|0,1,2] [--trajectories 8]
-    ... --selftest      # in-memory synthetic products drawn from the prior, realized per condition and
-                        # labeled through the DLI stage's path; verifies the checks
-                        # themselves (P1, P2, P4, P5, P6) without any tier on disk
+    ... --selftest      # in-memory synthetic products drawn from each condition's prior, realized
+                        # through the canonical helper (allocation included) and labeled through
+                        # the DLI stage's path from the starting counts; verifies the checks
+                        # themselves (P1, P2, P4, P5, P6) without any tier on disk, and that some
+                        # MET-INLB draws carry an allocation (c > 0) and no MET-FAB draw does
     ... --visibility    # P6 only, both conditions: theory vs code path (no tier needed)
-    ... --campaign-version 0.1.39 --expected-tasks 200 --task-simulations 1000 \\
-        --campaign-window 2026-10-14T00:00:00+00:00..2026-10-21T00:00:00+00:00
+    ... --campaign-version <package version> --expected-tasks 200 --task-simulations 1000 \\
+        --campaign-window <iso start>..<iso end>
                         # P7 campaign membership, run after the render pass: every expected task
                         # present; the tier's Theta_Set and, under --workflow detector, the
                         # detector's own Theta_Set carrying in their schemas the campaign's package
@@ -101,13 +115,13 @@ from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import parameterization as par  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import simulation_rds_support as rds  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, read_theta_set_schema  # noqa: E402
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERIZATION, PARAMETERS, RunTiming  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming  # noqa: E402
 
 RDS = PARAMETERS.simulation.rds
-KEYS = list(par.PARAMETER_KEYS)
 SEED = 20260914
-P2_SIGMAS = 3.0               # P2: |median log10 r - box center| <= P2_SIGMAS standard errors of a uniform's sample median
+P2_SIGMAS = 3.0               # P2: |median of a linear row - 0.5| <= P2_SIGMAS standard errors of a uniform's sample median
 P2_MIN_DRAWS = 20             # P2: below this the symmetry verdict is not formed (reported only)
+P2_ROUNDING_BOUND = 1.5       # P2: |N_R - expectation| <= three roundings of half a subunit
 TOL_VISIBLE_FLOOR = 0.02      # P4: absolute tolerance floor on pooled fractions
 TOL_P6_FLOOR = 0.002          # P6: absolute tolerance floor on Monte Carlo fractions (n = 3e5 subunits)
 TOL_RATIO = 0.05              # P6: |realized FAB/INLB visibility ratio - declared| (products and code path)
@@ -151,63 +165,99 @@ def quantiles(x) -> dict:
 # Checks on arrays (file-agnostic, so the selftest exercises the same code)
 # ----------------------------------------------------------------------------------------------
 
-def p1_prior_box(theta_physical: np.ndarray) -> dict:
+def table_of(condition: str) -> list:
+    """The condition's learnable table: its theta schema (eleven rows under MET-FAB, twelve under MET-INLB)."""
+    return par.parameterization_of(condition)
+
+
+def p1_prior_box(theta_physical: np.ndarray, condition: str) -> dict:
+    """Every stored theta maps back inside the condition's estimator box; per row (the twelfth row
+    included under MET-INLB) the marginal in the ESTIMATOR coordinate against Uniform(lo, hi)."""
     from scipy import stats
-    flow = par.to_flow(theta_physical)
-    low, high = np.array(par.theta_lower_bound()), np.array(par.theta_upper_bound())
+    table = table_of(condition)
+    flow = par.to_flow(theta_physical, table)
+    low, high = np.array(par.theta_lower_bound(condition)), np.array(par.theta_upper_bound(condition))
     inside = np.all((flow >= low - 1e-9) & (flow <= high + 1e-9), axis=1)
     rows = {}
-    for j, key in enumerate(KEYS):
+    for j, entry in enumerate(table):
         u = (flow[:, j] - low[j]) / (high[j] - low[j])
         p_value = float(stats.kstest(u, "uniform").pvalue)
         quarters = np.histogram(u, bins=[0, 0.25, 0.5, 0.75, 1.0 + 1e-12])[0] / max(u.size, 1)
-        rows[key] = dict(ks_pvalue=p_value, quarter_shares=[round(float(q), 3) for q in quarters],
-                         flagged=p_value < KS_ALPHA)
-    return dict(n_draws=int(flow.shape[0]), all_inside_box=bool(inside.all()),
+        rows[entry["KEY"]] = dict(scale=("log10" if par.is_log_row(entry) else "linear"), ks_pvalue=p_value,
+                                  quarter_shares=[round(float(q), 3) for q in quarters], flagged=p_value < KS_ALPHA)
+    return dict(condition=condition, n_draws=int(flow.shape[0]), n_rows=len(table), all_inside_box=bool(inside.all()),
                 n_outside=int((~inside).sum()), rows=rows,
                 ok=bool(inside.all()) and not any(r["flagged"] for r in rows.values()))
 
 
-def realized_compositions(theta_physical: np.ndarray, condition: str):
-    i_n, i_r = KEYS.index(RDS.stoichiometry.count_total_key), KEYS.index(RDS.stoichiometry.composition_ratio_key)
-    return [par.realize_initial_composition(t[i_n], t[i_r], condition) for t in theta_physical]
+def realized_population(theta_physical: np.ndarray, condition: str):
+    """The window-start composition of every stored theta (the canonical helper, by key)."""
+    return par.population_from_theta(np.asarray(theta_physical, dtype=float), condition)
 
 
 def p2_composition(theta_physical: np.ndarray, condition: str) -> dict:
-    comps = realized_compositions(theta_physical, condition)
-    n_dimers = np.array([c.n_dimers for c in comps])
-    n_monomers = np.array([c.n_monomers for c in comps])
-    f_true = np.array([c.complex_fraction_true for c in comps])
-    f_ret = np.array([c.complex_fraction_retained for c in comps])
-    n_sub = np.array([c.n_subunits for c in comps], dtype=float)
-    n_exp = np.array([c.expected_subunits for c in comps])
-    r_ret = np.array([c.ratio_realized for c in comps])
-    r_exp = np.array([c.ratio_retained_expected for c in comps])
-    at_least_one = bool((n_dimers >= 1).all() and (n_monomers >= 1).all())
-    lo_f, hi_f = par.COMPOSITION_BAND
-    in_band = bool(np.all((f_true >= lo_f - 1e-9) & (f_true <= hi_f + 1e-9)))
-    rounding = np.abs(n_sub - n_exp)                      # retained subunits: rounding of up to three integers
-    ratio_dev = np.abs(r_ret - r_exp) * n_monomers       # in units of dimers at the realized monomer count
-    # Uniform sampling in the LOG coordinate: the sample median of the requested log10 r lies at the box center
-    # within P2_SIGMAS standard errors of a uniform's sample median, SE = w / (2 sqrt(n)).
-    i_r = KEYS.index(RDS.stoichiometry.composition_ratio_key)
-    lo, hi = par.theta_lower_bound()[i_r], par.theta_upper_bound()[i_r]
-    u = np.log10(np.asarray(theta_physical, dtype=float)[:, i_r])
-    median_u, center = float(np.median(u)), 0.5 * (lo + hi)
-    tol_u = float(P2_SIGMAS * (hi - lo) / (2.0 * np.sqrt(max(u.size, 1))))
-    centered = abs(median_u - center) <= tol_u if u.size >= P2_MIN_DRAWS else None
-    p = par.occupancy_of(condition)
-    return dict(condition=condition, occupancy=float(p), n_draws=int(f_true.size),
-                every_draw_has_a_monomer_and_a_dimer=at_least_one, min_dimers=int(n_dimers.min()), min_monomers=int(n_monomers.min()),
-                true_f_B_in_band=in_band, band=par.COMPOSITION_BAND,
-                true_complex_fraction=quantiles(f_true), retained_complex_fraction=quantiles(f_ret),
-                median_true_complex_fraction=float(np.median(f_true)), median_retained_complex_fraction=float(np.median(f_ret)),
-                retained_subunits=quantiles(n_sub), max_retained_count_deviation=float(rounding.max()),
-                max_retained_ratio_deviation_dimers=float(ratio_dev.max()),
-                median_log10_ratio=median_u, box_center_log10_ratio=center, tolerance_log10_ratio=tol_u,
-                median_at_box_center=centered,
-                ok=at_least_one and in_band and (centered is not False) and float(rounding.max()) <= 2.5 + 1e-9
-                and float(ratio_dev.max()) <= 1.5 + 1e-9)
+    """The window-start composition realized from the stored (N_total, f[, R_active]) through the
+    canonical helper: the reference population within rounding of its expectation, exact
+    conservation through the allocation, the Fab allocation zero, the linear rows centered."""
+    theta = np.asarray(theta_physical, dtype=float)
+    pop = realized_population(theta, condition)
+    classes = pop.ligand_classes
+    # the same reference population without the allocation (only where the condition infers it): the
+    # allocation must leave B1, A_ref and N_R untouched
+    inferred = RDS.stoichiometry.active_allocation_key not in par.declared_row_values(condition)
+    zero = (par.realize_population(count_total=pop.count_total, fraction_basal_dimers_reference=pop.fraction_basal_dimers_reference,
+                                   relative_count_active_dimers_initial=np.zeros_like(pop.count_total), condition=condition)
+            if classes and inferred else None)
+    n_sub, n_exp = pop.n_subunits.astype(float), pop.expected_subunits
+    rounding = np.abs(n_sub - n_exp)                      # up to three roundings of half a subunit
+    n_r_reference = (pop.n_monomers_reference + pop.n_dimers_one_probe + 2 * pop.n_dimers_two_probe_reference if classes
+                     else pop.n_monomers_reference + 2 * pop.n_dimers_reference)
+    n_r_start = (pop.n_monomers + pop.n_dimers_one_probe + 2 * pop.n_dimers_two_probe if classes
+                 else pop.n_monomers + 2 * pop.n_dimers)
+    conserved = bool(np.array_equal(pop.n_subunits, n_r_reference) and np.array_equal(pop.n_subunits, n_r_start)
+                     and np.array_equal(pop.n_dimers, pop.n_dimers_one_probe + pop.n_dimers_two_probe)
+                     and np.array_equal(pop.n_monomers, pop.n_monomers_reference - 2 * pop.n_pairs_allocated)
+                     and np.array_equal(pop.n_dimers_two_probe, pop.n_dimers_two_probe_reference + pop.n_pairs_allocated))
+    # None = not applicable: no inferred allocation (MET-FAB) for the first, ligand classes (MET-INLB) for the second
+    b1_unchanged = None if zero is None else bool(np.array_equal(pop.n_dimers_one_probe, zero.n_dimers_one_probe)
+                                                  and np.array_equal(pop.n_monomers_reference, zero.n_monomers_reference)
+                                                  and np.array_equal(pop.n_subunits, zero.n_subunits))
+    c, cap = pop.n_pairs_allocated, pop.capacity
+    c_bounds = bool(np.all(c >= 0) and np.all(c <= cap) and np.array_equal(c, np.round(pop.relative_count_active_dimers_initial * cap)))
+    fab_zero = None if classes else bool(np.all(c == 0) and np.all(cap == 0))
+    underlying = bool(np.allclose(pop.n_monomers_underlying_start + 2.0 * pop.n_dimers_underlying_start, pop.count_total, rtol=1e-9))
+    # the LINEAR rows are uniform on (0, 1): their sample median lies at 0.5 within P2_SIGMAS standard
+    # errors of a uniform's sample median, SE = width / (2 sqrt n)
+    index = par.parameter_index_of(condition)
+    linear = {}
+    n = theta.shape[0]
+    for entry in table_of(condition):
+        if par.is_log_row(entry):
+            continue
+        lo, hi = entry["PRIOR_RANGE"]
+        col = theta[:, index[entry["KEY"]]]
+        tol = float(P2_SIGMAS * (hi - lo) / (2.0 * np.sqrt(max(n, 1))))
+        median, center = float(np.median(col)), 0.5 * (lo + hi)
+        linear[entry["KEY"]] = dict(median=median, center=center, tolerance=tol,
+                                    centered=(abs(median - center) <= tol) if n >= P2_MIN_DRAWS else None,
+                                    quantiles=quantiles(col))
+    centered_ok = all(v["centered"] is not False for v in linear.values())
+    with np.errstate(invalid="ignore"):
+        share = pop.active_share
+    return dict(condition=condition, occupancy=float(pop.occupancy), ligand_classes=classes, n_draws=int(n),
+                max_reference_count_deviation=float(rounding.max()), rounding_bound=P2_ROUNDING_BOUND,
+                conservation_exact=conserved, b1_and_reference_unchanged_by_allocation=b1_unchanged,
+                c_within_capacity=c_bounds, fab_allocation_zero=fab_zero, underlying_population_conserved=underlying,
+                linear_rows=linear, represented_receptors=quantiles(n_sub),
+                basal_fraction=quantiles(pop.fraction_basal_dimers_reference), capacity=quantiles(cap),
+                pairs_allocated=quantiles(c), share_without_a_pair=float(np.mean(cap == 0)),
+                share_with_allocation=float(np.mean(c > 0)),
+                starting_fraction=quantiles(pop.fraction_basal_dimers_start[np.isfinite(pop.fraction_basal_dimers_start)])
+                if np.isfinite(pop.fraction_basal_dimers_start).any() else None,
+                active_share=quantiles(share[np.isfinite(share)]) if np.isfinite(share).any() else None,
+                min_monomers=int(pop.n_monomers.min()), min_dimers=int(pop.n_dimers.min()),
+                ok=bool(float(rounding.max()) <= P2_ROUNDING_BOUND + 1e-9 and conserved and (b1_unchanged is not False)
+                        and c_bounds and (fab_zero is not False) and underlying and centered_ok))
 
 
 def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.ndarray | None) -> dict:
@@ -257,13 +307,27 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
     tol_m = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(exp_mono * (1 - exp_mono) / n_m))
     tol_d = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(exp_dim * (1 - exp_dim) / n_d))
     tol_two = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(max(exp_two * (1 - exp_two), 0.0) / n_vis_d))
-    subunits_ok = None
+    subunits_ok = classes_ok = None
+    n_with_allocation = None
     if theta_physical is not None:
-        n_expected = np.array([c.n_subunits for c in realized_compositions(theta_physical, condition)])
-        subunits_ok = bool(np.array_equal(L[:, col["n_subunits"]].astype(int), n_expected))
+        pop = realized_population(theta_physical, condition)
+        subunits_ok = bool(np.array_equal(L[:, col["n_subunits"]].astype(int), pop.n_subunits))
+        # the frame-0 class counts against the helper's STARTING counts, per simulation
+        mono_ok = np.array_equal(L[:, col["monomers_0"]].astype(int), pop.n_monomers)
+        dim_ok = np.array_equal(L[:, col["dimers_0"]].astype(int), pop.n_dimers)
+        if plan.ligand_classes and classes_recorded:
+            class_ok = (np.array_equal(L[:, col["dimers_one_probe_0"]].astype(int), pop.n_dimers_one_probe)
+                        and np.array_equal(L[:, col["dimers_two_probe_0"]].astype(int), pop.n_dimers_two_probe))
+        else:
+            class_ok = True                              # FAB classes are drawn at labeling (checked by share above)
+        classes_ok = bool(mono_ok and dim_ok and class_ok)
+        n_with_allocation = int((pop.n_pairs_allocated > 0).sum())
     return dict(n_simulations=int(L.shape[0]), probe_rule=plan.probe_rule, occupancy_declared=float(plan.occupancy),
                 occupancy_source=plan.occupancy_source, probe_probability_rule=tuple(plan.occupancy_pair),
-                two_probe_share_declared=plan.two_probe_share, occupancy_recorded=recorded,
+                two_probe_share_declared=plan.two_probe_share,
+                two_probe_share_meaning="the declared share of the REFERENCE dimers (Fab labeling draws with it; "
+                                        "under INLB the starting B2 share also carries the allocation)",
+                occupancy_recorded=recorded,
                 occupancy_matches_declared=matches_rule, occupancy_override=override,
                 occupancy_used=(float(np.nanmean(occ_m)), float(np.nanmean(occ_d))) if recorded else None,
                 probe_classes_recorded=classes_recorded, one_probe_dimers=float(one), two_probe_dimers=float(two),
@@ -274,10 +338,12 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
                 visible_dimer=(float(dim), float(exp_dim), float(tol_d)),
                 both_labeled_share=(float(two_lab), float(exp_two), float(tol_two)),
                 emitters_per_subunit=(float(emit), float(exp_emit), float(tol_emit)),
-                n_subunits_equals_realized_N_R=subunits_ok,
+                n_subunits_equals_realized_N_R=subunits_ok, frame0_counts_equal_starting_counts=classes_ok,
+                simulations_with_allocation=n_with_allocation,
                 ok=bool(recorded and abs(sub_vis - exp_sub) <= tol_sub and abs(mono - exp_mono) <= tol_m
                         and abs(dim - exp_dim) <= tol_d and abs(two_lab - exp_two) <= tol_two
-                        and abs(emit - exp_emit) <= tol_emit and (subunits_ok is not False) and class_share_ok and share_ok))
+                        and abs(emit - exp_emit) <= tol_emit and (subunits_ok is not False) and (classes_ok is not False)
+                        and class_share_ok and share_ok))
 
 
 # ----------------------------------------------------------------------------------------------
@@ -494,9 +560,11 @@ def p3_trajectories(paths, data_bank_root, timing, split, tasks, theta_by_task, 
     mode_counts = np.zeros(len(RDS.mobility.modes)); n_particles = 0
     law_sum = np.zeros(len(RDS.mobility.modes))
     problems = []
+    n_with_allocation = 0
     for task, sim, path in pick:
         theta = np.asarray(theta_by_task[task][sim], dtype=float)
-        comp = rds.initial_composition_of(theta, condition)
+        comp = rds.initial_composition_of(theta, condition)          # the STARTING counts, allocation included
+        n_with_allocation += int(comp.n_pairs_allocated > 0)
         tray = readdy.Trajectory(str(path))
         _, types, _, _ = tray.read_observable_particles()
         name_of_id = {v: k for k, v in tray.particle_types.items()}
@@ -504,25 +572,26 @@ def p3_trajectories(paths, data_bank_root, timing, split, tasks, theta_by_task, 
         n_a = sum(1 for n in names0 if RDS.species_of_type[n] == RDS.stoichiometry.monomer.name)
         n_b = sum(1 for n in names0 if RDS.species_of_type[n] == RDS.stoichiometry.dimer.name)
         if (n_a, n_b) != (comp.n_monomers, comp.n_dimers):
-            problems.append(f"task {task} sim {sim}: frame-0 counts ({n_a}, {n_b}) != realized ({comp.n_monomers}, {comp.n_dimers})")
+            problems.append(f"task {task} sim {sim}: frame-0 counts ({n_a}, {n_b}) != starting ({comp.n_monomers}, {comp.n_dimers})")
         if comp.ligand_classes:
             n_b1 = sum(1 for n in names0 if RDS.molecule_of_type[n] == RDS.stoichiometry.dimer_one_probe.name)
             n_b2 = sum(1 for n in names0 if RDS.molecule_of_type[n] == RDS.stoichiometry.dimer_two_probe.name)
             if (n_b1, n_b2) != (comp.n_dimers_one_probe, comp.n_dimers_two_probe):
-                problems.append(f"task {task} sim {sim}: frame-0 counts B1/B2 ({n_b1}, {n_b2}) != realized "
+                problems.append(f"task {task} sim {sim}: frame-0 counts B1/B2 ({n_b1}, {n_b2}) != starting "
                                 f"({comp.n_dimers_one_probe}, {comp.n_dimers_two_probe})")
         sub = dict(zip(RDS.particle_type_names, RDS.subunit_counts_per_type))
         totals = [sum(sub[name_of_id[int(t)]] for t in frame) for frame in types]
         if len(set(totals)) != 1 or totals[0] != comp.n_subunits:
-            problems.append(f"task {task} sim {sim}: retained subunit total not conserved ({min(totals)}..{max(totals)} vs {comp.n_subunits})")
+            problems.append(f"task {task} sim {sim}: represented subunit total not conserved ({min(totals)}..{max(totals)} vs {comp.n_subunits})")
         for n in names0:
             mode_counts[RDS.mobility.mode_index(RDS.mode_of_type[n])] += 1
         n_particles += len(names0)
-        law_sum += rds.stationary_mode_law(theta) * len(names0)
+        law_sum += rds.stationary_mode_law(theta, condition) * len(names0)
     pooled = mode_counts / max(n_particles, 1)
     law = law_sum / max(n_particles, 1)
     dev = float(np.max(np.abs(pooled - law)))
-    return dict(n_files=len(pick), frame0_counts_match=not any("counts" in p for p in problems),
+    return dict(n_files=len(pick), files_with_allocation=n_with_allocation,
+                frame0_counts_match=not any("counts" in p for p in problems),
                 subunit_total_conserved=not any("conserved" in p for p in problems),
                 pooled_frame0_mode_occupancy=[round(float(v), 4) for v in pooled],
                 stationary_law_weighted=[round(float(v), 4) for v in law], max_abs_deviation=dev,
@@ -696,7 +765,7 @@ def load_products(args):
     theta_by_task, schemas = {}, {}
     for t in tasks:
         p = base.theta_set_path(t, root, timing.label, True, split)
-        theta_by_task[t] = np.asarray(load_theta_set(p, par.PARAMETERIZATION, condition=condition)[:], dtype=float)
+        theta_by_task[t] = np.asarray(load_theta_set(p, table_of(condition), condition=condition)[:], dtype=float)
         schemas[t] = read_theta_set_schema(p)
     theta = np.vstack([theta_by_task[t] for t in tasks])
     p0 = dict(n_theta_sets=len(tasks), schema_checked=True,
@@ -720,15 +789,26 @@ def load_products(args):
 
 
 def synthetic_products(condition: str, n: int = 2000, seed: int = SEED) -> dict:
-    """In-memory products drawn from the prior and the declared occupancy (the selftest)."""
+    """In-memory products drawn from the condition's prior and the declared occupancy (the selftest)."""
     rng = np.random.default_rng(seed)
-    low, high = np.array(par.theta_lower_bound()), np.array(par.theta_upper_bound())
-    theta = par.to_physical(rng.uniform(low, high, size=(n, len(low))))
-    # Each composition is labeled through the DLI stage's own functions (labeled_lineage), so the
-    # synthetic Labeling_Set is produced by the code path the products come from, not by a re-implementation.
-    rows = [labeled_lineage(condition, c.n_monomers, c.n_dimers, rng, c.n_dimers_two_probe)[1]
-            for c in realized_compositions(theta, condition)]
-    return dict(condition=condition, theta=theta, labeling=np.array(rows, dtype=float))
+    low, high = np.array(par.theta_lower_bound(condition)), np.array(par.theta_upper_bound(condition))
+    theta = par.to_physical(rng.uniform(low, high, size=(n, len(low))), table_of(condition))
+    # Each composition is labeled through the DLI stage's own functions (labeled_lineage) from the
+    # STARTING counts (the placed-count fields, allocation included), so the synthetic Labeling_Set is
+    # produced by the code path the products come from, not by a re-implementation.
+    pop = realized_population(theta, condition)
+    rows = [labeled_lineage(condition, int(pop.n_monomers[i]), int(pop.n_dimers[i]), rng, int(pop.n_dimers_two_probe[i]))[1]
+            for i in range(n)]
+    return dict(condition=condition, theta=theta, labeling=np.array(rows, dtype=float),
+                n_with_allocation=int((pop.n_pairs_allocated > 0).sum()), ligand_classes=bool(pop.ligand_classes))
+
+
+def selftest_allocation(prod: dict) -> dict:
+    """The selftest exercises the allocation: some MET-INLB draws have c > 0, no MET-FAB draw does."""
+    n = prod["n_with_allocation"]
+    ok = (n > 0) if prod["ligand_classes"] else (n == 0)
+    return dict(condition=prod["condition"], n_draws=int(prod["theta"].shape[0]), draws_with_allocation=n,
+                expected=("some" if prod["ligand_classes"] else "none"), ok=bool(ok))
 
 
 # ----------------------------------------------------------------------------------------------
@@ -747,36 +827,49 @@ def write_report(out_dir, header: dict, res: dict) -> str:
     p1 = res.get("p1")
     if p1 is not None:
         flagged = [k for k, r in p1["rows"].items() if r["flagged"]]
-        L.append(f"| P1 prior box | {passed(p1['ok'])} | {p1['n_draws']} draws, {p1['n_outside']} outside the box; "
-                 f"rows with KS p < {KS_ALPHA}: {flagged or 'none'} |")
+        L.append(f"| P1 prior box | {passed(p1['ok'])} | {p1['n_draws']} draws over {p1['n_rows']} rows ({p1['condition']}), "
+                 f"{p1['n_outside']} outside the box; rows with KS p < {KS_ALPHA}: {flagged or 'none'} |")
     p2 = res.get("p2")
     if p2 is not None:
-        L.append(f"| P2 composition | {passed(p2['ok'])} | every draw has a monomer and a dimer: {p2['every_draw_has_a_monomer_and_a_dimer']} "
-                 f"(min {p2['min_monomers']} / {p2['min_dimers']}); true f_B in the band {p2['band']}: {p2['true_f_B_in_band']}; "
-                 f"requested log10 r median {p2['median_log10_ratio']:.3f} vs box center {p2['box_center_log10_ratio']:.3f} "
-                 f"(tol {p2['tolerance_log10_ratio']:.3f} = {P2_SIGMAS:g} SE at n = {p2['n_draws']}; centered: {p2['median_at_box_center']}); "
-                 f"f_B median true {p2['median_true_complex_fraction']:.3f} / retained {p2['median_retained_complex_fraction']:.3f} "
-                 f"(selection at occupancy {p2['occupancy']:.4f}); retained subunits median {p2['retained_subunits']['median']:.0f}; "
-                 f"max retained-count deviation {p2['max_retained_count_deviation']:.2f} subunits, max retained-ratio deviation "
-                 f"{p2['max_retained_ratio_deviation_dimers']:.2f} dimers |")
+        lin = "; ".join(f"{k} median {v['median']:.3f} vs {v['center']:.1f} (tol {v['tolerance']:.3f} = {P2_SIGMAS:g} SE at "
+                        f"n = {p2['n_draws']}; centered: {v['centered']})" for k, v in p2["linear_rows"].items())
+        fs = "n/a" if p2["starting_fraction"] is None else f"{p2['starting_fraction']['median']:.3f}"
+        sh = "n/a" if p2["active_share"] is None else f"{p2['active_share']['median']:.3f}"
+        na = lambda v: "n/a" if v is None else v      # noqa: E731
+        L.append(f"| P2 composition | {passed(p2['ok'])} | {p2['n_draws']} draws at occupancy {p2['occupancy']:.4f}; N_R within "
+                 f"{p2['rounding_bound']} of its expectation: max deviation {p2['max_reference_count_deviation']:.2f}; conservation "
+                 f"exact through the allocation: {p2['conservation_exact']}; B1 and the reference unchanged: "
+                 f"{na(p2['b1_and_reference_unchanged_by_allocation'])}; 0 <= c <= capacity: {p2['c_within_capacity']}; Fab "
+                 f"allocation zero: {na(p2['fab_allocation_zero'])}; M_start + 2 D_start = N_total: "
+                 f"{p2['underlying_population_conserved']}; linear "
+                 f"rows: {lin}; represented receptors median {p2['represented_receptors']['median']:.0f} "
+                 f"(min {p2['min_monomers']} monomers / {p2['min_dimers']} dimers placed); f quantiles q05/median/q95 "
+                 f"{p2['basal_fraction']['q05']:.3f}/{p2['basal_fraction']['median']:.3f}/{p2['basal_fraction']['q95']:.3f}; capacity "
+                 f"median {p2['capacity']['median']:.0f} (max {p2['capacity']['max']:.0f}); c median {p2['pairs_allocated']['median']:.0f} "
+                 f"(max {p2['pairs_allocated']['max']:.0f}); share without a pair {p2['share_without_a_pair']:.3f}, with an allocation "
+                 f"{p2['share_with_allocation']:.3f}; f_start median {fs}; active share median {sh} |")
     if res.get("p3") is not None:
         p3 = res["p3"]
-        L.append(f"| P3 trajectories | {passed(p3['ok']) if p3['ok'] is not None else 'n/a'} | {p3.get('n_files', 0)} files; frame-0 counts match: "
+        L.append(f"| P3 trajectories | {passed(p3['ok']) if p3['ok'] is not None else 'n/a'} | {p3.get('n_files', 0)} files "
+                 f"({p3.get('files_with_allocation', 0)} with c > 0); frame-0 counts = starting counts: "
                  f"{p3.get('frame0_counts_match')}; subunit total conserved: {p3.get('subunit_total_conserved')}; pooled frame-0 mode "
                  f"occupancy {p3.get('pooled_frame0_mode_occupancy')} vs law {p3.get('stationary_law_weighted')} "
                  f"(max dev {p3.get('max_abs_deviation', float('nan')):.3f}, tol {TOL_MODE}) |")
     if res.get("p4") is not None:
         p4 = res["p4"]
         L.append(f"| P4 labeling | {passed(p4['ok'])} | {p4['n_simulations']} simulations; probe rule {p4['probe_rule']} at occupancy "
-                 f"{p4['occupancy_declared']:.4f} ({p4['occupancy_source']}), two-probe share declared "
-                 f"{p4['two_probe_share_declared']}; recorded: {p4['occupancy_recorded']}, matches the rule: {p4['occupancy_matches_declared']}, "
+                 f"{p4['occupancy_declared']:.4f} ({p4['occupancy_source']}), two-probe share declared for the reference dimers "
+                 f"{p4['two_probe_share_declared']}; frame-0 class counts = the helper's starting counts: "
+                 f"{p4['frame0_counts_equal_starting_counts']} ({p4['simulations_with_allocation']} simulations with c > 0); "
+                 f"recorded: {p4['occupancy_recorded']}, matches the rule: {p4['occupancy_matches_declared']}, "
                  f"override: {p4['occupancy_override']}; probe classes recorded: {p4['probe_classes_recorded']} "
                  f"(two-probe share realized {p4['two_probe_share_realized']}, ok {p4['class_share_ok']}); visible per subunit "
                  f"{p4['visible_per_subunit'][0]:.4f} vs {p4['visible_per_subunit'][1]:.4f} (tol {p4['visible_per_subunit'][2]:.4f}); "
                  f"visible monomers {p4['visible_monomer'][0]:.3f} vs {p4['visible_monomer'][1]:.3f}; visible dimers "
                  f"{p4['visible_dimer'][0]:.3f} vs {p4['visible_dimer'][1]:.3f}; two-labeled share {p4['both_labeled_share'][0]:.3f} vs "
                  f"{p4['both_labeled_share'][1]:.3f}; emitters per subunit {p4['emitters_per_subunit'][0]:.4f} vs "
-                 f"{p4['emitters_per_subunit'][1]:.4f}; n_subunits = realized retained N_R: {p4['n_subunits_equals_realized_N_R']} |")
+                 f"{p4['emitters_per_subunit'][1]:.4f}; n_subunits = realized N_R (represented receptors): "
+                 f"{p4['n_subunits_equals_realized_N_R']} |")
         p5 = res["p5"]
         s, r = p5["simulated_visible_hosts_frame0"], p5["deposited_first2s_spots"]
         L.append(f"| P5 predictive visible counts | {passed(p5['ok'])} (descriptive) | simulated visible hosts at frame 0: "
@@ -785,6 +878,10 @@ def write_report(out_dir, header: dict, res: dict) -> str:
                  f"q75 {r['q75']:.0f}, max {r['max']:.0f}; share of recordings inside the simulated range: "
                  f"{p5['share_of_recordings_inside_simulated_range']}; empirical median inside simulated 5-95%: "
                  f"{p5['empirical_median_inside_simulated_5_95']} |")
+    if res.get("allocation_exercised") is not None:
+        ae = res["allocation_exercised"]
+        L.append(f"| selftest: allocation exercised | {passed(ae['ok'])} | {ae['draws_with_allocation']} of {ae['n_draws']} synthetic "
+                 f"{ae['condition']} draws carry c > 0 (expected {ae['expected']}) |")
     if res.get("p7") is not None:
         p7 = res["p7"]
         fails = "; ".join(f"task {t}: " + " / ".join(r) for t, r in sorted(p7["failures"].items())) or "none"
@@ -858,8 +955,9 @@ def main() -> None:
             res = dict(p6=p6_visibility(condition))
             if args.selftest:
                 prod = synthetic_products(condition)
-                res.update(p1=p1_prior_box(prod["theta"]), p2=p2_composition(prod["theta"], condition),
-                           p4=p4_labeling(prod["labeling"], condition, prod["theta"]), p5=p5_predictive(prod["labeling"], condition))
+                res.update(p1=p1_prior_box(prod["theta"], condition), p2=p2_composition(prod["theta"], condition),
+                           p4=p4_labeling(prod["labeling"], condition, prod["theta"]), p5=p5_predictive(prod["labeling"], condition),
+                           allocation_exercised=selftest_allocation(prod))
             results[condition] = res
             for k, v in res.items():
                 print(f"  [{passed(v['ok'])}] {condition} {k}")
@@ -881,7 +979,7 @@ def main() -> None:
     if args.condition is None or args.total_time_seconds is None:
         ap.error("--condition and --total-time-seconds are required (or use --selftest)")
     prod = load_products(args)
-    res = dict(p0=prod["p0"], p1=p1_prior_box(prod["theta"]), p2=p2_composition(prod["theta"], prod["condition"]))
+    res = dict(p0=prod["p0"], p1=p1_prior_box(prod["theta"], prod["condition"]), p2=p2_composition(prod["theta"], prod["condition"]))
     if args.trajectories > 0:
         res["p3"] = p3_trajectories(prod["base"], prod["root"], prod["timing"], prod["split"], prod["tasks"],
                                     prod["theta_by_task"], args.trajectories, prod["condition"])

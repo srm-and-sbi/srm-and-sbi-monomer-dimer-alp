@@ -59,10 +59,12 @@ is not the dimer's fluorescence probability. Among fluorescent two-InlB dimers o
 dyes. Under FAB a bound probe carries a Poisson number of dyes, so brightness classes do not map
 onto probe counts.
 
-The probe OCCUPANCY ``p`` of the TRUE population is a DECLARED PER-CONDITION conversion, not a
-labeling coin: it realizes the retained population from the inferred receptor total N_total at
-the RDS stage (``parameterization.realize_initial_composition``) and sets the one-/two-probe
-split of the initial dimers here (``two_probe_share_of``). The values live on the condition
+The probe OCCUPANCY ``p`` of the underlying population is a DECLARED PER-CONDITION conversion,
+not a labeling coin: it realizes the REFERENCE probe-bound population from the inferred
+receptor total N_total at the RDS stage (``parameterization.realize_population``; under
+MET-INLB the window-start allocation then pairs probe-bound monomers into further two-InlB
+dimers before the recording starts) and sets the one-/two-Fab split of the Fab dimers here
+(``two_probe_share_of``, the share of the reference dimers). The values live on the condition
 settings of ``parameterization.py`` (``ConditionSetting``; MET-INLB 0.0476, the independent-site
 equilibrium at the published 0.25 nM with K_D 5 nM; MET-FAB 0.0148, derived from a declared
 Fab/InlB visibility ratio of 0.5 and the InlB anchor). Every renderer of simulated trajectories
@@ -367,23 +369,26 @@ def assign_probes(plan: "LabelingPlan", host_index_0: np.ndarray, host_rank_0: n
 
 # ---- Provenance summary ------------------------------------------------------------------
 # One fixed-width row per rendered simulation, persisted beside the imaging draws as the
-# Labeling_Set. The ``_0`` columns describe the initial frame (the true and visible initial
-# composition); the first three are recording-wide. Counts are of PARTICLES for the dimer
-# columns and of SUBUNITS otherwise.
+# Labeling_Set. The ``_0`` columns describe frame 0: the STARTING composition the generator
+# placed (the reference probe-bound population, plus the window-start allocation under
+# MET-INLB) and its fluorescent part; the first three are recording-wide. Counts are of
+# PARTICLES for the dimer columns and of SUBUNITS otherwise. The reference counts, the
+# capacity and the allocated pairs are not recorded here: the helper recomputes them from the
+# Theta_Set row, the condition and its declared values (``parameterization.population_from_theta``).
 LABELING_SET_COLUMNS: Tuple[str, ...] = (
-    "n_subunits",            # retained receptor subunit count N_R (conserved)
+    "n_subunits",            # represented receptor subunit count N_R (conserved)
     "n_dyes",                # emitters rendered (sum of kappa)
     "n_labeled_subunits",    # subunits with kappa >= 1
-    "monomers_0",            # monomer particles at frame 0
+    "monomers_0",            # monomer particles at frame 0 (the starting count A_start)
     "monomers_visible_0",    # ... of which labeled
-    "dimers_0",              # dimer particles (any class, any mobility mode) at frame 0
+    "dimers_0",              # dimer particles (any class, any mobility mode) at frame 0 (the starting count)
     "dimers_visible_0",      # ... with at least one labeled subunit
     "dimers_two_labeled_0",  # ... with two labeled subunits
-    "occupancy_monomer",     # probability that a retained monomer subunit carries a probe (1 under the model; the coin under an override)
-    "occupancy_dimer",       # ... that a retained dimer subunit does ((1 + s_2) / 2 under FAB, 1 under INLB; the coin under an override)
+    "occupancy_monomer",     # probability that a represented monomer subunit carries a probe (1 under the model; the coin under an override)
+    "occupancy_dimer",       # ... that a represented dimer subunit does ((1 + s_2) / 2 under FAB, 1 under INLB; the coin under an override)
     "dimers_one_probe_0",    # dimer particles carrying ONE probe at frame 0 (B1 under INLB; one-Fab under FAB)
-    "dimers_two_probe_0",    # ... carrying two probes (B2 under INLB; two-Fab under FAB)
-    "two_probe_share",       # declared two-probe share s_2 = p / (2 - p) of the initial dimers (NaN under an override)
+    "dimers_two_probe_0",    # ... carrying two probes at frame 0 (B2_start under INLB, the allocation included; two-Fab under FAB)
+    "two_probe_share",       # the declared independent-binding share s_2 = p / (2 - p) of the REFERENCE dimers: the Fab labeling share; under INLB NOT the starting B2 share (NaN under an override)
 )
 
 
@@ -462,8 +467,10 @@ class LabelingPlan:
         occupancy_source: ``equilibrium``, ``derived`` or ``declared`` (the condition
             setting), or ``override`` (``--occupancy``).
         ligand_classes: whether the condition's dimers carry their probe class as a species.
-        two_probe_share: s_2 = p / (2 - p), the declared two-probe share of the initial dimers
-            (NaN under an override).
+        two_probe_share: s_2 = p / (2 - p), the declared independent-binding share of two-probe
+            dimers among the REFERENCE dimers: the share Fab labeling draws its classes with;
+            under INLB the starting B2 share also carries the window-start allocation and is read
+            from the starting counts, not from s_2 (NaN under an override).
         species_names: the stoichiometric class names, in configuration order (monomer, dimer).
         occupancy_pair: the probability that a retained subunit of each class carries a probe,
             as applied, in ``species_names`` order (the ``occupancy_monomer`` /
@@ -509,6 +516,29 @@ class LabelingPlan:
                 "occupancy": occupancy, "occupancy_source": self.occupancy_source,
                 "occupancy_by_species": dict(zip(self.species_names, self.occupancy_pair)),
                 "visible_per_subunit": dict(zip(self.species_names, self.visible_per_subunit))}
+
+
+def expected_fluorescent_complexes(population, plan: LabelingPlan):
+    """Expected number of fluorescent complexes at frame 0 of the STARTING population under the
+    plan's law and the model's probe rule (before bleaching and detection), elementwise over
+    the arrays of a ``PopulationRealization`` (or the scalars of an ``InitialComposition``).
+
+    With q = P(kappa >= 1 | bound probe): under MET-FAB  A q + B [(1 - s_2) q + s_2 (1 - (1 - q)^2)]
+    (every placed monomer is probe-bound; a dimer is one-Fab with probability 1 - s_2, two-Fab
+    with s_2); under MET-INLB  A q + B1 q + B2 (1 - (1 - q)^2) (every represented InlB receptor
+    carries a probe). The ``coins`` override has no probe classes, so it is refused here.
+    """
+    if plan.probe_rule != "classes":
+        raise ValueError("expected_fluorescent_complexes is defined for the model's probe rule "
+                         "('classes'); the --occupancy override draws independent coins instead.")
+    q = float(plan.law.visible_probability)
+    q_two = 1.0 - (1.0 - q) ** 2
+    monomers = np.asarray(population.n_monomers, dtype=float)
+    if plan.ligand_classes:
+        return (monomers * q + np.asarray(population.n_dimers_one_probe, dtype=float) * q
+                + np.asarray(population.n_dimers_two_probe, dtype=float) * q_two)
+    s_two = float(plan.two_probe_share)
+    return monomers * q + np.asarray(population.n_dimers, dtype=float) * ((1.0 - s_two) * q + s_two * q_two)
 
 
 def resolve_labeling(condition: str, law_spec: Optional[str] = None,

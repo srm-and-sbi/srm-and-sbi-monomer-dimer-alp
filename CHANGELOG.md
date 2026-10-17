@@ -5,18 +5,288 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.40 - 2026-10-17
+
+The window-start composition. The composition coordinate becomes the basal reference fraction `f` of dimers among
+the complexes, uniform on [0, 1] for both conditions, in place of the log dimer-to-monomer ratio on the 5–25 % band.
+The declared occupancy defines a reference probe-bound population from the receptor total and `f`. Under MET-INLB a
+twelfth inferred coordinate, the allocation `R_active`, pairs already probe-bound monomers of that population into
+additional two-InlB dimers before the recording starts. No probe is added and the represented receptors `N_R` are
+conserved; this is a declared starting-state approximation, not a reconstruction of binding before the window. The
+biology table is therefore resolved per condition from one master table of twelve rows: eleven inferred coordinates
+under MET-FAB (the allocation is declared 0) and twelve under MET-INLB. Every consumer aligns by key, never by
+position. Every trajectory tier and detector dataset generated under 0.1.39 is superseded (see *Data*).
+
+### Changed
+
+- **The composition rows** (`parameterization.py`). `fraction_basal_dimers_reference` (`f`, label `$f_{B}^{ref}$`,
+  linear on `FRACTION_BOX` = [0, 1], UNIT 'Fraction', VALUE 0.5) replaces `ratio_dimer_monomer_initial` at position 1.
+  A new group `initialization` holds `relative_count_active_dimers_initial` (`R_active`, `$R_{active}$`, the same box
+  and units) as the twelfth master row, so the eleven shared keys keep positions 0–10 in both conditions. The count
+  row, its box (`COUNT_TOTAL_BOX`, log10 [3, 5]) and the ten log rows are unchanged.
+- **Per-condition tables.** `MASTER_PARAMETERIZATION` (twelve rows) and `MASTER_PARAMETER_KEYS`, with the resolvers
+  `parameterization_of(condition)`, `parameterization_raw_of(condition)` (the declared rows read as fixed rows, NOTE
+  'Declared Constant'), `parameter_keys_of`, `parameter_index_of`, `parameter_find(key, condition)`,
+  `declared_row_values`, `theta_lower_bound` / `theta_upper_bound(condition)` and `build_prior(condition)`.
+  - The resolvers return fresh copies and never mutate the master: Fab, then InlB, then Fab resolve to 11, 12 and 11
+    rows.
+  - `ConditionSetting.relative_count_active_dimers_initial` declares the allocation (MET-FAB 0.0; MET-INLB None, i.e.
+    inferred); an inferred or nonzero allocation requires ligand classes.
+  - `to_physical` / `to_flow` require the table.
+  - `fraction_flags` marks linear-row values outside [0, 1].
+- **One window-start composition helper** for the generator and every analysis: `realize_population` (vectorized),
+  `population_from_theta` and the keyword-only `realize_initial_composition`, returning a `PopulationRealization` /
+  `InitialComposition`.
+  - The reference: `M_ref = N (1 − f)/(1 + f)`, `D_ref = N f/(1 + f)`, `A_ref = round(p M_ref)`,
+    `D_sim = round(p (2 − p) D_ref)`, `B2_ref = min(round(p² D_ref), D_sim)`, `B1 = D_sim − B2_ref`. At zero
+    allocation it reproduces the 0.1.39 integers exactly over the test grid.
+  - Under MET-INLB: `c = round(R_active · ⌊A_ref/2⌋)`, `A_start = A_ref − 2c`, `B2_start = B2_ref + c`, `B1` unchanged
+    and `N_R` conserved, with `M_start`, `D_start`, `f_start` and the active share `c/D_start` derived.
+  - The placed counts keep their names (`n_monomers`, `n_dimers`, `n_dimers_one_probe`, `n_dimers_two_probe`,
+    `n_subunits`); the reference counts gain `*_reference` names.
+  - One validity rule (`population_valid`): realization raises on any invalid element and never clips, and reports
+    mask, count and carry NaN.
+  - There is no ceiling window, no band, no at-least-one rule and no B2-share floor.
+- **Workflow resolvers take the estimator's condition in both workflows** (`parameter_keys`, `parameter_table`,
+  `parameter_table_raw`, `prior_bounds`, `prior_builder(cfg, condition)`). Every stage spec `_<stage>_spec(cfg,
+  condition)` binds `args.condition`, never a recording kind given with `--kinds`.
+- **`Theta_Set` records** (`io.py`). The schema functions require the condition and compare it strictly; refusals
+  name the stored package version and generator. `Paths.rds_theta_set_path` names the condition's RDS-tier record
+  for either workflow.
+  - Records are built under `.partial` names and published so that the final name only ever holds a complete record
+    paired with its own schema. A `.zarr` store is published by one rename; a store being replaced is first renamed
+    aside in one step, never deleted file by file under its final name, where a reader could take a deleted chunk's
+    fill value for data.
+  - A plain array's sidecar records `values_sha256`, the SHA-256 of its value file. The previous values leave the
+    final name before the new sidecar and then the new values take theirs, and `load_theta_set` returns plain-array
+    values only from bytes matching the digest: values copied, restored or replaced apart from their sidecar are
+    refused, and so is a read that straddles a replacement.
+  - This protects readers and scans that meet a record while it is published; it does not make concurrent
+    replacement and reading safe. A `.zarr` store read lazily across its own replacement can mix the two writes,
+    so a tier is never regenerated while training, rendering or an analysis reads it.
+- **RDS stage.**
+  - The banner states the condition's table and declared constants, and sampling uses the condition's bounds and
+    conversion.
+  - A mixed-schema guard (`io.tier_schema_scan`) reads the schema of every other `Theta_Set` of the tier before a
+    task is written. It refuses a record of another schema or one without a readable schema, naming each, and the
+    scan continues past unreadable records. A record removed or being replaced while the scan runs is skipped, never
+    refused as unreadable.
+  - `--supersede-tier` (passed by `Generate_Datasets` under `--overwrite-rds`) tolerates the superseded records that
+    a deliberate regeneration replaces.
+  - Each built system checks that it placed exactly `N_R` subunits.
+  - `--debug` compares the frame-0 census with the starting counts and fails on a mismatch.
+- **DLI stage.**
+  - The detector pass checks the upstream RDS-tier `Theta_Set` against the condition's biology table: its status
+    under `--dry-run`, a refusal before any output in the run.
+  - The InlB banner no longer presents the declared two-probe share as the starting B2 share.
+  - `Generate_Datasets` reports tier status by schema and refuses `--reuse-rds` over a superseded tier.
+- **Inference.**
+  - The biology flow standardizes theta per coordinate (`THETA_STANDARDIZATION = "independent"`), fitted from every
+    TRAIN task-0 label in estimator coordinates (`inference_support.theta_standardization_batch`). A two-row batch
+    would mis-scale coordinates of the mixed log/linear table.
+  - The detector keeps `structured`.
+  - The test-loss manifest and the estimator metadata record the condition, `theta_space` ("estimator", or "log10"
+    for an all-log table), `theta_log_flag`, `theta_standardization` and its source.
+  - `VideoDataset` requires `paths` and the table.
+- **Estimator artifacts.** `save_estimator` and `load_estimator` refuse an artifact whose recorded standardization
+  mode disagrees with its stored buffers (`assert_standardization_consistent`). `load_state_dict` would restore a
+  `(D,)` buffer into a 0-d one silently.
+- **Reports.**
+  - Every per-row number carries its unit (dex for a log row, percentage points or the fraction itself for a linear
+    row). Linear rows get no dex band, no multiplicative bias factor and a NaN `drift_fold`.
+  - Flagged-fraction tables count linear-row values outside [0, 1] and never clip them.
+  - The Evaluation and Experiment writers compare stored `parameter_keys` with the table by key and order.
+  - Under MET-INLB, the Evaluation report adds starting-composition recovery: the allocation's MAE and bias in pp and
+    its 50 / 90 % coverage per true-capacity stratum {0, 1–9, 10–99, 100–999, ≥ 1000}, and `c` in counts from MAP and
+    SGM only.
+  - The Experiment report labels an estimator applied to the other condition's recordings a misspecification test
+    beside every table and figure.
+  - Calibration shards store their keys and condition, and the merge compares them.
+  - The estimator comparison refuses two test-loss manifests whose keys, scales, boxes or condition differ.
+  - The embedding-space distance checks the EVAL `Theta_Set` schema before its embedding pass.
+  - Point-estimate validation and the MAP benchmark refuse a biology workflow.
+- **Population composition.** The analysis binds the estimator's condition (`stoichiometry_binding`) and realizes
+  every draw of the Experiment cloud once through the helper, reference and starting populations alike.
+  - A flagged draw is NaN, counted per kind, window and fraction key, and never clipped.
+  - A product with no valid draw still gets its report: the exclusion counts and the synthetic validation, the
+    closure and replicate checks marked UNAVAILABLE (`DiagnosticReporter.check_unavailable`, neither a pass nor a
+    failure), and no summary table or figure built from the draws.
+  - The report states the starting population first under MET-INLB and one "start = reference" table under
+    MET-FAB, followed by the per-draw realization with the expected fluorescent complexes.
+  - Its recovery half adds `c`, the capacity, `N_R` and the placed counts in counts, and the allocation in pp per
+    true-capacity stratum, using the Evaluation report's strata.
+  - Recordings of the other condition are labeled a misspecification test beside every derived table and figure.
+  - The product stores the starting compositions, the realization arrays, the flagged counts, `condition`,
+    `parameter_keys` and `count_keys`.
+- **Temporal dynamics.**
+  - Condition-bound keys and table, with display names and units for the two fraction rows.
+  - `drift_fold` is NaN for a linear row.
+  - The Experiment and temporal stages report a fraction row's drift in pp
+    (`format_drift_rows(..., linear_unit="pp")`); the default stays "abs", the row's own units, for other callers.
+  - Window MAPs outside [0, 1] are counted per linear row.
+  - Every figure names the estimator's condition in its title and, when it holds recordings of the other condition,
+    adds a MISSPECIFICATION TEST line and marks their curves. The report opens with the warning and marks every
+    table row and column of those recordings, with the population composition's label
+    (`experiment_support.kind_label`).
+- **Sample Geometric Median.** Condition-bound table; its plane is `f` (linear axis) against the dissociation rate
+  (log axis).
+- **Horizon audit.** The import-time breakages are fixed and the spec binds the condition's keys, table, bounds,
+  prior and composition binding. It stays disabled, and its message names both mismatches: the underlying
+  reference composition against the simulated census and, under MET-INLB, the allocation.
+- **Posterior-predictive video.**
+  - The reaction-diffusion vector is the condition's (eleven or twelve keys), drawn, pinned or declared under its
+    table.
+  - `load_declared_rds` requires the condition's keys and refuses the allocation key under MET-FAB. It also refuses
+    a fraction outside [0, 1] at load, `--set-rds` included.
+  - The window-start composition of every source is realized before any simulation, and an unrealizable vector
+    stops the run before the output folder exists.
+  - After the render, frame 0 must hold the realized starting counts before the clip is saved.
+  - Clips record `rds_keys`, `rds_declared_json` and `initial_composition_json`. The figure labels the vector by
+    the stored keys and refuses a clip without them or with another table's.
+  - The extrapolation warning concerns log rows only.
+  - The two declared Fab configurations state `fraction_basal_dimers_reference = 0.075` and reproduce the earlier
+    counts at every declared total.
+- **Labeling.** `labeling.expected_fluorescent_complexes(population, plan)` is the one expected-fluorescence function.
+  The `Labeling_Set` is unchanged: its frame-0 columns already record the starting classes, and `two_probe_share`
+  keeps the declared independent-binding share of the reference dimers.
+- **Detector mirror.** `_RDS_NUISANCE_GROUPS` gains `initialization`, so the detector's RDS nuisance mirrors all
+  twelve master keys.
+- **Model-structure audit.**
+  - D3: the linear rows are exactly `f` (MET-FAB) and `f`, `R_active` (MET-INLB), and conversions require the table.
+  - D4: the reference population against an audit-local literal of the ratio-form rule, 0 mismatches over a
+    41 × 101 grid plus 1e5 draws per condition.
+  - D12 is new: the allocation's worked literals, conservation, and the vectorized helper against the one-draw
+    initializer.
+  - D8: retired keys and removed symbols absent, Fab keys equal to InlB's first eleven, and the allocation-setting
+    refusals. D9 and D10 run per condition.
+  - The run tier compares frame 0 with the starting counts. R6 measures the Fab high-load case, `f` = 1 with
+    dissociation at its ceiling (10 per s) so the dimers split within the run, and reports the particle counts
+    the run reaches; a high-load benchmark, not a runtime bound.
+- **Prior-realization audit.**
+  - P1 runs per row in the estimator coordinate.
+  - P2 is rebuilt on `population_from_theta`: rounding bound, exact conservation, `B1` unchanged, `0 ≤ c ≤ cap`,
+    `c = 0` for every Fab draw, `M_start + 2 D_start = N`, and linear-row medians.
+  - P3 compares with the starting counts. P4 checks the per-simulation frame-0 class counts against the helper and
+    labels `two_probe_share` the reference share.
+  - The selftest exercises the allocation. An initializer placing `B2_ref` instead of `B2_ref + c` is flagged by P2
+    and P4.
+- **Labeling audit.** The import is fixed. The reactive lineage at the InlB prior center must place the helper's
+  starting counts (79 A + 302 B1 + 48 B2).
+- **Count match.**
+  - `visible_hosts_per_subunit(plan, fraction_basal, relative_active)` builds the reference population and the
+    allocation through `labeling.expected_fluorescent_complexes`. It is unchanged at the declared Fab `f` = 0.075.
+  - Declared fractions outside [0, 1] are refused.
+  - Under the `--occupancy` override a one-InlB dimer counts its one represented subunit.
+- **Seeding validation.** Condition-aware bounds and conversion, a build with `--condition`, and a signature error
+  that fails instead of printing SKIP.
+- **Spot count.** The declared receptor total is called `N`; `N_R` remains the simulated subunit count.
+- **Detector companions.** The Estimator_Scorecard, Experiment_Comparison, Raw_Decline_Cross_Check and
+  Embedding_Probe pass the estimator's condition to the workflow resolvers.
+- **CD86 / CTLA-4 control companions.**
+  - The MET estimator's `--condition` binds the table, keys, device prior and SGM scale, and the writer takes the
+    table explicitly with the by-key guard.
+  - The reports gain units, flagged-fraction tables and the estimator's table named beside every value.
+  - The temporal companion's mobile-diffusion readout weights by the window-start composition from the helper
+    (`n_A = M_start`, `n_B = D_start`) and reports `f_start` beside `f`. A window whose composition rows fail the
+    validity rule is flagged, counted and left out of the mixture readout, never clipped.
+- **Labeling arm.** The predictive-video labeling arm refuses a source clip whose stored `rds_keys` are not the
+  condition's, before any work and under `--dry-run`.
+
+### Removed
+
+- `PARAMETERIZATION`, `PARAMETER_KEYS`, `PARAMETER_FIND`, `COMPOSITION_BAND`, `COMPOSITION_RATIO_BOX`,
+  `ratio_to_receptor_fraction`, `ratio_to_complex_fraction`, `receptor_fraction_to_ratio`,
+  `SimulationRDS.retained_ratio_of`, `StoichiometryBlock.composition_ratio_key` and the `InitialComposition` ratio
+  fields (`ratio_requested`, `complex_fraction_true`, `receptor_fraction_true`, `ratio_retained_expected`,
+  `ratio_realized`, `complex_fraction_retained`, `receptor_fraction_retained`, `n_monomers_true`, `n_dimers_true`).
+  There are no aliases, so an old call site fails at import or call instead of reading a ratio as a fraction.
+
+### Fixed
+
+- The `InferenceFlow` docstring described `structured` standardization as per-dimension and the defaults as sbi's.
+  `structured` pools every entry into one mean and one scale, and the defaults are this pipeline's settings, not the
+  library's.
+- The CD86 / CTLA-4 temporal companion referenced an unbound `PARAMETER_KEYS` and so failed at run time.
+
+### Unchanged deliberately
+
+- The ten log rows, their boxes and the count box; the reaction channels (eleven under MET-FAB, twenty-four under
+  MET-INLB) and the declared association convention.
+- The eleven-key imaging vector and the detector's six learnable rows with their `structured` standardization.
+- `ARTIFACT_SCHEMA_VERSION` 2 and the stored field names (`true_log10`, the SGM `*_log` arrays, now documented as
+  estimator coordinates); `ESTIMATE_DEFINITIONS_VERSION`; the MAP optimizer.
+- The `Labeling_Set` columns; `role_of`; the theta-set schema version and fields.
+
+### Data
+
+- Every trajectory tier and detector dataset generated under 0.1.39 is superseded. Their `Theta_Set` schemas carry
+  the ratio key and are refused by the strict reads, and the RDS stage refuses to grow them.
+- Both conditions are regenerated and retrained under this release. The 0.1.39 tiers and the InlB detector datasets
+  are moved aside first, at targets the lead names.
+- The Fab detector chains `C128V39A` and `C128V39B` continue as a benchmark of training and test results only. The
+  campaign's InlB datasets are not trained (`DETECTOR_WORKFLOW.md` §9.10).
+
+### Verification
+
+- **Full suite**, from a fresh run on 2026-10-17 with each `tests/*.py` run directly and its PASS lines counted:
+  275 PASS over 33 files, every file exiting 0. At 0.1.39 it was 210 PASS over 27 files. The new files are
+  `test_window_start_composition.py` (12), `test_condition_resolver.py` (14), `test_theta_standardization.py` (4),
+  `test_rds_dry_run_per_condition.py` (4), `test_mixed_scale_reports.py` (11) and `test_composition_reporting.py`
+  (13).
+- **Publication, an empty cloud and the temporal labels**, each checked against the behavior it replaces. A probe at
+  every rename, unlink and tree removal of a `Theta_Set` write sees no reader get values under another write's
+  schema and no scan call a record unknown. The earlier writer fails that test three ways: a superseded-table reader
+  accepted the new values, a scan refused a fresh record, and a reader during the file-by-file deletion of a
+  replaced store took a deleted chunk's fill value for data. The earlier scan fails it inside the replacement's
+  rename gap. The population-composition run on a product with no valid draw fails on the earlier fatal closure
+  check, and the temporal run fails without the labels.
+- **The 0.1.39 integers.** The zero-allocation reference counts equal a frozen copy of the 0.1.39 integer rule on
+  201 receptor totals × 98 fractions and on 1e5 random draws per condition. The structure audit's D4 compares them
+  with an audit-local literal of the ratio-form rule: 0 mismatches.
+- **Two one-simulation RDS `--debug` runs** (2 s, seed 7, into a scratch data bank): 4 of 4 checks each, with frame 0
+  equal to the starting counts.
+  - MET-FAB: 14 monomers + 247 dimers, `N_R` 508; the reference population is placed.
+  - MET-INLB: reference 46 A + 763 B1 + 19 B2, start 34 A + 763 B1 + 25 B2 (`c` = 6), `N_R` 847 conserved.
+- **Audits.** The structure audit passes both tiers on the PC: the deterministic D1–D12 and the run tier R1–R8.
+  Frame 0 of a real run equals the starting counts in both conditions, the MET-INLB run with 40 pairs allocated, and
+  the subunit totals stay constant. R6, the MET-FAB high-load case, split all 1,466 initial dimers into 2,932
+  particles within the 2 s run in 5.3 s wall; the MET-INLB case took 12.0 s. The report of the deterministic-only
+  run earlier the same day was kept beside it (`..._Model_Structure_Audit_Superseded_20261017`). The
+  prior-realization audit passes `--selftest` (both conditions) and `--visibility`, and catches the mutation named
+  above. Seeding validation passes 8 of 8 per condition.
+- **Dry runs** of the Prime stages and of the edited companions for MET-FAB and MET-INLB, the detector twins
+  included; the horizon audit still refuses.
+- **Import sweep.** All 52 package modules and all 55 `Script_Bank` files load under their own module names. An AST
+  check first confirms that every entry point sits under `if __name__ == "__main__"` and that no top-level statement
+  runs a stage.
+- **Grep gates** over every `*.py` file and notebook: the removed names remain only in absence checks, in refusal
+  fixtures holding a stored product of the retired table, and in the structure audit's local retired-row literal.
+- **Not run:** the labeling audit's full run (skipped by decision), and any generation, training or HPC job.
 
 ### Documentation
 
-- `DETECTOR_WORKFLOW.md` §9.10, Training: the lead's decision of 2026-10-14 recorded before the Fab retraining: two
-  identical chains of the adopted configuration under the tags `C128V39A` and `C128V39B`; TRAIN learns, TEST selects
-  the checkpoint within a chain, EVAL compares the chains and determines the adoption; an architecture variant only as
-  a later addition beside them.
+- `PROJECT_CONTEXT.md`, `DETECTOR_WORKFLOW.md`, `VALIDATION.md`, `README.md` and `Script_Bank/HPC/README.md` restated
+  for the window-start composition:
+  - the reference and starting populations, the per-condition tables, the agreed starting-state wording, units and
+    flags;
+  - the mixed-schema append rule, the theta standardization, and a new `VALIDATION.md` §3.5 listing the focused
+    tests and audits;
+  - in `DETECTOR_WORKFLOW.md` §9.10, a dated decision paragraph: the campaign's products are superseded and the Fab
+    chains are kept as a benchmark of training and test results.
+- The analysis notes are restated to match their scripts, with their dated notes folded into the body: population
+  composition, posterior calibration, sample geometric median, temporal dynamics, test-loss distribution,
+  posterior-predictive video, estimator comparison, model-structure audit, prior-realization audit, count match,
+  seeding validation, horizon audit, and the two CD86 / CTLA-4 notes.
+- `DETECTOR_WORKFLOW.md` §9.10, Training: the lead's decision of 2026-10-14 recorded before the Fab retraining.
+  - Two identical chains of the adopted configuration run under the tags `C128V39A` and `C128V39B`.
+  - TRAIN learns, TEST selects the checkpoint within a chain, and EVAL compares the chains and determines the
+    adoption.
+  - An architecture variant is only a later addition beside them.
 - `DETECTOR_WORKFLOW.md` §9.10: the InlB 2 s trajectory tier and detector datasets are generated in parallel with the
-  Fab campaign under the same release, sizes, machines, submissions and audits (P7 under the InlB labeling); the InlB
-  calibration is independent of the Fab one; the InlB biology videos wait for the InlB nuisance treatment; cost
-  estimates from the structure audit's ceiling run; no earlier InlB dataset to archive.
+  Fab campaign under the same release, sizes, machines, submissions and audits (P7 under the InlB labeling).
+  - The InlB calibration is independent of the Fab one.
+  - The InlB biology videos wait for the InlB nuisance treatment.
+  - Cost estimates come from the structure audit's ceiling run; no earlier InlB dataset is archived.
 
 ## 0.1.39 - 2026-10-14
 

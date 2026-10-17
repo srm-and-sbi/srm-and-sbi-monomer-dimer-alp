@@ -11,7 +11,8 @@ The two workflows invert which half of the model the MAP supplies and which half
 * **detector** -- the MAP supplies the six IMAGING parameters; the reaction-diffusion block is a
   marginalized nuisance, drawn from the biology prior (or pinned) per render, and the system is
   built with its full reaction network -- the same simulator the detector was calibrated against.
-* **biology** -- the MAP supplies the eleven REACTION-DIFFUSION parameters and the system is built
+* **biology** -- the MAP supplies the condition's REACTION-DIFFUSION parameters (eleven under
+  MET-FAB, twelve under MET-INLB, whose window-start allocation is inferred) and the system is built
   with the recording's condition's reaction network (association is a per-condition constant); the imaging block is held fixed at the calibrated vector the
   training videos were generated with, read from the ``Nuisance_DLI`` artifact at run time.
 
@@ -26,9 +27,14 @@ every renderer of simulated trajectories shares (``labeling.resolve_labeling`` a
 probe occupancy, applied by initial molecular species, with ``--labeling-law`` and ``--occupancy``
 overriding them exactly as at the DLI stage; the clip records the labeling row the draw produced.
 Instead of the MAP, the reaction-diffusion block can come from a DECLARED configuration
-(``--declared-rds``, both workflows): a file stating each of the eleven values with its basis and
-source. It serves prediction checks before a biology estimator exists, and any render whose
-biology must be an explicit assumption rather than an estimate or a prior draw.
+(``--declared-rds``, both workflows): a file stating each of the condition's values with its basis
+and source. It serves prediction checks before a biology estimator exists, and any render whose
+biology must be an explicit assumption rather than an estimate or a prior draw. Whatever the
+source (MAP, declared, pinned or drawn), the window-start composition is realized ONCE, before any
+simulation, by the one population helper: a vector with a fraction outside [0, 1] is refused there,
+never clipped, and the realized composition is recorded in the clip. Every clip records the keys
+of its reaction-diffusion vector (``rds_keys``), and a figure is drawn only for a clip whose keys
+are the condition's.
 
 The renderer itself is already common to both workflows (``simulation_dli_support.render_dli_video``,
 re-exported as ``render_detector_video``), and the 11-key imaging order it consumes is a property of
@@ -58,7 +64,7 @@ from .simulation_rds_support import (
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
     extract_trajectory_poses,
 )
-from .workflow import parameter_keys as _wf_keys, parameter_table
+from .workflow import parameter_keys as _wf_keys, parameter_table, prior_bounds
 
 # Conditions are named scientifically wherever a reader sees them; the tokens below survive only as
 # the stored ``kinds`` field of the MAP database and the recording filenames on disk.
@@ -202,8 +208,11 @@ def _load_map_theta(map_npz, keys, table, kind, cell, chunk, source, prior_low, 
     phi = np.asarray(prior_high, dtype=float)
     oob = [keys[i] for i in range(len(keys))
            if theta_log10[i] < plo[i] - 1e-9 or theta_log10[i] > phi[i] + 1e-9]
-    if oob:
-        print(f"WARNING: the MAP is outside the prior box for {oob}; the render EXTRAPOLATES "
+    # The extrapolation warning is for LOG rows: a linear row (a fraction) outside [0, 1] is not an
+    # extrapolation but an unrealizable composition, refused by the preflight before any simulation.
+    oob_log = [k for k, e in zip(keys, table) if k in oob and bio.is_log_row(e)]
+    if oob_log:
+        print(f"WARNING: the MAP is outside the prior box for {oob_log}; the render EXTRAPOLATES "
               f"there, so a poor experimental-vs-synthetic match may reflect an out-of-prior MAP rather "
               f"than the calibration itself.")
     return bio.to_physical(theta_log10, table)
@@ -254,86 +263,149 @@ def _fixed_imaging_theta(overrides=None):
     return theta
 
 
-# The detector's RDS nuisance is the biology's eleven-parameter prior -- the detector re-images the
-# condition's trajectory tier -- so its keys, order, and ranges are the biology table's.
-_NUISANCE_KEYS = [e["KEY"] for e in bio.PARAMETERIZATION]
+# The reaction-diffusion vector of a render is the CONDITION's biology theta (eleven keys under
+# MET-FAB, twelve under MET-INLB): the detector's RDS nuisance is that condition's prior -- the
+# detector re-images the condition's trajectory tier -- so its keys, order and ranges are the
+# condition's biology table's. Every clip records them (``rds_keys``), and every consumer aligns by
+# key, never by position.
+
+def _rds_keys(condition):
+    """The condition's reaction-diffusion keys, in theta order (``parameter_keys_of``)."""
+    return list(bio.parameter_keys_of(condition))
 
 
-def _draw_nuisance_physical(rng=None):
-    """One fresh RDS-nuisance draw for a posterior-predictive render: the eleven reaction-diffusion
-    parameters from the biology prior (uniform in estimator space), mapped to physical values by
-    the ONE conversion rule (``parameterization.to_physical``: log rows exponentiated, the linear
-    initial dimer fraction passed through), in the canonical ``PARAMETERIZATION`` order -- exactly
-    what a condition's RDS tier draws per simulation."""
+def _rds_table(condition):
+    """The condition's reaction-diffusion table (``parameterization_of``): the conversion rule,
+    box and label of every key of ``_rds_keys``."""
+    return bio.parameterization_of(condition)
+
+
+def _draw_nuisance_physical(condition, rng=None):
+    """One fresh RDS-nuisance draw for a posterior-predictive render: the condition's
+    reaction-diffusion parameters from its biology prior (uniform in estimator space), mapped to
+    physical values by the ONE conversion rule (``parameterization.to_physical``: log rows
+    exponentiated, the linear rows -- the basal reference fraction f and, under MET-INLB, the
+    allocation R_active -- passed through), in the condition's theta order -- exactly what the
+    condition's RDS tier draws per simulation."""
     rng = np.random.default_rng() if rng is None else rng
-    low = np.asarray(bio.theta_lower_bound(), dtype=float)
-    high = np.asarray(bio.theta_upper_bound(), dtype=float)
-    return bio.to_physical(rng.uniform(low, high))
+    low = np.asarray(bio.theta_lower_bound(condition), dtype=float)
+    high = np.asarray(bio.theta_upper_bound(condition), dtype=float)
+    return bio.to_physical(rng.uniform(low, high), _rds_table(condition))
 
 
-def _fixed_nuisance_physical(overrides=None):
-    """Physical RDS-nuisance vector for --fixed-nuisance-RDS: every reaction-diffusion parameter
-    held at its prior-center nominal (``parameterization.prior_center``: the physical value at the
-    midpoint of its estimator-space range), then any ``overrides`` (``{key: physical_value}``)
-    applied last. This replaces the fresh ``_draw_nuisance_physical`` draw with a deterministic,
-    controlled nuisance, so the stoichiometry (receptor total ``count_total``, initial
-    dimer-to-monomer ratio ``ratio_dimer_monomer_initial``), diffusivities, switching rates, and reaction rates are
+def _fixed_nuisance_physical(condition, overrides=None):
+    """Physical RDS-nuisance vector for --fixed-nuisance-RDS under ``condition``: every
+    reaction-diffusion parameter held at its prior-center nominal (``parameterization.prior_center``:
+    the physical value at the midpoint of its estimator-space range; 0.5 for the fraction rows),
+    then any ``overrides`` (``{key: physical_value}``) applied last. This replaces the fresh
+    ``_draw_nuisance_physical`` draw with a deterministic, controlled nuisance, so the stoichiometry
+    (the receptor total ``count_total``, the basal reference fraction
+    ``fraction_basal_dimers_reference`` and, under MET-INLB, the allocation
+    ``relative_count_active_dimers_initial``), diffusivities, switching rates, and reaction rates are
     pinned to condition-appropriate values rather than sampled from a flat prior. Returns a
-    ``(len(PARAMETERIZATION),)`` array in canonical theta order."""
-    centers = {e["KEY"]: bio.prior_center(e) for e in bio.PARAMETERIZATION}
+    ``(len(_rds_keys(condition)),)`` array in the condition's theta order."""
+    keys = _rds_keys(condition)
+    centers = {e["KEY"]: bio.prior_center(e) for e in _rds_table(condition)}
     for key, value in (overrides or {}).items():
         if key not in centers:
             raise ValueError(
-                f"--fixed-nuisance-RDS key {key!r} is not an RDS-nuisance parameter; "
-                f"valid keys: {_NUISANCE_KEYS}.")
+                f"--fixed-nuisance-RDS key {key!r} is not an RDS-nuisance parameter under {condition}; "
+                f"valid keys: {keys}.")
         centers[key] = value
-    print("Fixed RDS nuisance: parameters at prior-center nominals"
+    print(f"Fixed RDS nuisance [{condition}]: parameters at prior-center nominals"
           + (f"; overrides {overrides}" if overrides else "")
-          + " (" + ", ".join(f"{k}={centers[k]:.4g}" for k in _NUISANCE_KEYS) + ").")
-    return np.array([centers[k] for k in _NUISANCE_KEYS], dtype=float)
+          + " (" + ", ".join(f"{k}={centers[k]:.4g}" for k in keys) + ").")
+    return np.array([centers[k] for k in keys], dtype=float)
 
 
-def rds_outside_prior(vector):
-    """Keys of a physical reaction-diffusion vector outside the biology prior box (estimator
-    coordinates): the support of the trajectory tiers both workflows are trained on. A render there
-    extrapolates beyond the training data; it is reported and recorded, never clipped."""
+def rds_outside_prior(vector, condition):
+    """Keys of a physical reaction-diffusion vector of ``condition`` outside its biology prior box
+    (estimator coordinates): the support of the trajectory tiers both workflows are trained on. The
+    vector's length must be the condition's. A LOG row outside its box is an extrapolation beyond
+    the training data, reported and recorded, never clipped; a LINEAR row (a fraction) outside
+    [0, 1] is also listed here, and is refused by the composition preflight before any simulation."""
+    table = _rds_table(condition)
+    values = np.asarray(vector, dtype=float).ravel()
+    if values.size != len(table):
+        raise ValueError(f"rds_outside_prior [{condition}]: the vector has {values.size} values; the "
+                         f"condition's table has {len(table)} ({_rds_keys(condition)}).")
     out = []
-    for entry, value in zip(bio.PARAMETERIZATION, np.asarray(vector, dtype=float).ravel()):
+    for entry, value in zip(table, values):
         lo, hi = entry["PRIOR_RANGE"]
         coordinate = float(bio.entry_to_flow(entry, value)) if value > 0 or not bio.is_log_row(entry) \
             else float("-inf")
-        if coordinate < lo - 1e-9 or coordinate > hi + 1e-9:
+        if not np.isfinite(coordinate) or coordinate < lo - 1e-9 or coordinate > hi + 1e-9:
             out.append(entry["KEY"])
     return out
+
+
+def rds_outside_prior_log(vector, condition):
+    """The LOG-row subset of :func:`rds_outside_prior`: the keys for which a render EXTRAPOLATES
+    beyond the training support (a fraction row outside [0, 1] is refused instead)."""
+    log_keys = {e["KEY"] for e in _rds_table(condition) if bio.is_log_row(e)}
+    return [k for k in rds_outside_prior(vector, condition) if k in log_keys]
+
+
+def _preflight_initial_composition(vector, condition, source):
+    """Realize the window-start composition of a physical reaction-diffusion vector ONCE, before
+    any simulation, through the one population helper (``parameterization.population_from_theta``:
+    the reference population from (N_total, f) under the condition's occupancy, then the
+    allocation). A vector the helper refuses (a fraction outside [0, 1], a non-finite value, a
+    width that is not the condition's) stops the run here with the source named -- the MAP, the
+    declared configuration, the pinned or drawn nuisance -- and nothing is clipped. Returns the
+    ``InitialComposition`` (Python scalars), which the clip records as ``initial_composition_json``."""
+    try:
+        return bio.population_from_theta(np.asarray(vector, dtype=float), condition).item(())
+    except ValueError as exc:
+        raise SystemExit(f"the {source} reaction-diffusion vector cannot be realized as a window-start "
+                         f"composition under {condition}: {exc} Nothing is simulated and nothing is "
+                         f"clipped; supply a vector inside the fraction boxes.") from None
+
+
+def initial_composition_record(composition):
+    """The JSON-ready record of an ``InitialComposition`` (every field, Python scalars)."""
+    from dataclasses import asdict
+    return {k: (float(v) if isinstance(v, float) else v) for k, v in asdict(composition).items()}
 
 
 _DECLARED_ROW_FIELDS = ("value", "per_cell", "basis", "source")
 
 
 def _checked_rds_value(entry, value, where):
-    """A declared physical value as float: finite, and positive on a log row."""
+    """A declared physical value as float: finite, positive on a log row, and inside the box of
+    a linear row (a fraction outside [0, 1] is refused at load, never clipped)."""
     value = float(value)
     if not np.isfinite(value) or (bio.is_log_row(entry) and value <= 0):
         raise ValueError(f"{where}: value {value!r} must be finite"
                          + (" and positive (a log row)." if bio.is_log_row(entry) else "."))
+    if not bio.is_log_row(entry):
+        lo, hi = entry["PRIOR_RANGE"]
+        if value < lo or value > hi:
+            raise ValueError(f"{where}: value {value!r} lies outside [{lo:g}, {hi:g}]; a fraction "
+                             f"outside its box cannot be realized as a composition and is refused at "
+                             f"load, never clipped.")
     return value
 
 
 def load_declared_rds(path, condition, cell, overrides=None):
     """Read a declared reaction-diffusion configuration (``--declared-rds``) for one recording.
 
-    The file (TOML) states every one of the eleven reaction-diffusion parameters in physical units
-    under ``[parameters.<KEY>]``, each with a non-empty ``basis`` (what kind of statement the value
-    is: a declared assumption, a prior center, a value matched to the recording, ...) and
-    ``source`` (where it comes from, and its scope), and exactly one of ``value`` or ``per_cell``, a
-    table keyed by the cell index for a value that differs between recordings. ``[scenario]`` names
-    the configuration (``name``) and its ``condition``, which must be the recording's. ``overrides``
-    (``{key: physical}``, from ``--set-rds``) apply last and are recorded as such. Nothing is
-    clipped: a value outside the prior box is recorded as an extrapolation (``rds_outside_prior``).
+    The file (TOML) states every one of the condition's reaction-diffusion parameters (eleven under
+    MET-FAB, twelve under MET-INLB) in physical units under ``[parameters.<KEY>]``, each with a
+    non-empty ``basis`` (what kind of statement the value is: a declared assumption, a prior
+    center, a value matched to the recording, ...) and ``source`` (where it comes from, and its
+    scope), and exactly one of ``value`` or ``per_cell``, a table keyed by the cell index for a value
+    that differs between recordings. ``[scenario]`` names the configuration (``name``) and its
+    ``condition``, which must be the recording's. The file must hold the condition's keys exactly:
+    under MET-FAB the allocation key is refused (the condition declares it 0; a file stating it
+    would describe another condition). A fraction outside [0, 1] is refused at load, never clipped,
+    so the dry run catches it. ``overrides`` (``{key: physical}``, from ``--set-rds``) apply last
+    and are recorded as such; a log row outside the prior box is recorded as an extrapolation
+    (``rds_outside_prior``).
 
-    Returns ``(vector, record)``: the physical vector in canonical ``PARAMETERIZATION`` order and a
-    JSON-ready record (path, SHA-256 of the file, scenario, per-parameter value, basis, source and
-    origin, the overrides, and the keys outside the prior box).
+    Returns ``(vector, record)``: the physical vector in the condition's theta order and a
+    JSON-ready record (path, SHA-256 of the file, scenario, condition, keys, per-parameter value,
+    basis, source and origin, the overrides, and the keys outside the prior box).
     """
     import tomllib
     path = Path(path)
@@ -346,15 +418,23 @@ def load_declared_rds(path, condition, cell, overrides=None):
     if declared_condition != condition:
         raise ValueError(f"{path}: [scenario].condition is {declared_condition!r}, but the recording's "
                          f"condition is {condition!r}; a declared configuration applies to one condition.")
+    keys = _rds_keys(condition)
+    table = _rds_table(condition)
     params = spec.get("parameters", {})
-    unknown = sorted(set(params) - set(_NUISANCE_KEYS))
-    missing = [k for k in _NUISANCE_KEYS if k not in params]
+    declared_constants = bio.declared_row_values(condition)
+    stated_constants = sorted(set(params) & set(declared_constants))
+    if stated_constants:
+        raise ValueError(f"{path}: [parameters] states {stated_constants}, which {condition} declares as "
+                         f"constant(s) {declared_constants}; a file stating the allocation describes "
+                         f"another condition and is refused.")
+    unknown = sorted(set(params) - set(keys))
+    missing = [k for k in keys if k not in params]
     if unknown or missing:
-        raise ValueError(f"{path}: [parameters] must hold exactly the eleven reaction-diffusion keys "
-                         f"{_NUISANCE_KEYS}; missing {missing}, unknown {unknown}.")
+        raise ValueError(f"{path}: [parameters] must hold exactly the {len(keys)} reaction-diffusion keys "
+                         f"of {condition} {keys}; missing {missing}, unknown {unknown}.")
     overrides = dict(overrides or {})
     rows = {}
-    for entry in bio.PARAMETERIZATION:
+    for entry in table:
         key = entry["KEY"]
         row = params[key]
         extra = sorted(set(row) - set(_DECLARED_ROW_FIELDS))
@@ -382,15 +462,16 @@ def load_declared_rds(path, condition, cell, overrides=None):
         rows[key] = {"value": value, "basis": basis, "source": source, "origin": origin}
     for key, value in overrides.items():
         if key not in rows:
-            raise ValueError(f"--set-rds key {key!r} is not a reaction-diffusion parameter; "
-                             f"valid keys: {_NUISANCE_KEYS}.")
-        entry = bio.PARAMETERIZATION[_NUISANCE_KEYS.index(key)]
+            raise ValueError(f"--set-rds key {key!r} is not a reaction-diffusion parameter under "
+                             f"{condition}; valid keys: {keys}.")
+        entry = table[keys.index(key)]
         rows[key] = dict(rows[key], value=_checked_rds_value(entry, value, f"--set-rds {key}"),
                          origin="override (--set-rds)", declared_value=rows[key]["value"])
-    vector = np.array([rows[k]["value"] for k in _NUISANCE_KEYS], dtype=float)
+    vector = np.array([rows[k]["value"] for k in keys], dtype=float)
     record = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "scenario": scenario,
+              "condition": str(condition), "keys": list(keys),
               "cell": int(cell), "parameters": rows, "overrides": dict(overrides or {}),
-              "outside_prior": rds_outside_prior(vector),
+              "outside_prior": rds_outside_prior(vector, condition),
               "text": raw.decode("utf-8")}                    # the file as read, so a clip is self-contained
     return vector, record
 
@@ -556,11 +637,26 @@ def comparison_figure_inputs(clip, cfg):
     map_block = str(_clip_field(clip, "map_block"))
     rds_source = str(_clip_field(clip, "rds_source"))
     needs_map = np.asarray(clip["map_theta"]).size > 0          # the render read a MAP vector
+    condition = str(_clip_field(clip, "condition"))
+    # The reaction-diffusion values are labeled by the KEYS the clip stored, which must be the
+    # condition's (a clip of another table -- an earlier release's, or the other condition's --
+    # is refused here, never relabeled by position).
+    files = clip.files if hasattr(clip, "files") else clip
+    if "rds_keys" not in files:
+        raise ValueError("the clip stores no 'rds_keys': it predates the per-condition "
+                         "reaction-diffusion vector and cannot be labeled by key; it is refused.")
+    stored_keys = [str(k) for k in np.asarray(clip["rds_keys"]).ravel()]
+    expected_keys = _rds_keys(condition)
+    if stored_keys != expected_keys:
+        raise ValueError(f"the clip's rds_keys {stored_keys} differ from the {condition} keys "
+                         f"{expected_keys}; its reaction-diffusion vector belongs to another table and "
+                         f"is refused (exact key and order match required).")
+    rds_table = _rds_table(condition)                     # labels the vector by the stored keys
     rds_record = json.loads(str(_clip_field(clip, "rds_record_json")))
     imaging_identity = json.loads(str(_clip_field(clip, "imaging_record_json")))
     labeling_record = json.loads(str(_clip_field(clip, "labeling_record_json")))
     overrides = imaging_identity.get("set_imaging_overrides")
-    tag = str(_clip_field(clip, "nuisance_tag")) if "nuisance_tag" in (clip.files if hasattr(clip, "files") else clip) else ""
+    tag = str(_clip_field(clip, "nuisance_tag")) if "nuisance_tag" in files else ""
     declared = rds_source == "declared"
     declared_label = (f"DECLARED reaction-diffusion ({rds_record['scenario']['name']}, absolute)"
                       if declared else None)
@@ -574,7 +670,6 @@ def comparison_figure_inputs(clip, cfg):
         else:
             rds_label = "INFERRED reaction-diffusion (MAP theta, absolute)"
             motion_desc = "from the MAP reaction-diffusion parameters (not a draw)"
-        rds_table = parameter_table(cfg)                 # the eleven biology parameters
     else:
         imaging_label = (imaging_role_label("FIXED imaging (MET values)", overrides) if fixed_imaging
                          else "INFERRED imaging (MAP theta, absolute)")
@@ -584,7 +679,6 @@ def comparison_figure_inputs(clip, cfg):
         else:
             rds_label = "NUISANCE reaction-diffusion (marginalized)"
             motion_desc = None
-        rds_table = None                                 # detector: labeled by the biology table (its RDS nuisance)
     if labeling_record.get("arm"):                       # a labeling arm reuses its source's trajectory
         motion_desc = "the source render's trajectory (reused, not re-simulated)"
     return dict(
@@ -614,15 +708,17 @@ def draw_comparison_figure(clip, figure_path, cfg, display_norm=DISPLAY_NORM_DEF
 
 
 def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, display_norm,
-                         nuisance, imaging_physical, *, synth_label, labeling_row, fixed_imaging=False,
-                         fixed_nuisance=False, imaging_label="imaging",
-                         rds_label="reaction-diffusion", motion_desc=None, rds_table=None,
+                         nuisance, imaging_physical, *, synth_label, labeling_row, rds_table,
+                         fixed_imaging=False, fixed_nuisance=False, imaging_label="imaging",
+                         rds_label="reaction-diffusion", motion_desc=None,
                          labeling_desc=None, rds_outside=(), display_percentiles=DISPLAY_PERCENTILES):
     """Static experimental-vs-synthetic panel. ``synth_label`` (``synthetic_source_label``) names
     the synthetic source in the synthetic panel and the title, as the clip file does; ``sel_desc``
     names the MAP selection and is None when no MAP was read. ``labeling_row`` is the render's
     labeling record, from which the provenance states the receptors the render actually started
-    with (``initial_receptor_lines``).
+    with (``initial_receptor_lines``). ``rds_table`` is REQUIRED: the condition's reaction-diffusion
+    table (``_rds_table``), which labels the ``nuisance`` vector key by key; its length must equal
+    the vector's.
 
     Col 0 = EXPERIMENTAL and col 1 = SYNTH, each
     showing the mid frame over its max projection; col 2 holds the shared pixel-intensity
@@ -762,10 +858,14 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
     nuis = np.asarray(nuisance, dtype=float).ravel()
     npart = []
     # The label table must match the block being shown, or zip() silently truncates. Both
-    # workflows' reaction-diffusion vectors are the biology's eleven parameters in canonical order
-    # (the detector's RDS nuisance is that prior, re-imaged from the condition's tier), so the biology
-    # table labels either; the explicit check keeps a future schema change from truncating.
-    table = bio.PARAMETERIZATION if rds_table is None else rds_table
+    # workflows' reaction-diffusion vectors are the condition's biology parameters in its theta
+    # order (the detector's RDS nuisance is that prior, re-imaged from the condition's tier), so the
+    # condition's table labels either; the explicit check keeps a vector of another table from
+    # being relabeled by position.
+    if rds_table is None:
+        raise ValueError("_save_comparison_png: rds_table is required (the condition's "
+                         "reaction-diffusion table labels the vector key by key).")
+    table = list(rds_table)
     if len(table) != nuis.size:
         raise ValueError(f"RDS label table has {len(table)} entries but the vector has "
                          f"{nuis.size}; they must correspond.")
@@ -787,7 +887,7 @@ def _save_comparison_png(path, experimental, synth, kind, cell, sel_desc, displa
         lines.append("  (* outside prior / SCOPE box)")
     lines += [f"{rds_label}:", *nuis_lines]
     if rds_outside:
-        lines.append("  (* outside the biology prior)")
+        lines.append("  (* outside the biology prior: a log row extrapolates)")
     if labeling_desc:
         lines.append(f"labeling: {labeling_desc}")
     lines += ["initial receptors (frame 0, this render):", *initial_receptor_lines(labeling_row),
@@ -941,15 +1041,24 @@ def run_posterior_predictive_video(cfg, args):
     # ---- the reaction-diffusion vector, then one clip at the experimental length through the
     # production chain (simulate_and_render: the RDS stage's system, the DLI stage's labeling and
     # renderer) ----
-    out_dir.mkdir(parents=True, exist_ok=True)
     rds_provenance, rds_desc, rds_source, rds_record = S["rds_vector"](args, map_theta, declared)
-    rds_outside = rds_outside_prior(rds_provenance)
-    if rds_outside and rds_source != "map":                    # the MAP path has already warned
-        print(f"WARNING: the reaction-diffusion vector lies outside the biology prior box for "
-              f"{rds_outside}; the trajectory tiers the estimators are trained on contain no such "
-              f"system, so this render EXTRAPOLATES beyond the training support.")
-    traj_path = outputs["trajectory"]
     condition = kind
+    rds_outside = rds_outside_prior(rds_provenance, condition)
+    outside_log = rds_outside_prior_log(rds_provenance, condition)
+    if outside_log and rds_source != "map":                    # the MAP path has already warned
+        print(f"WARNING: the reaction-diffusion vector lies outside the biology prior box for the log "
+              f"rows {outside_log}; the trajectory tiers the estimators are trained on contain no such "
+              f"system, so this render EXTRAPOLATES beyond the training support.")
+    # The window-start composition, realized ONCE before any simulation for every source (MAP,
+    # declared, pinned, drawn): a fraction outside [0, 1] stops the run here, never clipped.
+    composition = _preflight_initial_composition(rds_provenance, condition, rds_source)
+    print(f"Window-start composition [{condition}] from the {rds_source} vector: "
+          f"{composition.n_monomers} monomers + {composition.n_dimers} dimers placed "
+          f"(N_R {composition.n_subunits} represented receptors; reference A_ref {composition.n_monomers_reference}, "
+          f"D_sim {composition.n_dimers_reference}; capacity {composition.capacity}, c {composition.n_pairs_allocated}; "
+          f"f {composition.fraction_basal_dimers_reference:.4g} -> f_start {composition.fraction_basal_dimers_start:.4g}).")
+    out_dir.mkdir(parents=True, exist_ok=True)          # only once the vector is known to be realizable
+    traj_path = outputs["trajectory"]
     clip = simulate_and_render(condition, rds_provenance, imaging_physical, plan, n_frames, traj_path,
                                seed=args.seed, verbose=args.verbose)
     synth, dye_counts, labeling_row = clip["synth"], clip["dye_counts"], clip["labeling_row"]
@@ -957,8 +1066,12 @@ def run_posterior_predictive_video(cfg, args):
     print(f"Labeling: {plan.describe()} -> {int(lab['n_dyes'])} dyes on "
           f"{int(lab['n_labeled_subunits'])} of {int(lab['n_subunits'])} subunits; frame 0: "
           f"{int(lab['monomers_visible_0'])}/{int(lab['monomers_0'])} monomers and "
-          f"{int(lab['dimers_visible_0'])}/{int(lab['dimers_0'])} dimers visible "
+          f"{int(lab['dimers_visible_0'])}/{int(lab['dimers_0'])} dimers fluorescent "
           f"({int(lab['dimers_two_labeled_0'])} with both subunits labeled).")
+    if (int(lab["monomers_0"]), int(lab["dimers_0"])) != (composition.n_monomers, composition.n_dimers):
+        raise RuntimeError(f"frame 0 holds {int(lab['monomers_0'])} monomers + {int(lab['dimers_0'])} "
+                           f"dimers, but the realized starting composition is {composition.n_monomers} + "
+                           f"{composition.n_dimers}; the generator and the helper disagree.")
 
     # ---- persist (clip + provenance) and a static comparison figure ----
     clips_path = outputs["clip"]
@@ -979,8 +1092,12 @@ def run_posterior_predictive_video(cfg, args):
         imaging_physical=imaging_physical, imaging_keys=np.array(det.DETECTOR_IMAGING_KEYS),
         map_theta=(np.array([]) if map_theta is None else map_theta),
         map_keys=np.array(keys), map_block=S["map_block"], workflow=cfg.tag,
-        rds_provenance=rds_provenance, rds_keys=np.array(_NUISANCE_KEYS), rds_source=rds_source,
+        rds_provenance=rds_provenance, rds_keys=np.array(_rds_keys(condition)), rds_source=rds_source,
         rds_record_json=json.dumps(rds_record, default=float),
+        # the rows the condition declares as constants (MET-FAB: the allocation 0), which complete
+        # the vector to the master keys by key; the declared configuration itself is rds_record_json
+        rds_declared_json=json.dumps(bio.declared_row_values(condition)),
+        initial_composition_json=json.dumps(initial_composition_record(composition)),
         rds_outside_prior=np.array(rds_outside, dtype=str),
         condition=condition, labeling_law=plan.law_name, dye_counts=dye_counts,
         n_subunits=clip["n_subunits"], n_dyes=int(dye_counts.sum()),
@@ -1117,9 +1234,11 @@ def build_parser(description):
                         "overrides, instead of drawing it; repeatable.")
     p.add_argument("--declared-rds", type=str, default=None, metavar="TOML",
                    help="both workflows: take the reaction-diffusion block from a declared configuration "
-                        "file -- each of the eleven values with its basis and source (load_declared_rds) "
-                        "-- instead of the MAP (biology) or a drawn or pinned nuisance (detector); the "
-                        "file's SHA-256 and every value's origin are recorded in the clip.")
+                        "file -- each of the condition's values (eleven under MET-FAB, twelve under "
+                        "MET-INLB) with its basis and source (load_declared_rds) -- instead of the MAP "
+                        "(biology) or a drawn or pinned nuisance (detector); a fraction outside [0, 1] "
+                        "is refused at load; the file's SHA-256 and every value's origin are recorded "
+                        "in the clip.")
     p.add_argument("--set-rds", action="append", default=[], metavar="KEY=VALUE",
                    help="with --declared-rds: override one declared reaction-diffusion value (physical "
                         "units); repeatable; recorded as an override.")
@@ -1232,20 +1351,23 @@ def _ppv_spec(cfg, args):
     posit_dir = data_bank_root / paths.posit_subdir
     exp_out_dir = paths.experiment_recovery_dir(data_bank_root, map_label)
 
+    # The recording's condition binds the MAP block's keys, table and box: the condition's biology
+    # table (eleven rows under MET-FAB, twelve under MET-INLB) or the condition-free detector table.
+    low, high = prior_bounds(cfg, kind_token)
     S = dict(
-        paths=paths, map_label=map_label,
+        paths=paths, map_label=map_label, condition=kind_token,
         map_npz=exp_out_dir / (exp_out_dir.name + ".npz"),
         experimental_tif=paths.experiment_video_path(
             kind_token, args.cell, args.experiment_span_seconds, data_bank_root),
         out_dir=posit_dir / f"{paths.project_alias}_{map_label}_Posterior_Predictive_Video",
-        prior_low=np.asarray(cfg.param_module.theta_lower_bound(), dtype=float),
-        prior_high=np.asarray(cfg.param_module.theta_upper_bound(), dtype=float),
-        table=parameter_table(cfg),                          # the MAP block's conversion rule
+        prior_low=np.asarray(low, dtype=float),
+        prior_high=np.asarray(high, dtype=float),
+        table=parameter_table(cfg, kind_token),             # the MAP block's conversion rule
     )
 
     if cfg.tag == "detector":
         S["map_block"] = "imaging"
-        S["map_keys"] = _wf_keys(cfg)                       # the 6 learnable imaging parameters
+        S["map_keys"] = _wf_keys(cfg, kind_token)           # the 6 learnable imaging parameters
         S["imaging_desc"] = "MAP emitter parameters + MET SCOPE camera"
         S["rds_desc"] = ("full reactive system from the RDS nuisance (drawn from the biology prior, "
                          "pinned, or declared)")
@@ -1268,20 +1390,23 @@ def _ppv_spec(cfg, args):
                 desc, source = f"declared RDS configuration {record['scenario']['name']}", "declared"
             elif a.fixed_nuisance_rds:
                 overrides = _parse_kv(a.fixed_nuisance_rds, "--fixed-nuisance-RDS")
-                nuisance = _fixed_nuisance_physical(overrides=overrides)
+                nuisance = _fixed_nuisance_physical(kind_token, overrides=overrides)
                 desc, source = "pinned RDS nuisance", "pinned"
-                record = {"basis": "prior-center nominals with overrides", "overrides": overrides}
+                record = {"basis": "prior-center nominals with overrides", "overrides": overrides,
+                          "condition": kind_token, "keys": _rds_keys(kind_token)}
             else:
                 # The RDS stage draws a tier's theta from default_rng(--seed); the same stream here.
-                nuisance = _draw_nuisance_physical(np.random.default_rng(a.seed))
-                desc, source, record = "drawn RDS nuisance", "drawn", {"basis": "one biology-prior draw"}
-            # The nuisance vector IS a canonical theta (biology order), so the ordinary builders
-            # apply under the recording's condition -- the same system that condition's RDS tier
-            # simulates (association on under INLB, off under FAB).
+                nuisance = _draw_nuisance_physical(kind_token, np.random.default_rng(a.seed))
+                desc, source = "drawn RDS nuisance", "drawn"
+                record = {"basis": "one biology-prior draw", "condition": kind_token,
+                          "keys": _rds_keys(kind_token)}
+            # The nuisance vector IS the condition's theta (its biology order), so the ordinary
+            # builders apply under the recording's condition -- the same system that condition's RDS
+            # tier simulates (association on under INLB, off under FAB).
             return nuisance, desc + " (full reactive system)", source, record
     else:
         S["map_block"] = "rds"
-        S["map_keys"] = _wf_keys(cfg)                       # the 11 learnable RDS parameters
+        S["map_keys"] = _wf_keys(cfg, kind_token)           # the condition's learnable RDS parameters (11 or 12)
         S["imaging_desc"] = "calibrated Nuisance_DLI vector + MET SCOPE camera"
         S["rds_desc"] = "full reactive system from the MAP reaction-diffusion parameters"
 

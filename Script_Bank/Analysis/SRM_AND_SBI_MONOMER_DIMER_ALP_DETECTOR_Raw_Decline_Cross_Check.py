@@ -89,7 +89,7 @@ def resolve(cfg, args):
         posit / f"{paths.project_alias}_{plain}_Raw_Decline_Cross_Check_{args.estimator.upper()}"
     return dict(timing=timing, paths=paths, posit=posit, estimator=args.estimator, tag=tag,
                 experiment=posit / f"{stem}_MAP_Experiment" / f"{stem}_MAP_Experiment.npz", raw=raw,
-                out_dir=out_dir, condition=args.condition, keys=parameter_keys(cfg), table=parameter_table(cfg),
+                out_dir=out_dir, condition=args.condition, keys=parameter_keys(cfg, args.condition), table=parameter_table(cfg, args.condition),
                 authorization=args.authorization)
 
 

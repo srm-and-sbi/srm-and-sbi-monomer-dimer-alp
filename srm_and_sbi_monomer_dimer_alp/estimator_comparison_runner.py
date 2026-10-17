@@ -12,6 +12,13 @@ diagnostic is workflow-agnostic and the only per-workflow difference is the alia
 ``paths`` namespace the artifacts live under (biology's or detector's). No GPU, no sampling:
 it reads two finished artifacts and runs the statistics.
 
+Two log-scores compare only within one parameterization: before the kernel runs,
+``_assert_same_parameterization`` refuses a pair whose learnable keys (and order), per-row
+scale flags, prior boxes or condition differ. What the guard does not establish: pairing by
+``(task, sim)`` assumes both estimators scored the same TEST examples, which the manifest's
+``test_set_id`` (``TEST/<timing>``) does not prove; shared-example identity is established
+separately (same tier path and timing).
+
 An Analysis diagnostic -- read-only, never wired into the ``Submit.sh`` dispatcher -- whose
 report lands in the ``Posit/`` tier alongside the estimators it compares.
 """
@@ -60,6 +67,57 @@ def _resolve_tld(spec: str, paths, data_bank_root: Path, timing_label: str):
             f"estimator comparison: no TLD backup matching loss tag '{spec}' in {posit} "
             f"(use 'canonical', a loss tag like -6.91, or an explicit .npz path)")
     return matches[-1], spec
+
+
+def _learnable_rows(manifest):
+    """The learnable rows of a TLD manifest's parameter table, keyed by ``key``."""
+    return [e for e in manifest.get("parameter_table", []) if e.get("role") == "learnable"]
+
+
+def _assert_same_parameterization(manifest_a, manifest_b, *, label_a="A", label_b="B") -> None:
+    """Refuse two test-loss manifests that are not one parameterization: the learnable keys
+    (and their order), the per-row scale flags (``theta_log_flag``, else the table's
+    ``log_flag``), the prior boxes of the learnable rows, and the condition must agree. The
+    refusal (``ValueError``) names the first difference. It does not establish that both
+    estimators scored the same TEST examples (see the module docstring)."""
+    def keys(m):
+        return [str(k) for k in m.get("theta_keys", [])]
+
+    def flags(m):
+        if m.get("theta_log_flag") is not None:
+            return [bool(v) for v in m["theta_log_flag"]]
+        return [bool(e.get("log_flag")) for e in _learnable_rows(m)]
+
+    def boxes(m):
+        return [tuple(float(v) for v in e.get("prior_range") or ()) for e in _learnable_rows(m)]
+
+    ka, kb = keys(manifest_a), keys(manifest_b)
+    if len(ka) != len(kb):
+        raise ValueError(f"estimator comparison: {label_a} has {len(ka)} learnable keys and {label_b} "
+                         f"{len(kb)} ({ka} vs {kb}); two parameterizations are not compared.")
+    for i, (x, y) in enumerate(zip(ka, kb)):
+        if x != y:
+            raise ValueError(f"estimator comparison: learnable key at index {i} differs: {label_a} "
+                             f"{x!r} vs {label_b} {y!r}; two parameterizations are not compared.")
+    fa, fb = flags(manifest_a), flags(manifest_b)
+    for i, (x, y) in enumerate(zip(fa, fb)):
+        if x != y:
+            raise ValueError(f"estimator comparison: the scale of {ka[i]!r} differs: {label_a} "
+                             f"{'log' if x else 'linear'} vs {label_b} {'log' if y else 'linear'}; "
+                             f"the densities are over different spaces.")
+    if len(fa) != len(fb):
+        raise ValueError(f"estimator comparison: {label_a} records {len(fa)} scale flags and {label_b} "
+                         f"{len(fb)}.")
+    ba, bb = boxes(manifest_a), boxes(manifest_b)
+    if ba != bb:
+        for i, (x, y) in enumerate(zip(ba, bb)):
+            if x != y:
+                raise ValueError(f"estimator comparison: the prior box of {ka[i]!r} differs: {label_a} "
+                                 f"{x} vs {label_b} {y}; the prior volumes differ.")
+        raise ValueError(f"estimator comparison: the learnable prior boxes differ ({len(ba)} vs {len(bb)} rows).")
+    ca, cb = manifest_a.get("condition"), manifest_b.get("condition")
+    if ca != cb:
+        raise ValueError(f"estimator comparison: the condition differs: {label_a} {ca!r} vs {label_b} {cb!r}.")
 
 
 def _figure_improvement(result):
@@ -144,6 +202,15 @@ def run_estimator_comparison(cfg: WorkflowConfig, args: argparse.Namespace) -> N
 
     tld_a = TestLossDistribution.load(path_a)
     tld_b = TestLossDistribution.load(path_b)
+    try:
+        _assert_same_parameterization(tld_a.manifest, tld_b.manifest, label_a=label_a, label_b=label_b)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    reporter.check("same_parameterization", True,
+                   f"{len(tld_a.manifest.get('theta_keys', []))} learnable keys, scales, boxes and "
+                   f"condition {tld_a.manifest.get('condition')!r} agree",
+                   note="log-scores compare only within one parameterization; the guard compares "
+                        "keys and order, per-row scale flags, prior boxes and the condition.")
     result = ecomp.compare(
         tld_a.keys, tld_a.loss, tld_b.keys, tld_b.loss,
         label_a=label_a, label_b=label_b,
@@ -173,7 +240,11 @@ def run_estimator_comparison(cfg: WorkflowConfig, args: argparse.Namespace) -> N
              "Pairing cancels the intrinsic per-video entropy floor, so the difference isolates "
              "the two estimators' KL gap (Amisano & Giacomini 2007). Diebold-Mariano is the "
              "mean-based test; Wilcoxon + bootstrap are the heavy-tail-robust companions; the "
-             "verdict follows the Diebold-Mariano p-value at alpha.")
+             "verdict follows the Diebold-Mariano p-value at alpha. Pairing by (task, sim) "
+             "assumes both estimators scored the same TEST examples; the manifest's test_set_id "
+             f"({tld_a.manifest.get('test_set_id')!r} / {tld_b.manifest.get('test_set_id')!r}) "
+             "names the split and timing only and does not prove it -- shared-example identity "
+             "is established separately (same tier path and timing).")
 
     if reporter.dump:
         reporter.save_figure(

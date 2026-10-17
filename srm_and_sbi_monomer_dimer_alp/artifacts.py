@@ -64,6 +64,47 @@ def _rebuild_estimator(embedding_args, maf_args, theta_dim, video_shape, device)
     return estimator.to(device)
 
 
+def _standardization_buffers(state_dict: dict) -> dict:
+    """The flow's theta (x) standardization buffers of a compile-stripped ``state_dict``: the keys
+    ending in ``_transforms.0._shift`` / ``_transforms.0._scale`` outside the embedding net
+    (the first transform of the MAF is the standardizing one sbi inserts under ``z_score_x``)."""
+    return {key: value for key, value in state_dict.items()
+            if "embedding" not in key
+            and (key.endswith("_transforms.0._shift") or key.endswith("_transforms.0._scale"))}
+
+
+def assert_standardization_consistent(state_dict: dict, maf_args: dict, theta_dim: int, *,
+                                      source: str = "estimator") -> None:
+    """Refuse a state_dict whose theta-standardization buffers disagree with ``maf_args``.
+
+    ``torch.nn.Module.load_state_dict`` restores the standardizing buffers SILENTLY even when the
+    rebuilt mode differs (a ``(D,)`` buffer loads into a ``()`` buffer without an error), so an
+    artifact whose manifest ``z_score_x`` disagrees with its stored buffers would rebuild wrongly.
+    The rule: ``structured`` stores 0-d buffers (one pooled shift and scale); ``independent``
+    stores ``(theta_dim,)`` buffers (one per coordinate); ``none`` / ``None`` stores no such
+    buffer. Checked before an artifact is written and before a loaded state_dict is restored.
+    """
+    mode = maf_args.get("z_score_x", "independent")
+    buffers = _standardization_buffers(state_dict)
+    shapes = {key: tuple(value.shape) for key, value in buffers.items()}
+    if mode in (None, "none"):
+        if buffers:
+            raise ValueError(f"{source}: standardization mode of the manifest does not match the stored "
+                             f"buffers: z_score_x={mode!r} but the state_dict carries {shapes}.")
+        return
+    want = () if mode == "structured" else (int(theta_dim),)
+    if mode not in ("structured", "independent"):
+        raise ValueError(f"{source}: unknown z_score_x mode {mode!r}.")
+    if not buffers:
+        raise ValueError(f"{source}: standardization mode of the manifest does not match the stored "
+                         f"buffers: z_score_x={mode!r} but no standardization buffer is stored.")
+    bad = {key: shape for key, shape in shapes.items() if shape != want}
+    if bad:
+        raise ValueError(f"{source}: standardization mode of the manifest does not match the stored "
+                         f"buffers: z_score_x={mode!r} expects shape {want} (theta_dim {theta_dim}) "
+                         f"but the state_dict carries {bad}.")
+
+
 def save_estimator(estimator, *, embedding_args, maf_args, theta_dim, video_shape,
                    parameter_keys, prior_low, prior_high, path, metadata=None):
     """Persist a trained estimator as a self-describing, version-portable artifact.
@@ -85,6 +126,9 @@ def save_estimator(estimator, *, embedding_args, maf_args, theta_dim, video_shap
     """
     stripped = {key: value.detach().cpu()
                 for key, value in strip_compile_prefix(estimator.state_dict()).items()}
+    # A mismatch between the recorded standardization mode and the buffers is never written.
+    assert_standardization_consistent(stripped, dict(maf_args), int(theta_dim),
+                                      source=f"save_estimator {path}")
     buffer = io.BytesIO()
     torch.save(stripped, buffer)
     weights = np.frombuffer(buffer.getvalue(), dtype=np.uint8)
@@ -127,6 +171,14 @@ def load_estimator(path, device: str = "cpu", *, expected_parameter_keys=None) -
     If ``expected_parameter_keys`` is given, the artifact's stored parameter schema
     is checked first (`assert_schema_compatible`) and a mismatch raises before any
     rebuild — so a legacy artifact is rejected loudly, never misread column-for-column.
+
+    The stored theta-standardization buffers are checked against the manifest's
+    ``maf_args["z_score_x"]`` before ``load_state_dict`` (`assert_standardization_consistent`):
+    ``structured`` requires 0-d buffers, ``independent`` buffers of shape ``(theta_dim,)``,
+    ``none`` no buffer. ``load_state_dict`` restores a ``(D,)`` buffer into a 0-d one silently,
+    so without this check an edited or inconsistent manifest would rebuild a flow that
+    standardizes theta wrongly; the mismatch raises ``ValueError`` naming the stored mode, the
+    buffer shape and the theta_dim.
     """
     data = np.load(path, allow_pickle=False)
     manifest = json.loads(str(data["manifest"]))
@@ -143,6 +195,11 @@ def load_estimator(path, device: str = "cpu", *, expected_parameter_keys=None) -
         spec["embedding_args"], spec["maf_args"],
         spec["theta_dim"], tuple(spec["video_shape"]), device,
     )
+    # Checked on the stored state_dict BEFORE it is loaded: in one direction (a (D,) buffer into a
+    # 0-d one) load_state_dict restores silently, in the other torch raises its own RuntimeError;
+    # checking first gives one ValueError for both.
+    assert_standardization_consistent(state_dict, dict(spec["maf_args"]), int(spec["theta_dim"]),
+                                      source=f"estimator artifact {path}")
     estimator.load_state_dict(state_dict)
     estimator.eval()
 

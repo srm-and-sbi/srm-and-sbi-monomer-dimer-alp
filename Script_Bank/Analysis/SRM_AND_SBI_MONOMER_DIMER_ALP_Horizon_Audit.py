@@ -2,8 +2,9 @@
 recording break the estimator's reset assumption?
 
 ROLE. The estimator trains on independently initialized model-window simulations: every training
-video starts with freshly placed particles at the drawn stoichiometry (receptor total N_R, initial
-dimer fraction x_B). The experimental analysis slices
+video starts with freshly placed particles at the drawn window-start composition (the receptor total
+N_total, the basal reference fraction f and, under MET-INLB, the initial active-dimer allocation
+R_active). The experimental analysis slices
 each continuous 20 s recording into consecutive model-length windows and runs the estimator on
 every window -- silently assuming that a window whose past evolved for many seconds is
 distributed like a reset training simulation of the same length. This audit tests that assumption
@@ -42,6 +43,10 @@ disjoint --theta-start/--theta-stop ranges; per-theta output files, skip-if-pres
 
 BIOLOGY ONLY. The detector workflow marginalizes the reaction-diffusion block, so a continuous
 reactive trajectory has no inferred counterpart to audit; pointing the engine at it fails loudly.
+
+DISABLED. ``run_horizon_audit`` refuses every phase, the dry run included, until the audit's
+estimands are restated for the represented population at the window start
+(``horizon_audit_runner.HORIZON_AUDIT_DISABLED``; the note names the two mismatches).
 
 WHERE TO RUN. generate: any CPU machine (ReaDDy required). infer: the GPU server. analyze: any
 machine, seconds. Post-hoc, user-driven analysis in Script_Bank/Analysis, NOT a canonical

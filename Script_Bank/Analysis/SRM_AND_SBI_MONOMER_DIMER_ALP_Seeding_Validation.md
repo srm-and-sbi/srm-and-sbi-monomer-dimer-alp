@@ -45,13 +45,18 @@ The checks:
 - **B — cross-split disjoint.** The TRAIN, TEST, and EVAL path sets never intersect;
   the split suffix namespaces them apart.
 - **D — non-determinism sanity.** Reproducing the production theta sampler exactly (a
-  log-uniform draw over the prior bounds, then exponentiated to physical units), the
-  check confirms that: two default draws (no seed) differ, so the default is not
+  uniform draw over the condition's prior box in the estimator coordinate, eleven rows
+  under MET-FAB and twelve under MET-INLB, then converted to physical values by the one
+  conversion rule: log rows exponentiated, the two linear fraction rows passed through),
+  the check confirms that: two default draws (no seed) differ, so the default is not
   silently forcing a fixed seed; the rows within one draw are distinct; and an explicit
   seed reproduces the draw bit-for-bit. When ReaDDy is available it additionally
-  confirms the same behavior for initial particle placement — two unseeded placements
-  of the same theta differ, and an explicitly seeded placement is reproducible. If
-  ReaDDy is not installed the placement portion is skipped, not failed.
+  confirms the same behavior for initial particle placement of the condition's own
+  system and starting composition (the window-start allocation included under
+  MET-INLB) — two unseeded placements of the same theta differ, and an explicitly
+  seeded placement is reproducible. The systems are built and placed, never stepped. If
+  ReaDDy is not installed the placement portion is skipped, not failed; any other error
+  in it fails the check.
 
 ## How to run it
 
@@ -64,13 +69,15 @@ additionally requires ReaDDy in the environment.
 ```bash
 MACHINE_PROFILE=<profile> python \
   Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.py \
-  --total-time-seconds 2.0
+  --condition FAB --total-time-seconds 2.0
 ```
 
-The one argument is `--total-time-seconds` (required): the run duration, which sets the
-timing label (for example `2.0` → `2S_50FPS`) whose labels are checked, so the check
-matches the fan-out being validated. The frame cadence (frames per second) is fixed
-globally; only the duration varies per run.
+Two arguments are required. `--condition` (`FAB` or `INLB`) selects the condition's
+product namespace, its prior box and its reaction-diffusion system; run the check once
+per condition. `--total-time-seconds` is the run duration, which sets the timing label
+(for example `2.0` → `2S_50FPS`) whose labels are checked, so the check matches the
+fan-out being validated. The frame cadence (frames per second) is fixed globally; only
+the duration varies per run.
 
 Note on seeds: the seed values the check uses — a fixed value for the reproducibility
 assertions, no seed for the non-determinism assertions — are internal to the check
@@ -141,9 +148,10 @@ Because this concerns determinism and seeding, its scope is stated precisely:
 - The fan-out is a small representative shape, not the full production task count. It
   exercises the label algebra (within-split, cross-split, offset append), not the volume
   of a production run.
-- The check is tied to one timing label per invocation. Run it once per duration when a
-  project generates at more than one recording length, since each duration is a separate
-  namespace.
+- The check is tied to one timing label and one condition per invocation. Run it once per
+  duration when a project generates at more than one recording length, since each duration
+  is a separate namespace, and once per condition, since each condition has its own tier,
+  prior box and system.
 
 ## Reference
 

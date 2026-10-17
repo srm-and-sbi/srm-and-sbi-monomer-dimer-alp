@@ -29,7 +29,13 @@ What "validated" means here, in full:
   storage is a run-level setting, part of the contract every shard shares;
 * every required array present with the declared shape; every estimate, score and truth finite;
   quantiles nondecreasing along the level axis (equal neighbors allowed); identifier arrays
-  integer-valued; the optional posterior cloud of shape ``(N, n_summary_draws, D)`` and finite;
+  integer-valued; the optional posterior cloud of shape ``(N, n_summary_draws, D)`` and finite.
+  Every per-observation vector is in ESTIMATOR coordinates: log10 of the physical value for a
+  log row, the value itself for a linear row. The stored field ``true_log10`` keeps its name
+  (it holds the truth in estimator coordinates; a rename would refuse every stored product of
+  this schema version), as do the SGM ``*_log`` arrays of the median-vector products. The
+  ``parameter_keys`` of the manifest are the ESTIMATOR condition's learnable keys, in theta
+  order (eleven under MET-FAB, twelve under MET-INLB for the biology; six for the detector);
 * observation identifiers unique (and equal to an expected inventory when one is given);
 * for a merged product, one ``shards`` record per input shard (rank, world size, observation
   count, write time, execution attempt) whose observation counts sum to the product's.
@@ -587,9 +593,12 @@ def median_level_index(manifest: dict) -> int:
 
 
 def assert_parameter_keys(manifest: dict, expected, *, source="product") -> None:
-    """A consumer's parameter table must equal the product's, key for key and in order. Counting
-    columns is not enough: two tables of equal length with a different row order would read every
-    column as the wrong parameter."""
+    """A consumer's parameter table must equal the product's, key for key and in order.
+    ``expected`` is the ESTIMATOR condition's learnable keys (``workflow.parameter_keys(cfg,
+    condition)``), never a recording kind's. Counting columns is not enough: two tables of equal
+    length with a different row order would read every column as the wrong parameter, and a
+    table of equal width whose column changed meaning (the Fab vector keeps eleven columns
+    across revisions) would be misread column for column; only the keys tell them apart."""
     got = [str(k) for k in manifest.get("parameter_keys", [])]
     want = [str(k) for k in expected]
     if got != want:

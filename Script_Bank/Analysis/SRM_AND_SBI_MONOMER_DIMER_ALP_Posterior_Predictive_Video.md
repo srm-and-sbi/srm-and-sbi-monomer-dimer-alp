@@ -52,7 +52,8 @@ half is held fixed**:
 This is not cosmetic: the comparison figure labels each block by the role it plays in the run that
 produced it — labeling a fixed block "INFERRED" (or an inferred one "NUISANCE") would invert the
 reader's conclusion about what any visible mismatch implies. Both workflows build the same reactive
-system; only the source of its eleven reaction-diffusion parameters differs. The recording's condition (`--kind`) selects
+system; only the source of its reaction-diffusion parameters differs (the condition's: eleven under MET-FAB, twelve under
+MET-INLB, whose window-start allocation is inferred). The recording's condition (`--kind`) selects
 the reaction network the scene is simulated with (the condition's declared association setting: on under
 MET-INLB, off under MET-FAB), the condition-specific estimator namespace, the condition's calibrated `Nuisance_DLI` on the biology
 path, and the static labeling law the render uses (`--labeling-law` overrides it for a sensitivity
@@ -76,7 +77,11 @@ the production ones (`simulate_and_render`).
 
 What differs from a production draw is declared: the five camera values are pinned to the MET acquisition
 values, which lie inside the SCOPE box the DLI stage draws from; the reaction-diffusion block is the MAP,
-a prior draw, a pinned vector, or a declared configuration; and the clip is stored at 16 bits after a
+a prior draw, a pinned vector, or a declared configuration; whatever its source, its window-start
+composition is realized once, before any simulation, by the population helper the generator uses
+(`parameterization.population_from_theta`: the reference population from the receptor total and the
+basal reference fraction under the condition's occupancy, then the allocation), and a vector with a
+fraction outside [0, 1] is refused there, naming its source, never clipped; and the clip is stored at 16 bits after a
 clip to [0, 65535] (the recording's domain), where the training videos store the 8-bit conversion
 `io.convert_video_dtype`, which the direct estimators and the count match apply to both videos.
 
@@ -90,11 +95,14 @@ stay OS-seeded, so a seed does not reproduce a trajectory.
 
 Where no estimate is to be used -- a prediction check before a biology estimator exists, or any render
 whose biology must be an explicit assumption -- the reaction-diffusion block comes from a TOML file
-(`load_declared_rds`). It states each of the eleven parameters in physical units under
+(`load_declared_rds`). It states each of the condition's parameters in physical units under
 `[parameters.<KEY>]` with a non-empty `basis` and `source`, and exactly one of `value` or `per_cell` (a
-table by cell index, for the receptor total). `[scenario]` names it and its condition, which must be the
-recording's. `--set-rds KEY=VALUE` overrides one value and is recorded as an override. A value outside the
-biology prior box is flagged in the console, the clip and the figure, never clipped.
+table by cell index, for the receptor total): eleven under MET-FAB, twelve under MET-INLB, the window-start
+allocation included. Under MET-FAB a file stating the allocation is refused, because the condition declares
+it 0 and such a file would describe another condition. `[scenario]` names it and its condition, which must
+be the recording's. `--set-rds KEY=VALUE` overrides one value and is recorded as an override. A log-row value
+outside the biology prior box is flagged in the console, the clip and the figure, never clipped; a fraction
+outside [0, 1] cannot be realized as a composition and is refused at load, so the dry run catches it.
 
 **On the biology path, the configuration is presented to the user and confirmed before any render.**
 Prior centers, literature values and inferred values are not interchangeable, and none is selected
@@ -138,6 +146,10 @@ says so.
 - `cell-median` — the per-dimension median. Faster to explain, but it composes coordinates that need
   never have co-occurred, and for a *render* that matters: the simulator is then asked to realize a
   combination no chunk supported. Retained as an option; not the default.
+
+Whichever vector is selected, a fraction outside [0, 1] (the MAP ascent is unconstrained) refuses the
+render before any simulation; the cell aggregates are computed as for every other row and refused only
+when the selected vector itself is invalid.
 
 This is a post-hoc, ad-hoc analysis — a visual posterior-predictive check of a workflow's MAP
 estimates against one experimental recording. It is not one of the canonical pipeline stages and
@@ -250,10 +262,12 @@ needs its own `--run-label`. The dry run reports files that already exist. Files
 - `<stem>_Synthetic_Video.npz` — experimental and synthetic frames (16-bit, non-negative) plus
   provenance: the imaging vector (`imaging_physical`, `imaging_keys`) and its source
   (`imaging_record_json`: the artifact identity with its tag and selection record, or the MAP source);
-  the reaction-diffusion vector (`rds_provenance`, `rds_keys`), its source (`rds_source`: map, declared,
-  pinned or drawn) and record (`rds_record_json`: for a declared configuration the file path, SHA-256 and
-  text, every value's basis, source and origin, and the overrides), and the keys outside the prior box
-  (`rds_outside_prior`); the labeling (`labeling_law`, `dye_counts`, `labeling_row` with
+  the reaction-diffusion vector (`rds_provenance`, `rds_keys`: the condition's keys, by which every
+  consumer aligns the vector), its source (`rds_source`: map, declared, pinned or drawn) and record
+  (`rds_record_json`: for a declared configuration the file path, SHA-256 and text, every value's basis,
+  source and origin, and the overrides), the keys outside the prior box (`rds_outside_prior`), and the
+  window-start composition realized from it (`initial_composition_json`: the reference and starting
+  counts, the capacity and the allocated pairs, the represented receptors); the labeling (`labeling_law`, `dye_counts`, `labeling_row` with
   `labeling_columns`, `occupancy_source`, `occupancy_monomer`, `occupancy_dimer`, `labeling_record_json`);
   the selection, the seed, `synth_label` and `package_version`.
 - `<stem>_Comparison.png` — the static side-by-side figure (below).
@@ -264,7 +278,9 @@ The render draws its figure from the fields it saves in the clip. A figure can t
 from the clip alone, under another display window or after a change to the figure, with
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Redraw_Figure.py`. It simulates and renders
 nothing, and it replaces an existing figure only under `--replace`, through a temporary file moved into
-place once complete:
+place once complete. The figure labels the reaction-diffusion values by the keys the clip stored: a clip
+without `rds_keys`, or whose keys differ from the condition's (a clip of another table or of the other
+condition), is refused, never relabeled by position:
 
 ```bash
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
@@ -283,13 +299,14 @@ over its max projection, so a frame and its projection sit in the same column. C
 the shared **pixel-intensity histograms** — log-y over the full range (top) and linear-y
 through ~p99.99 (bottom, essentially the whole range bar the top-0.01% hot-pixel sliver). Column 3 holds the syn/exp **ratio-per-quantile match plot**
 (top) over a **quantile table and provenance text box** (bottom). The provenance lists the eleven
-imaging values and the eleven reaction-diffusion values in absolute units, each block under the role it
+imaging values and the condition's reaction-diffusion values (eleven under MET-FAB, twelve under
+MET-INLB) in absolute units, each block under the role it
 plays in the run (INFERRED, FIXED, NUISANCE or DECLARED), with out-of-prior values flagged. The title
 and the synthetic panel name the synthetic source in the words the clip file stores (`synth_label`,
 e.g. *SYNTH (declared reaction-diffusion)*), which the notebook also shows. The synthetic panel names a
 MAP selection only when a MAP was read. The provenance also states the receptors the render actually
 started with, from its labeling record: the subunit total split into monomers and dimers, the labeled
-subunits and their dyes, and the visible monomers and dimers at frame 0. It ends with the display
+subunits and their dyes, and the fluorescent monomers and dimers at frame 0. It ends with the display
 window: the mode, the window in ADU, and how many pixels of each clip fall below and above it, which
 the frame panels show at the colormap's ends. Its numbers carry at most three decimal places (a value
 below 0.01 keeps three significant digits), and long lines wrap inside the panel. A colorbar beside each
@@ -332,8 +349,9 @@ machine, not just the one that rendered the clip. Step by step:
    titles.
    Run the cell; it prints the clip's identity (entry point, recording, frame count and rate, seed,
    engine version) and its provenance as the static figure states it: the synthetic source, the
-   imaging tag and its eleven values, the reaction-diffusion source and its eleven values (for a
-   declared configuration, its name and SHA-256), the labeling, the receptors the render started
+   imaging tag and its eleven values, the reaction-diffusion source and its values (eleven under
+   MET-FAB, twelve under MET-INLB; for a declared configuration, its name and SHA-256), the
+   labeling, the receptors the render started
    with, the display window in ADU, and how many pixels of each clip fall below and above it. To
    compare two renders of the same recording, for example the production render and one of its
    labeling arms, set `SECOND_CLIP_PATH` to the second clip: its synthetic video becomes a third
@@ -414,7 +432,8 @@ it; none simulates a trajectory, and none adopts anything:
   beside its source as `<source stem>_<ARM>_Synthetic_Video.npz` with its comparison figure; its clip
   carries the source's provenance with the labeling fields replaced and the arm recorded in
   `labeling_record_json`. The occupancy it records is the source's (the labeled subunits are kept), not the
-  occupancy the arm's law would derive for production.
+  occupancy the arm's law would derive for production. A source clip without `rds_keys`, or whose keys
+  differ from the condition's, is refused before any work.
 - `..._Brightness_Tail_Structure.py` compares, per recording, the experimental frames with the production
   render and every arm: the quantiles, the per-frame maximum, the pixels above the threshold and their
   structure. Genuinely bright emitters are PSF-shaped (several hot pixels in one frame) and revisit the

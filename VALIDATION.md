@@ -197,11 +197,18 @@ trajectory directory `READY_TRACT/`, namespaced by split — for TRAIN,
 `<data_bank>/Theta/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Theta_Set_TASK_0_TRAIN.zarr`
 (the condition token right after the sibling alias, no workflow qualifier; with the
 `_TEST` / `_EVAL` namespaces for the other two splits). Each theta set carries its schema in
-the store's attributes — the eleven keys in order, their prior bounds and scales, the condition,
-the timing label, and the package version — and the stage prints a `Theta_Set schema:` line per
-task; every later stage refuses a theta set whose schema differs from its table. This generates
-250 / 50 / 20 (train / test / eval) trajectories. Add `--verbose` to print the
-sampled diffusion and reaction rates per simulation. This is the MET-FAB tier, shared
+the store's attributes — the condition's keys in order (eleven under MET-FAB: the count, the
+basal reference fraction `f`, the dissociation rate and the seven mobility rows; twelve under
+MET-INLB, the window-start allocation `R_active` last; the two fraction rows linear on [0, 1],
+every other row log10), their prior bounds and scales, the condition, the timing label, and the
+package version — and the stage prints a `Theta_Set schema:` line per task; every later stage
+refuses a theta set whose schema differs from the condition's table, and the RDS stage itself
+refuses to add a task beside a record of another schema (the mixed-schema guard: move a
+superseded tier aside, or let the orchestrator's `--overwrite-rds` pass `--supersede-tier`).
+This generates 250 / 50 / 20 (train / test / eval) trajectories. Add `--verbose` to print the
+sampled diffusion and reaction rates per simulation together with the window-start composition
+(the reference counts, the capacity, the allocated pairs `c` and the placed starting counts;
+under MET-FAB `allocation: declared 0`). This is the MET-FAB tier, shared
 by both workflows: the detector smoke (§2.5) re-images these same trajectories under
 the FAB labeling law. The second condition has its own tier, because the association
 setting differs (MET-INLB associates at the reference intensity, MET-FAB has no
@@ -227,18 +234,24 @@ biology renderer marginalizes imaging, each task additionally writes the per-tas
 it used, all under `<data_bank>/Theta/` with the condition slot: a `Nuisance_DLI_Theta_Set`
 (the imaging vectors drawn from the artifact), a `Nuisance_SCOPE_Theta_Set` (the EMCCD
 camera vectors drawn from the SCOPE box), and a `Labeling_Set` (the per-simulation labeling
-record: true and visible initial composition under the MET-FAB labeling law, and the probe
-occupancy applied, in `occupancy_monomer` / `occupancy_dimer`). `--video-dtype-bits 8` matches the bit depth the
+record: the starting composition at frame 0 — the placed monomers and dimers, the realized
+probe classes `dimers_one_probe_0` / `dimers_two_probe_0` — the fluorescent monomers and dimers
+under the MET-FAB labeling law, and the probe occupancy applied, in `occupancy_monomer` /
+`occupancy_dimer`). `--video-dtype-bits 8` matches the bit depth the
 estimator trains on and is also the DLI default.
 
 **Probe rule.** The DLI stage labels the retained population by default: every
 simulated monomer carries a probe, a MET-INLB dimer one (`B1`) or two (`B2`) by
-species, a MET-FAB basal dimer two Fab with the declared share `p / (2 − p)` =
-0.0074 or one Fab on one random subunit; one dye draw per bound probe. The
-condition's occupancy — MET-INLB 0.0476 (the equilibrium at 0.25 nM with `K_D`
-5 nM), MET-FAB 0.0148 (derived from the declared Fab/InlB visibility ratio 0.5
-and the INLB anchor) — is a conversion that realizes the retained population from
-`N_total` at the RDS stage and sets the two-probe share; the stage prints the rule
+species — the two-InlB dimers at frame 0 being the reference's independent-binding
+share plus the pairs the window-start allocation formed — a MET-FAB basal dimer two
+Fab with the declared share `p / (2 − p)` = 0.0074 or one Fab on one random subunit;
+one dye draw per bound probe. The condition's occupancy — MET-INLB 0.0476 (the
+equilibrium at 0.25 nM with `K_D` 5 nM), MET-FAB 0.0148 (derived from the declared
+Fab/InlB visibility ratio 0.5 and the INLB anchor) — is a conversion that defines the
+reference probe-bound population from `N_total` and the basal reference fraction `f`
+at the RDS stage and sets the two-probe share of the reference dimers (`two_probe_share`
+in the `Labeling_Set` records that declared share, not the starting `B2` share); the
+stage prints the rule
 with its source (`equilibrium` / `derived`); no flag is passed, and there is no
 full-occupancy default (`PROJECT_CONTEXT.md` §2, *Modeling assumptions of the MET
 model*). `--occupancy` is an explicit OVERRIDE for a sensitivity run only: it
@@ -267,13 +280,19 @@ intro.
 Run the prior-realization audit (it reads the products and writes only its report) over every
 generated tier and every DLI pass before
 the products are used, and again whenever a range or a declared input changes. It reads the
-condition's `Theta_Set` (P1: every draw inside the prior box, per-row uniformity; P2: the
-retained composition realized from `(N_total, r)` and the condition's occupancy, the true
-`f_B` inside the 5–25 % band), optionally a few trajectories (P3: frame-0 counts per class
-against the realized retained composition, retained-subunit conservation, the stationary
-mode law), and the workflow's `Labeling_Set` (P4: the recorded probe rule and two-probe
-share, the realized probe classes, the visible fractions and the two-labeled share against
-the retained-population arithmetic, and the emitters per subunit), compares the simulated
+condition's `Theta_Set` (P1: every draw inside the prior box, per-row uniformity — the two
+fraction rows uniform on [0, 1], the log rows in their log10 boxes; P2: the window-start
+composition realized from `(N_total, f, R_active)` and the condition's occupancy — the
+reference counts, the capacity, the allocated pairs and the starting counts, with the
+represented receptors conserved by the allocation and `B1` unchanged; under MET-FAB the
+allocation is the declared 0 and the starting counts are the reference counts; no band is
+checked, since the fractions are uniform over their whole box), optionally a few trajectories
+(P3: frame-0 counts per class against the STARTING counts — under MET-INLB the allocated
+two-InlB dimers included — conservation of the represented receptors, the stationary mode
+law), and the workflow's `Labeling_Set` (P4: the recorded probe rule and the declared
+two-probe share of the reference dimers, the realized probe classes against the starting
+counts, the fluorescent fractions and the two-labeled share against the starting-population
+arithmetic, and the emitters per subunit), compares the simulated
 visible counts with the deposited recordings' spot counts descriptively (P5,
 Special_Analyses A9), and always corroborates the theoretical visibility chain of the
 retained population through the DLI stage's own labeling path on a synthetic lineage for
@@ -321,7 +340,17 @@ python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py --condition 
 **Expected**: a network checkpoint at
 `<data_bank>/Labor/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Optimum_ANN.pth` and a
 version-portable estimator artifact at
-`<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Estimator.npz`. The
+`<data_bank>/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Estimator.npz`. The stage's
+banner's `theta` line names the condition's coordinates (eleven under MET-FAB, twelve under
+MET-INLB) and ends `standardization independent fitted from all theta labels of TRAIN task 0`:
+the biology flow standardizes each coordinate on its own, fitted from every theta label of the
+first TRAIN task rather than from the two-row dummy batch that fixes the video side, because
+the table mixes log10 rows with the two linear fraction rows; the detector banner reads
+`standardization structured fitted from two-row dummy batch (pooled, structured)` instead. The
+estimator artifact records the condition, the standardization mode and its source (the mode
+sits in its rebuild spec, and `save_estimator` / `load_estimator` refuse an artifact whose
+stored standardization buffers disagree with it), and the test-loss manifest records the same
+three. The
 training loop also writes a full-state resume file beside the checkpoint,
 `<data_bank>/Labor/SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Resurrect_State_ANN.pth`, updated
 every epoch — its presence is what lets a later `--resurrect` hot-restart (see §2.4).
@@ -668,7 +697,9 @@ against any particular reference run. Equivalence rests on three pillars:
 
 1. **Theta-sampling determinism (mathematically exact).** The theta sampler
    draws from the prior with `np.random.default_rng(seed).uniform(low, high, size)`
-   over fixed bounds. The same seed produces bit-identical theta vectors. This
+   over the condition's fixed bounds (eleven rows under MET-FAB, twelve under
+   MET-INLB; the two fraction rows on [0, 1] in the value itself, every other row
+   in log10). The same seed produces bit-identical theta vectors. This
    is directly verifiable — extract the theta set written by a seeded RDS run
    and compare it across runs:
 
@@ -688,10 +719,14 @@ against any particular reference run. Equivalence rests on three pillars:
    complement). What is deterministic, and what this pillar verifies, is the
    construction of that specification: the system builder and the simulation
    builder produce a ReaDDy system with the declared rates, geometry, and
-   observables expected for a given theta. The verbose RDS banner (`--verbose`)
-   prints the diffusion and reaction rates, so the constructed system can be
-   inspected directly. The stepper's own internal randomness is the intended
-   source of run-to-run variability (see the theta-only regression test,
+   observables expected for a given theta, and place exactly the window-start
+   composition the draw realizes (the starting counts per molecule, the
+   represented receptors `N_R` conserved by the allocation; the placement census
+   of `tests/test_window_start_composition.py` builds the system without stepping
+   and counts the placed particles). The verbose RDS banner (`--verbose`)
+   prints the diffusion and reaction rates and the composition, so the constructed
+   system can be inspected directly. The stepper's own internal randomness is the
+   intended source of run-to-run variability (see the theta-only regression test,
    section 3.2).
 
 3. **Imaging-pipeline functional equivalence.** The DLI stage applies a Gaussian
@@ -752,6 +787,12 @@ done
   training data. Posterior summaries should converge across runs within
   statistical uncertainty given enough training data, but bit-identity past the
   theta stage is neither expected nor required.
+
+The same loop with `--condition INLB` (and the `..._INLB_...` theta-set path) is the
+MET-INLB variant of the check: its theta set has twelve columns, the twelfth being
+the window-start allocation, and the twelve are bit-identical across the three
+runs in the same way. The two conditions' theta sets are different draws of
+different tables and are never compared with each other.
 
 In short: **theta is reproducible at a fixed seed; trajectories, videos, and
 trained networks vary by design.**
@@ -900,6 +941,27 @@ match. The three estimates:
   approximation that snaps a Weiszfeld geometric median to its nearest member
   above 20,000 members, is a different quantity and is named as such where it
   appears.
+
+Units and flags follow the row's scale. A log row's error is in dex, with the ±0.3
+and ±0.15 dex tolerance bands; the two linear fraction rows (the basal reference
+fraction `f` and, under MET-INLB, the allocation `R_active`) report absolute errors
+in percentage points, carry no dex band and no multiplicative bias factor, and read
+`n/a` wherever a dex quantity is tabulated. A point estimate or draw whose fraction
+lies outside [0, 1] is flagged and counted in the report, never clipped; derived
+composition quantities (the starting fraction, the active share, the counts) are
+formed per joint draw and carry NaN for flagged draws. Under MET-INLB the Evaluation
+report adds a starting-composition section: per true-capacity stratum ({0}, 1–9, 10–99,
+100–999, ≥ 1000; the zero stratum has no effect on the simulation, so a prior-like
+posterior is expected there) the error and signed bias of `R_active` in percentage
+points for each point estimate with the 50 % and 90 % coverage of the true allocation,
+and the recovery of the allocated pairs `c` in counts from the joint MAP and SGM vectors
+(never the coordinate-wise median); a flagged vector is excluded from the section and
+counted. Under MET-FAB the allocation is the declared 0 and the section states that `c`
+is 0, with no strata. The Experiment report binds the table of the estimator's condition
+(`--condition`); recordings of the other condition (`--kinds`) are estimated under it
+and labeled a misspecification test beside every table and figure. Every product is
+guarded by key: a report writer or analysis refuses a product whose `parameter_keys`
+differ from the condition's.
 
 Under the `bounded` pool the draws are posterior draws; under `unrestricted`
 they are flow draws that may fall outside the prior's support — the manifest
@@ -1083,6 +1145,55 @@ carries it.
 
 ---
 
+### 3.5 Focused tests and audits of the window-start composition
+
+The window-start composition is validated by focused tests and the two audits, not by a
+smoke campaign (no generation, training or HPC run is part of this check). Run the tests
+directly from the repository root and count the `PASS` lines (no pytest):
+
+```bash
+for f in tests/test_window_start_composition.py tests/test_condition_resolver.py \
+         tests/test_theta_standardization.py tests/test_rds_dry_run_per_condition.py \
+         tests/test_mixed_scale_reports.py tests/test_composition_reporting.py; do
+    MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python "$f" || echo "FAILED $f"
+done
+```
+
+- `tests/test_window_start_composition.py` — the composition rule against an independent
+  scalar oracle: the reference counts, the capacity, `c`, the starting counts, the
+  conservation of the represented receptors and of `B1`, rounding ties, the refusal of
+  out-of-range inputs (never clipped), and the placement census (a ReaDDy system built
+  without stepping places exactly the starting counts, allocated dimers included).
+- `tests/test_condition_resolver.py` — the per-condition tables (eleven under MET-FAB,
+  twelve under MET-INLB; the eleven shared keys at positions 0–10; the master never
+  mutated), the condition-bound stage resolvers, the `Theta_Set` schema round trips
+  and refusals (the other condition's table, the other condition, a stored `None`
+  condition, a superseded schema named with its package version), and the `Theta_Set`
+  publication: every on-disk state of a fresh write and of a replacement, in both formats,
+  probed by a reader holding the superseded ratio table, a reader holding the current table
+  and a tier scan (no reader ever gets values under another write's schema, no scan ever
+  calls a record unknown), the plain-array value digest (values copied apart from their
+  sidecar, a sidecar without the digest, and a read straddling a replacement are refused),
+  and the tier scan that skips in-progress `.partial` names and records removed during it.
+- `tests/test_theta_standardization.py` — the biology flow's `independent` standardization
+  fitted from the TRAIN task-0 labels, the detector's unchanged `structured` build, and the
+  refusal of a stored estimator whose standardization buffers disagree with its recorded
+  mode.
+- `tests/test_rds_dry_run_per_condition.py` — the RDS dry run per condition, its schema
+  status and the mixed-schema guard's verdicts.
+- `tests/test_mixed_scale_reports.py` and `tests/test_composition_reporting.py` — the
+  report units (dex for log rows, percentage points for the fractions, `n/a` where a
+  dex quantity does not apply), the flagged-fraction bookkeeping, the capacity strata, the
+  count recovery and the expected fluorescent complexes against hand values; a population-
+  composition run on a product with no valid draw (the report written, its exclusion counts
+  and synthetic validation kept, the composition checks UNAVAILABLE and the summaries left
+  out, the stored compositions NaN); and a temporal-dynamics run whose figures and tables
+  name the estimator and mark the other condition's recordings a misspecification test.
+- The structure audit (deterministic tier) and the prior-realization audit (`--selftest`,
+  `--visibility`, and P0–P4 on a generated tier; section 2.2b) complete the check on
+  products; the audit's R6 timing at the Fab high-load case (`f` = 1, dissociation at its
+  ceiling) is re-measured before a campaign is sized.
+
 ## 4. Troubleshooting
 
 ### Import-time configuration errors
@@ -1136,6 +1247,31 @@ once without `--resurrect` first to produce the initial checkpoint.
 DLI reads the theta set written by RDS. If it reports a missing file, ensure the
 matching RDS run completed first and produced both the trajectories and the
 theta set, with the same `--tasks` and `--task-simulations`.
+
+### `ThetaSetSchemaError` — a theta set is refused
+
+Every reader compares the stored schema with the condition's table and names what
+differs, together with the stored package version and generator. The cases:
+
+- **keys or bounds differ** — the tier was drawn under another table (for example a
+  composition row that has since been replaced; under MET-FAB the vector keeps eleven
+  columns while its second key changed, which is why keys are compared, not widths).
+  Generate a fresh tier; nothing reinterprets the old one.
+- **condition differs, or none stored** — the record belongs to the other condition,
+  or was written without one; pass the estimator's `--condition` and read the
+  condition's own tier.
+- **the RDS stage refuses to add a task** — the tier holds a record of another schema
+  or one without a readable schema (the mixed-schema guard, which scans every other
+  `Theta_Set` of the tier before simulating). Move the superseded tier aside before
+  regenerating, or let the orchestrator's `--overwrite-rds` pass the stage
+  `--supersede-tier` for a deliberate in-place regeneration; a record without a
+  readable schema still refuses.
+- **the detector DLI pass refuses the tier** — it checks the UPSTREAM RDS-tier
+  `Theta_Set` of the condition before rendering (its dry run shows the status), so a
+  superseded tier is never re-imaged.
+- **an estimator or product is refused by its `parameter_keys`** — the artifact was
+  trained or written under another table or condition; retrain or regenerate it rather
+  than aligning columns by position.
 
 ### A long generation run hangs without finishing
 

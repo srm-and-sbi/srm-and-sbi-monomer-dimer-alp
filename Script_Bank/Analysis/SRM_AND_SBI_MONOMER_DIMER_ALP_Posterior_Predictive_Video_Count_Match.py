@@ -19,11 +19,13 @@ detection (``direct_imaging_estimates.measure_spot_widths`` on the stored 8-bit 
 fit half-width 14 px, SCOPE box center) over the first ``--match-seconds``.
 
 METHOD. A render's detected count per frame is written ``c = eta * V``: ``V`` is its number of
-visible hosts at frame 0 (its labeling record) and ``eta`` the detected-per-visible-host ratio, which
-carries the detection losses, the overlaps, the bleaching within the window and the exits from the
-field at that density. With the plan's per-subunit visibility ``a`` and the declared initial ratio
-``r``, the expected number of visible hosts is ``N_total * v`` with
-``v = p (q + (2 - p) r v_B) / (1 + 2 r), the retained-population visibility per true subunit``. Each iteration renders at the current ``N_total``,
+fluorescent hosts at frame 0 (its labeling record) and ``eta`` the detected-per-fluorescent-host ratio,
+which carries the detection losses, the overlaps, the bleaching within the window and the exits from
+the field at that density. With the declared basal reference fraction ``f`` and, under MET-INLB, the
+declared allocation ``R_active``, the expected number of fluorescent hosts is ``N_total * v``, where
+``v`` is the expected fluorescence of the starting population per receptor subunit of the underlying
+population (``visible_hosts_per_subunit``: the reference population, then the allocation, then
+``labeling.expected_fluorescent_complexes``). Each iteration renders at the current ``N_total``,
 measures ``eta``, and proposes ``N_total = c_exp / (eta * v)``; a step is limited to a factor of two.
 Every render -- the first, each update and the check renders -- first passes one count test
 (``count_problem``): no render exceeds ``--max-count``, and none lies outside the prior box of ``N_total``
@@ -222,27 +224,50 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
                                    f"{int(max_iterations)} iterations")
 
 
-def visible_hosts_per_subunit(plan, ratio: float) -> float:
-    """Expected visible hosts at frame 0 per TRUE receptor subunit (per unit of N_total) for the
-    initial true ratio ``r = n_B / n_A``.
+def visible_hosts_per_subunit(plan, fraction_basal: float, relative_active: float = 0.0) -> float:
+    """Expected fluorescent hosts at frame 0 per receptor subunit of the underlying population (per
+    unit of N_total), for the basal reference fraction ``f`` and, under MET-INLB, the allocation
+    ``R_active`` (MET-FAB declares it 0; any other value is refused there).
 
-    The generator simulates the retained population: ``p n_A`` probe-bound monomers and
-    ``p (2 - p) n_B`` dimers carrying at least one probe (``parameterization.realize_initial_composition``),
-    with ``n_A = N_total / (1 + 2r)`` and ``n_B = r N_total / (1 + 2r)``. Under the model's probe rule a
-    monomer is visible with the law's ``q``, a one-probe dimer with ``q`` and a two-probe dimer (share
-    ``s_2 = p / (2 - p)``) with ``1 - (1 - q)^2``. Under the ``--occupancy`` override the per-class coin
-    visibilities ``plan.visible_per_subunit`` thin the retained population instead (approximate: the
-    coins act on the retained cohort).
+    Built in the generator's two steps, as expectations without rounding
+    (``parameterization.realize_population`` holds the rounded integers): first the REFERENCE
+    probe-bound population, ``A_ref = p M_ref`` probe-bound monomers with ``M_ref = N_total (1 - f) / (1 + f)``,
+    and ``D_sim = p (2 - p) D_ref`` dimers carrying at least one probe with ``D_ref = N_total f / (1 + f)``,
+    of which ``B2_ref = p^2 D_ref`` carry two and ``B1 = D_sim - B2_ref`` one; then, under ligand classes,
+    the window-start ALLOCATION of ``c = R_active A_ref / 2`` probe-bound monomer pairs into two-probe
+    dimers (``A_start = A_ref - 2c``, ``B2_start = B2_ref + c``, B1 unchanged). Under the model's probe rule
+    the starting population's expected fluorescence is ``labeling.expected_fluorescent_complexes`` (a
+    monomer and a one-probe dimer fluorescent with the law's ``q``, a two-probe dimer with
+    ``1 - (1 - q)^2``; MET-FAB dimers classed at labeling with the declared share ``s_2 = p / (2 - p)``).
+    Under the ``--occupancy`` override the per-class coin visibilities ``plan.visible_per_subunit``
+    act on each represented subunit instead (approximate: the coins act on the represented cohort):
+    a monomer and a MET-INLB ``B1`` host with one represented subunit, a Fab dimer and a ``B2`` host
+    with two. A fraction outside [0, 1] (or a nonzero MET-FAB allocation) is refused, never clipped.
     """
-    from srm_and_sbi_monomer_dimer_alp.parameterization import occupancy_of
+    from types import SimpleNamespace
+    from srm_and_sbi_monomer_dimer_alp.labeling import expected_fluorescent_complexes
+    from srm_and_sbi_monomer_dimer_alp.parameterization import occupancy_of, population_valid
+    f, r_active = float(fraction_basal), float(relative_active)
+    if not bool(population_valid(count_total=1.0, fraction_basal_dimers_reference=f,
+                                 relative_count_active_dimers_initial=r_active, condition=plan.condition)):
+        raise ValueError(f"visible_hosts_per_subunit [{plan.condition}]: the basal reference fraction {f!r} and the "
+                         f"allocation {r_active!r} must be finite in [0, 1], the allocation equal to the "
+                         f"condition's declared value where it declares one; nothing is clipped.")
     p = float(occupancy_of(plan.condition))
+    m_ref, d_ref = (1.0 - f) / (1.0 + f), f / (1.0 + f)          # per unit of N_total
+    a_ref, b2_ref = p * m_ref, p * p * d_ref
+    b1 = p * (2.0 - p) * d_ref - b2_ref
+    c = r_active * a_ref / 2.0 if plan.ligand_classes else 0.0
+    start = SimpleNamespace(n_monomers=a_ref - 2.0 * c, n_dimers_one_probe=b1, n_dimers_two_probe=b2_ref + c,
+                            n_dimers=b1 + b2_ref + c)
     if plan.probe_rule == "classes":
-        q = plan.law.visible_probability
-        s2 = float(plan.two_probe_share)
-        vis_dimer = (1.0 - s2) * q + s2 * (1.0 - (1.0 - q) ** 2)
-        return p * (q + (2.0 - p) * ratio * vis_dimer) / (1.0 + 2.0 * ratio)
+        return float(expected_fluorescent_complexes(start, plan))
     a_mono, a_dim = plan.visible_per_subunit
-    return p * (a_mono + (2.0 - p) * ratio * (1.0 - (1.0 - a_dim) ** 2)) / (1.0 + 2.0 * ratio)
+    two_subunits = 1.0 - (1.0 - a_dim) ** 2
+    if plan.ligand_classes:
+        return float(start.n_monomers * a_mono + start.n_dimers_one_probe * a_dim
+                     + start.n_dimers_two_probe * two_subunits)
+    return float(start.n_monomers * a_mono + start.n_dimers * two_subunits)
 
 
 def attempt_folder_name(scenario_name, nuisance_tag, attempt_label=None) -> str:
@@ -286,23 +311,28 @@ def _context(args):
     from srm_and_sbi_monomer_dimer_alp import labeling as lab
     from srm_and_sbi_monomer_dimer_alp import posterior_predictive_video_runner as ppv
     from srm_and_sbi_monomer_dimer_alp.experiment_support import KIND_OF_CONDITION
-    from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERIZATION, PARAMETERS, RunTiming
+    from srm_and_sbi_monomer_dimer_alp.parameterization import (
+        PARAMETERS, RunTiming, entry_to_physical, parameter_find, parameterization_of,
+    )
     from srm_and_sbi_monomer_dimer_alp.workflow import biology_workflow
     kind = KIND_OF_CONDITION.get(args.kind, args.kind)
     paths = biology_workflow().paths.with_condition(kind)
     data_bank_root = PARAMETERS.machine.data_bank_root
     map_label = RunTiming(total_time_seconds=args.total_time_seconds,
                           frames=PARAMETERS.simulation.timing).label
-    first_cell = args.cell[0]
-    _, record = ppv.load_declared_rds(args.declared_rds, kind, first_cell,
-                                      overrides={"count_total": args.initial_count})
+    # every requested cell's declaration is read first: the loader refuses a fraction outside [0, 1]
+    # (never clipped), so a bad entry of a later cell stops the run before any recording or render
+    records = {cell: ppv.load_declared_rds(args.declared_rds, kind, cell,
+                                           overrides={"count_total": args.initial_count})[1]
+               for cell in args.cell}
+    record = records[args.cell[0]]
     folder = (data_bank_root / paths.posit_subdir
               / f"{paths.project_alias}_{map_label}_Posterior_Predictive_Video" / "Count_Match"
               / attempt_folder_name(record["scenario"]["name"], args.nuisance_tag, args.attempt_label))
     stems = {c: folder / f"{paths.project_alias}_{map_label}_Count_Match_{args.kind}_Cell_{c}"
              for c in args.cell}
-    count_entry = next(e for e in PARAMETERIZATION if e["KEY"] == "count_total")
-    prior_box = tuple(10.0 ** np.asarray(count_entry["PRIOR_RANGE"], dtype=float))
+    count_entry = parameterization_of(kind)[parameter_find("count_total", kind)]
+    prior_box = tuple(float(entry_to_physical(count_entry, bound)) for bound in count_entry["PRIOR_RANGE"])
     limits = dict(max_count=args.max_count, prior_box=prior_box,
                   allow_outside_prior=args.allow_outside_prior)
     return dict(kind=kind, paths=paths, data_bank_root=data_bank_root, map_label=map_label,
@@ -314,7 +344,9 @@ def match_one(args, ctx, cell: int) -> dict:
     from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
     from srm_and_sbi_monomer_dimer_alp.experiment_support import read_recording
     from srm_and_sbi_monomer_dimer_alp.io import convert_video_dtype
+    from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import theta_by_key
     lab, ppv, PARAMETERS = ctx["lab"], ctx["ppv"], ctx["PARAMETERS"]
+    sto = PARAMETERS.simulation.rds.stoichiometry
     kind = ctx["kind"]
     frame_time = PARAMETERS.simulation.timing.frame_time_seconds
     n_match = int(round(args.match_seconds / frame_time))
@@ -333,10 +365,10 @@ def match_one(args, ctx, cell: int) -> dict:
     c_exp = float(detected_per_frame(convert_video_dtype(raw[:n_match], bits_from=16, bits_to=8)).mean())
     print(f"[cell {cell}] experimental: {c_exp:.2f} detected spots per frame over the first "
           f"{args.match_seconds:g} s ({time.time() - t0:.0f} s)", flush=True)
-    _, base_record = ppv.load_declared_rds(args.declared_rds, kind, cell,
-                                           overrides={"count_total": args.initial_count})
-    ratio = base_record["parameters"]["ratio_dimer_monomer_initial"]["value"]
-    v = visible_hosts_per_subunit(plan, ratio)
+    base_vector, base_record = ppv.load_declared_rds(args.declared_rds, kind, cell,
+                                                     overrides={"count_total": args.initial_count})
+    declared = theta_by_key(base_vector, kind)          # by key; MET-FAB's allocation is its declared 0
+    v = visible_hosts_per_subunit(plan, declared[sto.basal_fraction_key], declared[sto.active_allocation_key])
     limits = ctx["limits"]
     prior_box = limits["prior_box"]
 
@@ -416,7 +448,7 @@ def _write_md(path, r, tif, plan, imaging, record):
              f"- recording: `{tif.name}`, first {r['match_seconds']:g} s ({r['match_frames']} frames): "
              f"{r['experimental_detected_per_frame']:.2f} detected spots per frame (4 sigma, half-width 14 px, "
              f"SCOPE box center, 8-bit levels)",
-             f"- labeling: {plan.describe()}; expected visible hosts per subunit "
+             f"- labeling: {plan.describe()}; expected fluorescent hosts per receptor subunit "
              f"{r['visible_hosts_per_subunit']:.4f}",
              f"- imaging: {imaging['description']}",
              f"- declared configuration: `{Path(record['path']).name}` (sha256 {record['sha256'][:12]}), "
@@ -466,14 +498,17 @@ def build_parser():
     p.add_argument("--match-seconds", type=float, default=2.0,
                    help="opening window over which the counts are compared (default 2 s).")
     p.add_argument("--initial-count", type=float, default=10000.0,
-                   help="first N_total rendered (the true receptor total; the prior center by default).")
+                   help="first N_total rendered (the receptor total of the underlying population; the prior "
+                        "center by default).")
     p.add_argument("--tolerance", type=float, default=0.03,
                    help="iteration criterion: relative agreement of the rendered and proposed N_total.")
     p.add_argument("--max-iterations", type=int, default=5)
     p.add_argument("--max-count", type=int, default=100000,
-                   help="no render above this true receptor total, the first and the check renders "
+                   help="no render above this receptor total N_total, the first and the check renders "
                         "included (a resource and saturation guard; the prior ceiling by default, where "
-                        "the retained population is about 2,100 FAB or 4,800 INLB subunits).")
+                        "MET-FAB places about 1,466-1,477 initial particles for every basal fraction while "
+                        "its represented receptors rise from 1,477 (f = 0) to 2,932 (f = 1), and MET-INLB "
+                        "holds about 4,762 represented receptors).")
     p.add_argument("--allow-outside-prior", action="store_true",
                    help="the user's decision to render outside the prior box of N_total (the training "
                         "support). Without it nothing is rendered there: a count outside the box, the "

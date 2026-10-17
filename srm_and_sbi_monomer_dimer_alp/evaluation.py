@@ -20,11 +20,14 @@ The MAP candidate is a **seed-then-optimize** procedure (one per observation):
                               pool-IQR units); return the best (score, theta) seen
                               and the reason the ascent stopped.
 
-All theta live in log10 space (the flow's space and the prior's space); the
-ground-truth theta sets are stored linear, so the report compares
-``log10(theta_true)`` against the inferred log10 theta. The pool sampler uses
-the bounded ``DirectPosterior`` (rejection sampling between prior ranges); the
-gradient steps use ``posterior.posterior_estimator`` (the flow, which exposes
+All theta live in ESTIMATOR coordinates (the flow's space and the prior's space): log10 of the
+physical value for a log row, the value itself for a linear row (the two fractions of the
+biology table). The ground-truth theta sets are stored physical, so the report compares
+``to_flow(theta_true)`` against the inferred coordinates. Every per-row statistic carries its
+unit: dex for a log row (an error of 0.3 dex is a factor of two), percentage points (pp) for a
+linear row (an absolute error of 0.01 is one pp); a linear row has no multiplicative band and no
+bias factor. The pool sampler uses the bounded ``DirectPosterior`` (rejection sampling between
+prior ranges); the gradient steps use ``posterior.posterior_estimator`` (the flow, which exposes
 ``log_prob`` and tracks gradients but does not enforce bounds).
 
 Module contents:
@@ -37,6 +40,9 @@ Module contents:
     recovery_table(...)       -- (headers, rows) recovery summary for the report.
     point_estimates_compared_table(...), point_estimate_agreement_table(...)
                               -- the three estimates side by side.
+    fraction_flag_rows(...)   -- the linear rows' values outside [0, 1], counted, never changed.
+    starting_composition_recovery(...), starting_composition_tables(...)
+                              -- recovery of the window-start allocation and of c per true-capacity stratum.
 """
 
 from __future__ import annotations
@@ -48,10 +54,37 @@ import torch
 
 from .artifact_schema import DRAW_LABELS
 from .inference_support import normalize_video
-from .parameterization import entry_to_physical
+from .parameterization import (PARAMETERS, entry_to_physical, is_log_row, parameter_keys_of,
+                               population_from_theta, population_valid, to_physical)
 # band_label lives in the temporal-dynamics kernel (pure numpy, no machine profile) so the
 # recovery tolerances render identically wherever they are reported -- one definition, not two.
 from .temporal_dynamics import band_label
+
+
+# =============================================================================
+# Per-row units: dex for a log row, percentage points for a linear row
+# =============================================================================
+
+#: Multiplier from an estimator-coordinate error to the reported unit: 1 for a log row (dex),
+#: 100 for a linear row (percentage points).
+_PP = 100.0
+
+
+def row_error_unit(entry: dict) -> str:
+    """The unit of an error on this row: ``'dex'`` for a log row, ``'pp'`` (percentage points)
+    for a linear row."""
+    return "dex" if is_log_row(entry) else "pp"
+
+
+def row_coordinate_unit(entry: dict) -> str:
+    """The unit of this row's estimator coordinate: ``'log10'`` for a log row, ``'fraction'``
+    for a linear row (the value itself)."""
+    return "log10" if is_log_row(entry) else "fraction"
+
+
+def _error_scale(entry: dict) -> float:
+    """Factor turning an estimator-coordinate difference into the row's reported error unit."""
+    return 1.0 if is_log_row(entry) else _PP
 
 
 # =============================================================================
@@ -87,7 +120,7 @@ POINT_ESTIMATES = {
         "population": "the flow's conditional density for one observation; the candidate draws "
                       "that seed the ascent are that observation's own draws",
         "grouping": "one vector per observation",
-        "coordinates": "estimator (log10) coordinates",
+        "coordinates": "estimator coordinates (log10 for a log row, the value itself for a linear row)",
         "scaling": None,
         "caveats": "the optimization is unconstrained: prior support and convergence to a mode "
                    "are not guaranteed, so a value outside the prior box is a flow optimum, not "
@@ -103,7 +136,7 @@ POINT_ESTIMATES = {
         "population": "one observation's summary draws (posterior draws under the bounded pool, "
                       "flow draws under the unrestricted one)",
         "grouping": "one vector per observation",
-        "coordinates": "estimator (log10) coordinates",
+        "coordinates": "estimator coordinates (log10 for a log row, the value itself for a linear row)",
         "scaling": None,
         "caveats": "a coordinate-wise composite: the resulting vector is not necessarily a "
                    "sampled vector and need not be a probable point of the joint. A physical "
@@ -117,7 +150,7 @@ POINT_ESTIMATES = {
                     "Euclidean distance to all other draws (an exact sample medoid)",
         "population": "the same summary draws as the marginal median, for the same observation",
         "grouping": "one vector per observation",
-        "coordinates": "estimator (log10) coordinates",
+        "coordinates": "estimator coordinates (log10 for a log row, the value itself for a linear row)",
         "scaling": "each coordinate divided by its prior width before the distance is taken",
         "caveats": "a realized draw, so its coordinates co-occurred; selecting a member avoids a "
                    "coordinate-wise composite but does not by itself preserve the "
@@ -538,7 +571,7 @@ def map_estimate(posterior, video_chunk: np.ndarray,
             ``collect_theta_prex``.
         show: when True, print the per-stage diagnostics (pool/score/
             elite shapes and timings, per-step optimization progress, the stopping
-            reason, and the optimal theta in log10 and physical units).
+            reason, and the optimal theta in estimator coordinates).
         verbose: deeper level (implies show at the call site): enables sbi sampling
             progress bars (bounded pool) and the optimizer-configuration line.
         log_fn: optional sink called with each per-step optimization-progress line
@@ -554,7 +587,7 @@ def map_estimate(posterior, video_chunk: np.ndarray,
 
     Returns:
         ``(optimal_score, optimal_theta)`` -- the log-probability and the inferred
-        MAP theta (1D numpy array, log10 space). With ``return_info``, a third item: a dict with
+        MAP theta (1D numpy array, estimator coordinates). With ``return_info``, a third item: a dict with
         ``stop`` (one of :data:`STOP_REASONS`), ``steps``, ``seed_score`` (the best seed's score),
         ``learning_rate_final``, ``center`` and ``scale`` (the pool's median and IQR per
         coordinate) and ``scale_valid`` (per coordinate).
@@ -655,10 +688,10 @@ def posterior_summary(posterior, video_chunk: np.ndarray,
     do not guarantee.
 
     Returns:
-        ``(D, len(quantiles))`` numpy array (log10 space): per parameter, the
+        ``(D, len(quantiles))`` numpy array (estimator coordinates): per parameter, the
         sampled quantiles in the order given by ``quantiles``. With
         ``return_samples``, the tuple ``(summary, draws)`` where ``draws`` is
-        ``(n_samples, D)`` float32 in log10 space. With ``return_sgm`` the SGM
+        ``(n_samples, D)`` float32 in estimator coordinates. With ``return_sgm`` the SGM
         vector ``(D,)`` is appended as the last element of the returned tuple.
     """
     omega = torch.tensor(normalize_video(video_chunk), dtype=torch.float32,
@@ -723,7 +756,8 @@ def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
     Per parameter (and per group when ``groups`` -- a label per observation -- is
     given): the median absolute gap between the MAP and the 1-D posterior median
     (``post_q[:, :, 2]``), between the MAP and the SGM, and between the SGM and the 1-D
-    median, all in log10 units; and the share of observations whose MAP lies outside the
+    median, in the row's error unit (dex for a log row, percentage points for a linear row;
+    the ``units`` column); and the share of observations whose MAP lies outside the
     posterior's central 90% interval ``[Q05, Q95]``. A MAP far from both medians and
     outside the 90% interval marks an optimizer that climbed into a density spike the
     posterior samples do not visit, or an optimizer that stopped short, or another feature
@@ -735,16 +769,18 @@ def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
     sgm = None if sgm_log10 is None else np.asarray(sgm_log10, dtype=float)
     n_obs = map_log10.shape[0]
     labels = np.asarray(["all"] * n_obs) if groups is None else np.asarray(groups)
-    headers = ["parameter", "label"] + ([group_header] if groups is not None else []) + [
+    headers = ["parameter", "label", "units"] + ([group_header] if groups is not None else []) + [
         "n", "MAP vs median", "MAP vs SGM", "SGM vs median", "MAP outside 90%"]
     rows = []
     for i, para in enumerate(parameterization):
+        scale = _error_scale(para)
         for g in (dict.fromkeys(labels) if groups is not None else ["all"]):
             m = labels == g
             mp, q = map_log10[m, i], post_q[m, i, :]
             ok = np.isfinite(mp) & np.all(np.isfinite(q), axis=1)
             mp, q = mp[ok], q[ok]
-            cells = [para["KEY"], para.get("LABEL") or "-"] + ([str(g)] if groups is not None else [])
+            cells = ([para["KEY"], para.get("LABEL") or "-", row_error_unit(para)]
+                     + ([str(g)] if groups is not None else []))
             if not mp.size:
                 rows.append(cells + ["0", "-", "-", "-", "-"])
                 continue
@@ -752,11 +788,11 @@ def point_estimate_agreement_table(parameterization, map_log10: np.ndarray,
             outside = float(np.mean((mp < q[:, 0]) | (mp > q[:, 4])))
             if sgm is not None:
                 sg = sgm[m, i][ok]
-                map_sgm = f"{np.median(np.abs(mp - sg)):.3f}"
-                sgm_med = f"{np.median(np.abs(sg - med)):.3f}"
+                map_sgm = f"{scale * np.median(np.abs(mp - sg)):.3f}"
+                sgm_med = f"{scale * np.median(np.abs(sg - med)):.3f}"
             else:
                 map_sgm = sgm_med = "n/a"
-            rows.append(cells + [str(mp.size), f"{np.median(np.abs(mp - med)):.3f}",
+            rows.append(cells + [str(mp.size), f"{scale * np.median(np.abs(mp - med)):.3f}",
                                  map_sgm, sgm_med, f"{outside * 100:.0f}%"])
     return headers, rows
 
@@ -766,22 +802,24 @@ def point_estimates_compared_table(parameterization, true_log10: np.ndarray,
     """Build ``(headers, rows)`` placing the point estimates side by side per parameter.
 
     ``estimates`` maps a short estimate name (``"MAP"``, ``"median"``, ``"SGM"``) to its
-    ``(N, D)`` log10 array; insertion order is the column order within each statistic. One
-    row per learnable parameter. The columns are grouped by statistic, with the estimates
-    consecutive inside each group: correlation with the truth for MAP, median, SGM; then
-    MAE; then signed bias (mean of inferred - true); then the share outside the prior box.
-    The single-estimate recovery tables carry each estimate's full statistics; this table is
-    the view in which the three are read against each other. A ``None`` entry renders as
-    ``n/a``.
+    ``(N, D)`` array in estimator coordinates; insertion order is the column order within each
+    statistic. One row per learnable parameter. The columns are grouped by statistic, with the
+    estimates consecutive inside each group: correlation with the truth for MAP, median, SGM;
+    then MAE; then signed bias (mean of inferred - true), both in the row's error unit (dex for
+    a log row, percentage points for a linear row; the ``units`` column); then the share
+    outside the prior box. The single-estimate recovery tables carry each estimate's full
+    statistics; this table is the view in which the three are read against each other. A
+    ``None`` entry renders as ``n/a``.
     """
     true_log10 = np.asarray(true_log10, dtype=float)
     names = [n for n in estimates]
     stats = ("corr", "MAE", "bias", "outside prior")
-    headers = ["parameter", "label", "n"] + [f"{s} {n}" for s in stats for n in names]
+    headers = ["parameter", "label", "units", "n"] + [f"{s} {n}" for s in stats for n in names]
     present = {n: np.asarray(estimates[n], dtype=float) for n in names
                if estimates[n] is not None and np.asarray(estimates[n]).size}
     rows = []
     for i, para in enumerate(parameterization):
+        scale = _error_scale(para)
         cells = {s: [] for s in stats}
         # One shared mask per row: the videos finite in the truth and in every present estimate,
         # so the three columns of a statistic describe the same videos and 'n' counts them.
@@ -800,10 +838,10 @@ def point_estimates_compared_table(parameterization, true_log10: np.ndarray,
                 continue
             corr = correlation_with_truth(tru, est)
             cells["corr"].append("n/a" if corr is None else f"{corr:+.2f}")
-            cells["MAE"].append(f"{np.mean(np.abs(est - tru)):.3f}")
-            cells["bias"].append(f"{np.mean(est - tru):+.3f}")
+            cells["MAE"].append(f"{scale * np.mean(np.abs(est - tru)):.3f}")
+            cells["bias"].append(f"{scale * np.mean(est - tru):+.3f}")
             cells["outside prior"].append(f"{fraction_outside_prior(para, est) * 100:.0f}%")
-        rows.append([para["KEY"], para.get("LABEL") or "-", str(int(shared.sum()))]
+        rows.append([para["KEY"], para.get("LABEL") or "-", row_error_unit(para), str(int(shared.sum()))]
                     + [c for s in stats for c in cells[s]])
     return headers, rows
 
@@ -812,16 +850,18 @@ def experiment_estimates_compared_table(parameterization, estimates_by_kind: dic
                                         kinds) -> tuple:
     """Build ``(headers, rows)`` placing the point estimates side by side per condition.
 
-    ``estimates_by_kind`` maps a short estimate name to the ``{kind: (N, D) log10 array}``
-    dict that ``experiment_table`` consumes; insertion order is the column order within each
-    statistic. One row per (parameter, kind); columns grouped by statistic with the estimates
-    consecutive: the median over windows for MAP, median, SGM; then the IQR over windows; then
-    the share outside the prior box. No ground truth exists for experimental recordings, so
-    this is the distribution view, read across the three estimates on the same windows.
+    ``estimates_by_kind`` maps a short estimate name to the ``{kind: (N, D) array}`` dict (in
+    estimator coordinates) that ``experiment_table`` consumes; insertion order is the column
+    order within each statistic. One row per (parameter, kind); columns grouped by statistic
+    with the estimates consecutive: the median over windows for MAP, median, SGM; then the IQR
+    over windows, both in the row's estimator coordinate (log10 for a log row, the fraction
+    itself for a linear row; the ``units`` column); then the share outside the prior box. No
+    ground truth exists for experimental recordings, so this is the distribution view, read
+    across the three estimates on the same windows.
     """
     names = [n for n in estimates_by_kind]
     stats = ("median", "IQR", "outside prior")
-    headers = ["parameter", "label", "kind", "n"] + [f"{s} {n}" for s in stats for n in names]
+    headers = ["parameter", "label", "units", "kind", "n"] + [f"{s} {n}" for s in stats for n in names]
     rows = []
     for i, para in enumerate(parameterization):
         for kind in kinds:
@@ -854,39 +894,51 @@ def experiment_estimates_compared_table(parameterization, estimates_by_kind: dic
                 cells["median"].append(f"{med:+.3f}")
                 cells["IQR"].append(f"{q3 - q1:.3f}")
                 cells["outside prior"].append(f"{fraction_outside_prior(para, col) * 100:.0f}%")
-            rows.append([para["KEY"], para.get("LABEL") or "-", kind,
+            rows.append([para["KEY"], para.get("LABEL") or "-", row_coordinate_unit(para), kind,
                          str(int(shared.sum())) if shared is not None else "0"]
                         + [c for s in stats for c in cells[s]])
     return headers, rows
 
 
 # =============================================================================
-# Recovery statistics (true vs. inferred, log10 space)
+# Recovery statistics (true vs. inferred, estimator coordinates)
 # =============================================================================
 
 def recovery_stats(true_log10: np.ndarray, estimate_log10: np.ndarray,
-                   guide: float = 0.3, guide_tight: float = 0.15) -> list:
-    """Per-parameter recovery error statistics (in log10 units).
+                   guide: float = 0.3, guide_tight: float = 0.15, *, log_rows=None) -> list:
+    """Per-parameter recovery error statistics, in estimator coordinates.
 
     Args:
-        true_log10: ground-truth theta in log10, shape ``(N, D)``.
-        estimate_log10: the point estimate in log10 (any of MAP, median, SGM), shape ``(N, D)``.
-        guide: half-width of the "within guide" band (log10 units). The default
+        true_log10: ground-truth theta in estimator coordinates, shape ``(N, D)``.
+        estimate_log10: the point estimate (any of MAP, median, SGM), shape ``(N, D)``.
+        guide: half-width of the "within guide" band (dex). The default
             0.3 ~= log10(2), so it counts recoveries within a factor of 2 of the truth.
         guide_tight: half-width of a tighter, nested band. The default 0.15
             ~= log10(sqrt(2)) = guide / 2, counting recoveries within a factor of
             sqrt(2) ~= 1.41 -- a stricter concentration measure.
+        log_rows: one boolean per column, True for a log row. ``None`` means every column
+            is a log row (an all-log table). The bands are multiplicative tolerances and so
+            exist only for log rows: a linear row's ``frac_within_guide`` and
+            ``frac_within_guide_tight`` are NaN.
 
     Returns:
         A list of ``D`` dicts, one per parameter, each with keys: ``n``,
-        ``median_error``, ``mae``, ``rmse``, ``q95_abs_error``,
-        ``frac_within_guide`` (within +/-guide) and ``frac_within_guide_tight``
-        (within +/-guide_tight) -- computed over the finite (true, inferred) pairs.
+        ``median_error``, ``mae``, ``rmse``, ``q95_abs_error`` (all in the coordinate's own
+        unit: dex for a log row, the fraction itself for a linear row -- callers scale the
+        latter to percentage points), ``frac_within_guide`` (within +/-guide) and
+        ``frac_within_guide_tight`` (within +/-guide_tight) -- computed over the finite
+        (true, inferred) pairs.
     """
     true_log10 = np.asarray(true_log10, dtype=float)
     estimate_log10 = np.asarray(estimate_log10, dtype=float)
+    d = true_log10.shape[1]
+    if log_rows is None:
+        log_rows = [True] * d
+    log_rows = [bool(v) for v in log_rows]
+    if len(log_rows) != d:
+        raise ValueError(f"recovery_stats: log_rows has {len(log_rows)} entries; the arrays have {d} columns.")
     stats = []
-    for i in range(true_log10.shape[1]):
+    for i in range(d):
         x = true_log10[:, i]
         y = estimate_log10[:, i]
         mask = np.isfinite(x) & np.isfinite(y)
@@ -900,8 +952,9 @@ def recovery_stats(true_log10: np.ndarray, estimate_log10: np.ndarray,
                 "mae": float(np.mean(abs_error)),
                 "rmse": float(np.sqrt(np.mean(error ** 2))),
                 "q95_abs_error": float(np.quantile(abs_error, 0.95)),
-                "frac_within_guide": float(np.mean(abs_error <= guide)),
-                "frac_within_guide_tight": float(np.mean(abs_error <= guide_tight)),
+                "frac_within_guide": float(np.mean(abs_error <= guide)) if log_rows[i] else float("nan"),
+                "frac_within_guide_tight": (float(np.mean(abs_error <= guide_tight)) if log_rows[i]
+                                            else float("nan")),
             })
         else:
             stats.append({"n": 0, "median_error": float("nan"),
@@ -917,15 +970,16 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
 
     For real microscopy data there is no ground truth, so this reports, per
     learnable parameter and per condition (kind), the distribution of the
-    inferred MAP theta: count, median and IQR in log10, the median in physical
-    units, and the share of estimates outside the row's prior box
+    inferred MAP theta: count, median and IQR in the row's estimator coordinate (log10 for
+    a log row, the fraction itself for a linear row; the ``units`` column), the median in
+    physical units, and the share of estimates outside the row's prior box
     (``fraction_outside_prior``; possible under either pool mode, because the pool mode
     bounds the candidate pool and not the unconstrained gradient ascent).
-    ``inferred_by_kind`` maps each kind to an ``(N, D)`` array of inferred log10
-    theta (N = cells x chunks for that kind).
+    ``inferred_by_kind`` maps each kind to an ``(N, D)`` array of inferred theta in estimator
+    coordinates (N = cells x chunks for that kind).
     """
-    headers = ["parameter", "label", "kind", "n", "median log10",
-               "IQR log10", "median value", "outside prior"]
+    headers = ["parameter", "label", "units", "kind", "n", "median (estimator)",
+               "IQR (estimator)", "median value", "outside prior"]
     rows = []
     for i, para in enumerate(parameterization):
         for kind in kinds:
@@ -935,12 +989,12 @@ def experiment_table(parameterization, inferred_by_kind: dict, kinds) -> tuple:
             if col.size:
                 med = float(np.median(col))
                 q1, q3 = np.quantile(col, [0.25, 0.75])
-                rows.append([para["KEY"], para.get("LABEL") or "-", kind,
+                rows.append([para["KEY"], para.get("LABEL") or "-", row_coordinate_unit(para), kind,
                              str(col.size), f"{med:+.3f}", f"{q3 - q1:.3f}",
                              f"{float(entry_to_physical(para, med)):.4g}",
                              f"{fraction_outside_prior(para, col) * 100:.0f}%"])
             else:
-                rows.append([para["KEY"], para.get("LABEL") or "-", kind,
+                rows.append([para["KEY"], para.get("LABEL") or "-", row_coordinate_unit(para), kind,
                              "0", "nan", "nan", "nan", "n/a"])
     return headers, rows
 
@@ -950,12 +1004,13 @@ def posterior_coverage_table(parameterization, true_log10: np.ndarray,
     """Posterior calibration summary per parameter (recovery stage).
 
     ``post_q`` is an ``(N, D, 5)`` array of per-observation posterior quantiles
-    ``[Q05, Q25, Q50, Q75, Q95]`` (log10). Reports, per parameter, the fraction
-    of ground-truths falling inside the 50% (IQR) and 90% (Q05-Q95) posterior
+    ``[Q05, Q25, Q50, Q75, Q95]`` in estimator coordinates. Reports, per parameter, the
+    fraction of ground-truths falling inside the 50% (IQR) and 90% (Q05-Q95) posterior
     credible intervals -- a well-calibrated posterior covers ~50% and ~90%
-    respectively -- plus the median absolute bias of the posterior median.
+    respectively -- plus the median absolute bias of the posterior median, in the row's
+    error unit (dex or percentage points; the ``units`` column).
     """
-    headers = ["parameter", "label", "n", "cover@50% (IQR)", "cover@90%",
+    headers = ["parameter", "label", "units", "n", "cover@50% (IQR)", "cover@90%",
                "median |median-true|"]
     true_log10 = np.asarray(true_log10, dtype=float)
     rows = []
@@ -967,24 +1022,249 @@ def posterior_coverage_table(parameterization, true_log10: np.ndarray,
         if t.size:
             c50 = float(np.mean((t >= q[:, 1]) & (t <= q[:, 3])))
             c90 = float(np.mean((t >= q[:, 0]) & (t <= q[:, 4])))
-            bias = float(np.median(np.abs(q[:, 2] - t)))
-            rows.append([para["KEY"], para.get("LABEL") or "-", str(t.size),
+            bias = float(np.median(np.abs(q[:, 2] - t))) * _error_scale(para)
+            rows.append([para["KEY"], para.get("LABEL") or "-", row_error_unit(para), str(t.size),
                          f"{c50 * 100:.0f}%", f"{c90 * 100:.0f}%", f"{bias:.3f}"])
         else:
-            rows.append([para["KEY"], para.get("LABEL") or "-", "0", "-", "-", "-"])
+            rows.append([para["KEY"], para.get("LABEL") or "-", row_error_unit(para), "0", "-", "-", "-"])
     return headers, rows
 
 
 def fraction_outside_prior(para, values) -> float:
-    """Share of ``values`` (in the table's coordinate: log10 for a log row) outside the
-    row's ``PRIOR_RANGE``. NaN when no finite value is present. Non-zero only when the
-    estimator placed a MAP estimate beyond the prior box, which the unrestricted pool permits."""
+    """Share of ``values`` (in the table's coordinate: log10 for a log row, the value itself
+    for a linear row) outside the row's ``PRIOR_RANGE``. NaN when no finite value is present.
+    Non-zero only when the estimator placed a MAP estimate beyond the prior box, which the
+    unrestricted pool permits. Counts only; the values are never changed."""
     v = np.asarray(values, dtype=float)
     v = v[np.isfinite(v)]
     if not v.size:
         return float("nan")
     lo, hi = (float(b) for b in para["PRIOR_RANGE"])
     return float(np.mean((v < lo) | (v > hi)))
+
+
+def fraction_flag_rows(parameterization, estimates: dict, post_q=None) -> tuple:
+    """The flagged-fractions table: ``(headers, rows, n_flagged)`` over the LINEAR rows of
+    ``parameterization`` (the two fractions of the biology table; an all-log table yields no
+    rows). Per linear row: the number of MAP, median and SGM values (``estimates``, a short
+    name -> ``(N, D)`` array) that are non-finite or outside the row's box, and, when
+    ``post_q`` ``(N, D, 5)`` is given, the share of observations whose Q05 lies below the box
+    or whose Q95 lies above it. The values are counted and left unchanged: nothing is clipped;
+    a flagged vector carries NaN in every derived quantity downstream. ``n_flagged`` is the
+    total count over the estimates, for a non-fatal report check.
+    """
+    headers = ["parameter", "label", "box", "n"] + [f"{name} outside" for name in estimates] + [
+        "Q05 < lo or Q95 > hi"]
+    rows, n_flagged = [], 0
+    for i, para in enumerate(parameterization):
+        if is_log_row(para):
+            continue
+        lo, hi = (float(b) for b in para["PRIOR_RANGE"])
+        counts, n_obs = [], 0
+        for name, arr in estimates.items():
+            if arr is None or not np.asarray(arr).size:
+                counts.append("n/a")
+                continue
+            col = np.asarray(arr, dtype=float)[:, i]
+            n_obs = max(n_obs, int(col.size))
+            bad = int(np.sum(~(np.isfinite(col) & (col >= lo) & (col <= hi))))
+            n_flagged += bad
+            counts.append(str(bad))
+        if post_q is not None and np.asarray(post_q).size:
+            q = np.asarray(post_q, dtype=float)[:, i, :]
+            share = float(np.mean((q[:, 0] < lo) | (q[:, 4] > hi)))
+            share_cell = f"{share * 100:.1f}%"
+        else:
+            share_cell = "n/a"
+        rows.append([para["KEY"], para.get("LABEL") or "-", f"[{lo:g}, {hi:g}]", str(n_obs)]
+                    + counts + [share_cell])
+    return headers, rows, n_flagged
+
+
+# =============================================================================
+# Recovery of the window-start allocation (the Evaluation stage, biology)
+# =============================================================================
+
+#: The strata of the TRUE capacity ``cap = A_ref // 2`` (the probe-bound monomer pairs the
+#: reference can turn into two-InlB dimers): ``(label, low, high)`` with ``high`` inclusive.
+CAPACITY_STRATA = (
+    ("0 (no effect, prior-like posterior expected)", 0, 0),
+    ("1-9", 1, 9),
+    ("10-99", 10, 99),
+    ("100-999", 100, 999),
+    (">= 1000", 1000, None),
+)
+
+
+def _capacity_stratum(capacity: np.ndarray) -> np.ndarray:
+    """Index into :data:`CAPACITY_STRATA` for every true capacity (``-1`` for a NaN)."""
+    cap = np.asarray(capacity, dtype=float)
+    out = np.full(cap.shape, -1, dtype=int)
+    for s, (_, lo, hi) in enumerate(CAPACITY_STRATA):
+        m = np.isfinite(cap) & (cap >= lo) & ((cap <= hi) if hi is not None else True)
+        out[m] = s
+    return out
+
+
+def starting_composition_recovery(condition: str, parameterization, true_log10: np.ndarray,
+                                  estimates: dict, post_q: np.ndarray, median_index: int) -> dict:
+    """Recovery of the window-start composition from a biology Evaluation product.
+
+    ``parameterization`` is the condition's learnable table (``parameterization_of(condition)``:
+    the keys must equal ``parameter_keys_of(condition)``); ``true_log10``, the estimates (a
+    short name -> ``(N, D)`` array; ``"MAP"``, ``"median"``, ``"SGM"``) and ``post_q`` are in
+    estimator coordinates. The true capacity and the true number of allocated pairs c come
+    from the physical truth through ``population_from_theta``; every estimate vector is
+    realized the same way AFTER masking with ``population_valid`` (a vector whose fraction or
+    allocation falls outside [0, 1], or whose count is not positive, is excluded from this
+    section and counted under ``flagged``; nothing is clipped).
+
+    Under MET-INLB the result holds, per TRUE capacity stratum (:data:`CAPACITY_STRATA`):
+    the allocation's MAE and signed bias in percentage points for every estimate, the 50 %
+    and 90 % coverage of the true allocation by the per-video quantiles, and the recovery of
+    c in counts from the JOINT vectors MAP and SGM (never the coordinate-wise median, which
+    is not a vector of the posterior). Under MET-FAB the allocation is the declared 0: the
+    result carries no strata and states that c is 0 for every video and every valid estimate.
+
+    Returns a dict: ``has_allocation``, ``n_videos``, ``flagged`` (estimate -> count excluded),
+    ``allocation_key``, ``strata`` (a list of per-stratum dicts, empty under MET-FAB),
+    ``c_true_all_zero`` and ``c_estimates_all_zero`` (MET-FAB), ``true_capacity`` and
+    ``true_pairs`` (arrays over the videos).
+    """
+    keys = [e["KEY"] for e in parameterization]
+    if keys != parameter_keys_of(condition):
+        raise ValueError(f"starting_composition_recovery [{condition}]: the table's keys {keys} are not the "
+                         f"condition's {parameter_keys_of(condition)}.")
+    true_log10 = np.asarray(true_log10, dtype=float)
+    post_q = np.asarray(post_q, dtype=float)
+    n = true_log10.shape[0]
+    true_phys = to_physical(true_log10, parameterization)
+    pop_true = population_from_theta(true_phys, condition)
+    capacity = np.asarray(pop_true.capacity, dtype=float)
+    pairs_true = np.asarray(pop_true.n_pairs_allocated, dtype=float)
+    stratum = _capacity_stratum(capacity)
+
+    index = {k: i for i, k in enumerate(keys)}
+    sto = PARAMETERS.simulation.rds.stoichiometry
+    r_key = sto.active_allocation_key
+    has_allocation = r_key in index
+
+    # Every estimate: the valid subset (population_valid on the physical vector), realized.
+    valid, pairs_est, flagged = {}, {}, {}
+    for name, arr in estimates.items():
+        if arr is None or not np.asarray(arr).size:
+            continue
+        est = np.asarray(arr, dtype=float)
+        phys = to_physical(est, parameterization)
+        r = (phys[:, index[r_key]] if has_allocation
+             else np.zeros(n, dtype=float))
+        ok = population_valid(count_total=phys[:, index[sto.count_total_key]],
+                              fraction_basal_dimers_reference=phys[:, index[sto.basal_fraction_key]],
+                              relative_count_active_dimers_initial=r, condition=condition)
+        valid[name] = ok
+        flagged[name] = int(n - np.count_nonzero(ok))
+        pe = np.full(n, np.nan)
+        if np.any(ok):
+            pe[ok] = np.asarray(population_from_theta(phys[ok], condition).n_pairs_allocated, dtype=float)
+        pairs_est[name] = pe
+
+    result = {"condition": str(condition), "has_allocation": bool(has_allocation), "n_videos": int(n),
+              "flagged": flagged, "allocation_key": r_key, "strata": [],
+              "true_capacity": capacity, "true_pairs": pairs_true, "estimated_pairs": pairs_est}
+    if not has_allocation:
+        result["c_true_all_zero"] = bool(np.all(pairs_true == 0))
+        result["c_estimates_all_zero"] = {name: bool(np.all(pe[valid[name]] == 0)) if np.any(valid[name]) else True
+                                          for name, pe in pairs_est.items()}
+        return result
+
+    j = index[r_key]
+    r_true = true_log10[:, j]
+    for s, (label, lo, hi) in enumerate(CAPACITY_STRATA):
+        m = stratum == s
+        row = {"label": label, "low": lo, "high": hi, "n": int(m.sum()), "allocation": {}, "pairs": {}}
+        if m.any():
+            q = post_q[m, j, :]
+            t = r_true[m]
+            q25, q75 = q[:, median_index - 1], q[:, median_index + 1]
+            row["cover50"] = float(np.mean((t >= q25) & (t <= q75)))
+            row["cover90"] = float(np.mean((t >= q[:, 0]) & (t <= q[:, 4])))
+            row["true_pairs_median"] = float(np.median(pairs_true[m]))
+        else:
+            row["cover50"] = row["cover90"] = row["true_pairs_median"] = float("nan")
+        for name, arr in estimates.items():
+            if name not in valid:
+                continue
+            sel = m & valid[name]
+            if sel.any():
+                err = np.asarray(arr, dtype=float)[sel, j] - r_true[sel]
+                row["allocation"][name] = {"n": int(sel.sum()), "mae_pp": float(_PP * np.mean(np.abs(err))),
+                                           "bias_pp": float(_PP * np.mean(err))}
+            else:
+                row["allocation"][name] = {"n": 0, "mae_pp": float("nan"), "bias_pp": float("nan")}
+            if name == "median":
+                continue        # c is read from the joint vectors only
+            if sel.any():
+                derr = pairs_est[name][sel] - pairs_true[sel]
+                row["pairs"][name] = {"n": int(sel.sum()), "mae": float(np.mean(np.abs(derr))),
+                                      "bias": float(np.mean(derr))}
+            else:
+                row["pairs"][name] = {"n": 0, "mae": float("nan"), "bias": float("nan")}
+        result["strata"].append(row)
+    return result
+
+
+def starting_composition_tables(result: dict) -> list:
+    """Render :func:`starting_composition_recovery` as report tables: a list of
+    ``(title, headers, rows, note)``. Under MET-FAB a single one-row table states the declared
+    allocation and that c is 0; under MET-INLB two tables, the allocation's recovery (pp) with
+    coverage per true-capacity stratum and the recovery of c in counts from MAP and SGM."""
+    fmt = lambda v, f="{:.2f}": "n/a" if not np.isfinite(v) else f.format(v)   # noqa: E731
+    flagged = ", ".join(f"{k} {v}" for k, v in result["flagged"].items()) or "none"
+    if not result["has_allocation"]:
+        rows = [[result["condition"], "declared 0", "0 for every video" if result["c_true_all_zero"] else "NOT 0",
+                 ", ".join(f"{k}: {'0' if v else 'NOT 0'}" for k, v in result["c_estimates_all_zero"].items()),
+                 flagged]]
+        return [("Starting composition (window start)",
+                 ["condition", "allocation R_active", "c from the truth", "c from the estimates (valid vectors)",
+                  "flagged vectors excluded"], rows,
+                 "the condition declares the allocation as a constant, so no allocation is inferred, no "
+                 "true-capacity strata are formed and the number of allocated pairs c is 0 for every video; "
+                 "the estimates are checked for the same. A flagged vector (fraction outside [0, 1] or a "
+                 "non-positive count) is excluded and counted, never clipped.")]
+    names = [n for n in next(iter(result["strata"]))["allocation"]] if result["strata"] else []
+    joint = [n for n in names if n != "median"]
+    a_headers = ["true capacity", "n"] + [f"{s} {n}" for n in names for s in ("MAE (pp)", "bias (pp)")] + [
+        "cover@50%", "cover@90%"]
+    a_rows, c_rows = [], []
+    for row in result["strata"]:
+        cells = [row["label"], str(row["n"])]
+        for n in names:
+            a = row["allocation"].get(n, {"mae_pp": np.nan, "bias_pp": np.nan})
+            cells += [fmt(a["mae_pp"]), fmt(a["bias_pp"], "{:+.2f}")]
+        cells += [fmt(100 * row["cover50"], "{:.0f}%"), fmt(100 * row["cover90"], "{:.0f}%")]
+        a_rows.append(cells)
+        c_cells = [row["label"], str(row["n"]), fmt(row["true_pairs_median"], "{:.0f}")]
+        for n in joint:
+            p = row["pairs"].get(n, {"mae": np.nan, "bias": np.nan})
+            c_cells += [fmt(p["mae"], "{:.1f}"), fmt(p["bias"], "{:+.1f}")]
+        c_rows.append(c_cells)
+    c_headers = ["true capacity", "n", "c true (median)"] + [f"{s} {n}" for n in joint
+                                                               for s in ("MAE (counts)", "bias (counts)")]
+    return [
+        (f"Starting composition: recovery of the allocation {result['allocation_key']} per true-capacity stratum",
+         a_headers, a_rows,
+         f"the true capacity cap = A_ref // 2 (the probe-bound monomer pairs the reference can pair) is "
+         f"computed from the physical truth; each stratum holds the videos whose true capacity falls in it. "
+         f"MAE and signed bias (inferred - true) of the allocation are in percentage points for every "
+         f"estimate; the coverage columns are the share of truths inside the per-video 50 % and 90 % "
+         f"intervals of the draws (one posterior, so they do not depend on the estimate). At capacity 0 "
+         f"the allocation has no effect on the video and a prior-like posterior is expected there. "
+         f"Flagged vectors excluded and counted: {flagged}."),
+        ("Starting composition: recovery of the allocated pairs c (counts)", c_headers, c_rows,
+         "c = round(R_active x capacity) realized from the JOINT vectors (MAP and SGM, which are "
+         "vectors of the posterior; the coordinate-wise median is not) against c from the truth, in "
+         "counts, per true-capacity stratum. Zero-safe: at capacity 0 every c is 0."),
+    ]
 
 
 def correlation_with_truth(true_values, inferred_values, min_pairs: int = 3):
@@ -1007,38 +1287,44 @@ def recovery_table(parameterization, true_log10: np.ndarray,
     """Build a ``(headers, rows)`` recovery summary for the diagnostic report.
 
     One row per learnable parameter, with the error statistics from
-    ``recovery_stats``. Two "within" columns report the fraction recovered inside
-    the +/-guide band and the tighter, nested +/-guide_tight band. Both columns are
-    headed by the multiplicative range the tolerance permits rather than its log10
-    half-width -- ``[0.50x, 2.00x]`` for 0.3 dex and ``[0.71x, 1.41x]`` for 0.15 --
-    because that is the form in which a reader can judge whether a parameter is
-    usable, without doing the arithmetic first. Two further columns expose failure
+    ``recovery_stats`` in the row's error unit (the ``units`` column: dex for a log row,
+    percentage points for a linear row, where the estimator-coordinate error is multiplied by
+    100). Two "within" columns report the fraction recovered inside the +/-guide band and
+    the tighter, nested +/-guide_tight band. Both columns are headed by the multiplicative
+    range the tolerance permits rather than its log10 half-width -- ``[0.50x, 2.00x]`` for
+    0.3 dex and ``[0.71x, 1.41x]`` for 0.15 -- because that is the form in which a reader can
+    judge whether a parameter is usable, without doing the arithmetic first. A linear row has
+    no multiplicative band: its two cells read ``n/a``. Two further columns expose failure
     modes the error statistics hide: ``outside prior`` is the share of MAP estimates
     beyond the row's prior box (``fraction_outside_prior``), and ``corr(inf, true)`` is
     the correlation between inferred and true values (``correlation_with_truth``; ``n/a``
-    below three pairs or at zero spread). ``parameterization`` is the learnable-only
-    ``PARAMETERIZATION`` list (its order matches the theta columns).
+    below three pairs or at zero spread). ``parameterization`` is the learnable table of the
+    condition (its order matches the theta columns).
     """
-    headers = ["parameter", "label", "n", "median err", "MAE", "RMSE",
+    headers = ["parameter", "label", "units", "n", "median err", "MAE", "RMSE",
                "q95|err|", f"within {band_label(guide)}",
                f"within {band_label(guide_tight)}", "outside prior", "corr(inf, true)"]
-    stats = recovery_stats(true_log10, estimate_log10, guide, guide_tight)
+    log_rows = [is_log_row(p) for p in parameterization]
+    stats = recovery_stats(true_log10, estimate_log10, guide, guide_tight, log_rows=log_rows)
     true_log10 = np.asarray(true_log10, dtype=float)
     estimate_log10 = np.asarray(estimate_log10, dtype=float)
     rows = []
     for i, (para, st) in enumerate(zip(parameterization, stats)):
+        scale = _error_scale(para)
         outside = fraction_outside_prior(para, estimate_log10[:, i]) if estimate_log10.size else float("nan")
         corr = correlation_with_truth(true_log10[:, i], estimate_log10[:, i]) if estimate_log10.size else None
+        band = lambda v: "n/a" if not np.isfinite(v) else f"{v * 100:.0f}%"   # noqa: E731
         rows.append([
             para["KEY"],
             para.get("LABEL") or "-",
+            row_error_unit(para),
             str(st["n"]),
-            f"{st['median_error']:+.3f}",
-            f"{st['mae']:.3f}",
-            f"{st['rmse']:.3f}",
-            f"{st['q95_abs_error']:.3f}",
-            f"{st['frac_within_guide'] * 100:.0f}%",
-            f"{st['frac_within_guide_tight'] * 100:.0f}%",
+            f"{scale * st['median_error']:+.3f}",
+            f"{scale * st['mae']:.3f}",
+            f"{scale * st['rmse']:.3f}",
+            f"{scale * st['q95_abs_error']:.3f}",
+            band(st["frac_within_guide"]),
+            band(st["frac_within_guide_tight"]),
             "n/a" if not np.isfinite(outside) else f"{outside * 100:.0f}%",
             "n/a" if corr is None else f"{corr:+.2f}",
         ])

@@ -144,13 +144,15 @@ def write_report(results: dict, report: Path) -> None:
         add("")
     add("## The renders' receptor totals, visible spots at frame 0 and detected-per-visible ratio (opening window)")
     add("")
-    add((f"Every render declares the receptor total N_R = {totals[0]:.0f}. " if len(totals) == 1 else
-         "The receptor total is declared per recording (column N_R); a recording's arms share its render's trajectory, "
-         "so they share its N_R. ")
+    add((f"Every render declares the receptor total N = {totals[0]:.0f}. " if len(totals) == 1 else
+         "The receptor total N is declared per recording (column N); a recording's arms share its render's "
+         "trajectory, so they share its N. ")
+        + "N counts the receptor subunits of the underlying population; the represented receptors N_R follow "
+          "from it through the condition's occupancy. "
         + "Visible spots are the labeled monomers plus the dimers with at least one labeled subunit at frame 0 (the "
         "labeling record). `eta` = detected per frame / visible spots, the count match's ratio.")
     add("")
-    add("| cell | N_R | " + " | ".join(f"{c} visible" for c in column_names) + " | "
+    add("| cell | N | " + " | ".join(f"{c} visible" for c in column_names) + " | "
         + " | ".join(f"{c} eta" for c in column_names) + " |")
     add("|---|---|" + "---|" * (2 * len(column_names)))
     for cell, block in cells.items():
@@ -234,7 +236,7 @@ def main(argv=None):
             if not np.array_equal(d["experimental"], experimental):
                 raise SystemExit(f"cell {cell}: {name} references different experimental frames")
             if count_total(d) != block["count_total_declared"]:
-                raise SystemExit(f"cell {cell}: {name} declares N_R {count_total(d):g}, not its source's "
+                raise SystemExit(f"cell {cell}: {name} declares the receptor total N = {count_total(d):g}, not its source's "
                                  f"{block['count_total_declared']:g}")
             vec = np.asarray(d["imaging_physical"], dtype=float)
             if imaging_vector is None:

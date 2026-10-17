@@ -10,18 +10,26 @@ Public interface:
     PARAMETERS                  -- module-level singleton; typed access:
                                    PARAMETERS.paths.*, PARAMETERS.simulation.*,
                                    PARAMETERS.inference.*, PARAMETERS.plotting.*
-    PARAMETERIZATION_RAW        -- flat list of all parameter entries (full spec)
-    PARAMETERIZATION            -- filtered list of learnable parameters (for the prior)
+    PARAMETERIZATION_RAW        -- flat list of all parameter entries (full spec, the master)
+    MASTER_PARAMETERIZATION     -- the twelve learnable row definitions (never a theta schema by itself)
+    parameterization_of(cond)   -- the condition's learnable table: eleven rows under FAB, twelve under INLB
+    parameterization_raw_of(cond) -- the full spec with the condition's declared rows as fixed rows
+    parameter_keys_of(cond)     -- the condition's theta schema (ordered keys); parameter_index_of(cond)
+    parameter_find(key, cond)   -- index lookup in the condition's theta vector
+    declared_row_values(cond)   -- the master rows the condition declares as constants (FAB: allocation 0)
     PARAMETER_RAW_FIND          -- dict[KEY -> index in PARAMETERIZATION_RAW]
-    PARAMETER_FIND              -- dict[KEY -> index in PARAMETERIZATION]
-    parameter_find(key)         -- index lookup for learnable parameters
-    build_prior(device)         -- construct the BoxUniform prior over the estimator space
-    theta_lower_bound()         -- lower bounds of the prior box (estimator space)
-    theta_upper_bound()         -- upper bounds of the prior box (estimator space)
-    to_physical(theta_flow)     -- the ONE conversion estimator space -> physical values
-    to_flow(theta_physical)     -- its inverse (physical -> estimator space)
+    build_prior(cond, device)   -- the BoxUniform prior of the condition's table (estimator space)
+    theta_lower_bound(cond)     -- lower bounds of the condition's prior box (estimator space)
+    theta_upper_bound(cond)     -- upper bounds of the condition's prior box (estimator space)
+    to_physical(theta_flow, table) -- the ONE conversion estimator space -> physical values
+    to_flow(theta_physical, table) -- its inverse (physical -> estimator space)
+    fraction_flags(theta, table) -- per linear row, the draws outside [0, 1] (flagged, never clipped)
     prior_center(entry)         -- physical value at the center of a ranged row
-    realize_initial_composition -- integer (n_A, n_B) from the sampled (N_R, r), r = n_B/n_A
+    realize_population          -- the window-start composition of many draws (reference, allocation, start)
+    population_from_theta       -- the same from physical theta vectors, aligned by key
+    realize_initial_composition -- the one-draw record the generator places from
+    population_valid            -- the one validity rule of a window-start input
+    THETA_STANDARDIZATION       -- the biology flow's theta standardization ("independent")
     association_ratio_of(cond)  -- the declared association ratio R_ON of a condition (FAB 0, INLB 1)
     occupancy_of(cond)          -- the declared (INLB) or derived (FAB) probe occupancy per subunit
     visibility_of(cond)         -- occupancy x P(dye >= 1) under the condition's labeling law
@@ -44,14 +52,16 @@ The estimator space ("flow space"). Every ranged row declares its scale: LOG_FLA
 the prior box and the estimator coordinate are log10 of the physical value; LOG_FLAG False
 means the coordinate IS the physical value (a linear row). `to_physical` / `to_flow` apply
 the per-row rule and are the only sanctioned conversion -- no consumer exponentiates or
-log-transforms a theta vector by hand. The decided table (2026-09-14) has no linear row --
-the initial composition is the log10 dimer-to-monomer ratio -- but the per-row rule stays
-the contract, so a linear row can be declared without touching any consumer.
+log-transforms a theta vector by hand. The decided table (2026-09-14, revised 2026-10-15)
+carries two LINEAR rows, the basal reference fraction and the InlB window-start allocation,
+beside ten log rows; the per-row rule is the contract every consumer applies.
 
 Prior ranges. Every range is a DECIDED box (2026-09-14; PROJECT_CONTEXT.md sec. 2, "How the
 prior ranges and the declared inputs are set"): box-uniform in the estimator coordinate,
 covering the plausible support with a margin and never encoding the answer an experiment is
-expected to give; both conditions share the one table. Each row's DOC names its source:
+expected to give; both conditions draw from the one MASTER table, each under its own view
+(``parameterization_of``: MET-FAB declares the allocation 0 and infers eleven coordinates,
+MET-INLB infers all twelve). Each row's DOC names its source:
 the frozen baseline ranges of the earlier model (dimer-alp 0.4.23), the per-recording analysis
 of the deposited MET localization tables (Special_Analyses A9), the literature anchors of the
 model specification (sec. 9), or the tracking pipelines' resolution and classification
@@ -248,9 +258,10 @@ class Paths:
     is a biology product and ``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_...``
     a detector product of the MET-FAB condition. The condition enters at the RDS
     stage: the association intensity of the reaction-diffusion model is a per-condition
-    constant (``SimulationRDS.conditions``), so the trajectory tier and its
-    eleven-parameter ``Theta_Set`` are generated once PER CONDITION under the sibling
-    alias plus the condition token (``rds_alias``, e.g. ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB``),
+    constant (``SimulationRDS.conditions``), so the trajectory tier and its ``Theta_Set``
+    (eleven reaction-diffusion labels under MET-FAB, twelve under MET-INLB) are generated once
+    PER CONDITION under the sibling alias plus the condition token (``rds_alias``, e.g.
+    ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB``),
     free of the workflow qualifier, and shared by both workflows, which re-image them at
     the DLI stage under the condition's labeling law. Every product therefore carries
     the condition. A stage applies its condition with ``with_condition``; the trajectory
@@ -280,18 +291,18 @@ class Paths:
     compressed_ext: str = "zarr"
     uncompressed_ext: str = "npy"
     # The bare sibling alias. The RDS products -- one trajectory tier per condition and its
-    # eleven-parameter ``Theta_Set`` -- carry this alias plus the condition token and never
-    # the workflow qualifier, because both workflows re-image the same tier (``rds_alias``
-    # composes it).
+    # ``Theta_Set`` (eleven labels under MET-FAB, twelve under MET-INLB) -- carry this alias
+    # plus the condition token and never the workflow qualifier, because both workflows
+    # re-image the same tier (``rds_alias`` composes it).
     sibling_alias: str = "SRM_AND_SBI_MONOMER_DIMER_ALP"
     # The condition token these Paths carry (None = no condition applied yet; see the class
     # docstring). Set only through ``with_condition``, which also appends the token to
     # ``project_alias``; ``rds_alias`` composes the tier alias from it.
     condition: Optional[str] = None
-    # Whether this workflow's ``Theta_Set`` is an RDS product (biology: the eleven
-    # reaction-diffusion labels -- the condition's tier's own record, under ``rds_alias``) or
-    # a DLI product (detector: the six imaging labels, drawn when the videos are rendered,
-    # hence qualified and per condition).
+    # Whether this workflow's ``Theta_Set`` is an RDS product (biology: the condition's
+    # reaction-diffusion labels -- the tier's own record, under ``rds_alias``) or a DLI
+    # product (detector: the six imaging labels, drawn when the videos are rendered, hence
+    # qualified and per condition).
     theta_set_is_rds_product: bool = True
 
     # The `timing_label` token (e.g., "2S_50FPS") encodes simulation duration
@@ -318,10 +329,11 @@ class Paths:
 
     @property
     def rds_alias(self) -> str:
-        """The alias of the condition's RDS tier (trajectories and the eleven-parameter
-        ``Theta_Set``): the bare sibling alias plus the condition token, whatever workflow
-        qualifier these Paths carry. Requires a condition (``with_condition``): the tier is
-        per condition because the association setting is."""
+        """The alias of the condition's RDS tier (trajectories and the condition's
+        ``Theta_Set``, eleven labels under MET-FAB and twelve under MET-INLB): the bare sibling
+        alias plus the condition token, whatever workflow qualifier these Paths carry. Requires
+        a condition (``with_condition``): the tier is per condition because the association
+        setting is."""
         if not self.project_alias.startswith(self.sibling_alias):
             raise ValueError(
                 f"project_alias {self.project_alias!r} does not extend the sibling alias "
@@ -336,8 +348,8 @@ class Paths:
     @property
     def theta_set_alias(self) -> str:
         """Alias of this workflow's ``Theta_Set``: the condition's RDS-tier alias for an RDS
-        product (biology: the eleven reaction-diffusion labels), the qualified and conditioned
-        alias for a DLI product (detector: the six imaging labels)."""
+        product (biology: the condition's reaction-diffusion labels), the qualified and
+        conditioned alias for a DLI product (detector: the six imaging labels)."""
         return self.rds_alias if self.theta_set_is_rds_product else self.project_alias
 
     def trajectory_dir(self, task_alias: int, data_bank_root: Path,
@@ -371,6 +383,24 @@ class Paths:
         ext = self.compressed_ext if compress else self.uncompressed_ext
         filename = self.theta_set_pattern.format(
             project_alias=self.theta_set_alias,
+            timing_label=timing_label,
+            task_alias=task_alias,
+            ext=ext,
+            split=split,
+        )
+        return data_bank_root / self.theta_subdir / filename
+
+    def rds_theta_set_path(self, task_alias: int, data_bank_root: Path,
+                           timing_label: str, compress: bool = True,
+                           split: str = "TRAIN") -> Path:
+        """Full path of the condition's RDS-tier ``Theta_Set`` (the biology labels under
+        ``rds_alias``, the namespace ``trajectory_dir`` resolves), for ANY workflow: the
+        biology reads its own labels here, and the detector checks the UPSTREAM record of the
+        trajectories it re-images -- never its own six-column imaging ``Theta_Set``, which
+        ``theta_set_path`` resolves under the DETECTOR alias."""
+        ext = self.compressed_ext if compress else self.uncompressed_ext
+        filename = self.theta_set_pattern.format(
+            project_alias=self.rds_alias,
             timing_label=timing_label,
             task_alias=task_alias,
             ext=ext,
@@ -814,19 +844,23 @@ class StoichiometryBlock:
     monomers. ``species_for(ligand_classes)`` selects the inventory of a condition; the
     stoichiometric class of every type is ``A`` or ``B``.
 
-    - ``count_total_key``: N_total, the initial receptor-subunit total of the TRUE population,
-      probe-bound and unbound (the inferred count, shared by both conditions). The retained
+    - ``count_total_key``: N_total, the receptor-subunit total of the underlying population,
+      probe-bound and unbound (the inferred count, shared by both conditions). The represented
       count N_R the simulation conserves is realized from it through the condition's occupancy
-      (``realize_initial_composition``): N_R = n_A + 2 n_B under FAB and n_A + n_B1 + 2 n_B2,
-      the InlB-bound subunits, under INLB.
-    - ``composition_ratio_key``: the REQUESTED initial dimer-to-monomer ratio r = n_B / n_A of
-      the TRUE population, a log10 row on the declared band of the initial basal complex
-      fraction f_B = r / (1 + r) (``COMPOSITION_BAND``, 5-25%). The retained ratio of the
-      initial population is (2 - p) r (``retained_ratio``); the true receptor fraction in dimers
-      x_B = 2r / (1 + 2r) and f_B are DERIVED quantities (``ratio_to_receptor_fraction``,
-      ``ratio_to_complex_fraction``). Under a condition without association it is read as the
-      composition PRESENT at the start of the recording, not one formed; it is an inference
-      coordinate restricted to the literature band and reported as a secondary quantity.
+      (``realize_population``): N_R = A_ref + 2 D_sim under FAB and A_ref + B1 + 2 B2_ref, the
+      InlB-bound subunits, under INLB.
+    - ``basal_fraction_key``: f, the basal REFERENCE fraction of dimers among the complexes of
+      the underlying population, a LINEAR row uniform on [0, 1] (``FRACTION_BOX``): M_ref =
+      N_total (1 - f) / (1 + f) monomers and D_ref = N_total f / (1 + f) dimers. Under a
+      condition without association it is the fraction PRESENT at the start of the recording,
+      not one formed; under MET-INLB the starting fraction f_start also carries the allocation
+      and is a DERIVED quantity reported beside f.
+    - ``active_allocation_key``: R_active, the initial active-dimer allocation of the
+      window-start composition, a LINEAR row uniform on [0, 1], inferred under MET-INLB and
+      declared 0 under MET-FAB (``ConditionSetting.relative_count_active_dimers_initial``):
+      c = round(R_active cap) of the cap = A_ref // 2 probe-bound monomer pairs of the reference
+      become additional two-InlB dimers before the recording starts, conserving N_R. It is
+      capacity-relative, not the active share c / D_start, which is derived.
     - ``dissociation_rate_key``: kappa_OFF, the dimer unbinding rate (1/s), one for every
       dimer class and mode; dissociation is not governed by contact; inferred in every condition.
     The association intensity is NOT a learnable row. It is a declared per-condition constant
@@ -847,8 +881,9 @@ class StoichiometryBlock:
     dimer_one_probe: MolecularSpecies = MolecularSpecies("B1", 1, "dimer", "conversion", 1)
     dimer_two_probe: MolecularSpecies = MolecularSpecies("B2", 2, "dimer", "fission", 2)
     count_total_key: str = "count_total"
-    composition_ratio_key: str = "ratio_dimer_monomer_initial"
+    basal_fraction_key: str = "fraction_basal_dimers_reference"
     dissociation_rate_key: str = "rate_dissociation"
+    active_allocation_key: str = "relative_count_active_dimers_initial"
 
     def __post_init__(self):
         if self.monomer.stoichiometry != "monomer" or self.monomer.subunits != 1:
@@ -888,7 +923,9 @@ class StoichiometryBlock:
 
     @property
     def parameter_keys(self) -> tuple:
-        return (self.count_total_key, self.composition_ratio_key, self.dissociation_rate_key)
+        """The block's master rows in master order: count, basal fraction, dissociation, allocation."""
+        return (self.count_total_key, self.basal_fraction_key, self.dissociation_rate_key,
+                self.active_allocation_key)
 
 
 @dataclass(frozen=True)
@@ -1019,6 +1056,15 @@ class ConditionSetting:
     ``visibility_ratio`` and ``occupancy`` is set per condition. The equilibrium reading is a
     declared initialization, not a measurement: the acquisition delay and the unknown rates
     are recorded as its caveats, and fixed attachment within a recording is its own assumption.
+
+    ``relative_count_active_dimers_initial`` is the condition's setting of the window-start
+    allocation row (``StoichiometryBlock.active_allocation_key``): None means the row is
+    INFERRED (MET-INLB, twelve coordinates); a value in [0, 1] DECLARES it a constant, removes
+    the row from the condition's table and realizes every simulation with it (MET-FAB declares
+    0: no association, so the reference population is the starting population and eleven
+    coordinates remain). An inferred or nonzero allocation requires ligand classes, because
+    the pairs it forms are two-InlB dimers. A declared nonzero value under ligand classes is a
+    sensitivity variant, not a decided setting.
     """
     token: str
     association_ratio: float
@@ -1028,6 +1074,7 @@ class ConditionSetting:
     occupancy: Optional[float] = None
     visibility_ratio: Optional[float] = None
     visibility_ratio_to: Optional[str] = None
+    relative_count_active_dimers_initial: Optional[float] = None
 
     def __post_init__(self):
         token = str(self.token)
@@ -1069,6 +1116,21 @@ class ConditionSetting:
                                  f"condition in visibility_ratio_to (got {self.visibility_ratio_to!r}).")
         elif self.visibility_ratio_to is not None:
             raise ValueError(f"ConditionSetting {token}: visibility_ratio_to is set without a visibility_ratio.")
+        allocation = self.relative_count_active_dimers_initial
+        if allocation is not None and not (np.isfinite(allocation) and 0.0 <= float(allocation) <= 1.0):
+            raise ValueError(f"ConditionSetting {token}: a declared relative_count_active_dimers_initial lies in "
+                             f"[0, 1] (got {allocation!r}); None leaves the row inferred.")
+        if not self.ligand_classes and (allocation is None or float(allocation) != 0.0):
+            raise ValueError(f"ConditionSetting {token}: an inferred or nonzero initial active-dimer allocation "
+                             f"requires ligand classes (the allocated pairs are two-InlB dimers); a condition "
+                             f"without them declares relative_count_active_dimers_initial=0.0.")
+
+    @property
+    def declared_rows(self) -> dict:
+        """The master rows this setting declares as constants, KEY -> value."""
+        if self.relative_count_active_dimers_initial is None:
+            return {}
+        return {StoichiometryBlock.active_allocation_key: float(self.relative_count_active_dimers_initial)}
 
     @property
     def equilibrium_occupancy(self) -> Optional[float]:
@@ -1084,9 +1146,13 @@ CONDITION_SETTINGS: tuple = (
     # MET-FAB: no association channels; the retained basal dimers (at least one Fab) may dissociate
     # and both daughters stay retained. Occupancy DERIVED from the declared Fab/InlB visibility
     # ratio 0.5 and the InlB anchor (-> 0.0148 under the baseline laws); used at initialization only.
-    ConditionSetting("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB"),
+    # The window-start allocation is DECLARED 0 (no active dimers form before the window), so the
+    # reference population is the starting population and the Fab table has eleven coordinates.
+    ConditionSetting("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB",
+                     relative_count_active_dimers_initial=0.0),
     # MET-INLB: lambda_on = lambda_ref, the reference convention; ligand classes B1 / B2. Occupancy =
     # the independent-site equilibrium at 0.25 nM with K_D 5 nM (-> 0.0476); initialization only.
+    # The window-start allocation is INFERRED (None): twelve coordinates.
     ConditionSetting("INLB", 1.0, ligand_classes=True, dissociation_constant_nm=5.0),
 )
 
@@ -1163,14 +1229,16 @@ class SimulationRDS:
         return self.occupancy_of(condition) * self.dye_probability_of(condition)
 
     def two_probe_share_of(self, condition: str) -> float:
-        """Share of the RETAINED initial dimers that carry two probes under independent binding,
-        s_2 = p / (2 - p): the B2 share of the initial dimers (INLB), the two-Fab share (FAB)."""
+        """The declared independent-binding share of two-probe dimers among the REFERENCE
+        dimers, s_2 = p / (2 - p): the two-Fab share Fab labeling draws with (FAB) and the B2
+        share of the reference dimers (INLB), before the window-start allocation."""
         p = self.occupancy_of(condition)
         return p / (2.0 - p)
 
-    def retained_ratio_of(self, condition: str, ratio_true) -> np.ndarray:
-        """Retained dimer-to-monomer ratio of the INITIAL population, (2 - p) r, from the true r."""
-        return (2.0 - self.occupancy_of(condition)) * np.asarray(ratio_true, dtype=float)
+    def declared_row_values(self, condition: str) -> dict:
+        """The master rows ``condition`` declares as constants, KEY -> value
+        (``ConditionSetting.declared_rows``): FAB {allocation: 0.0}, INLB {}."""
+        return dict(self.condition_setting(condition).declared_rows)
 
     def occupancy_source_of(self, condition: str) -> str:
         """'equilibrium', 'declared' or 'derived' (provenance for the labeling record)."""
@@ -1417,7 +1485,8 @@ class InferenceEvaluation:
     whatever its size.
 
     The `error_*` / `quantile_*` fields control the recovery-report figures:
-    a per-parameter scatter of inferred-vs-true (log10) and a residual-error view,
+    a per-parameter scatter of inferred-vs-true (estimator coordinates: log10 for log rows,
+    the value for the linear fraction rows, whose errors are absolute) and a residual-error view,
     each with conditional-quantile bands drawn only where a bin holds at least
     `quantile_min_count` points (so the bands degrade gracefully for small EVAL).
     """
@@ -1468,15 +1537,19 @@ class InferenceFlow:
     stage passes explicitly, so the flow's capacity is a recorded configuration rather than a
     library default, and they are persisted verbatim in the saved estimator's rebuild
     specification (`artifacts.save_estimator`, ``rebuild_spec.maf_args``). The defaults below
-    are the library defaults the estimators trained before 0.1.13 used, so a run with no
-    preset reproduces them exactly.
+    are the settings every earlier estimator of this pipeline was trained with, so a run with
+    no preset reproduces them exactly; they are NOT the library defaults (sbi 0.26.1 builds
+    with ``z_score`` "independent", dropout 0 and no batch normalization).
 
     - `hidden_features`: width of each autoregressive transform's hidden layers.
     - `num_transforms`: number of stacked autoregressive transforms.
     - `num_blocks`: residual blocks per transform.
     - `dropout_probability` / `use_batch_norm`: regularization inside the transforms.
-    - `z_score_x` / `z_score_y`: standardization of parameters and of the embedding input
-      ("structured" standardizes each dimension independently from the training batch).
+    - `z_score_x` / `z_score_y`: standardization of the parameters and of the embedding input,
+      fixed from the batch handed to ``build_maf`` and never refitted. "structured" pools EVERY
+      entry of the batch into ONE scalar mean and one scalar scale (the mean of the per-row
+      standard deviations), so coordinates of different scale are not equalized;
+      "independent" standardizes each dimension by its own mean and standard deviation.
     """
     hidden_features: int = 50
     num_transforms: int = 5
@@ -1487,10 +1560,23 @@ class InferenceFlow:
     z_score_y: str = "structured"
 
 
+# The standardization of the BIOLOGY theta (``z_score_x`` of the biology flow), applied by the
+# Inference stage after the preset: the biology table mixes log10 coordinates spanning two to
+# four decades with two linear fractions on [0, 1], which one shared scalar scale ("structured")
+# would leave an order of magnitude apart. "independent" fits each coordinate's mean and scale,
+# which needs a REPRESENTATIVE batch: the stage hands ``build_maf`` every theta label of the
+# first TRAIN task (about a thousand prior draws), never the two-row dummy batch that fixes
+# the video side (two draws would mis-scale at least one of twelve coordinates more than
+# tenfold in most builds). The detector keeps ``InferenceFlow.z_score_x``.
+THETA_STANDARDIZATION: str = "independent"
+
+
 # Named capacity presets for the Inference stage (`--network-preset`). A preset overrides fields
 # of `InferenceNetwork` and `InferenceFlow` together; everything else (data, targets, splits,
-# preprocessing, training protocol, standardization, batch normalization) is untouched. The
-# baseline preset is the empty override and reproduces the pre-0.1.13 architecture.
+# preprocessing, training protocol, batch normalization) is untouched, and no preset touches the
+# standardization: the biology theta standardization (THETA_STANDARDIZATION) is applied by the
+# workflow after the preset. The baseline preset is the empty override and reproduces the
+# pre-0.1.13 architecture.
 #
 #   capacity256 -- the combined capacity test of DETECTOR_WORKFLOW.md sec. 9.7: the embedding is
 #   widened to 256 dimensions by doubling every convolutional block's channels
@@ -1641,14 +1727,14 @@ NUISANCE_SENTINEL = "NUISANCE"
 POSTERIOR_SENTINEL = "POSTERIOR"
 _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
-# The two prior rows the retained-population model fixes (decided 2026-10-05; PROJECT_CONTEXT.md
-# sec. 2, *Modeling assumptions of the MET model*, items 9 and 14). COUNT_TOTAL_BOX is log10 of the
-# true receptor-subunit total N_total, one box for both conditions. COMPOSITION_BAND is the declared
-# band of the initial basal complex fraction f_B of the true population; the ratio row stores
-# log10 r with r = f_B / (1 - f_B), so its box is the band mapped through that function.
+# The prior boxes of the window-start composition (decided 2026-10-05 and 2026-10-15;
+# PROJECT_CONTEXT.md sec. 2, *Modeling assumptions of the MET model*, items 9 and 14).
+# COUNT_TOTAL_BOX is log10 of the true receptor-subunit total N_total, one box for both
+# conditions. FRACTION_BOX is the box of the two LINEAR rows: the basal reference fraction of
+# dimers in the underlying population and, under MET-INLB, the initial active-dimer allocation
+# relative to its capacity; both are uniform on [0, 1] in the estimator coordinate.
 COUNT_TOTAL_BOX: tuple = (3.0, 5.0)
-COMPOSITION_BAND: tuple = (0.05, 0.25)
-COMPOSITION_RATIO_BOX: tuple = tuple(float(np.log10(f / (1.0 - f))) for f in COMPOSITION_BAND)
+FRACTION_BOX: tuple = (0.0, 1.0)
 
 
 _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
@@ -1660,11 +1746,11 @@ _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
     # pipelines). Rationale: PROJECT_CONTEXT.md sec. 2, "Modeling assumptions of the MET model" and
     # "How the prior ranges and the declared inputs are set". The receptor count is the TRUE total,
     # conditional on the declared occupancies that realize the simulated (retained) population.
-    'stoichiometry': [  # StoichiometryBlock: true receptor total, requested initial dimer-to-monomer ratio, dissociation (the association ratio is a per-condition CONSTANT, not a row)
+    'stoichiometry': [  # StoichiometryBlock: true receptor total, basal reference fraction of dimers, dissociation (the association ratio is a per-condition CONSTANT, not a row; the initial active-dimer allocation is the 'initialization' row below)
         {'KEY': 'count_total', 'VALUE': 10**4.0, 'PRIOR_RANGE': COUNT_TOTAL_BOX, 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{\mathrm{total}}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'N_total, the initial receptor-subunit total of the TRUE population in the simulated patch, probe-bound and unbound receptors included; one prior for both conditions, log10 on [3.0, 5.0] (1,000-100,000 subunits), decided 2026-10-05. It is NOT the number of simulated particles: the generator realizes the RETAINED population (probe-associated complexes) from it through the condition\'s occupancy p (realize_initial_composition) -- expected retained count p N_total under INLB (about 4,762 subunits at the ceiling) and p N_total [1 + 2 (1 - p) f_B / (1 + f_B)] under FAB (about 1,600-2,100), whose cohort keeps the unbound partners of one-Fab dimers. The two conditions share this quantity because they share the cell line and the probe concentration; their simulated populations differ through the occupancies. The deposited recordings (A9: spots per frame in the first 2 s, divided by the visibility p x P(dye >= 1)) imply totals of about 1,400-25,800 (FAB) and 3,000-33,300 (INLB), computed without missed detections and overlap, so the ceiling carries headroom for the undercount; it is a declared modeling choice, not an experimental maximum. Compatible N_total posteriors across the conditions are a consistency check, not independent validation (the Fab occupancy rests on the declared visibility ratio). In-field count and retained count are distinct quantities.'},
-        {'KEY': 'ratio_dimer_monomer_initial', 'VALUE': 10**(0.5 * (COMPOSITION_RATIO_BOX[0] + COMPOSITION_RATIO_BOX[1])), 'PRIOR_RANGE': COMPOSITION_RATIO_BOX, 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Dimensionless', 'DERIVED_UNIT': 'Count', 'LABEL': r'$r_{B/A}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'REQUESTED initial dimer-to-monomer ratio r = n_B(0) / n_A(0) of the TRUE population, log10 on the declared band of the initial basal complex fraction f_B = r / (1 + r) from 5% to 25% (COMPOSITION_BAND; bounds log10(0.05/0.95) = -1.27875 and log10(0.25/0.75) = -0.47712; decided 2026-10-05). Sampling is uniform in the log10 coordinate, so f_B itself is not uniform (median 11.7%). The band is declared from the independent resting measurements (5 +/- 1% of clusters dimeric, Baldering et al. 2021; 18% of fitted spots assigned to a dimer component in fixed cells, stated as an underestimate, Dietz et al. 2013) and constrains the initial basal pool only, not the InlB-induced dimerization that follows. The row stays an inference coordinate (eleven coordinates, ten primary quantities, the composition secondary): a calibrated, prior-like posterior is acceptable and a narrow prior is not evidence of recovery. The retained ratio of the initial population is (2 - p) r (selection, not rounding: 25% true basal dimers are about 39-40% of the retained complexes); the true x_B = 2r / (1 + 2r) and f_B are derived (ratio_to_receptor_fraction, ratio_to_complex_fraction). Under MET-FAB it is the composition PRESENT at the recording start, not one formed.'},
+         'DOC': 'N_total, the receptor-subunit total of the underlying population in the simulated patch, probe-bound and unbound receptors included; one prior for both conditions, log10 on [3.0, 5.0] (1,000-100,000 subunits), decided 2026-10-05. It is NOT the number of simulated particles: the generator realizes the REFERENCE probe-bound population from it through the condition\'s occupancy p (realize_population), then applies the initial allocation of the window-start composition. Sizing at N_total = 100,000, bookkeeping rather than a population change: under MET-FAB the initial particles stay at the expected bound probes (about 1,477; 1,472 at a basal fraction of 0.25, 1,466 at 1) for every basal fraction, while the represented receptors N_R rise from 1,477 (basal fraction 0) through 2,058 (0.25) to 2,932 (1), because more probe-free partners are represented inside dimers; particles can approach N_R only after dissociation, so the upper figure is a memory and timing consideration for the worst case. Under MET-INLB N_R stays about 4,762 for every basal fraction and allocation (the allocation conserves it). The two conditions share this quantity because they share the cell line and the probe concentration; their simulated populations differ through the occupancies. The deposited recordings (A9: spots per frame in the first 2 s, divided by the visibility p x P(dye >= 1)) imply totals of about 1,400-25,800 (FAB) and 3,000-33,300 (INLB), computed without missed detections and overlap, so the ceiling carries headroom for the undercount; it is a declared modeling choice, not an experimental maximum. Compatible N_total posteriors across the conditions are a consistency check, not independent validation (the Fab occupancy rests on the declared visibility ratio). In-field count and represented count are distinct quantities.'},
+        {'KEY': 'fraction_basal_dimers_reference', 'VALUE': 0.5, 'PRIOR_RANGE': FRACTION_BOX, 'LOG_FLAG': False, 'LOG_BASE': None, 'UNIT': 'Fraction', 'DERIVED_UNIT': 'Count', 'LABEL': r'$f_{B}^{ref}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Basal reference fraction f of the underlying population, the fraction of its complexes that are dimers before any initial allocation: M_ref = N_total (1 - f) / (1 + f) monomers and D_ref = N_total f / (1 + f) dimers, so that M_ref + 2 D_ref = N_total. A LINEAR row, uniform on [0, 1] (decided 2026-10-15; the earlier log10 dimer-to-monomer ratio on the 5-25 % basal band is retired): the basal measurements (5 +/- 1 % of clusters dimeric, Baldering et al. 2021; 18 % of fitted spots assigned to a dimer component in fixed cells, stated as an underestimate, Dietz et al. 2013) inform the reading of the posterior, not the prior. Under MET-FAB the reference population IS the starting population (the allocation is declared 0), so f is the fraction of dimers present at the recording start, not one formed. Under MET-INLB the reference population is the state from which the initial allocation (relative_count_active_dimers_initial) pairs probe-bound monomers into two-InlB dimers, so the starting fraction f_start = (D_ref + c) / (M_ref + D_ref - c) differs from f; both are reported. The row is an inference coordinate whose calibrated, prior-like posterior is acceptable; a narrow prior is not evidence of recovery.'},
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{CAP}$', 'NOTE': 'Known Parameter'},
         {'KEY': 'rate_dissociation', 'VALUE': 10**(-1), 'PRIOR_RANGE': (-3, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$\kappa_{OFF}$', 'NOTE': 'Learnable Parameter',
          'DOC': 'Dimer unbinding rate, one rate for every dimer class and mode (dissociation conserves the mode): B_m -> A_m + A_m (FAB) and B2_m -> A_m + A_m by fission, B1_m -> A_m by conversion (the probe-free partner is not represented); inferred in every condition. Range 0.001-10 per s: the lower bound is widened from the baseline (-1, 1) so that under MET-FAB, where no association exists, dimers can PERSIST through a 20 s recording (0.001 per s loses 2% in 20 s); the upper bound, a 0.1 s lifetime (five frames), is the baseline value. Under MET-FAB kappa_OFF is the dimer lifetime rate directly.'},
@@ -1686,6 +1772,10 @@ _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
          'DOC': 'Switching slow -> immobile, shared by all molecular species of the condition. Range 0.1-10 per s: the baseline 0.4.23 band of the earlier mobile/immobile switching, kept for all four shared rates; resolvable between the 20 ms frame and the 2 s window; the observed class fractions (67/22/11 Fab, 43/29/28 InlB) imply rate ratios between 0.3 and 1, well inside.'},
         {'KEY': 'rate_immobile_slow', 'VALUE': 10**0, 'PRIOR_RANGE': (-1, 1), 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count Per Second', 'DERIVED_UNIT': None, 'LABEL': r'$k_{is}$', 'NOTE': 'Learnable Parameter',
          'DOC': 'Switching immobile -> slow, shared by all molecular species of the condition. Range 0.1-10 per s: the baseline 0.4.23 band of the earlier mobile/immobile switching, kept for all four shared rates; resolvable between the 20 ms frame and the 2 s window; the observed class fractions (67/22/11 Fab, 43/29/28 InlB) imply rate ratios between 0.3 and 1, well inside.'},
+    ],
+    'initialization': [  # the window-start allocation: inferred under MET-INLB, a declared constant (0) under MET-FAB (ConditionSetting.relative_count_active_dimers_initial)
+        {'KEY': 'relative_count_active_dimers_initial', 'VALUE': 0.5, 'PRIOR_RANGE': FRACTION_BOX, 'LOG_FLAG': False, 'LOG_BASE': None, 'UNIT': 'Fraction', 'DERIVED_UNIT': 'Count', 'LABEL': r'$R_{active}$', 'NOTE': 'Learnable Parameter',
+         'DOC': 'Initial active-dimer allocation R_active of the window-start composition, a LINEAR row uniform on [0, 1] (decided 2026-10-15), inferred under MET-INLB only; MET-FAB declares it 0 on its condition setting, so the Fab table has no such row. It is a CAPACITY-RELATIVE count, not the active share: the reference probe-bound population holds A_ref probe-bound monomers, of which at most cap = A_ref // 2 pairs can be formed; c = round(R_active cap) pairs are turned into additional two-InlB dimers before the recording starts, A_start = A_ref - 2c, B2_start = B2_ref + c, B1 unchanged, and the represented receptor and probe budget N_R is conserved exactly. The declared starting-state approximation: at initialization, the declared occupancy defines a reference probe-bound population; additional initial B2 dimers are obtained by pairing already probe-bound monomers from that population, preserving its receptor and probe budget. This is not a reconstruction of probe binding or receptor reactions before the analysis window; fixed attachment remains the assumption applied during the simulated recording. The active share c / (D_ref + c) of the starting dimers is a DERIVED quantity, reported per joint posterior draw; at zero capacity (no pair available) the row has no effect and a prior-like posterior is expected.'},
     ],
     # ----- Diffraction-Limited Imaging -----
     'camera': [  # EMCCD camera chain (REFERENCE_EMCCD_NOISE_MODEL.md): gamma, kappa_o, kappa_b, kappa_s, kappa_q marginalized as the SCOPE camera nuisance (externally constrained, not jointly inferred; DETECTOR_WORKFLOW.md sec. 9.3, marginalized in both workflows); kappa_g, kappa_c fixed nominal spec metadata (gamma = kappa_g/kappa_c).
@@ -1746,8 +1836,10 @@ PARAMETER_RAW_FIND: dict[str, int] = {
 # and the six photophysics (mu_r, sigma_r, mu_pc, sigma_pc, prob_photo_bleach, lambda_rate)
 # are the calibrated-imaging nuisance (nuisance_object, drawn per simulation from the
 # persisted Nuisance_DLI artifact). The remaining imaging rows (kappa_g, kappa_c,
-# delta_frame, numb_photo_bleach) resolve to 'fixed', so
-# the learnable subset is exactly the 10 RDS parameters.
+# delta_frame, numb_photo_bleach) resolve to 'fixed', so the learnable subset of the MASTER
+# table is exactly the twelve reaction-diffusion rows; a condition's own table removes the
+# rows its setting declares (eleven inferred coordinates under MET-FAB, twelve under
+# MET-INLB; `parameterization_of`).
 
 
 def role_of(entry: dict) -> str:
@@ -1776,22 +1868,62 @@ def role_of(entry: dict) -> str:
     return 'fixed'
 
 
-# Filtered list (learnable subset): VALUE-not-a-sentinel AND PRIOR_RANGE-not-None.
-PARAMETERIZATION: list[dict] = [
+# The MASTER learnable table: VALUE-not-a-sentinel AND PRIOR_RANGE-not-None, in declaration
+# order (twelve rows). It is a set of row DEFINITIONS, never a theta schema by itself: a
+# condition's theta vector holds the master rows minus the rows its condition setting declares
+# as constants (``parameterization_of``), so the eleven shared coordinates sit at positions
+# 0-10 under both conditions and the InlB allocation is the twelfth. Alignment across
+# conditions is always by KEY (``parameter_keys_of``, ``parameter_index_of``).
+MASTER_PARAMETERIZATION: tuple = tuple(
     para for para in PARAMETERIZATION_RAW if role_of(para) == 'learnable'
-]
+)
+MASTER_PARAMETER_KEYS: tuple = tuple(para['KEY'] for para in MASTER_PARAMETERIZATION)
 
-# Index map: KEY -> position in PARAMETERIZATION (for theta-vector indexing)
-PARAMETER_FIND: dict[str, int] = {
-    para['KEY']: index for index, para in enumerate(PARAMETERIZATION)
-}
 
-# Ordered learnable-parameter keys = the theta-vector schema. Passed to
-# artifacts.load_estimator(expected_parameter_keys=...) / assert_schema_compatible to
-# hard-reject an estimator whose parameter schema differs (equal-length theta vectors
-# would otherwise be misread column-for-column). Mirrors
-# detector_parameterization.DETECTOR_PARAMETER_KEYS.
-PARAMETER_KEYS: list[str] = [para['KEY'] for para in PARAMETERIZATION]
+def declared_row_values(condition: str) -> dict:
+    """The master rows ``condition`` declares as constants, KEY -> value (FAB: the allocation
+    0.0; INLB: none); ``SimulationRDS.declared_row_values``."""
+    return PARAMETERS.simulation.rds.declared_row_values(condition)
+
+
+def parameterization_of(condition: str) -> list[dict]:
+    """The learnable table of ``condition``: the master rows minus its declared rows, as a
+    fresh list of copied row dictionaries (the master is never modified; eleven rows under
+    MET-FAB, twelve under MET-INLB). This list is the theta schema of every product of the
+    condition: ``Theta_Set`` columns, estimator coordinates, prior box."""
+    declared = declared_row_values(condition)
+    return [dict(para) for para in MASTER_PARAMETERIZATION if para['KEY'] not in declared]
+
+
+def parameterization_raw_of(condition: str) -> list[dict]:
+    """The full specification seen from ``condition``: every row of ``PARAMETERIZATION_RAW``,
+    copied, with each declared row turned into a FIXED row (VALUE = the declared constant,
+    PRIOR_RANGE None, NOTE 'Declared Constant'), so that ``role_of`` reads the condition's
+    roles without a condition of its own (the test-loss manifest, the fixed-parameter
+    tables). The master is never modified."""
+    declared = declared_row_values(condition)
+    rows = []
+    for para in PARAMETERIZATION_RAW:
+        row = dict(para)
+        if row['KEY'] in declared:
+            row['VALUE'] = float(declared[row['KEY']])
+            row['PRIOR_RANGE'] = None
+            row['NOTE'] = 'Declared Constant'
+        rows.append(row)
+    return rows
+
+
+def parameter_keys_of(condition: str) -> list[str]:
+    """Ordered learnable keys of ``condition`` = its theta-vector schema. Passed to
+    ``artifacts.load_estimator(expected_parameter_keys=...)`` and the by-key guards of the
+    stage writers, so a product of another condition or of a superseded table is refused
+    (equal-length theta vectors would otherwise be misread column for column)."""
+    return [para['KEY'] for para in parameterization_of(condition)]
+
+
+def parameter_index_of(condition: str) -> dict[str, int]:
+    """KEY -> position in the theta vector of ``condition``."""
+    return {key: index for index, key in enumerate(parameter_keys_of(condition))}
 
 
 # =============================================================================
@@ -1803,16 +1935,24 @@ def is_log_row(entry: dict) -> bool:
     return bool(entry.get('LOG_FLAG'))
 
 
-def to_physical(theta_flow, parameterization=None):
+def _require_table(parameterization, where: str) -> list:
+    if parameterization is None:
+        raise ValueError(f"{where}: the parameter table is required (parameterization_of(condition) "
+                         f"for the biology; the width differs between the conditions).")
+    return list(parameterization)
+
+
+def to_physical(theta_flow, parameterization):
     """Map estimator-space coordinates to physical values, row by row.
 
     ``theta_flow`` has the learnable parameters on its LAST axis, in the order of
-    ``parameterization`` (default: ``PARAMETERIZATION``). Log rows are exponentiated
+    ``parameterization`` (the condition's table, ``parameterization_of(condition)``; required,
+    because the width differs between the conditions). Log rows are exponentiated
     (``10 ** u``); linear rows pass through. Returns a float64 array of the same shape.
     This is the only sanctioned conversion; a blanket ``10 ** theta`` corrupts the linear
-    initial dimer fraction.
+    rows (the basal reference fraction and the InlB allocation).
     """
-    table = PARAMETERIZATION if parameterization is None else parameterization
+    table = _require_table(parameterization, "to_physical")
     arr = np.array(theta_flow, dtype=float, copy=True)
     if arr.shape[-1] != len(table):
         raise ValueError(f"to_physical: last axis has {arr.shape[-1]} entries; the table has {len(table)}.")
@@ -1822,14 +1962,14 @@ def to_physical(theta_flow, parameterization=None):
     return arr
 
 
-def to_flow(theta_physical, parameterization=None):
+def to_flow(theta_physical, parameterization):
     """Map physical values to estimator-space coordinates (inverse of ``to_physical``).
 
     Log rows become ``log10`` (a non-positive physical value on a log row is an error, not a
     NaN, because it can only come from a corrupted table or a mis-scaled input); linear rows
-    pass through. Returns a float64 array of the same shape.
+    pass through. Returns a float64 array of the same shape. The table is required.
     """
-    table = PARAMETERIZATION if parameterization is None else parameterization
+    table = _require_table(parameterization, "to_flow")
     arr = np.array(theta_physical, dtype=float, copy=True)
     if arr.shape[-1] != len(table):
         raise ValueError(f"to_flow: last axis has {arr.shape[-1]} entries; the table has {len(table)}.")
@@ -1861,165 +2001,319 @@ def prior_center(entry: dict) -> float:
     return float(entry_to_physical(entry, (lo + hi) / 2.0))
 
 
+def fraction_flags(theta_physical, parameterization) -> dict:
+    """Per LINEAR row of ``parameterization``: a boolean array (the leading shape of
+    ``theta_physical``) that is True where the value is non-finite or outside the row's box.
+    Reporting code flags and counts such draws and carries NaN for their derived quantities;
+    nothing is ever clipped. Returns KEY -> flags."""
+    table = _require_table(parameterization, "fraction_flags")
+    arr = np.asarray(theta_physical, dtype=float)
+    if arr.shape[-1] != len(table):
+        raise ValueError(f"fraction_flags: last axis has {arr.shape[-1]} entries; the table has {len(table)}.")
+    flags = {}
+    for j, entry in enumerate(table):
+        if is_log_row(entry):
+            continue
+        lo, hi = entry['PRIOR_RANGE']
+        col = arr[..., j]
+        flags[entry['KEY']] = ~(np.isfinite(col) & (col >= lo) & (col <= hi))
+    return flags
+
+
 # =============================================================================
-# Initial composition: integer realization of the sampled (N_R, r), r = n_B / n_A
+# Window-start composition: the reference probe-bound population and the initial allocation
 # =============================================================================
+
+_POPULATION_FIELDS = (
+    # name, dtype ('f' float64 / 'i' int64), one-line meaning
+    ("count_total", "f", "N_total, the receptor-subunit total of the underlying population"),
+    ("fraction_basal_dimers_reference", "f", "f, the basal reference fraction (the inferred coordinate)"),
+    ("relative_count_active_dimers_initial", "f", "R_active, the allocation (inferred under INLB; the declared 0 under FAB)"),
+    ("n_monomers_underlying_reference", "f", "M_ref = N_total (1 - f) / (1 + f), underlying monomers of the reference"),
+    ("n_dimers_underlying_reference", "f", "D_ref = N_total f / (1 + f), underlying dimers of the reference"),
+    ("n_monomers_reference", "i", "A_ref = round(p M_ref), probe-bound monomers of the reference"),
+    ("n_dimers_reference", "i", "D_sim = round(p (2 - p) D_ref), dimers carrying at least one probe, in the reference"),
+    ("n_dimers_one_probe", "i", "B1 = D_sim - B2_ref, one-probe dimers (unchanged by the allocation)"),
+    ("n_dimers_two_probe_reference", "i", "B2_ref = min(round(p^2 D_ref), D_sim), two-probe dimers of the reference"),
+    ("capacity", "i", "cap = A_ref // 2 under ligand classes, else 0: the pairs the reference can form"),
+    ("n_pairs_allocated", "i", "c = round(R_active cap), probe-bound monomer pairs turned into two-InlB dimers"),
+    ("n_monomers", "i", "A_start = A_ref - 2c, the probe-bound monomers PLACED"),
+    ("n_dimers_two_probe", "i", "B2_start = B2_ref + c, the two-probe dimers PLACED (B2 under INLB; the two-Fab class under FAB, assigned at labeling)"),
+    ("n_dimers", "i", "B1 + B2_start, the dimers PLACED"),
+    ("n_subunits", "i", "N_R, the represented receptors, conserved by the allocation and by every channel"),
+    ("n_monomers_underlying_start", "f", "M_start = M_ref - 2c, underlying monomers at the window start"),
+    ("n_dimers_underlying_start", "f", "D_start = D_ref + c, underlying dimers at the window start"),
+    ("fraction_basal_dimers_start", "f", "f_start = D_start / (M_start + D_start), the starting fraction (DERIVED)"),
+    ("active_share", "f", "c / D_start, the share of the starting dimers the allocation formed (DERIVED; NaN at D_start = 0)"),
+)
+POPULATION_FIELD_DOCS: dict = {name: doc for name, _, doc in _POPULATION_FIELDS}
+
 
 @dataclass(frozen=True)
-class InitialComposition:
-    """The realized initial state of the stoichiometry layer for one simulation: the RETAINED
-    population the generator places, derived from the true population the parameters describe.
+class PopulationRealization:
+    """The window-start composition of one or many draws, as arrays of one common shape.
 
-    True population (continuum, from the sampled parameters): ``n_total_true`` = N_total,
-    ``n_monomers_true`` = N_total / (1 + 2r), ``n_dimers_true`` = r N_total / (1 + 2r),
-    ``ratio_requested`` = r and ``complex_fraction_true`` = f_B = r / (1 + r).
+    Two populations are distinguished throughout (PROJECT_CONTEXT.md sec. 2, *Modeling
+    assumptions of the MET model*, items 4, 9 and 11). The REFERENCE probe-bound population is
+    what the declared occupancy p defines from the underlying population of N_total subunits
+    with the basal reference fraction f: underlying M_ref = N_total (1 - f) / (1 + f) monomers
+    and D_ref = N_total f / (1 + f) dimers (M_ref + 2 D_ref = N_total), realized DIMERS AND
+    THEIR CLASSES FIRST, then the monomers, as rounded expectations of the independent-binding
+    thinning: D_sim = round(p (2 - p) D_ref), B2_ref = min(round(p^2 D_ref), D_sim),
+    B1 = D_sim - B2_ref, A_ref = round(p M_ref), rounded half to even. The STARTING population
+    is what the generator places: under ligand classes (MET-INLB) the allocation pairs
+    c = round(R_active cap) of the cap = A_ref // 2 available probe-bound monomer pairs into
+    additional two-InlB dimers (A_start = A_ref - 2c, B2_start = B2_ref + c, B1 unchanged),
+    conserving the represented receptor and probe budget N_R = A_ref + B1 + 2 B2_ref exactly;
+    without ligand classes (MET-FAB, allocation declared 0) the starting population IS the
+    reference, with N_R = A_ref + 2 D_sim (both subunits of a retained Fab dimer are
+    represented; its one-/two-Fab class is assigned at labeling).
 
-    Retained population (integers, the particles placed): ``n_monomers`` probe-bound monomers;
-    ``n_dimers`` dimers carrying at least one probe, split into ``n_dimers_one_probe`` and
-    ``n_dimers_two_probe`` (the B1 / B2 classes under INLB; the one-/two-Fab classes assigned at
-    labeling under FAB); ``n_subunits`` = N_R, the conserved retained subunit count, n_A + 2 n_B
-    under FAB (both subunits of every retained dimer) and n_A + n_B1 + 2 n_B2 under INLB (the
-    InlB-bound subunits). ``occupancy`` is the condition's p; ``two_probe_share`` its
-    s_2 = p / (2 - p); ``ratio_retained_expected`` = (2 - p) r. The realized retained ratio and
-    fractions (``ratio_realized``, ``complex_fraction_retained``, ``receptor_fraction_retained``)
-    are computed from the integers and differ from the expectations by rounding; the difference
-    between the true and the retained composition is selection, not rounding.
+    The placed-count fields (``n_monomers``, ``n_dimers``, ``n_dimers_one_probe``,
+    ``n_dimers_two_probe``, ``n_subunits``) are the STARTING counts; the reference counts carry
+    the ``_reference`` suffix; the underlying (continuum) counts carry ``_underlying``. The
+    derived starting fraction f_start and the active share c / D_start are reported beside f and
+    R_active, never in their place; nothing reconstructs underlying monomers as A_start / p.
+    ``POPULATION_FIELD_DOCS`` names every field.
     """
     condition: str
     ligand_classes: bool
-    n_total_true: float
-    n_monomers_true: float
-    n_dimers_true: float
-    ratio_requested: float
     occupancy: float
     two_probe_share: float
-    n_monomers: int
-    n_dimers: int
-    n_dimers_one_probe: int
-    n_dimers_two_probe: int
-    n_subunits: int
+    count_total: np.ndarray
+    fraction_basal_dimers_reference: np.ndarray
+    relative_count_active_dimers_initial: np.ndarray
+    n_monomers_underlying_reference: np.ndarray
+    n_dimers_underlying_reference: np.ndarray
+    n_monomers_reference: np.ndarray
+    n_dimers_reference: np.ndarray
+    n_dimers_one_probe: np.ndarray
+    n_dimers_two_probe_reference: np.ndarray
+    capacity: np.ndarray
+    n_pairs_allocated: np.ndarray
+    n_monomers: np.ndarray
+    n_dimers_two_probe: np.ndarray
+    n_dimers: np.ndarray
+    n_subunits: np.ndarray
+    n_monomers_underlying_start: np.ndarray
+    n_dimers_underlying_start: np.ndarray
+    fraction_basal_dimers_start: np.ndarray
+    active_share: np.ndarray
 
     @property
-    def n_complexes(self) -> int:
-        """Retained complexes placed, n_A + n_B."""
+    def shape(self) -> tuple:
+        return tuple(np.shape(self.n_subunits))
+
+    @property
+    def n_complexes(self) -> np.ndarray:
+        """Particles placed, A_start + B1 + B2_start."""
         return self.n_monomers + self.n_dimers
 
     @property
-    def complex_fraction_true(self) -> float:
-        """f_B = r / (1 + r) of the true population (the inferred composition)."""
-        return float(ratio_to_complex_fraction(self.ratio_requested))
-
-    @property
-    def receptor_fraction_true(self) -> float:
-        """x_B = 2r / (1 + 2r) of the true population."""
-        return float(ratio_to_receptor_fraction(self.ratio_requested))
-
-    @property
-    def ratio_retained_expected(self) -> float:
-        """(2 - p) r: the retained dimer-to-monomer ratio the initial population is expected to have."""
-        return (2.0 - self.occupancy) * self.ratio_requested
-
-    @property
-    def complex_fraction_retained(self) -> float:
-        """f_B,ret = n_B / (n_A + n_B) of the realized retained counts."""
-        return self.n_dimers / self.n_complexes if self.n_complexes else float("nan")
-
-    @property
-    def receptor_fraction_retained(self) -> float:
-        """x_B of the realized retained counts over the retained subunit count N_R:
-        2 n_B / N_R under FAB, (n_B1 + 2 n_B2) / N_R under INLB."""
-        if not self.n_subunits:
-            return float("nan")
+    def n_probe_bound_receptors_expected(self) -> np.ndarray:
+        """Probe-bound receptors among the represented ones: exact under ligand classes
+        (A + B1 + 2 B2 = N_R), the expectation A + D_sim (1 + s_2) under FAB, whose one-/two-Fab
+        classes are drawn at labeling."""
         if self.ligand_classes:
-            return (self.n_dimers_one_probe + 2 * self.n_dimers_two_probe) / self.n_subunits
-        return 2.0 * self.n_dimers / self.n_subunits
+            return self.n_monomers + self.n_dimers_one_probe + 2 * self.n_dimers_two_probe
+        return self.n_monomers + self.n_dimers * (1.0 + self.two_probe_share)
 
     @property
-    def ratio_realized(self) -> float:
-        """r_ret = n_B / n_A of the realized retained counts (inf when no monomer was placed)."""
-        return self.n_dimers / self.n_monomers if self.n_monomers else float("inf")
+    def expected_subunits(self) -> np.ndarray:
+        """Expectation of N_R before rounding: p N_total under ligand classes, else
+        p N_total [1 + f (3 - 2p)] / (1 + f)."""
+        p, f = self.occupancy, self.fraction_basal_dimers_reference
+        if self.ligand_classes:
+            return p * self.count_total
+        return p * self.count_total * (1.0 + f * (3.0 - 2.0 * p)) / (1.0 + f)
+
+    def item(self, index=()) -> "InitialComposition":
+        """The one-draw record (Python scalars) at ``index`` of these arrays."""
+        values = {}
+        for name, kind, _ in _POPULATION_FIELDS:
+            value = np.asarray(getattr(self, name))[index]
+            values[name] = int(value) if kind == "i" else float(value)
+        return InitialComposition(condition=self.condition, ligand_classes=self.ligand_classes,
+                                  occupancy=self.occupancy, two_probe_share=self.two_probe_share, **values)
+
+
+@dataclass(frozen=True)
+class InitialComposition:
+    """The window-start composition of ONE simulation, with Python scalars: the record the
+    generator places from and the diagnostics print. Same fields and meanings as
+    ``PopulationRealization`` (``POPULATION_FIELD_DOCS``); the placed-count fields are the
+    STARTING counts, the reference counts carry ``_reference``."""
+    condition: str
+    ligand_classes: bool
+    occupancy: float
+    two_probe_share: float
+    count_total: float
+    fraction_basal_dimers_reference: float
+    relative_count_active_dimers_initial: float
+    n_monomers_underlying_reference: float
+    n_dimers_underlying_reference: float
+    n_monomers_reference: int
+    n_dimers_reference: int
+    n_dimers_one_probe: int
+    n_dimers_two_probe_reference: int
+    capacity: int
+    n_pairs_allocated: int
+    n_monomers: int
+    n_dimers_two_probe: int
+    n_dimers: int
+    n_subunits: int
+    n_monomers_underlying_start: float
+    n_dimers_underlying_start: float
+    fraction_basal_dimers_start: float
+    active_share: float
+
+    @property
+    def n_complexes(self) -> int:
+        """Particles placed, A_start + B1 + B2_start."""
+        return self.n_monomers + self.n_dimers
+
+    @property
+    def n_total_true(self) -> float:
+        """N_total, the receptor-subunit total of the underlying population (``count_total``)."""
+        return self.count_total
+
+    @property
+    def n_probe_bound_receptors_expected(self) -> float:
+        if self.ligand_classes:
+            return float(self.n_monomers + self.n_dimers_one_probe + 2 * self.n_dimers_two_probe)
+        return self.n_monomers + self.n_dimers * (1.0 + self.two_probe_share)
 
     @property
     def expected_subunits(self) -> float:
-        """Expected retained subunit count: p N_total under ligand classes, else
-        p N_total [1 + 2 (1 - p) f_B / (1 + f_B)]."""
-        p, f_b = self.occupancy, self.complex_fraction_true
+        p, f = self.occupancy, self.fraction_basal_dimers_reference
         if self.ligand_classes:
-            return p * self.n_total_true
-        return p * self.n_total_true * (1.0 + 2.0 * (1.0 - p) * f_b / (1.0 + f_b))
+            return p * self.count_total
+        return p * self.count_total * (1.0 + f * (3.0 - 2.0 * p)) / (1.0 + f)
 
-    # compatibility names kept for the diagnostics that print the composition
+    # compatibility name kept for the diagnostics that print the composition
     @property
     def n_total(self) -> int:
-        """The conserved retained subunit count N_R (``n_subunits``)."""
+        """The conserved represented receptor count N_R (``n_subunits``)."""
         return self.n_subunits
 
 
-def ratio_to_receptor_fraction(ratio) -> np.ndarray:
-    """x_B = 2r / (1 + 2r): the receptor fraction in dimers implied by the ratio r = n_B / n_A."""
-    r = np.asarray(ratio, dtype=float)
-    return 2.0 * r / (1.0 + 2.0 * r)
+def _realize_population_arrays(count_total, fraction_basal_dimers_reference,
+                               relative_count_active_dimers_initial, occupancy: float,
+                               ligand_classes: bool) -> dict:
+    """The pure arithmetic of the window-start composition on broadcast float64 arrays, with
+    the given occupancy ``p`` and ligand-class flag; no validation (``realize_population`` does
+    it). Rounding is ``np.round`` (half to even, as Python's ``round``), with the operand order
+    of the reference rules kept so that the zero-allocation integers are reproduced exactly.
+    Exposed for the tests, which probe rounding ties at a chosen ``p``."""
+    n_total, f, r_active = np.broadcast_arrays(
+        np.asarray(count_total, dtype=np.float64), np.asarray(fraction_basal_dimers_reference, dtype=np.float64),
+        np.asarray(relative_count_active_dimers_initial, dtype=np.float64))
+    p = float(occupancy)
+    m_ref = n_total * (1.0 - f) / (1.0 + f)
+    d_ref = n_total * f / (1.0 + f)
+    d_sim = np.round(p * (2.0 - p) * d_ref)
+    b2_ref = np.minimum(np.round(p * p * d_ref), d_sim)
+    b1 = d_sim - b2_ref
+    a_ref = np.round(p * m_ref)
+    cap = np.floor_divide(a_ref, 2.0) if ligand_classes else np.zeros_like(a_ref)
+    c = np.round(r_active * cap)
+    a_start = a_ref - 2.0 * c
+    b2_start = b2_ref + c
+    n_r = a_ref + b1 + 2.0 * b2_ref if ligand_classes else a_ref + 2.0 * d_sim
+    m_start = m_ref - 2.0 * c
+    d_start = d_ref + c
+    with np.errstate(invalid="ignore", divide="ignore"):
+        f_start = np.where(m_start + d_start > 0.0, d_start / np.where(m_start + d_start > 0.0, m_start + d_start, 1.0), np.nan)
+        share = np.where(d_start > 0.0, c / np.where(d_start > 0.0, d_start, 1.0), np.nan)
+    as_int = lambda a: np.asarray(a, dtype=np.int64)  # noqa: E731
+    return dict(
+        count_total=n_total, fraction_basal_dimers_reference=f, relative_count_active_dimers_initial=r_active,
+        n_monomers_underlying_reference=m_ref, n_dimers_underlying_reference=d_ref,
+        n_monomers_reference=as_int(a_ref), n_dimers_reference=as_int(d_sim), n_dimers_one_probe=as_int(b1),
+        n_dimers_two_probe_reference=as_int(b2_ref), capacity=as_int(cap), n_pairs_allocated=as_int(c),
+        n_monomers=as_int(a_start), n_dimers_two_probe=as_int(b2_start), n_dimers=as_int(b1 + b2_start),
+        n_subunits=as_int(n_r), n_monomers_underlying_start=m_start, n_dimers_underlying_start=d_start,
+        fraction_basal_dimers_start=f_start, active_share=share)
 
 
-def ratio_to_complex_fraction(ratio) -> np.ndarray:
-    """f_B = r / (1 + r): the fraction of complexes that are dimers implied by r = n_B / n_A."""
-    r = np.asarray(ratio, dtype=float)
-    return r / (1.0 + r)
+def population_valid(*, count_total, fraction_basal_dimers_reference, relative_count_active_dimers_initial,
+                     condition: str) -> np.ndarray:
+    """The ONE validity rule of a window-start input, elementwise over broadcast arrays: N_total
+    finite and > 0; f and R_active finite and in [0, 1]; R_active equal to the declared constant
+    where ``condition`` declares one (MET-FAB: 0). Reporting code masks posterior clouds and MAP
+    vectors with this rule, realizes the valid subset, counts the flagged entries and carries
+    NaN for them, so one out-of-range draw never aborts a report and nothing is clipped."""
+    n_total, f, r_active = np.broadcast_arrays(
+        np.asarray(count_total, dtype=np.float64), np.asarray(fraction_basal_dimers_reference, dtype=np.float64),
+        np.asarray(relative_count_active_dimers_initial, dtype=np.float64))
+    declared = declared_row_values(condition).get(PARAMETERS.simulation.rds.stoichiometry.active_allocation_key)
+    lo, hi = FRACTION_BOX
+    ok = np.isfinite(n_total) & (n_total > 0.0)
+    ok &= np.isfinite(f) & (f >= lo) & (f <= hi)
+    ok &= np.isfinite(r_active) & (r_active >= lo) & (r_active <= hi)
+    if declared is not None:
+        ok &= np.abs(r_active - float(declared)) <= 1e-12
+    return ok
 
 
-def receptor_fraction_to_ratio(fraction) -> np.ndarray:
-    """r = x_B / (2 (1 - x_B)): the inverse of ``ratio_to_receptor_fraction`` (inf at x_B = 1)."""
-    x = np.asarray(fraction, dtype=float)
-    with np.errstate(divide="ignore"):
-        return x / (2.0 * (1.0 - x))
-
-
-def realize_initial_composition(count_total: float, ratio_dimer_monomer: float,
-                                condition: str) -> InitialComposition:
-    """The retained integer population from the sampled TRUE total, the requested true
-    dimer-to-monomer ratio, and the condition's occupancy p (``PROJECT_CONTEXT.md`` sec. 2,
-    *Modeling assumptions of the MET model*, items 4, 9 and 11).
-
-    True counts (continuum): n_A = N_total / (1 + 2r), n_B = r N_total / (1 + 2r). The retained
-    population is realized DIMERS AND THEIR CLASSES FIRST, then the monomers, as rounded
-    expectations of the independent-binding thinning:
-
-        n_B(0)   = round(p (2 - p) n_B)        dimers carrying at least one probe
-        n_B2(0)  = round(p^2 n_B)              two-probe dimers (B2 under INLB; two-Fab under FAB)
-        n_B1(0)  = n_B(0) - n_B2(0)            one-probe dimers
-        n_A(0)   = round(p n_A)                probe-bound monomers
-
-    and the conserved retained subunit count follows: N_R = n_A + 2 n_B under FAB (both
-    daughters of a one-Fab dimer stay retained) and n_A + n_B1 + 2 n_B2 under INLB (the
-    InlB-bound subunits; the probe-free partner of a B1 is never represented). A binomial
-    realization of the same thinning is a framework alternative. The requested true r and the
-    realized retained ratio are both recorded per simulation; the retained composition differs
-    from the true one by the selection factor (2 - p), not by rounding.
-    """
-    if not np.isfinite(count_total) or not np.isfinite(ratio_dimer_monomer):
-        raise ValueError(f"realize_initial_composition: non-finite input ({count_total}, {ratio_dimer_monomer}).")
-    if ratio_dimer_monomer < 0.0:
-        raise ValueError(f"realize_initial_composition: the dimer-to-monomer ratio must be >= 0 "
-                         f"(got {ratio_dimer_monomer}).")
-    if count_total <= 0.0:
-        raise ValueError(f"realize_initial_composition: the receptor total must be > 0 (got {count_total}).")
+def realize_population(*, count_total, fraction_basal_dimers_reference, relative_count_active_dimers_initial,
+                       condition: str) -> PopulationRealization:
+    """The window-start composition of every draw in the broadcast inputs, under ``condition``
+    (its occupancy, ligand classes and declared allocation). Strict: any invalid element
+    (``population_valid``) raises ``ValueError`` naming the count; nothing is clipped. Callers
+    holding posterior clouds mask with ``population_valid`` first."""
     rds = PARAMETERS.simulation.rds
     setting = rds.condition_setting(condition)
     p = rds.occupancy_of(condition)
-    r = float(ratio_dimer_monomer)
-    n_total = float(count_total)
-    n_monomers_true = n_total / (1.0 + 2.0 * r)
-    n_dimers_true = r * n_total / (1.0 + 2.0 * r)
-    n_dimers = int(round(p * (2.0 - p) * n_dimers_true))
-    n_two = int(min(round(p * p * n_dimers_true), n_dimers))
-    n_one = n_dimers - n_two
-    n_monomers = int(round(p * n_monomers_true))
-    if setting.ligand_classes:
-        n_subunits = n_monomers + n_one + 2 * n_two
+    valid = population_valid(count_total=count_total, fraction_basal_dimers_reference=fraction_basal_dimers_reference,
+                             relative_count_active_dimers_initial=relative_count_active_dimers_initial, condition=condition)
+    if not np.all(valid):
+        n_bad, n_all = int(np.size(valid) - np.count_nonzero(valid)), int(np.size(valid))
+        declared = declared_row_values(condition).get(rds.stoichiometry.active_allocation_key)
+        rule = (f"N_total finite and > 0, {rds.stoichiometry.basal_fraction_key} and "
+                f"{rds.stoichiometry.active_allocation_key} finite in [0, 1]")
+        if declared is not None:
+            rule += f", and {rds.stoichiometry.active_allocation_key} equal to the declared constant {declared:g} under {condition}"
+        raise ValueError(f"realize_population [{condition}]: {n_bad} of {n_all} input(s) invalid ({rule}); "
+                         f"nothing is clipped. Mask with population_valid first.")
+    arrays = _realize_population_arrays(count_total, fraction_basal_dimers_reference,
+                                        relative_count_active_dimers_initial, p, bool(setting.ligand_classes))
+    return PopulationRealization(condition=str(condition), ligand_classes=bool(setting.ligand_classes),
+                                 occupancy=float(p), two_probe_share=float(p / (2.0 - p)), **arrays)
+
+
+def population_from_theta(theta_physical, condition: str) -> PopulationRealization:
+    """``realize_population`` on physical theta vectors (``(..., D)`` in the order of
+    ``parameterization_of(condition)``): the count, fraction and allocation columns are read by
+    KEY, a declared allocation is inserted, and the width is checked."""
+    arr = np.asarray(theta_physical, dtype=np.float64)
+    keys = parameter_keys_of(condition)
+    if arr.shape[-1] != len(keys):
+        raise ValueError(f"population_from_theta [{condition}]: theta has {arr.shape[-1]} columns; "
+                         f"the condition's table has {len(keys)} ({keys}).")
+    sto = PARAMETERS.simulation.rds.stoichiometry
+    index = {key: i for i, key in enumerate(keys)}
+    declared = declared_row_values(condition)
+    if sto.active_allocation_key in index:
+        r_active = arr[..., index[sto.active_allocation_key]]
     else:
-        n_subunits = n_monomers + 2 * n_dimers
-    return InitialComposition(condition, bool(setting.ligand_classes), n_total, n_monomers_true, n_dimers_true,
-                              r, float(p), float(p / (2.0 - p)), n_monomers, n_dimers, n_one, n_two, n_subunits)
+        r_active = np.full(arr.shape[:-1], float(declared[sto.active_allocation_key]))
+    return realize_population(count_total=arr[..., index[sto.count_total_key]],
+                              fraction_basal_dimers_reference=arr[..., index[sto.basal_fraction_key]],
+                              relative_count_active_dimers_initial=r_active, condition=condition)
+
+
+def realize_initial_composition(*, count_total: float, fraction_basal_dimers_reference: float,
+                                relative_count_active_dimers_initial: float,
+                                condition: str) -> InitialComposition:
+    """The window-start composition of ONE simulation (``PopulationRealization`` for the
+    rules): the record the generator places from. Keyword-only; strict (``ValueError`` on an
+    invalid input, never a clipped one). Under MET-FAB the allocation must be the declared 0."""
+    pop = realize_population(count_total=float(count_total),
+                             fraction_basal_dimers_reference=float(fraction_basal_dimers_reference),
+                             relative_count_active_dimers_initial=float(relative_count_active_dimers_initial),
+                             condition=condition)
+    return pop.item(())
 
 
 # =============================================================================
@@ -2028,11 +2322,11 @@ def realize_initial_composition(count_total: float, ratio_dimer_monomer: float,
 
 def _validate_model_blocks() -> None:
     rds = PARAMETERS.simulation.rds
-    learnable = set(PARAMETER_KEYS)
+    master = {para['KEY']: para for para in MASTER_PARAMETERIZATION}
     for key in rds.stoichiometry.parameter_keys + rds.mobility.parameter_keys:
-        if key not in learnable:
-            raise ValueError(f"model block references parameter {key!r}, which is not a learnable row.")
-    for entry in PARAMETERIZATION:
+        if key not in master:
+            raise ValueError(f"model block references parameter {key!r}, which is not a learnable master row.")
+    for entry in MASTER_PARAMETERIZATION:
         lo, hi = entry['PRIOR_RANGE']
         if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
             raise ValueError(f"parameter {entry['KEY']!r}: invalid PRIOR_RANGE {entry['PRIOR_RANGE']}.")
@@ -2040,27 +2334,24 @@ def _validate_model_blocks() -> None:
             raise ValueError(f"parameter {entry['KEY']!r}: a ranged row declares LOG_FLAG True or False.")
         if is_log_row(entry) and entry['LOG_BASE'] != 10:
             raise ValueError(f"parameter {entry['KEY']!r}: log rows are base 10.")
-    ratio = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.composition_ratio_key]]
-    if not is_log_row(ratio):
-        raise ValueError("the initial dimer-to-monomer ratio is a LOG row.")
-    band = tuple(float(ratio_to_complex_fraction(entry_to_physical(ratio, b))) for b in ratio['PRIOR_RANGE'])
-    if not (np.allclose(band, COMPOSITION_BAND, atol=1e-9) and 0.0 < band[0] < band[1] < 1.0):
-        raise ValueError(f"the composition box must map to the declared basal band {COMPOSITION_BAND} "
-                         f"of the complex fraction (got {band}).")
-    count = PARAMETERIZATION[PARAMETER_FIND[rds.stoichiometry.count_total_key]]
+        if abs(float(entry['VALUE']) - prior_center(entry)) > 1e-9 * max(1.0, abs(prior_center(entry))):
+            raise ValueError(f"parameter {entry['KEY']!r}: VALUE {entry['VALUE']!r} is not the prior center "
+                             f"{prior_center(entry)!r} of its box.")
+    for key in (rds.stoichiometry.basal_fraction_key, rds.stoichiometry.active_allocation_key):
+        row = master[key]
+        if is_log_row(row) or tuple(row['PRIOR_RANGE']) != FRACTION_BOX:
+            raise ValueError(f"{key} is a LINEAR row on the box {FRACTION_BOX} (got LOG_FLAG {row['LOG_FLAG']}, "
+                             f"PRIOR_RANGE {row['PRIOR_RANGE']}).")
+    count = master[rds.stoichiometry.count_total_key]
     if tuple(count['PRIOR_RANGE']) != COUNT_TOTAL_BOX:
         raise ValueError(f"count_total must carry the declared box {COUNT_TOTAL_BOX} (got {count['PRIOR_RANGE']}).")
-    n_floor = float(entry_to_physical(count, count['PRIOR_RANGE'][0]))
-    r_floor = float(entry_to_physical(ratio, ratio['PRIOR_RANGE'][0]))
-    for token in rds.condition_tokens:
-        floor = realize_initial_composition(n_floor, r_floor, token)
-        if floor.n_dimers < 1 or floor.n_monomers < 1:
-            raise ValueError(f"{token}: the boxes realize {floor.n_monomers} monomers and {floor.n_dimers} "
-                             f"dimers at the count floor and the band's lower edge; every permitted draw "
-                             f"must place both.")
+    # The twelve master keys in their decided order: eleven shared coordinates, then the allocation.
+    if MASTER_PARAMETER_KEYS[-1] != rds.stoichiometry.active_allocation_key or len(MASTER_PARAMETER_KEYS) != 12:
+        raise ValueError(f"the master table holds twelve learnable rows ending with the allocation "
+                         f"(got {MASTER_PARAMETER_KEYS}).")
     # Mobility ordering R_immobile < R_slow <= 1 and 0 < R_dimer <= 1, by the declared ranges.
     def phys_range(key):
-        e = PARAMETERIZATION[PARAMETER_FIND[key]]
+        e = master[key]
         return float(entry_to_physical(e, e['PRIOR_RANGE'][0])), float(entry_to_physical(e, e['PRIOR_RANGE'][1]))
     ratio_keys = [k for k in rds.mobility.mode_ratio_keys if k is not None]
     previous_low = 1.0 + 1e-12
@@ -2105,6 +2396,37 @@ def _validate_model_blocks() -> None:
                          f"together.")
     if rds.condition_setting("INLB").ligand_classes is not True or rds.condition_setting("FAB").ligand_classes:
         raise ValueError("SimulationRDS.conditions: MET-INLB carries the ligand classes B1 / B2 and MET-FAB does not.")
+    # Declared rows: every declared key is a master row and its value lies inside the row's box;
+    # each condition's table is the master minus its declared rows, in master order; the raw view
+    # agrees; the eleven shared coordinates keep their positions in every condition.
+    for t in tokens:
+        declared = rds.declared_row_values(t)
+        for key, value in declared.items():
+            if key not in master:
+                raise ValueError(f"SimulationRDS.conditions: {t} declares {key!r}, which is not a master row.")
+            lo, hi = master[key]['PRIOR_RANGE']
+            if not (np.isfinite(value) and lo <= value <= hi):
+                raise ValueError(f"SimulationRDS.conditions: {t} declares {key} = {value!r} outside its box [{lo}, {hi}].")
+        table = parameterization_of(t)
+        if [e['KEY'] for e in table] != [k for k in MASTER_PARAMETER_KEYS if k not in declared]:
+            raise ValueError(f"parameterization_of({t!r}) is not the master minus the declared rows.")
+        raw_learnable = [e['KEY'] for e in parameterization_raw_of(t) if role_of(e) == 'learnable']
+        if raw_learnable != [e['KEY'] for e in table]:
+            raise ValueError(f"parameterization_raw_of({t!r}): its learnable rows {raw_learnable} differ from the "
+                             f"condition's table {[e['KEY'] for e in table]}.")
+    shared = list(MASTER_PARAMETER_KEYS[:-1])
+    for t in tokens:
+        if parameter_keys_of(t)[:len(shared)] != shared:
+            raise ValueError(f"{t}: the eleven shared coordinates must keep the master positions 0-10 "
+                             f"(got {parameter_keys_of(t)}).")
+    # The decided declarations: MET-FAB fixes the allocation at 0 (eleven inferred coordinates),
+    # MET-INLB infers it (twelve). Change the condition settings AND this guard together.
+    if parameter_keys_of("FAB") != list(MASTER_PARAMETER_KEYS[:-1]) or parameter_keys_of("INLB") != list(MASTER_PARAMETER_KEYS):
+        raise ValueError(f"the decided tables are eleven coordinates under FAB (the allocation declared 0) and "
+                         f"twelve under INLB (got FAB {len(parameter_keys_of('FAB'))}, INLB "
+                         f"{len(parameter_keys_of('INLB'))}). Change the condition settings AND this guard together.")
+    if THETA_STANDARDIZATION not in ("independent", "structured", "none"):
+        raise ValueError(f"THETA_STANDARDIZATION {THETA_STANDARDIZATION!r} is not an sbi z_score option.")
 
 
 _validate_model_blocks()
@@ -2137,55 +2459,61 @@ def visibility_of(condition: str) -> float:
 
 
 def two_probe_share_of(condition: str) -> float:
-    """Share of the retained initial dimers carrying two probes, s_2 = p / (2 - p)
-    (``SimulationRDS.two_probe_share_of``): INLB 0.0244, FAB 0.0074."""
+    """The declared independent-binding share of two-probe dimers among the REFERENCE dimers,
+    s_2 = p / (2 - p) (``SimulationRDS.two_probe_share_of``): INLB 0.0244, FAB 0.0074. It is the
+    share Fab labeling draws its one-/two-Fab classes with; under InlB the starting B2 share
+    also carries the allocation and is read from the starting counts, not from s_2."""
     return PARAMETERS.simulation.rds.two_probe_share_of(condition)
-
-
-def retained_ratio_of(condition: str, ratio_true) -> np.ndarray:
-    """Retained dimer-to-monomer ratio of the initial population, (2 - p) r, from the true r."""
-    return PARAMETERS.simulation.rds.retained_ratio_of(condition, ratio_true)
 
 
 # =============================================================================
 # Helpers
 # =============================================================================
 
-def parameter_find(key: str) -> int:
-    """Return the index of a learnable parameter by KEY.
+def parameter_find(key: str, condition: str) -> int:
+    """Return the index of a learnable parameter of ``condition`` by KEY.
 
-    Use this to index into theta vectors (which contain only learnable parameters).
-    For all-parameter access (including 'Known' / 'Hyper'), use PARAMETER_RAW_FIND.
-
-    Raises KeyError with the list of learnable parameters if the key is not found.
+    Use this to index into the condition's theta vectors (which contain only its learnable
+    parameters). For all-parameter access (including 'Known' / 'Hyper'), use
+    PARAMETER_RAW_FIND. Raises KeyError naming the condition's learnable parameters and, for a
+    row the condition declares as a constant, saying so (``declared_row_values``).
     """
-    if key not in PARAMETER_FIND:
+    index = parameter_index_of(condition)
+    if key not in index:
+        declared = declared_row_values(condition)
+        if key in declared:
+            raise KeyError(
+                f"Parameter {key!r} is a declared constant under {condition} ({declared[key]!r}), not a "
+                f"theta coordinate; read it from declared_row_values({condition!r}).")
         raise KeyError(
-            f"Parameter {key!r} is not a learnable parameter. "
-            f"Learnable parameters: {list(PARAMETER_FIND.keys())}."
+            f"Parameter {key!r} is not a learnable parameter under {condition}. "
+            f"Learnable parameters: {list(index)}."
         )
-    return PARAMETER_FIND[key]
+    return index[key]
 
 
-def theta_lower_bound() -> list[float]:
-    """Lower bounds of the prior box in estimator space (log10 for log rows, the value for linear rows)."""
-    return [para['PRIOR_RANGE'][0] for para in PARAMETERIZATION]
+def theta_lower_bound(condition: str) -> list[float]:
+    """Lower bounds of the condition's prior box in estimator space (log10 for log rows, the value
+    for linear rows)."""
+    return [para['PRIOR_RANGE'][0] for para in parameterization_of(condition)]
 
 
-def theta_upper_bound() -> list[float]:
-    """Upper bounds of the prior box in estimator space (log10 for log rows, the value for linear rows)."""
-    return [para['PRIOR_RANGE'][1] for para in PARAMETERIZATION]
+def theta_upper_bound(condition: str) -> list[float]:
+    """Upper bounds of the condition's prior box in estimator space (log10 for log rows, the value
+    for linear rows)."""
+    return [para['PRIOR_RANGE'][1] for para in parameterization_of(condition)]
 
 
-def build_prior(device: str = "cpu") -> BoxUniform:
-    """Construct the BoxUniform prior over the learnable parameters, in estimator space.
+def build_prior(condition: str, device: str = "cpu") -> BoxUniform:
+    """Construct the BoxUniform prior over the condition's learnable parameters, in estimator
+    space (eleven dimensions under MET-FAB, twelve under MET-INLB).
 
     Sampled theta live in estimator space: log10 for log rows (a log-uniform prior on the
     physical value) and the value itself for linear rows (a uniform prior). Consumers map
     to physical values with ``to_physical`` -- never with a blanket ``10 ** theta``.
     """
     return BoxUniform(
-        low=torch.tensor(theta_lower_bound()),
-        high=torch.tensor(theta_upper_bound()),
+        low=torch.tensor(theta_lower_bound(condition)),
+        high=torch.tensor(theta_upper_bound(condition)),
         device=device,
     )

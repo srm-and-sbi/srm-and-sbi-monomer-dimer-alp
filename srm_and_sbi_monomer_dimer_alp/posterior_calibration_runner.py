@@ -15,9 +15,13 @@ video beyond the draw.
 
 The only per-workflow differences -- which parameterization supplies the learnable
 table + parameter keys, the device ``build_prior``, and the alias-qualified ``paths`` --
-are resolved from the config in ``_posterior_calibration_spec(cfg)``, mirroring
+are resolved from the config AND the ESTIMATOR's condition in
+``_posterior_calibration_spec(cfg, condition)`` through the workflow resolvers, mirroring
 ``evaluation_runner._evaluation_spec``. The estimator + EVAL paths resolve through the
-same shared ``paths`` methods for both workflows.
+same shared ``paths`` methods for both workflows. Every shard records its parameter keys and
+condition, and the merge refuses a shard whose keys are missing or differ; the physical bias
+of the diagnosis is a multiplicative factor for a log row and percentage points for a linear
+row.
 
 Not a canonical pipeline stage: this is an Analysis diagnostic (never wired into the
 ``Submit.sh`` dispatcher). It shares the two-shim + shared-engine structure so that one
@@ -48,10 +52,11 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import collect_score_prex, collect
 from srm_and_sbi_monomer_dimer_alp.experiment_support import assert_complete_shard_set, shard_by_rank
 from srm_and_sbi_monomer_dimer_alp.inference_support import normalize_video, resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, is_log_row, to_flow
 from srm_and_sbi_monomer_dimer_alp.visualization_calibration import (
     figure_coverage, figure_pairwise, figure_sbc_ranks, figure_stratified, figure_tarp)
-from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
+from srm_and_sbi_monomer_dimer_alp.workflow import (
+    WorkflowConfig, parameter_keys, parameter_table, prior_builder)
 
 _ALL_TESTS = ("sbc", "coverage", "tarp", "lc2st")
 
@@ -62,26 +67,36 @@ _ALL_TESTS = ("sbc", "coverage", "tarp", "lc2st")
 
 @dataclass(frozen=True)
 class _CalibrationSpec:
-    """Per-workflow calibration specializations resolved from a ``WorkflowConfig``."""
+    """Per-workflow, per-condition calibration specializations resolved from a ``WorkflowConfig``
+    and the ESTIMATOR's condition."""
+    condition: str           # the estimator's condition (validated)
     draw_spec: list          # learnable table (KEY/LABEL) for the per-parameter SBC table
-    parameter_keys: list     # target-theta keys: load_estimator schema guard + kernel labels
+    parameter_keys: list     # target-theta keys: load_estimator schema guard + kernel labels + shard identity
+    log_rows: list           # one bool per row: True for a log row (factor), False for a linear row (pp)
     build_prior: Callable    # device prior rebuild (bounded sampling + prior-sample baseline)
 
 
-def _posterior_calibration_spec(cfg: WorkflowConfig) -> _CalibrationSpec:
-    """Resolve the calibration diagnostic's per-workflow specializations from the config."""
-    m = cfg.param_module
-    if cfg.tag == "detector":
-        return _CalibrationSpec(
-            draw_spec=m.DETECTOR_PARAMETERIZATION,
-            parameter_keys=[e["KEY"] for e in m.DETECTOR_PARAMETERIZATION],
-            build_prior=m.build_prior,
-        )
+def _posterior_calibration_spec(cfg: WorkflowConfig, condition) -> _CalibrationSpec:
+    """Resolve the calibration diagnostic's specializations from the config and the
+    ESTIMATOR's condition (``args.condition``) through the workflow resolvers, which validate
+    the token for both workflows."""
+    keys = parameter_keys(cfg, condition)
+    table = parameter_table(cfg, condition)
     return _CalibrationSpec(
-        draw_spec=m.PARAMETERIZATION,
-        parameter_keys=m.PARAMETER_KEYS,
-        build_prior=m.build_prior,
+        condition=str(condition),
+        draw_spec=table,
+        parameter_keys=keys,
+        log_rows=[is_log_row(e) for e in table],
+        build_prior=prior_builder(cfg, condition),
     )
+
+
+def _physical_bias_cell(d) -> str:
+    """The 'physical bias' cell of the diagnosis table: a multiplicative factor (``x``) on a log
+    row, the offset in percentage points (``pp``) on a linear row."""
+    if d.log_row:
+        return f"{d.bias_factor:.3f}x"
+    return f"{100.0 * d.bias_theta:+.2f} pp"
 
 
 def _calibration_dir(paths, data_bank_root: Path, timing_label: str) -> Path:
@@ -202,6 +217,7 @@ def _write_calibration_report(reporter, args, cfg, spec, cal_dir: Path, cal_arra
         truth_log_probs=np.asarray(truth_log_probs),
         sample_log_probs=np.asarray(sample_log_probs),
         embeddings=np.asarray(embeddings),
+        log_rows=list(spec.log_rows),
     )
 
     tests = _parse_tests(args.tests)
@@ -226,6 +242,8 @@ def _write_calibration_report(reporter, args, cfg, spec, cal_dir: Path, cal_arra
         sample_log_probs=np.asarray(sample_log_probs),
         embeddings=np.asarray(embeddings),
         parameter_keys=np.asarray(list(spec.parameter_keys)),
+        log_rows=np.asarray(list(spec.log_rows), dtype=bool),
+        condition=np.asarray(spec.condition),
     )
     print(f"\nCalibration arrays saved to {cal_array_path}")
 
@@ -233,6 +251,9 @@ def _write_calibration_report(reporter, args, cfg, spec, cal_dir: Path, cal_arra
     reporter.check("eval_set_nonempty", n_videos > 0, f"{n_videos} EVAL videos drawn",
                    note="the held-out EVAL namespace yielded at least one calibration sample.")
     reporter.stat("eval_tasks", args.eval_tasks)
+    reporter.stat("condition", spec.condition,
+                  note=f"the estimator's condition; its parameter table has {len(spec.parameter_keys)} "
+                       f"learnable rows ({sum(1 for v in spec.log_rows if not v)} linear).")
     reporter.stat("calibration_videos", n_videos,
                   note="held-out videos whose posterior was drawn for calibration.")
     reporter.stat("posterior_samples", inputs.num_posterior_samples,
@@ -326,7 +347,7 @@ def _write_calibration_report(reporter, args, cfg, spec, cal_dir: Path, cal_arra
                 continue
             rows.append([para["KEY"], para.get("LABEL") or "-", f"{d.bias_z:+.2f}",
                          f"{d.spread_z:.2f}", f"{d.sharpness:.1%}",
-                         f"{d.bias_factor:.3f}x", d.defect])
+                         _physical_bias_cell(d), d.defect])
         reporter.table(
             "Diagnosis: location error versus width error (per parameter)", headers, rows,
             note=(
@@ -344,8 +365,9 @@ def _write_calibration_report(reporter, args, cfg, spec, cal_dir: Path, cal_arra
                 "'sharpness' is the posterior sd as a fraction of the prior width -- how much "
                 "the data constrained the parameter. "
                 "'physical bias' converts the offset into a multiplicative factor on the "
-                "physical value, which is the number to weigh against the precision the "
-                "downstream use actually needs. "
+                "physical value for a log row ('x'), and states it in percentage points ('pp') "
+                "for a linear row (a fraction, which has no multiplicative form); either is the "
+                "number to weigh against the precision the downstream use actually needs. "
                 "Note how the two interact: a very sharp posterior (small sharpness) turns a "
                 "physically negligible offset into a large bias in z, and therefore into a "
                 "large rank deviation. A parameter can thus be flagged by every rank measure "
@@ -502,7 +524,11 @@ def _report_implications(reporter, result) -> None:
     location = [d for d in diag if d.defect.startswith("location")]
     narrow = [d for d in diag if d.defect == "width (too narrow)"]
     wide = [d for d in diag if d.defect == "width (too wide)"]
-    worst_phys = max((abs(d.bias_factor - 1.0) for d in diag), default=0.0)
+    # The worst multiplicative factor is taken over the log rows only; a linear row's offset is
+    # absolute and is stated beside its key in percentage points.
+    worst_phys = max((abs(d.bias_factor - 1.0) for d in diag if d.log_row and np.isfinite(d.bias_factor)),
+                     default=0.0)
+    worst_pp = max((abs(100.0 * d.bias_theta) for d in diag if not d.log_row), default=None)
 
     rows = []
     if healthy:
@@ -515,7 +541,7 @@ def _report_implications(reporter, result) -> None:
     if location:
         rows.append([
             "location error",
-            ", ".join(f"{d.key} ({d.bias_factor:.3f}x)" for d in location),
+            ", ".join(f"{d.key} ({_physical_bias_cell(d)})" for d in location),
             "The posterior sits systematically away from the truth by an appreciable "
             "fraction of its own width. Because the offset is systematic rather than noisy, "
             "it usually reflects the forward model or the training distribution rather than "
@@ -554,9 +580,11 @@ def _report_implications(reporter, result) -> None:
                 "location error moves the estimate, a width error only misstates its error "
                 "bar, and only the former can change a scientific conclusion drawn from the "
                 "point estimate. Second, statistical versus physical size: this run's largest "
-                f"offset is a factor of {1.0 + worst_phys:.3f} on the physical value, and "
-                "that -- not the flag -- is what must be compared against the precision the "
-                "downstream use requires. "
+                f"offset over the log rows is a factor of {1.0 + worst_phys:.3f} on the physical "
+                "value"
+                + ("" if worst_pp is None else f", and over the linear rows {worst_pp:.2f} pp")
+                + ", and that -- not the flag -- is what must be compared against the precision "
+                "the downstream use requires. "
                 "Retraining is warranted when the pattern points at capacity or convergence: "
                 "widespread width errors in the same direction, or errors that shrink as "
                 "training proceeds. It is NOT the indicated response to a small physical "
@@ -569,8 +597,10 @@ def _report_implications(reporter, result) -> None:
 
 
 def _save_shard(topo, cal_dir: Path, truths, samples, truth_log_probs, sample_log_probs,
-                embeddings, run_start) -> None:
-    """Write this worker's partial calibration arrays (multi-GPU sharded run)."""
+                embeddings, run_start, spec) -> None:
+    """Write this worker's partial calibration arrays (multi-GPU sharded run), with the
+    parameter keys and the condition the draws were made under, so the merge can refuse a
+    shard of another table."""
     cal_dir.mkdir(parents=True, exist_ok=True)
     if len(truths) == 0:
         print(f"\n[rank {topo.rank}/{topo.world_size}] no tasks assigned -- no shard written.",
@@ -583,10 +613,45 @@ def _save_shard(topo, cal_dir: Path, truths, samples, truth_log_probs, sample_lo
         truth_log_probs=np.asarray(truth_log_probs),
         sample_log_probs=np.asarray(sample_log_probs),
         embeddings=np.asarray(embeddings),
+        parameter_keys=np.asarray(list(spec.parameter_keys)),
+        condition=np.asarray(spec.condition),
     )
     print(f"\n[rank {topo.rank}/{topo.world_size}] shard saved: {path} "
           f"({len(truths)} videos) in {time.time() - run_start:.1f}s. "
           f"Run the --merge step once all shards finish.", flush=True)
+
+
+def merge_shard_arrays(shard_paths, expected_keys, expected_condition) -> tuple:
+    """Concatenate the per-shard calibration arrays, refusing any shard whose stored
+    ``parameter_keys`` are missing or differ from ``expected_keys`` (key for key, in order) or
+    whose stored condition differs from ``expected_condition``: shards of another table or
+    condition, or of a run that recorded none, are never merged into one report. Returns
+    ``(truths, samples, truth_log_probs, sample_log_probs, embeddings)``; raises ``ValueError``
+    naming the shard and the difference."""
+    want = [str(k) for k in expected_keys]
+    truths, samples, truth_lp, sample_lp, emb = [], [], [], [], []
+    for shard_path in shard_paths:
+        with np.load(str(shard_path)) as data:
+            if "parameter_keys" not in data.files:
+                raise ValueError(f"shard {Path(shard_path).name} records no parameter_keys; a shard of an "
+                                 f"earlier run cannot be merged under {want}.")
+            got = [str(k) for k in np.asarray(data["parameter_keys"]).ravel()]
+            if got != want:
+                raise ValueError(f"shard {Path(shard_path).name} was drawn under parameter_keys {got}, not "
+                                 f"this run's {want} (exact key and order match required).")
+            cond = str(np.asarray(data["condition"]).item()) if "condition" in data.files else None
+            if cond != str(expected_condition):
+                raise ValueError(f"shard {Path(shard_path).name} was drawn under condition {cond!r}, not "
+                                 f"{str(expected_condition)!r}.")
+            if data["truths"].shape[0] == 0:
+                continue
+            truths.append(data["truths"]); samples.append(data["samples"])
+            truth_lp.append(data["truth_log_probs"]); sample_lp.append(data["sample_log_probs"])
+            emb.append(data["embeddings"])
+    if not truths:
+        raise ValueError("every shard was empty")
+    return (np.concatenate(truths, 0), np.concatenate(samples, 0), np.concatenate(truth_lp, 0),
+            np.concatenate(sample_lp, 0), np.concatenate(emb, 0))
 
 
 def _merge_shards(reporter, args, cfg, spec, cal_dir: Path, cal_array_path: Path,
@@ -603,19 +668,11 @@ def _merge_shards(reporter, args, cfg, spec, cal_dir: Path, cal_array_path: Path
                   note="per-rank shards combined into this report; fewer than world_size means "
                        "--allow-partial was used and the EVAL coverage is incomplete.")
     print(f"Merging {len(shard_paths)} shard file(s) from {cal_dir}", flush=True)
-    truths, samples, truth_lp, sample_lp, emb = [], [], [], [], []
-    for shard_path in shard_paths:
-        with np.load(str(shard_path)) as data:
-            if data["truths"].shape[0] == 0:
-                continue
-            truths.append(data["truths"]); samples.append(data["samples"])
-            truth_lp.append(data["truth_log_probs"]); sample_lp.append(data["sample_log_probs"])
-            emb.append(data["embeddings"])
-    if not truths:
-        raise SystemExit(f"--merge: every shard in {cal_dir} was empty")
-    truths = np.concatenate(truths, 0); samples = np.concatenate(samples, 0)
-    truth_lp = np.concatenate(truth_lp, 0); sample_lp = np.concatenate(sample_lp, 0)
-    emb = np.concatenate(emb, 0)
+    try:
+        truths, samples, truth_lp, sample_lp, emb = merge_shard_arrays(
+            shard_paths, spec.parameter_keys, spec.condition)
+    except ValueError as exc:
+        raise SystemExit(f"--merge: {exc}")
     print(f"Merged {truths.shape[0]} videos from {len(shard_paths)} shard(s).", flush=True)
     _write_calibration_report(reporter, args, cfg, spec, cal_dir, cal_array_path,
                               truths, samples, truth_lp, sample_lp, emb, run_start)
@@ -630,7 +687,7 @@ def _merge_shards(reporter, args, cfg, spec, cal_dir: Path, cal_array_path: Path
 
 def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run the full posterior-calibration diagnostic for the given workflow + CLI args."""
-    spec = _posterior_calibration_spec(cfg)
+    spec = _posterior_calibration_spec(cfg, args.condition)
 
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
@@ -675,6 +732,8 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
     print(f"  --pool-mode          : {pool_mode}")
     print(f"  --tests              : {args.tests}")
     print(f"  --stratify           : {args.stratify}   (--n-strata {args.n_strata})")
+    print(f"  parameter table      : {len(spec.parameter_keys)} learnable rows under {spec.condition} "
+          f"({sum(1 for v in spec.log_rows if not v)} linear)")
     print("\nOutput destinations:")
     print(f"  reads estimator : {estimator_path}")
     print(f"  reads EVAL      : <data_bank>/{paths.video_subdir}/"
@@ -781,7 +840,7 @@ def run_posterior_calibration(cfg: WorkflowConfig, args: argparse.Namespace) -> 
 
     # ---- Write outputs (single process) or shard (distributed) -----------
     if topo.is_distributed:
-        _save_shard(topo, cal_dir, truths, samples, truth_lp, sample_lp, embeddings, run_start)
+        _save_shard(topo, cal_dir, truths, samples, truth_lp, sample_lp, embeddings, run_start, spec)
     else:
         _write_calibration_report(reporter, args, cfg, spec, cal_dir, cal_array_path,
                                   truths, samples, truth_lp, sample_lp, embeddings, run_start)

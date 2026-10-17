@@ -67,7 +67,7 @@ def resolve(cfg, args):
     return dict(timing=timing, root=root, paths=paths, posit=posit, label=label,
                 estimator=posit / f"{paths.project_alias}_{label}_Estimator.npz",
                 out_dir=Path(args.out_dir) if args.out_dir else posit / f"{paths.project_alias}_{label}_Embedding_Probe",
-                keys=parameter_keys(cfg), table=parameter_table(cfg))
+                keys=parameter_keys(cfg, args.condition), table=parameter_table(cfg, args.condition))
 
 
 def task_paths(R, task):

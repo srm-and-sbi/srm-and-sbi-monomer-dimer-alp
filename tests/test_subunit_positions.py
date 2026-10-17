@@ -40,8 +40,8 @@ from srm_and_sbi_monomer_dimer_alp import labeling as lab                       
 from srm_and_sbi_monomer_dimer_alp import simulation_dli_runner as dli_runner       # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.io import (convert_video_dtype, theta_set_schema,   # noqa: E402
                                               write_theta_set)
-from srm_and_sbi_monomer_dimer_alp.parameterization import (PARAMETERIZATION, PARAMETERS,   # noqa: E402
-                                                            RunTiming)
+from srm_and_sbi_monomer_dimer_alp.parameterization import (PARAMETERS, RunTiming,   # noqa: E402
+                                                            parameterization_of, prior_center)
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import (                  # noqa: E402
     build_dye_tracks, build_dye_tracks_from_subunit_positions, render_dli_video)
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (                  # noqa: E402
@@ -306,6 +306,27 @@ def _run(cfg, argv):
     return args
 
 
+def _write_upstream(paths, root, timing_label, split, tasks, n_sims, condition="FAB", schema=None):
+    """The UPSTREAM record both workflows check before re-imaging a tier: the condition's RDS-tier
+    Theta_Set (biology labels under rds_alias), one per task, at the prior center."""
+    table = parameterization_of(condition)
+    theta = np.array([[prior_center(e) for e in table]] * n_sims)
+    schema = schema or theta_set_schema(table, condition=condition, timing_label=timing_label, generator="rds")
+    for task in tasks:
+        write_theta_set(paths.rds_theta_set_path(task, root, timing_label, True, split), theta, schema)
+
+
+def _superseded_schema(condition, timing_label):
+    """A Theta_Set schema shaped like the release before the window-start composition: the second
+    column a log10 dimer-to-monomer ratio on the basal band, stamped with that release's version."""
+    table = parameterization_of(condition)
+    schema = theta_set_schema(table, condition=condition, timing_label=timing_label, generator="rds")
+    schema["parameter_keys"] = ["count_total", "ratio_dimer_monomer_initial"] + schema["parameter_keys"][2:]
+    schema["prior_low"][1], schema["prior_high"][1], schema["log_flag"][1] = -1.27875, -0.47712, True
+    schema["package_version"] = "0.1.39"
+    return schema
+
+
 def test_the_shared_runner_writes_the_dense_path_result_for_both_workflows():
     original_machine, original_trajectory = PARAMETERS.machine, readdy.Trajectory
     real_posit = original_machine.root_for("EVAL") / PARAMETERS.paths.posit_subdir
@@ -322,6 +343,8 @@ def test_the_shared_runner_writes_the_dense_path_result_for_both_workflows():
             readdy.Trajectory = factory
             cfg = detector_workflow()
             paths = cfg.paths.with_condition("FAB")
+            # the detector checks the tier's upstream RDS record before rendering: write it (tasks 0, 1)
+            _write_upstream(paths, root, "1S_50FPS", "EVAL", (0, 1), 2)
             _run(cfg, ["--total-time-seconds", "1", "--tasks", "1", "--task-simulations", "2",
                        "--split", "eval", "--condition", "FAB", "--seed", "3"])
             video = zarr.open(str(paths.video_set_path(0, root, "1S_50FPS", True, "EVAL")), mode="r")[:]
@@ -351,10 +374,10 @@ def test_the_shared_runner_writes_the_dense_path_result_for_both_workflows():
             readdy.Trajectory = factory
             cfg = biology_workflow()
             paths = cfg.paths.with_condition("FAB")
-            theta = np.array([[10 ** ((e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2) if e["LOG_FLAG"]
-                               else (e["PRIOR_RANGE"][0] + e["PRIOR_RANGE"][1]) / 2 for e in PARAMETERIZATION]] * 2)
+            table = parameterization_of("FAB")
+            theta = np.array([[prior_center(e) for e in table]] * 2)
             write_theta_set(paths.theta_set_path(0, root, "2S_50FPS", True, "EVAL"), theta,
-                            theta_set_schema(PARAMETERIZATION, condition="FAB", timing_label="2S_50FPS", generator="rds"))
+                            theta_set_schema(table, condition="FAB", timing_label="2S_50FPS", generator="rds"))
             _run(cfg, ["--total-time-seconds", "2", "--tasks", "1", "--task-simulations", "2",
                        "--split", "eval", "--condition", "FAB", "--seed", "9", "--nuisance-tag", "REF"])
             video = zarr.open(str(paths.video_set_path(0, root, "2S_50FPS", True, "EVAL")), mode="r")[:]
@@ -364,6 +387,57 @@ def test_the_shared_runner_writes_the_dense_path_result_for_both_workflows():
                 paths.record_set_path("Nuisance_DLI_Theta_Set", 0, root, "2S_50FPS", True, "EVAL"))
             assert video.shape == (2, _frames(2.0), 256, 256)
             assert np.array_equal(video, ref_video) and np.array_equal(labeling, ref_rows)
+        finally:
+            readdy.Trajectory = original_trajectory
+            object.__setattr__(PARAMETERS, "machine", original_machine)
+
+
+def test_the_detector_checks_the_upstream_record_in_both_directions():
+    """A valid upstream tier with no detector output renders and writes the six-column record; a
+    superseded upstream record beside an existing valid detector record is refused before any
+    output, the detector record untouched and no video store created."""
+    original_machine, original_trajectory = PARAMETERS.machine, readdy.Trajectory
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "Data_Bank"
+        root.mkdir()
+        object.__setattr__(PARAMETERS, "machine",
+                           dataclasses.replace(original_machine, data_bank_root=root, scratch_data_bank_root=None))
+        try:
+            readdy.Trajectory = _stub_factory(_frames(1.0))
+            cfg = detector_workflow()
+            paths = cfg.paths.with_condition("FAB")
+            # direction 1: valid upstream record, no detector output yet -> permitted
+            _write_upstream(paths, root, "1S_50FPS", "EVAL", (0,), 2)
+            own = paths.theta_set_path(0, root, "1S_50FPS", True, "EVAL")
+            assert own != paths.rds_theta_set_path(0, root, "1S_50FPS", True, "EVAL")
+            assert not own.exists()
+            _run(cfg, ["--total-time-seconds", "1", "--task-id", "0", "--task-simulations", "2",
+                       "--split", "eval", "--condition", "FAB", "--seed", "3"])
+            assert own.exists() and paths.video_set_path(0, root, "1S_50FPS", True, "EVAL").exists()
+            assert zarr.open(str(own), mode="r").shape == (2, len(det.DETECTOR_PARAMETER_KEYS))
+            # direction 2: a superseded upstream record (task 1) beside an existing valid detector
+            # record -> refused before any output; the detector record stays byte for byte
+            _write_upstream(paths, root, "1S_50FPS", "EVAL", (1,), 2, schema=_superseded_schema("FAB", "1S_50FPS"))
+            own1 = paths.theta_set_path(1, root, "1S_50FPS", True, "EVAL")
+            write_theta_set(own1, np.full((2, len(det.DETECTOR_PARAMETER_KEYS)), 0.5),
+                            theta_set_schema(det.DETECTOR_PARAMETERIZATION, condition="FAB", timing_label="1S_50FPS",
+                                             generator="dli_detector"))
+            before = {p.name: p.stat().st_mtime_ns for p in own1.rglob("*") if p.is_file()}
+            try:
+                _run(cfg, ["--total-time-seconds", "1", "--task-id", "1", "--task-simulations", "2",
+                           "--split", "eval", "--condition", "FAB", "--seed", "3"])
+            except SystemExit as exc:
+                assert "SCHEMA MISMATCH" in str(exc) and "ratio_dimer_monomer_initial" in str(exc), str(exc)
+            else:
+                raise AssertionError("a superseded upstream record was re-imaged")
+            after = {p.name: p.stat().st_mtime_ns for p in own1.rglob("*") if p.is_file()}
+            assert before == after, "the existing detector record must stay untouched"
+            assert not paths.video_set_path(1, root, "1S_50FPS", True, "EVAL").exists()
+            assert not paths.record_set_path("Labeling_Set", 1, root, "1S_50FPS", True, "EVAL").exists()
+            # the dry run reports the same state without writing anything
+            _run(cfg, ["--total-time-seconds", "1", "--task-id", "1", "--task-simulations", "2",
+                       "--split", "eval", "--condition", "FAB", "--seed", "3", "--dry-run"])
+            assert not paths.video_set_path(1, root, "1S_50FPS", True, "EVAL").exists()
         finally:
             readdy.Trajectory = original_trajectory
             object.__setattr__(PARAMETERS, "machine", original_machine)

@@ -62,6 +62,22 @@ Each estimator is named by `--a` / `--b`, which accept any of:
 The two sets need not have identical coverage or ordering: the pairing is by `(task, sim)`
 identity, so the shared subset is found automatically.
 
+**Only estimators of one parameterization are compared.** A log score is a density in the
+estimator's own coordinates, so two scores compare only when both estimators define their
+density over the same space: the same learnable keys in the same order, the same per-row scale
+flags (a log row's coordinate is log10 of the value, a linear row's the value itself), the same
+prior boxes, and the same condition. Before any statistic is computed, the runner reads both
+manifests and refuses a pair that differs in any of these, naming the first difference. A Fab
+and an InlB estimator (eleven and twelve coordinates) are therefore never paired, and neither
+are two estimators whose composition rows differ, even at equal width.
+
+**What the pairing does not establish.** Pairing by `(task, sim)` assumes that both estimators
+scored the same TEST examples. The manifest's `test_set_id` (`TEST/<timing>`) names the split and
+the timing, not the tier, so matching parameterizations and matching identifiers do not prove it:
+two TEST sets of one schema drawn in different generation campaigns carry the same identifiers.
+Shared-example identity is established separately (the same tier path and timing), and the
+report states this limit beside the verdict.
+
 ## How to run
 
 **1 — Select the machine.** `export MACHINE_PROFILE=<profile>` (resolves every path).

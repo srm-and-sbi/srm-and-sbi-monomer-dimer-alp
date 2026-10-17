@@ -43,7 +43,7 @@ from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 from srm_and_sbi_monomer_dimer_alp import artifacts
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, is_log_row
-from srm_and_sbi_monomer_dimer_alp.workflow import detector_workflow, parameter_keys, parameter_table
+from srm_and_sbi_monomer_dimer_alp.workflow import detector_workflow, parameter_keys, parameter_table, prior_bounds
 
 VIEWS = ("MAP", "median", "SGM")
 BASELINE = "baseline"
@@ -90,10 +90,10 @@ def resolve(cfg, args):
     suffix = "_".join(c["name"].upper() for c in columns)          # the columns, in order: never a collision
     out_dir = Path(args.out_dir) if args.out_dir else \
         posit / f"{paths.project_alias}_{paths.product_label(timing.label, None)}_Estimator_Scorecard_{suffix}"
+    lower, upper = prior_bounds(cfg, args.condition)
     return dict(timing=timing, paths=paths, posit=posit, columns=columns, out_dir=out_dir,
-                keys=parameter_keys(cfg), table=parameter_table(cfg),
-                lo=np.array(cfg.param_module.theta_lower_bound(), dtype=float),
-                hi=np.array(cfg.param_module.theta_upper_bound(), dtype=float))
+                keys=parameter_keys(cfg, args.condition), table=parameter_table(cfg, args.condition),
+                lo=np.array(lower, dtype=float), hi=np.array(upper, dtype=float))
 
 
 def load_column(column, keys):

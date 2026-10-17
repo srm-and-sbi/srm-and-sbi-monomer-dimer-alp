@@ -1,11 +1,5 @@
 # Experiment Sample Geometric Median
 
-> **Note (2026-09-09).** The results quoted in this note were produced under the ten-parameter three-species model of 0.1.1 (A monomer, B mobile dimer, C immobile dimer; per-species initial counts). Release 0.1.2 replaced it with the separated stoichiometry–mobility model (two molecular species × three mobility modes), and the readout definitions changed with it: the composition now derives from the conserved receptor total `N_R` and the initial dimer fraction `x_B`, with the complex fraction `f_B = x_B / (2 − x_B)` and the receptor-level dimer fraction `f_R = x_B`; mobility (fast / slow / immobile) is a mode of either species, not a species of its own. The numbers below are kept as the record of that earlier run and are not re-derived here.
-
-> **Note (2026-09-10).** Release 0.1.3 removed the association ratio from the learnable parameters: it is a declared per-condition constant (MET-FAB 0, no association channel; MET-INLB 1, the reference convention), so the summary vector has eleven reaction-diffusion coordinates and the association-rate coordinate of the earlier run has no counterpart. The `sgm_plane` figure shows the initial dimer fraction `x_B` against the dissociation rate `κ_OFF` — the coupled pair at the center of the biological question — in place of an abundance against an association rate. The earlier numbers stand as recorded.
-
-> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A`, a log10 row on [−2, 2] (`x_B = 2r / (1 + 2r)` is derived), and gave every learnable row its decided prior range (`PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*). The `sgm_plane` figure is now the log ratio `r` against the dissociation rate `κ_OFF`, both axes logarithmic; where the text below names the initial dimer fraction, read the derived `x_B`. The earlier numbers and figures stand as recorded.
-
 > **Note (2026-09-23).** Release 0.1.16 names this analysis's population explicitly: it is an **SGM of
 > window MAPs** — the Sample Geometric Median over the Experiment product's per-window MAP candidates
 > (`map_estimate`, one vector per analyzed window). It is a different quantity from the posterior-draw
@@ -25,9 +19,10 @@ vector differs from the naive per-dimension summary.
 
 Given many estimated parameter vectors, the obvious summary is to take the median of each
 dimension separately. That composite is not a member of the collection, and nothing guarantees it
-is even a configuration the system can occupy. The eleven reaction-diffusion parameters are
-correlated — the receptor total and the initial dimer fraction constrain one another through the
-visible-spot count, and the dimer fraction trades off against the dissociation rate that depletes
+is even a configuration the system can occupy. The reaction-diffusion parameters (eleven under
+MET-FAB, twelve under MET-INLB, whose window-start allocation is inferred) are correlated — the
+receptor total and the basal reference fraction of dimers constrain one another through the
+detected-spot count, and the dimer fraction trades off against the dissociation rate that depletes
 it (association is a per-condition constant, not inferred) — so a coordinate taken from one
 recording and another taken from a different recording need never have co-occurred. For a
 multimodal cloud the composite is actively misleading: it lands in the low-density valley
@@ -47,8 +42,10 @@ effects the analysis is used to detect.
 
 ## The space the median is taken in
 
-All computation happens in **absolute (physical, `10**theta`) values normalized by the absolute
-prior range**. Two deliberate choices:
+All computation happens in **absolute (physical) values normalized by the absolute prior range**:
+`parameterization.to_physical` under the condition's table, `10**theta` for a log row and the value
+itself for a linear row (the basal reference fraction and, under MET-INLB, the window-start
+allocation, each with a prior range of 1). Two deliberate choices:
 
 - **Absolute, not log.** The geometric median is not invariant under the log-to-linear transform,
   so centrality has to be defined in the space where the vector is actually used — the simulator
@@ -58,7 +55,8 @@ prior range**. Two deliberate choices:
 
 ## What it reports
 
-- **SGM vs vector-of-medians**, per parameter, in both absolute and log10 units, for the full
+- **SGM vs vector-of-medians**, per parameter, in both absolute units and estimator coordinates
+  (log10 for a log row, the value itself for a linear row), for the full
   collection (`unrestricted`) and for the members inside the prior box (`bounded_in_box`). Both
   variants appear because they answer different questions: `unrestricted` describes where the
   inference actually landed, `bounded_in_box` describes what a downstream stage constrained to
@@ -78,8 +76,10 @@ prior range**. Two deliberate choices:
   (the 0.1.15 defect displaced MAPs by about one learning rate). The table establishes the share;
   which reading applies needs the posterior-draw estimates of the same windows and separate checks.
 
-Figures: `sgm_plane` (initial dimer fraction versus dissociation rate, with both summary points;
-the fraction on a linear axis, the rate on a log axis),
+Figures: `sgm_plane` (the basal reference fraction of dimers `f` versus the dissociation rate
+`κ_OFF`, with both summary points; the fraction on a linear axis, the rate on a log axis; under
+MET-INLB `f` is the reference composition, and the window-start allocation is a further coordinate
+of the collection),
 `sgm_corner` (all pairwise structure), `out_of_prior_mass`.
 
 ## How to run
@@ -95,8 +95,9 @@ estimator nor renders videos. It is a post-hoc analysis, never wired into the st
 
 `--condition` (`FAB` = MET-FAB, the monomer control; `INLB` = MET-INLB, the dimer condition) is the
 run's experimental condition: it selects the condition-specific estimator namespace (the condition
-slot of the runtime grammar), and the collection is restricted to that condition's rows by its
-per-row labels. Each condition therefore writes to its own directory by construction.
+slot of the runtime grammar) and binds the estimator's parameter keys, table and prior box (eleven
+rows under MET-FAB, twelve under MET-INLB), and the collection is restricted to that condition's rows
+by its per-row labels. Each condition therefore writes to its own directory by construction.
 
 The tokens `ALP` and `BET` appear nowhere in the interface, the report, or the output paths. They
 survive only inside the Experiment output's stored `kinds` field — a data-schema artifact of how
@@ -118,6 +119,12 @@ detector additionally has Nuisance_DLI sources with no biology counterpart. The 
 population it summarized in its `population` and `collection` entries.
 
 ## What it found on the 2 s MET data
+
+This run was made with the three-species model that preceded the separated stoichiometry–mobility
+model: ten parameters, per-species initial counts of A (monomer), B (mobile dimer) and C (immobile
+dimer, `count_chi`), and an inferred association rate. Its readouts, the dimer count below included,
+have no counterpart among the coordinates described above; they are kept as the record of that run
+and are not re-derived.
 
 Run on the 500-window Experiment output (250 windows per condition):
 

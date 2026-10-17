@@ -16,8 +16,16 @@ The report machinery (``_aggregate_by_kind`` / ``write_experiment_outputs``) liv
 here, shared. The only per-workflow differences are which parameterization supplies
 the learnable table (report tables + figures), the ``parameter_keys`` schema guard,
 the device ``build_prior``, and the alias-qualified ``paths`` -- resolved from the
-config in ``_experiment_spec(cfg)``. The estimator path is resolved through the
-shared ``paths.estimator_path`` method for both workflows.
+config AND the ESTIMATOR's condition in ``_experiment_spec(cfg, condition)`` through the
+workflow resolvers. The recording kinds named with ``--kinds`` never select the table: an
+estimator applied to the OTHER condition's recordings is a misspecification test, labeled
+as such beside every table and figure of those recordings, and everything derived from its
+estimates is computed under the estimator's condition. The estimator path is resolved
+through the shared ``paths.estimator_path`` method for both workflows.
+
+Every per-row number carries its unit (dex for a log row, the fraction itself or percentage
+points for a linear row); the linear rows' values outside [0, 1] are counted per kind in a
+flagged-fractions table and left unchanged.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
     ESTIMATE_DEFINITIONS_VERSION, QUANTILE_LEVELS,
     draw_label,
+    fraction_flag_rows,
     map_estimate,
     optimizer_contract,
     optimizer_summary_lines,
@@ -71,35 +80,51 @@ from srm_and_sbi_monomer_dimer_alp.experiment_support import (
 )
 from srm_and_sbi_monomer_dimer_alp.provenance import code_provenance, finalize_code_provenance
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, is_log_row
 from srm_and_sbi_monomer_dimer_alp import temporal_dynamics as tdk
 from srm_and_sbi_monomer_dimer_alp.visualization_inference import (
     figure_experiment_combined, figure_window_drift, figure_point_estimates_by_cell)
-from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
+from srm_and_sbi_monomer_dimer_alp.workflow import (
+    WorkflowConfig, parameter_keys, parameter_table, prior_builder)
 
 
 @dataclass(frozen=True)
 class _ExperimentSpec:
-    """Per-workflow Experiment specializations resolved from a ``WorkflowConfig``."""
+    """Per-workflow, per-condition Experiment specializations resolved from a ``WorkflowConfig``
+    and the ESTIMATOR's condition (never a recording kind)."""
+    condition: str           # the estimator's condition (validated)
     draw_spec: list          # learnable table for the report tables + figures
-    parameter_keys: list     # load_estimator schema guard
+    parameter_keys: list     # load_estimator schema guard + the by-key guard of the writer
+    log_rows: list           # one bool per row: True for a log row, False for a linear row
     build_prior: Callable    # device prior rebuild for bounded rejection sampling
 
 
-def _experiment_spec(cfg: WorkflowConfig) -> _ExperimentSpec:
-    """Resolve the Experiment stage's per-workflow specializations from the workflow config."""
-    m = cfg.param_module
-    if cfg.tag == "detector":
-        return _ExperimentSpec(
-            draw_spec=m.DETECTOR_PARAMETERIZATION,
-            parameter_keys=[e["KEY"] for e in m.DETECTOR_PARAMETERIZATION],
-            build_prior=m.build_prior,
-        )
+def _experiment_spec(cfg: WorkflowConfig, condition) -> _ExperimentSpec:
+    """Resolve the Experiment stage's specializations from the workflow config and the
+    ESTIMATOR's condition (``args.condition``) through the workflow resolvers, which validate
+    the token for both workflows. The recording kinds (``--kinds``) never select the table."""
+    keys = parameter_keys(cfg, condition)
+    table = parameter_table(cfg, condition)
     return _ExperimentSpec(
-        draw_spec=m.PARAMETERIZATION,
-        parameter_keys=m.PARAMETER_KEYS,
-        build_prior=m.build_prior,
+        condition=str(condition),
+        draw_spec=table,
+        parameter_keys=keys,
+        log_rows=[is_log_row(e) for e in table],
+        build_prior=prior_builder(cfg, condition),
     )
+
+
+def _misspecification_note(kind, condition) -> str:
+    """The label a derived table or figure of ``kind``'s recordings carries when the estimator
+    was calibrated for another condition: a misspecification test, computed under the
+    ESTIMATOR's condition. Empty when the kind is the estimator's own, or no condition is known."""
+    if condition is None or str(kind) == str(condition):
+        return ""
+    return (f" MISSPECIFICATION TEST: the recordings of {condition_display(kind)} are estimated with "
+            f"the estimator of {condition_display(condition)}; every value here is read under the "
+            f"estimator's condition ({condition_display(condition)}: its parameter table, occupancy and "
+            f"declared values), not the recording's, and is not an inference about "
+            f"{condition_display(kind)} under its own model.")
 
 
 def _aggregate_by_kind(estimate, kind_index, cell_arr, kinds, mode, n_params):
@@ -137,11 +162,20 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
     can persist or render an invalid product -- and the manifest the report reads is decoded
     from the arrays themselves, never supplied separately. The three point estimates are read
     by their stored fields -- ``map_estimate``, the 0.50 level of ``posterior_quantiles`` located
-    through the manifest, and ``posterior_sgm``. With ``persist_arrays=False`` (report-only
+    through the manifest, and ``posterior_sgm``. After validation the product's
+    ``parameter_keys`` are compared, key for key and in order, against ``draw_spec``'s
+    (``artifact_schema.assert_parameter_keys``): Experiment inventories come from recordings, so
+    no Theta_Set refusal reaches this path and the key guard is the one check that a product of
+    another table or condition is not re-rendered under this one. ``args.condition`` (the
+    estimator's condition, when present) labels every table and figure of a kind that is not the
+    estimator's own as a misspecification test. With ``persist_arrays=False`` (report-only
     rendering) the arrays on disk are left untouched. Returns the validated manifest.
     """
     manifest = schema.validate_product(arrays, stage="experiment",
                                        source=f"experiment product {array_path.name}")
+    schema.assert_parameter_keys(manifest, [e["KEY"] for e in draw_spec],
+                                 source=f"experiment product {array_path.name}")
+    condition = getattr(args, "condition", None)
     tok = short_labels()
     qi = schema.median_level_index(manifest)
     scores = np.asarray(arrays["scores"], dtype=float)
@@ -194,7 +228,18 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                        f"summarize (pool mode {manifest['pool_mode']}).")
     for kind, name in zip(kinds, shown):
         reporter.stat(f"n[{name}]", int(by_kind[tok["map"]][name].shape[0]),
-                      note=f"estimates for condition {name} (stored as '{kind}').")
+                      note=f"estimates for condition {name} (stored as '{kind}')."
+                           + _misspecification_note(kind, condition))
+    foreign = [k for k in kinds if condition is not None and str(k) != str(condition)]
+    if condition is not None:
+        reporter.stat("estimator_condition", condition_display(condition),
+                      note="the condition the estimator was trained for; its parameter table "
+                           f"({len(draw_spec)} learnable rows) is the table of every value in this "
+                           "report." + ("" if not foreign else
+                                        f" The recordings of {', '.join(condition_display(k) for k in foreign)} "
+                                        f"are estimated with it as a MISSPECIFICATION TEST (--kinds): every "
+                                        f"derived table and figure of those recordings is labeled so, and "
+                                        f"nothing in them is computed under the recording's own condition."))
     if n_estimates:
         reporter.stat("mean_log_prob", float(np.mean(scores)),
                       note="mean log-density at the returned MAP candidate (optimization "
@@ -207,37 +252,64 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
              "below uses these three tokens. The three are read together; no one replaces the "
              "others.")
 
+    kind_notes = "".join(_misspecification_note(k, condition) for k in foreign)
     for key in (tok["map"], tok["median"], tok["sgm"]):
         headers, rows = experiment_table(draw_spec, by_kind[key], shown)
         extra = ("" if key != tok["map"] else
                  " The gradient ascent is unconstrained, so an outside-prior value happens under "
                  "either pool mode -- --pool-mode bounds the candidate pool, not the optimizer's "
                  "steps -- and is a flow optimum rather than a MAP of the prior-supported posterior.")
-        reporter.table(f"{key} theta by condition (log10 units)", headers, rows,
+        reporter.table(f"{key} theta by condition (estimator coordinates)", headers, rows,
                        note=f"no ground truth for experimental recordings; values are the "
-                            f"distribution of the {key} estimate per condition ({agg_desc}). "
-                            f"'outside prior' is the share beyond the row's prior box.{extra} The "
-                            f"three tables are read together.")
+                            f"distribution of the {key} estimate per condition ({agg_desc}), in the "
+                            f"row's estimator coordinate ('units': log10 for a log row, the fraction "
+                            f"itself for a linear row). 'outside prior' is the share beyond the row's "
+                            f"prior box.{extra} The three tables are read together.{kind_notes}")
     cmp_headers, cmp_rows = experiment_estimates_compared_table(draw_spec, by_kind, shown)
-    reporter.table("Point estimates compared (per parameter, log10 units)",
+    reporter.table("Point estimates compared (per parameter, estimator coordinates)",
                    cmp_headers, cmp_rows,
                    note=f"the three point estimates on the same windows ({agg_desc}), columns "
                         f"grouped by statistic with the estimates consecutive: the median over "
-                        f"windows, the IQR over windows and the share outside the prior box, each "
-                        f"for {tok['map']}, {tok['median']} and {tok['sgm']} (definitions above). A "
-                        f"statement about a parameter is read from the row as a whole, never from "
-                        f"one column.")
+                        f"windows, the IQR over windows (both in the row's estimator coordinate) and "
+                        f"the share outside the prior box, each for {tok['map']}, {tok['median']} and "
+                        f"{tok['sgm']} (definitions above). A statement about a parameter is read "
+                        f"from the row as a whole, never from one column.{kind_notes}")
     agr_headers, agr_rows = point_estimate_agreement_table(
         draw_spec, map_est, post_q, sgm,
         groups=[condition_display(kinds[k]) for k in kind_index])
-    reporter.table("Point-estimate agreement (per parameter, log10 units)",
+    reporter.table("Point-estimate agreement (per parameter, estimator coordinates)",
                    agr_headers, agr_rows,
                    note="each 'X vs Y' column is the median over windows of the absolute "
-                        "difference between the two point estimates (log10). 'MAP outside 90%' is "
+                        "difference between the two point estimates, in the row's unit (dex for a "
+                        "log row, percentage points for a linear row). 'MAP outside 90%' is "
                         "the share of windows whose MAP falls outside the central 90% interval of "
                         "the draws. Large gaps with a high outside share establish that the "
                         "optimized candidate and the draw summaries disagree; the cause is not "
-                        "decided by this table and needs separate checks.")
+                        f"decided by this table and needs separate checks.{kind_notes}")
+
+    # ---- Flagged fractions per kind: the linear rows' values outside [0, 1], counted ---------
+    n_flagged_total = 0
+    for ki, kind in enumerate(kinds):
+        m = kind_index == ki
+        ff_headers, ff_rows, n_flagged = fraction_flag_rows(
+            draw_spec, {tok["map"]: map_est[m], tok["median"]: median[m], tok["sgm"]: sgm[m]}, post_q[m])
+        if not ff_rows:
+            break
+        n_flagged_total += n_flagged
+        reporter.table(
+            f"Flagged fractions, {condition_display(kind)} (linear rows outside their box)", ff_headers, ff_rows,
+            note="per linear row (a fraction with the box [0, 1]): the number of MAP, median and SGM "
+                 "window values that are non-finite or outside the box, and the share of windows "
+                 "whose central 90% interval of the draws reaches beyond it. Counted and left as "
+                 "stored -- nothing is clipped; a flagged vector carries NaN in every derived "
+                 "composition quantity (the population-composition analysis)."
+                 + _misspecification_note(kind, condition))
+    if not all(is_log_row(p) for p in draw_spec):
+        reporter.check("fractions_within_box", n_flagged_total == 0,
+                       f"{n_flagged_total} flagged value(s) over the three estimates and all kinds",
+                       fatal=False,
+                       note="no point estimate of a linear row lies outside [0, 1]; a failure is "
+                            "reported, counted and carried as NaN downstream, never clipped.")
 
     # ---- Within-recording drift: the three point estimates against window position --------
     # The windows of one recording share the same acquisition, so a trend across them is either
@@ -252,7 +324,7 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
             log_rows = np.array([bool(para.get("LOG_FLAG")) for para in draw_spec], dtype=bool)
             rows = tdk.window_drift_rows(grids, [condition_display(k) for k in kinds], keys,
                                          lambda u: u, log_rows)
-            d_headers, d_rows = tdk.format_drift_rows(rows)
+            d_headers, d_rows = tdk.format_drift_rows(rows, linear_unit="pp")   # the linear rows are fractions
             reporter.table(
                 "Within-recording drift across windows (per point estimate, stored coordinates)",
                 d_headers, d_rows,
@@ -261,10 +333,14 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                      "changes across recordings. One row per point estimate (MAP, posterior "
                      "median, SGM), read together: the three come from the same draws, so a "
                      "difference between them describes the shape of the density along the "
-                     "recording. 'cells over 0.3 dex' is the share whose change exceeds a factor "
-                     "of two. The signed-rank p states detectability, not magnitude, and no row "
-                     "attributes a cause: the biology block is marginalized here, so an imaging "
-                     "trend and a biological one are not separable in this stage alone.")
+                     "recording. The change is in dex for a log row and in percentage points "
+                     "('pp', an absolute difference of a fraction) for a linear row; 'cells over "
+                     "0.3 dex' is the share whose change exceeds a factor of two and exists for "
+                     "log rows only ('n/a' for a linear row, which has no multiplicative "
+                     "tolerance). The signed-rank p states detectability, not "
+                     "magnitude, and no row attributes a cause: the block not inferred is "
+                     "marginalized here, so an imaging trend and a biological one are not "
+                     f"separable in this stage alone.{kind_notes}")
             if reporter.dump:
                 bands_all = tdk.shared_posterior_bands(post_q, kind_index, cell_of, chunk_of,
                                                        len(kinds))
@@ -283,7 +359,8 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                                 f"recordings at each window, over the per-window central 50 % and "
                                 f"90 % intervals of the draws (median across recordings). Dotted "
                                 f"red lines are the prior bounds. The three lines share one draw "
-                                f"set, so the band is drawn once.")
+                                f"set, so the band is drawn once."
+                                + _misspecification_note(kind, condition))
 
     if reporter.dump and n_estimates:
         for i, para in enumerate(draw_spec):
@@ -300,12 +377,12 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
             reporter.save_figure(
                 f"experiment_{key}",
                 figure_experiment_combined(values, by_kind_post, prior_range, label,
-                                           seed=args.seed),
+                                           seed=args.seed, log_row=is_log_row(para)),
                 caption=f"{key} ({label}). Left: per-condition distribution of the {tok['map']} "
                         f"({agg_desc}). Right: each window's {tok['median']} +/- IQR of its draws "
                         f"per condition (within-window spread), the {tok['map']} overlaid. The "
                         f"{tok['sgm']} is tabulated above and its gap to the median is in the "
-                        f"agreement table.",
+                        f"agreement table." + kind_notes,
             )
         # The point-estimate view for experimental recordings: no truth exists, so the three
         # estimates are laid out per recording over the IQR of the draws (one shared band),
@@ -321,7 +398,7 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                     {tok["map"]: map_est[kmask, i], tok["median"]: median[kmask, i],
                      tok["sgm"]: sgm[kmask, i]},
                     post_q[kmask, i, :], cell_of[kmask], para["PRIOR_RANGE"],
-                    f"{label} ({condition_display(kind)})")
+                    f"{label} ({condition_display(kind)})", log_row=is_log_row(para))
                 if fig is not None:
                     reporter.save_figure(
                         f"point_estimates_{kind}_{key}", fig,
@@ -333,7 +410,8 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                                 f"the draws (median over the recording's windows of the per-window "
                                 f"Q25 and Q75) as the band, drawn once and identical on every panel. "
                                 f"The estimate axis is clipped to the prior box widened by 40 %; "
-                                f"values beyond it are counted in the tables, not drawn.")
+                                f"values beyond it are counted in the tables, not drawn."
+                                + _misspecification_note(kind, condition))
 
     reporter.summary()
     reporter.write_report()
@@ -383,6 +461,18 @@ def _merge_shards(reporter, args, eval_cfg, draw_spec, out_dir: Path,
     print(f"Removed {len(shard_paths)} shard file(s).", flush=True)
 
 
+def _estimator_status(estimator_path, expected_keys) -> str:
+    """``OK`` / ``MISSING`` / ``KEY MISMATCH: <reason>`` for the dry-run listing: the estimator
+    manifest's ``parameter_keys`` against the estimator condition's, before any GPU work."""
+    if not Path(estimator_path).exists():
+        return "MISSING"
+    try:
+        artifacts.assert_schema_compatible(estimator_path, expected_parameter_keys=expected_keys)
+    except Exception as exc:  # noqa: BLE001 -- a listing reports, it does not raise
+        return f"KEY MISMATCH: {exc}"
+    return "OK"
+
+
 def _selected_recordings(paths, kinds, cells_by_kind, span, data_bank_root):
     """``[(kind_index, cell, path), ...]`` for every selected recording present on disk. A
     recording missing on disk is not part of the run, matching the estimation loop's SKIP rule."""
@@ -412,7 +502,7 @@ def _expected_observations(paths, kinds, cells_by_kind, span, data_bank_root, n_
 
 def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run MAP estimation over the experimental videos for the given workflow + CLI args."""
-    spec = _experiment_spec(cfg)
+    spec = _experiment_spec(cfg, args.condition)
 
     timing = RunTiming(
         total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing,
@@ -504,7 +594,12 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --experiment-span-seconds : {span}  ({n_chunks} chunks/video, step {step_seconds}s)")
     print(f"  --kinds                   : {kinds}")
     for kind in kinds:
-        print(f"      {kind}: cells {cells_by_kind[kind]}")
+        print(f"      {kind}: cells {cells_by_kind[kind]}"
+              + ("" if kind == args.condition else
+                 f"   (MISSPECIFICATION TEST: recordings of {condition_display(kind)} under the "
+                 f"{condition_display(args.condition)} estimator)"))
+    print(f"  parameter table           : {len(spec.parameter_keys)} learnable rows under "
+          f"{spec.condition} ({sum(1 for v in spec.log_rows if not v)} linear)")
     print(f"  --max-cells               : {args.max_cells}  (0 = all discovered)")
     print(f"  --aggregation             : {args.aggregation}")
     print(f"  point estimates           : map, median, sgm  (all three, always; "
@@ -540,9 +635,12 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         ]
         missing = 0
         for role, path in checks:
-            ok = Path(path).exists()
-            missing += not ok
-            print(f"  reads {role}: {path}  [{'OK' if ok else 'MISSING'}]")
+            if "estimator" in role:
+                status = _estimator_status(path, spec.parameter_keys)
+            else:
+                status = "OK" if Path(path).exists() else "MISSING"
+            missing += status != "OK"
+            print(f"  reads {role}: {path}  [{status}]")
         for kind in kinds:
             discovered = discover_cells(experiment_dir, kind, span)
             print(f"  discovered {kind} recordings: {len(discovered)} cell(s) "
@@ -719,8 +817,8 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                                  f"elapsed={elapsed:.1f}s | avg={avg:.1f}s | ETA={eta:.0f}s")
                     if debug_log:
                         log_file_only(progress_fh,
-                                      f"pool IQR [LOG] {_theta_repr(map_info['scale'], 4)}")
-                        log_file_only(progress_fh, f"inferred [LOG] {_theta_repr(theta_log)}")
+                                      f"pool IQR [estimator] {_theta_repr(map_info['scale'], 4)}")
+                        log_file_only(progress_fh, f"inferred [estimator] {_theta_repr(theta_log)}")
                 log_progress(progress_fh, f"{kind} cell {cell} complete "
                                           f"({n_cell_chunks} chunks in "
                                           f"{time.time() - cell_start:.1f}s).")

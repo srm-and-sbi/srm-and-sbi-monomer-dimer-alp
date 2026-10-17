@@ -15,13 +15,16 @@ asserts uniqueness over a representative fan-out, including:
   C. Incremental TASK_OFFSET  - an appended block (e.g. tids 8..15) never
                                 collides with the original block (tids 0..7).
   D. Non-determinism sanity   - the default (seed=None) yields independent draws
-                                (theta and real placement differ across runs),
-                                while an explicit --seed is still reproducible;
-                                guards against accidentally re-forcing a seed.
+                                (theta from the condition's prior box, and the real
+                                placement of the condition's own starting composition,
+                                differ across runs), while an explicit --seed is still
+                                reproducible; guards against accidentally re-forcing a seed.
 
 Run:
-    MACHINE_PROFILE=<profile> python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.py
-Exits nonzero if any collision is found.
+    MACHINE_PROFILE=<profile> python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Seeding_Validation.py \\
+        --condition FAB --total-time-seconds 2
+Exits nonzero if any collision is found. Without ReaDDy the placement checks are skipped; any other
+error in them fails.
 """
 
 import argparse
@@ -33,6 +36,7 @@ from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
     PARAMETERS,
     RunTiming,
+    parameterization_of,
     theta_lower_bound,
     theta_upper_bound,
     to_physical,
@@ -139,15 +143,17 @@ def main(args):
     check("B. TRAIN / TEST / EVAL namespaces never collide", cross_ok, detail)
 
     # D. Non-determinism sanity (seed=None is the default; --seed still works) -- #
-    LOW = np.array(theta_lower_bound())
-    HIGH = np.array(theta_upper_bound())
+    TABLE = parameterization_of(args.condition)          # eleven rows under MET-FAB, twelve under MET-INLB
+    LOW = np.array(theta_lower_bound(args.condition))
+    HIGH = np.array(theta_upper_bound(args.condition))
     D = len(LOW)
 
     def sample(seed, nrows, sims):
-        # Estimator-space draw -> physical values through the ONE conversion rule (log rows
-        # exponentiated, the linear initial dimer fraction passed through).
+        # Estimator-space draw over the condition's prior box -> physical values through the ONE
+        # conversion rule (log rows exponentiated; the linear rows, the basal reference fraction f
+        # and, under MET-INLB, the allocation R_active, passed through).
         return to_physical(np.random.default_rng(seed).uniform(low=LOW, high=HIGH,
-                                                                 size=(nrows, sims, D)))
+                                                                 size=(nrows, sims, D)), TABLE)
     a, b = sample(None, 2, 3), sample(None, 2, 3)
     check("D. theta: seed=None differs across runs (non-deterministic)",
           not np.array_equal(a, b))
@@ -157,13 +163,18 @@ def main(args):
           np.array_equal(sample(42, 2, 3), sample(42, 2, 3)))
 
     # Optional: real placement (needs ReaDDy). Confirms build_simulation honors
-    # seed=None (fresh placement) and a given seed (reproducible placement).
+    # seed=None (fresh placement) and a given seed (reproducible placement). Only a missing
+    # ReaDDy is a SKIP; any other error (a signature change, a refused theta) fails the check.
     try:
+        import readdy  # noqa: F401 -- availability probe
         from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import build_simulation, build_system
-
+    except ImportError as exc:
+        print(f"  [SKIP] D. real-placement check ({type(exc).__name__}: {exc})")
+    else:
         def place(theta, seed):
-            # placement only: the condition (INLB, association on) does not affect the initial state
-            smut = build_simulation(build_system(theta, "INLB", verbose=False), theta, "INLB",
+            # the condition's own system and starting composition (the allocation included under
+            # MET-INLB); the systems are built and placed, never stepped
+            smut = build_simulation(build_system(theta, args.condition, verbose=False), theta, args.condition,
                                     seed=seed, verbose=False)
             p = np.array([q.pos for q in smut.current_particles], dtype=float).reshape(-1, 3)
             return p[np.lexsort((p[:, 2], p[:, 1], p[:, 0]))]
@@ -173,8 +184,6 @@ def main(args):
               p1.shape == p2.shape and not np.array_equal(p1, p2))
         check("D. placement: explicit seed -> placement reproducible",
               np.array_equal(place(th, 7), place(th, 7)))
-    except Exception as exc:  # noqa: BLE001 -- ReaDDy not present: skip, don't fail
-        print(f"  [SKIP] D. real-placement check ({type(exc).__name__}: {exc})")
 
     print("=" * 74)
     n_fail = sum(1 for _, ok in results if not ok)

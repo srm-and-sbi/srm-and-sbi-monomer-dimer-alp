@@ -4,8 +4,9 @@ Part of the posterior-predictive video check. The files of the check, what each 
 of a check at a declared configuration are listed in `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`
 (*The files of the posterior-predictive video check*).
 
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` chooses the receptor total `N_R` of a
-posterior-predictive render at a declared reaction-diffusion configuration
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` chooses the receptor total `N_total`
+(the receptor subunits of the underlying population, the declared `count_total`) of a posterior-predictive
+render at a declared reaction-diffusion configuration
 (`SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`, *A declared reaction-diffusion
 configuration*) when a density-matched render is wanted. It is **optional**: the visual check declares the
 receptor total like the other values, one value for every recording, and does not use this script. The
@@ -19,21 +20,35 @@ uses (`simulate_and_render`): the RDS stage's system, the DLI stage's labeling a
 occupancy, and its renderer with the tagged `Nuisance_DLI` imaging vector. Spots are counted on the
 recording and on every render with the direct estimators' detection (8-bit stored levels, 4 sigma, fit
 half-width 14 px, SCOPE box center). The detected count of a render is written `c = eta * V`, with `V` its
-visible hosts at frame 0 and `eta` the detected-per-visible-host ratio, which carries the missed detections,
-overlap, saturation, in-window bleaching and field exits at that density. With the expected visible hosts
-per subunit `v` under the declared visibility and initial composition, each iteration proposes
-`N_R = c_exp / (eta * v)`, moving at most a factor of two per step, until the rendered and proposed values
-agree within the tolerance.
+fluorescent hosts at frame 0 and `eta` the detected-per-fluorescent-host ratio, which carries the missed
+detections, overlap, saturation, in-window bleaching and field exits at that density.
+
+The expected fluorescent hosts per receptor subunit `v` follow the generator's two steps, as expectations
+without rounding: the reference probe-bound population from the declared basal reference fraction `f`,
+then, under MET-INLB, the window-start allocation of a share `R_active` of the probe-bound monomer pairs
+into two-InlB dimers (MET-FAB declares the allocation 0, so its starting population is the reference
+population); the starting population's expected fluorescence is the one expected-fluorescence function of
+the package (`labeling.expected_fluorescent_complexes`). The declared values are read by key, so the same
+code serves both conditions. At MET-FAB's declared `f = 0.075`, `v = 0.011894875`. Each iteration proposes
+`N_total = c_exp / (eta * v)`, moving at most a factor of two per step, until the rendered and proposed
+values agree within the tolerance. Under the `--occupancy` override the per-class coins act on each
+represented subunit instead (an approximation, stated in the script).
 
 Every render passes one count test before it is made: the first, each update and the check renders. No
-render exceeds `--max-count` (10000), and none lies outside the prior box of `N_R` (316-3162, the training
-support) without the user's decision, which `--allow-outside-prior` records. Without it, a count outside
-the box stops the recording's match before anything is rendered there.
+render exceeds `--max-count` (100,000, the prior ceiling), and none lies outside the prior box of `N_total`
+(1,000–100,000, the training support) without the user's decision, which `--allow-outside-prior` records.
+Without it, a count outside the box stops the recording's match before anything is rendered there. At the
+prior ceiling MET-FAB places about 1,466–1,477 initial particles for every basal fraction, while its
+represented receptors rise from 1,477 (`f = 0`) to 2,932 (`f = 1`), because more probe-free partners are
+represented inside dimers; MET-INLB holds about 4,762 represented receptors.
 
-Normalizing by each render's realized initial visibility reduces the labeling-count variability of a single
+Every requested recording's declaration is read before any recording or render: a fraction outside [0, 1]
+is refused there, never clipped, and so is an allocation stated under MET-FAB.
+
+Normalizing by each render's realized initial fluorescence reduces the labeling-count variability of a single
 render. The remaining simulation variability, and the dependence of `eta` on density, arrangement, overlap,
 dye multiplicity and motion, are not removed (`E[eta V]` is not `E[eta] E[V]` in general). The 3 %
-tolerance is an iteration criterion, not an uncertainty of `N_R`. One independent check render at the
+tolerance is an iteration criterion, not an uncertainty of `N_total`. One independent check render at the
 accepted value (`--check-renders`, default 1) reports the count it produces beside the recording's.
 
 ## Statuses
@@ -45,12 +60,12 @@ other status keeps its diagnostics, carries no count, and makes the run exit wit
 | status | meaning |
 |---|---|
 | `undefined_no_experimental_detections` | the recording's opening window has no accepted spot |
-| `undefined_no_visibility` | the declared labeling and composition give no visible host |
-| `undefined_no_visible_hosts` | a render has no visible host at frame 0, so `eta` is undefined |
+| `undefined_no_visibility` | the declared labeling and composition give no fluorescent host |
+| `undefined_no_visible_hosts` | a render has no fluorescent host at frame 0, so `eta` is undefined |
 | `undefined_no_synthetic_detections` | a render has no accepted spot |
 | `undefined_nonfinite_update` | the proposal is not a finite positive count |
 | `unresolved_saturation` | count matching unresolved under detector saturation: across a step of at least 25 % the detected count responds with an elasticity below `--min-elasticity` (0.3) while a larger count is proposed; no value is reported |
-| `unresolved_max_count` | the next count (the first included) or the converged one exceeds `--max-count` (10000); nothing is rendered above it |
+| `unresolved_max_count` | the next count (the first included) or the converged one exceeds `--max-count` (100,000); nothing is rendered above it |
 | `user_decision_outside_prior` | the next count (the first included) or the converged one lies outside the prior box: nothing is rendered there, and the user decides whether to render it (`--allow-outside-prior`) |
 | `not_converged` | the iteration budget is exhausted |
 
@@ -82,5 +97,5 @@ result records:
 - every iteration and the check render;
 - the labeling plan and the imaging artifact's identity;
 - the declared file's path and SHA-256;
-- the resolved values of all eleven parameters;
+- the resolved values of the condition's parameters (eleven under MET-FAB, twelve under MET-INLB);
 - the settings and the package version.

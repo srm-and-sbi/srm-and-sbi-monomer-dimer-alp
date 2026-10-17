@@ -7,11 +7,14 @@ implementation realizes the labeling model it documents (`labeling`,
     Level 1 (laws)      Every registered labeling law reproduces its analytic mean, variance,
                         and zero-dye probability on a large draw; the derived visible fractions
                         (monomer 1 - P0, dimer 1 - P0^2) follow.
-    Level 2 (lineage)   On a reactive trajectory simulated at the biology prior center, the
-                        reaction records replay into a subunit lineage that covers every
-                        subunit exactly once per frame, agrees with the particles observable
-                        (host present, particle type matches, multiplicity matches), and shows the
-                        particle-id churn the design relies on (a subunit visits several ids).
+    Level 2 (lineage)   On a reactive trajectory simulated at the MET-INLB prior center (its twelve
+                        values; the window-start allocation pairs c = 40 probe-bound monomer pairs,
+                        so the starting population is 79 A + 302 B1 + 48 B2 at N_total = 10,000),
+                        the frame-0 hosts per molecular species equal the starting counts of the
+                        composition helper, and the reaction records replay into a subunit lineage
+                        that covers every subunit exactly once per frame, agrees with the particles
+                        observable (host present, particle type matches, multiplicity matches), and
+                        shows the particle-id churn the design relies on (a subunit visits several ids).
     Level 3 (draw)      Repeated static draws of the BARE labeling law (probe occupancy 1) on
                         that lineage reproduce the law's visible fractions and, for the MET-INLB
                         law, the two-thirds one-dye share among visible dimers -- the arithmetic
@@ -58,12 +61,13 @@ import readdy  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
-    PARAMETERIZATION, PARAMETERS, RunTiming, prior_center,
+    PARAMETERS, RunTiming, parameterization_of, prior_center,
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (  # noqa: E402
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
-    extract_trajectory_poses, monomer_ranks, rank_to_species,
+    extract_trajectory_poses, initial_composition_of, initial_species_counts, monomer_ranks,
+    rank_to_species,
 )
 
 assert os.path.abspath(lab.__file__).startswith(REPO_ROOT), (
@@ -125,19 +129,42 @@ def laws() -> dict:
 # Level 2: lineage on a reactive trajectory at the prior center
 # ----------------------------------------------------------------------------------------------
 
+# MET-INLB: the condition with association switched on, so the lineage exercises every channel
+# (fusion concatenates, fission distributes, conversion preserves); its table has twelve rows, the
+# window-start allocation included.
+REACTIVE_CONDITION = "INLB"
+
+
+def prior_center_theta(condition: str) -> np.ndarray:
+    """Physical prior center of the condition's table, in its theta order."""
+    return np.array([prior_center(p) for p in parameterization_of(condition)], dtype=float)
+
+
+def frame0_species_counts(tray, condition: str) -> dict:
+    """Frame-0 hosts per molecular species of ``condition`` (A, B1, B2 under MET-INLB), summed over
+    the mobility modes, from the particles observable; keyed like ``initial_species_counts``."""
+    rds = PARAMETERS.simulation.rds
+    _, types, _, _ = tray.read_observable_particles()
+    name_of_rank = {int(rank): name for name, rank in tray.particle_types.items()}
+    counts = {sp.name: 0 for sp in rds.species_for(condition)}
+    for t in types[0]:
+        counts[rds.molecule_of_type[name_of_rank[int(t)]]] += 1
+    return counts
+
+
 def reactive_lineage(workdir: str) -> dict:
-    theta = np.array([p["VALUE"] for p in PARAMETERIZATION], dtype=float)   # prior center (VALUE is physical)
+    theta = prior_center_theta(REACTIVE_CONDITION)
+    starting = dict(initial_species_counts(initial_composition_of(theta, REACTIVE_CONDITION)))
     timing = RunTiming(total_time_seconds=2.0, frames=PARAMETERS.simulation.timing)
-    # MET-INLB: the condition with association switched on, so the lineage exercises every
-    # channel (fusion concatenates, fission distributes, conversion preserves).
-    stem = build_system(theta, "INLB")
-    smut = build_simulation(stem, theta, "INLB", seed=SEED)
+    stem = build_system(theta, REACTIVE_CONDITION)
+    smut = build_simulation(stem, theta, REACTIVE_CONDITION, seed=SEED)
     traj = os.path.join(workdir, "labeling_audit_center.h5")
     smut.output_file = traj
     smut.progress_output_stride = timing.total_steps
     smut.run(n_steps=timing.total_steps,
              timestep=timing.delta_time_nanoseconds * readdy.units.nanosecond, show_summary=False)
     tray = readdy.Trajectory(traj)
+    frame0 = frame0_species_counts(tray, REACTIVE_CONDITION)     # placed hosts against the helper's starting counts
     poses = extract_trajectory_poses(tray)
     lineage = extract_subunit_lineage(tray)
     soul_poses = collapse_species_axis(poses)
@@ -171,6 +198,7 @@ def reactive_lineage(workdir: str) -> dict:
         n_frames=lineage.n_frames, n_records=n_records,
         cover_consistent=bool(consistent), host_positions_finite=bool(finite),
         max_ids_per_subunit=int(visits.max()), mean_ids_per_subunit=float(visits.mean()),
+        frame0_hosts=frame0, starting_counts=starting, frame0_equals_starting=bool(frame0 == starting),
         monomer_ranks=mono_ranks, species_of_rank=species_of_rank, theta_center=theta.tolist(),
         _lineage=lineage,
     )
@@ -338,8 +366,10 @@ def write_report(law_out, lin, drw, occ, ren, verdicts) -> None:
         f"{N_LAW:,} times; mean, variance, and zero-dye probability must match the analytic values "
         f"within {TOL_LAW_REL:.0%} relative. The visible fractions follow from P0 by arithmetic.")
     add("")
-    add("**Level 2 (lineage).** A 2 s reactive trajectory at the biology prior center is simulated in "
-        "a temporary directory, its reaction records replayed into the subunit lineage, and the lineage "
+    add("**Level 2 (lineage).** A 2 s reactive trajectory at the MET-INLB prior center (its twelve values, "
+        "the window-start allocation included) is simulated in a temporary directory; its frame-0 hosts per "
+        "molecular species must equal the starting counts of the composition helper; its reaction records "
+        "are replayed into the subunit lineage, and the lineage "
         "checked independently against the particles observable: every host present in its frame with "
         "the recorded particle type, every particle covered by exactly its type's subunit count, every host "
         "position finite. The particle-id churn (ids visited per subunit) documents why the lineage is "
@@ -375,7 +405,8 @@ def write_report(law_out, lin, drw, occ, ren, verdicts) -> None:
         add(f"| 1 | {name} = {r['describe']} | max rel. err < {TOL_LAW_REL:.0%} | "
             f"mean {r['mean_emp']:.4f}/{r['mean']:.4f}, var {r['variance_emp']:.4f}/{r['variance']:.4f}, "
             f"P0 {r['p0_emp']:.4f}/{r['p0']:.4f} (max err {r['max_rel_err']:.2%}) | {verdicts['law_' + name]} |")
-    add(f"| 2 | lineage covers every subunit, agrees with the particles observable | exact | "
+    add(f"| 2 | frame-0 hosts equal the starting counts; lineage covers every subunit, agrees with the particles "
+        f"observable | exact | frame-0 hosts {lin['frame0_hosts']} vs starting {lin['starting_counts']}; "
         f"{lin['n_subunits']} subunits over {lin['n_particle_ids']} particle ids in {lin['n_frames']} frames; "
         f"{lin['n_records']} records; up to {lin['max_ids_per_subunit']} ids per subunit "
         f"(mean {lin['mean_ids_per_subunit']:.1f}) | {verdicts['lineage']} |")
@@ -424,8 +455,9 @@ def write_report(law_out, lin, drw, occ, ren, verdicts) -> None:
     add("")
     add("## 4. Audit operating point")
     add("")
-    theta_desc = ", ".join(f"{p['KEY']}={v:.4g}" for p, v in zip(PARAMETERIZATION, lin["theta_center"]))
-    add(f"Laws: {N_LAW:,} draws each. Lineage: theta at the biology prior center ({theta_desc}), "
+    theta_desc = ", ".join(f"{p['KEY']}={v:.4g}" for p, v in zip(parameterization_of(REACTIVE_CONDITION),
+                                                                   lin["theta_center"]))
+    add(f"Laws: {N_LAW:,} draws each. Lineage: theta at the {REACTIVE_CONDITION} prior center ({theta_desc}), "
         f"2 s at the configured cadence, seed {SEED}. Draws: {N_DRAWS} labelings per condition. Renders: "
         f"{T_RENDER} frames, imaging at the prior center of every imaging parameter with bleaching off, "
         "9x9 apertures.")
@@ -437,7 +469,7 @@ def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
     print("Level 1: laws ...")
     law_out = laws()
-    print("Level 2: reactive lineage at the prior center ...")
+    print(f"Level 2: reactive lineage at the {REACTIVE_CONDITION} prior center ...")
     with tempfile.TemporaryDirectory(prefix="labeling_audit_") as workdir:
         lin = reactive_lineage(workdir)
     lineage = lin.pop("_lineage")
@@ -452,7 +484,7 @@ def main() -> None:
     for name, r in law_out.items():
         verdicts["law_" + name] = passed(r["max_rel_err"] < TOL_LAW_REL)
     verdicts["lineage"] = passed(lin["cover_consistent"] and lin["host_positions_finite"]
-                                 and lin["max_ids_per_subunit"] >= 1)
+                                 and lin["max_ids_per_subunit"] >= 1 and lin["frame0_equals_starting"])
     for cond, d in drw.items():
         verdicts["fractions_" + cond] = passed(
             abs(d["visible_monomer_emp"] - d["visible_monomer"]) < TOL_FRACTION

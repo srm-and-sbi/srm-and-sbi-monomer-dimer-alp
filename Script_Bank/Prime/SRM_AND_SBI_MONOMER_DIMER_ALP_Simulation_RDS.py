@@ -1,11 +1,13 @@
 """Entry-point script: generate one condition's ReaDDy reaction-diffusion trajectory tier.
 
-Samples the eleven reaction-diffusion parameters of the separated stoichiometry-mobility
-model (two molecular species under MET-FAB, A monomer and B dimer, three under MET-INLB with
-the one- and two-InlB dimers B1 and B2, each in three mobility modes f / s / i: six or nine
-particle types; the reaction channels generated from the model blocks and the run's
-condition) from the box-uniform prior in the estimator space (log10 for log rows, the
-value itself for the linear initial dimer fraction), maps them to physical values with
+Samples the condition's reaction-diffusion parameters of the separated stoichiometry-mobility
+model (eleven coordinates under MET-FAB, twelve under MET-INLB, whose window-start allocation
+is inferred while MET-FAB declares it 0; two molecular species under MET-FAB, A monomer and B
+dimer, three under MET-INLB with the one- and two-InlB dimers B1 and B2, each in three
+mobility modes f / s / i: six or nine particle types; the reaction channels generated from
+the model blocks and the run's condition) from the box-uniform prior in the estimator space
+(log10 for log rows, the value itself for the two linear fraction rows: the basal reference
+fraction and the allocation), maps them to physical values with
 ``parameterization.to_physical``, runs ReaDDy simulations for each (task, simulation)
 pair, and saves the resulting particle trajectories (with their reaction records) as .h5
 files and the parameter samples as a .zarr (compressed) or .npy (uncompressed) theta set.

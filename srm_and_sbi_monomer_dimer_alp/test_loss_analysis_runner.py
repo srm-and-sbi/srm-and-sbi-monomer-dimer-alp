@@ -115,9 +115,13 @@ def run_test_loss_analysis(cfg: WorkflowConfig, args: argparse.Namespace) -> int
                    note="The theta columns line up with the learnable rows of the manifest "
                         "parameter table, in declaration order.")
     space = manifest.get("theta_space", "?")
-    reporter.check("theta_space_is_log10", space == "log10", f"theta_space={space}", fatal=False,
+    log_flags = tla.theta_log_flags(manifest, entries)
+    space_ok, space_detail = tla.theta_space_check(manifest, log_flags)
+    reporter.check("theta_space_is_estimator_coordinates", space_ok, space_detail, fatal=False,
                    note="The uniform-prior reference is computed in the space the density is "
-                        "scored in; it assumes log10 theta.")
+                        "scored in: estimator coordinates (log10 for a log row, the value itself "
+                        "for a linear row; the label 'log10' is accepted for an all-log table).")
+    units = tla.width_units(log_flags)
 
     nll_prior, widths = tla.prior_reference_nll(entries)
     threshold = args.tail_threshold if args.tail_threshold is not None else nll_prior
@@ -130,6 +134,8 @@ def run_test_loss_analysis(cfg: WorkflowConfig, args: argparse.Namespace) -> int
          ["project alias", manifest.get("project_alias", "?")],
          ["timing label", manifest.get("timing_label", "?")],
          ["theta space", space],
+         ["condition", manifest.get("condition", "?")],
+         ["linear rows", ", ".join(k for k, v in zip(keys, log_flags) if not v) or "none"],
          ["best epoch", manifest.get("epoch", "?")],
          ["best test NLL (manifest)", f"{manifest.get('best_test_loss', float('nan')):.6f}"],
          ["test examples", f"{n_finite} finite / {n_total} total"],
@@ -160,10 +166,13 @@ def run_test_loss_analysis(cfg: WorkflowConfig, args: argparse.Namespace) -> int
     reporter.stat("mean_ci95", f"[{card['mean_ci95'][0]:.4f}, {card['mean_ci95'][1]:.4f}]",
                   note=f"Percentile bootstrap ({args.n_boot} resamples), post-hoc.")
     reporter.stat("uniform_prior_nll", round(nll_prior, 6),
-                  note="No-information baseline = log prior-box volume; an estimator that "
-                       "learned nothing scores this.")
+                  note="No-information baseline = log prior-box volume in estimator coordinates "
+                       "(a [0, 1] linear row contributes ln 1 = 0); an estimator that learned "
+                       "nothing scores this. NLL values compare only within one parameterization: "
+                       "the density is over a different space when the keys or row scales differ.")
     reporter.stat("information_gain_nats", round(nll_prior - mean, 6),
-                  note="How far the mean NLL sits below the prior baseline (nats gained).")
+                  note="How far the mean NLL sits below the prior baseline (nats gained); "
+                       "comparable only between estimators of one parameterization.")
     reporter.stat("worse_than_prior_fraction", round(card["tail_mass"], 6), expected="small",
                   note=f"Fraction of examples with NLL > {threshold:.3f} (the estimator did "
                        "worse than the prior there).")
@@ -198,22 +207,24 @@ def run_test_loss_analysis(cfg: WorkflowConfig, args: argparse.Namespace) -> int
                      "identifiability limit (a wide but calibrated posterior there) or "
                      "overconfidence is answered by the Posterior_Calibration diagnostic, "
                      "stratified by inferred value; this locates WHERE, that measures WHETHER.")
+        unit_of = dict(zip(keys, units))
         reporter.table(
             "Per-parameter tail analysis (ranked by KS D)",
-            ["parameter", "prior range (log10)", "Spearman rho", "rho p (BH)",
+            ["parameter", "prior width", "units", "Spearman rho", "rho p (BH)",
              "mean shift (hard-bulk)", "KS D", "KS p (BH)"],
-            [[r["key"], f"{r['width']:.3g}", f"{r['rho']:+.3f}", f"{r['rho_p_bh']:.3g}",
-              f"{r['mean_shift']:+.3f}", f"{r['ks_stat']:.3f}", f"{r['ks_p_bh']:.3g}"]
+            [[r["key"], f"{r['width']:.3g}", unit_of.get(r["key"], "?"), f"{r['rho']:+.3f}",
+              f"{r['rho_p_bh']:.3g}", f"{r['mean_shift']:+.3f}", f"{r['ks_stat']:.3f}", f"{r['ks_p_bh']:.3g}"]
              for r in rows],
             note="Spearman rho = monotone NLL-vs-value trend over all examples; KS D and the "
-                 "mean shift compare the hardest examples against the rest. Larger |rho| or KS "
-                 "D = that parameter more strongly marks the hard examples, and the sign shows "
-                 "which end of its range is harder (negative = harder at low values). p-values "
-                 "are Benjamini-Hochberg-adjusted; with this many examples nearly all are "
-                 "significant, so judge difficulty by the effect sizes (rho, KS D), not the "
-                 "p-values.")
+                 "mean shift compare the hardest examples against the rest. 'prior width' and "
+                 "the mean shift are in the row's estimator coordinate ('units': dex for a log "
+                 "row, abs for a linear row). Larger |rho| or KS D = that parameter more strongly "
+                 "marks the hard examples, and the sign shows which end of its range is harder "
+                 "(negative = harder at low values). p-values are Benjamini-Hochberg-adjusted; "
+                 "with this many examples nearly all are significant, so judge difficulty by the "
+                 "effect sizes (rho, KS D), not the p-values.")
         reporter.save_figure(
-            "loss_vs_theta", tla.figure_loss_vs_theta(loss, theta, keys, nll_prior),
+            "loss_vs_theta", tla.figure_loss_vs_theta(loss, theta, keys, nll_prior, log_flags),
             caption="P3. Joint density of NLL against each learnable parameter (hexbin = "
                     "examples per cell, log scale; orange = median NLL across the range; red "
                     "dashed = uniform-prior baseline). GOOD: the orange line stays low and flat "

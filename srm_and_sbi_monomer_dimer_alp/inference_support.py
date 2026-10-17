@@ -123,20 +123,29 @@ class VideoDataset(Dataset):
                  augment: bool = True,
                  split: str = "TRAIN",
                  return_index: bool = False,
+                 *,
                  paths=None,
                  parameterization=None):
-        # `parameterization` is the learnable table whose per-row scale converts the stored
-        # PHYSICAL theta to the estimator's space (parameterization.to_flow): the per-row
-        # scale is the table's contract (a linear row, if one is ever declared, must not be
-        # log-transformed), so no blanket log10 here. None -> the biology table.
-        from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERIZATION
-        self.parameterization = PARAMETERIZATION if parameterization is None else parameterization
-        # `paths` selects the filename namespace. Default is the canonical
-        # PARAMETERS.paths (byte-identical to previous behavior); the Detector
-        # workflow passes an aliased Paths (project_alias + "_DETECTOR") so it
-        # loads its own namespaced data. Only the filename prefix changes; the
-        # directory (data_bank_root) is still the caller's argument.
-        paths = paths if paths is not None else PARAMETERS.paths
+        # `parameterization` is the workflow's learnable table under the run's condition
+        # (workflow.parameter_table(cfg, condition)), whose per-row scale converts the stored
+        # PHYSICAL theta to the estimator's space (parameterization.to_flow): the per-row scale
+        # is the table's contract (the two linear fraction rows pass through), so no blanket
+        # log10 here. REQUIRED: the biology width differs between the conditions, so no default
+        # table exists.
+        if parameterization is None:
+            raise ValueError("VideoDataset: `parameterization` is required (workflow.parameter_table(cfg, "
+                             "condition)); the biology table is per condition, eleven rows under MET-FAB "
+                             "and twelve under MET-INLB.")
+        self.parameterization = list(parameterization)
+        # `paths` selects the filename namespace and the CONDITION: the biology's
+        # PARAMETERS.paths or the detector's aliased Paths (project_alias + "_DETECTOR"),
+        # with the condition applied (Paths.with_condition), so the dataset loads its own
+        # namespaced, per-condition data; the directory (data_bank_root) is still the
+        # caller's argument. REQUIRED, and the condition must be set.
+        if paths is None or paths.condition is None:
+            raise ValueError("VideoDataset: `paths` carrying the condition is required "
+                             "(cfg.paths.with_condition(condition)); every Theta_Set is per condition.")
+        self.condition = str(paths.condition)
         video_paths = []
         theta_paths = []
         for task_alias in range(tasks):
@@ -153,7 +162,7 @@ class VideoDataset(Dataset):
         # scales); a tier drawn under another table is refused here, before any training.
         from srm_and_sbi_monomer_dimer_alp.io import check_theta_set_schema
         for theta_path in theta_paths:
-            check_theta_set_schema(theta_path, self.parameterization)
+            check_theta_set_schema(theta_path, self.parameterization, condition=self.condition)
 
         # Probe the last theta file to determine how many examples per file.
         probe = load_data(theta_paths[-1])
@@ -377,12 +386,31 @@ def cleanup_distributed() -> None:
         dist.destroy_process_group()
 
 
+def theta_standardization_batch(dataset: "VideoDataset") -> torch.Tensor:
+    """Every theta label of ``dataset`` (its indices, in order), in ESTIMATOR coordinates, as one
+    float32 tensor of shape ``(n_examples, n_theta)``: the representative batch the biology
+    Inference stage hands ``build_maf`` as ``batch_x`` so that an ``independent`` standardization
+    fits each coordinate's mean and scale from about a thousand prior draws, never from the
+    two-row dummy batch that fixes the video side. Reads the theta stores only (no video is
+    opened), through the dataset's own table and the one conversion rule, so it is
+    deterministic and identical on every rank."""
+    from srm_and_sbi_monomer_dimer_alp.parameterization import to_flow
+    labels = []
+    for task_index in range(len(dataset.theta_paths)):
+        theta_array = np.asarray(load_data(dataset.theta_paths[task_index]))
+        labels.append(theta_array)
+    all_rows = np.concatenate(labels, axis=0)
+    selected = all_rows[np.asarray(dataset.indices, dtype=np.int64)]
+    return torch.tensor(to_flow(selected, dataset.parameterization), dtype=torch.float32)
+
+
 def build_datasets(train_tasks: int,
                    data_bank_root: Path,
                    timing_label: str,
                    compress: bool = True,
                    test_tasks: int = 0,
                    test_return_index: bool = False,
+                   *,
                    paths=None,
                    parameterization=None,
                    ) -> tuple:

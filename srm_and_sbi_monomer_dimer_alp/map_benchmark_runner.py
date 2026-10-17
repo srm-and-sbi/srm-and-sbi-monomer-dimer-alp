@@ -216,7 +216,7 @@ def _process_group(flow, post, rows, videos, truth_rows, dev, args, prior_w, n_s
 
 
 def run_map_benchmark(cfg: WorkflowConfig, args: argparse.Namespace) -> int:
-    spec = _validation_spec(cfg)
+    spec = _validation_spec(cfg, args.condition)      # detector only; refuses a biology workflow
     ev = PARAMETERS.inference.evaluation
     timing = RunTiming(total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing)
     root = Path(args.data_bank_root) if args.data_bank_root else PARAMETERS.machine.data_bank_root

@@ -64,7 +64,7 @@ _CHECK_GLOSSARY = {
 }
 
 
-# Display labels for the long-form UNIT strings in PARAMETERIZATION, for compact
+# Display labels for the long-form UNIT strings of the parameter tables, for compact
 # table rendering.
 _UNIT_DISPLAY = {
     "Count": "count",
@@ -72,6 +72,7 @@ _UNIT_DISPLAY = {
     "Square Micrometer Per (Count*Second)": "um^2/(count*s)",
     "Count Per Second": "1/s",
     "Dimensionless": "dimensionless",
+    "Fraction": "fraction",
     "": "",
 }
 
@@ -86,8 +87,10 @@ def prior_sampling_table(parameterization, theta):
     simulation was seeded with match what the rendered video shows.
 
     Args:
-        parameterization: the PARAMETERIZATION list (dicts with KEY,
-            PRIOR_RANGE, UNIT), in the same order as ``theta``.
+        parameterization: the condition's learnable table (``parameterization_of(condition)``
+            for the biology, eleven rows under MET-FAB and twelve under MET-INLB; the six-row
+            detector table), dicts with KEY, PRIOR_RANGE, UNIT, in the same order as ``theta``,
+            whose width must match it.
         theta: physical (already exponentiated) sampled parameter values.
 
     Returns:
@@ -95,6 +98,11 @@ def prior_sampling_table(parameterization, theta):
     """
     headers = ["parameter", "label", "scale", "prior box (estimator space)",
                "sampled coordinate", "sampled value", "units", "derived unit", "kind"]
+    theta = np.asarray(theta, dtype=float)
+    if theta.shape != (len(parameterization),):
+        raise ValueError(f"prior_sampling_table: theta has shape {theta.shape}; the table has "
+                         f"{len(parameterization)} rows ({[p['KEY'] for p in parameterization]}). The biology "
+                         f"table is per condition (eleven rows under MET-FAB, twelve under MET-INLB).")
     rows = []
     for i, para in enumerate(parameterization):
         lo, hi = para["PRIOR_RANGE"]
@@ -226,6 +234,7 @@ class DiagnosticReporter:
         self.dump_dir = Path(dump_dir) if dump_dir else None
 
         self._checks = []        # list of (name, passed, detail)
+        self._unavailable = []   # list of (name, reason): checks that could not be evaluated
         self._stats = []         # list of (name, value, expected, note)
         self._tables = []        # list of (title, headers, rows, note)
         self._figures = []       # list of (name, relative_png_path, caption)
@@ -284,6 +293,20 @@ class DiagnosticReporter:
                 f"[{self.stage}] CHECK FAILED: {name}{suffix}"
             )
         return passed
+
+    def check_unavailable(self, name: str, reason: str, note: str = "") -> None:
+        """Record a check that cannot be evaluated on this input: neither a PASS nor a FAIL.
+
+        For an invariant whose subject is absent (a closure over the valid draws when no draw is
+        valid). It never raises and never counts as passed; the report lists it as UNAVAILABLE
+        with ``reason``, so an absent result cannot read as a verified one.
+        """
+        if not self.enabled:
+            return
+        self._unavailable.append((name, reason))
+        if note:
+            self._check_notes[name] = note
+        print(f"  [N/A ] {name} - {reason}", flush=True)
 
     # -- convenience checkers ------------------------------------------
     def check_no_nan_inf(self, name: str, array, fatal: bool = True) -> bool:
@@ -457,13 +480,16 @@ class DiagnosticReporter:
         n_pass = sum(1 for _, p, _ in self._checks if p)
         n_fail = sum(1 for _, p, _ in self._checks if not p)
         print(SINK, flush=True)
-        print(f"[{self.stage}] CHECKS: {n_pass} passed, {n_fail} failed",
+        print(f"[{self.stage}] CHECKS: {n_pass} passed, {n_fail} failed"
+              + (f", {len(self._unavailable)} unavailable" if self._unavailable else ""),
               flush=True)
         if n_fail:
             for name, passed, detail in self._checks:
                 if not passed:
                     suffix = f" - {detail}" if detail else ""
                     print(f"  FAILED: {name}{suffix}", flush=True)
+        for name, reason in self._unavailable:
+            print(f"  UNAVAILABLE: {name} - {reason}", flush=True)
         print(SOCK, flush=True)
 
     def write_report(self) -> Optional[Path]:
@@ -484,13 +510,16 @@ class DiagnosticReporter:
         lines.append("")
 
         # -- Checks table --------------------------------------------------
-        lines.append(f"## Checks - {n_pass} passed, {n_fail} failed")
+        lines.append(f"## Checks - {n_pass} passed, {n_fail} failed"
+                     + (f", {len(self._unavailable)} unavailable" if self._unavailable else ""))
         lines.append("")
         lines.append("| check | result | detail |")
         lines.append("|---|---|---|")
         for name, passed, detail in self._checks:
             lines.append(f"| {name} | {'PASS' if passed else 'FAIL'} "
                          f"| {detail or '-'} |")
+        for name, reason in self._unavailable:
+            lines.append(f"| {name} | UNAVAILABLE | {reason} |")
         lines.append("")
 
         # -- Quantitative table (with a plain-language meaning column) -----
@@ -519,11 +548,14 @@ class DiagnosticReporter:
 
         # -- Legend: explain the checks (and PASS/FAIL convention) ---------
         legend = self._legend_lines()
-        if legend:
+        if legend or self._unavailable:
             lines.append("## What these mean")
             lines.append("")
             lines.append("A check **PASS** means the invariant held; a **FAIL** "
-                         "aborts the run immediately with a located error message.")
+                         "aborts the run immediately with a located error message."
+                         + (" An **UNAVAILABLE** check could not be evaluated on this "
+                            "input (the reason stands beside it); it is neither a pass "
+                            "nor a failure." if self._unavailable else ""))
             lines.append("")
             lines.extend(legend)
             lines.append("")

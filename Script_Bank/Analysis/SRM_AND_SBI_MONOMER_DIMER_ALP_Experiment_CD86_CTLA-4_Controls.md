@@ -1,7 +1,5 @@
 # Control-receptor experiment (CD86 / CTLA-4) — usage and interpretation
 
-> **Note (2026-09-14).** Release 0.1.4 gave every learnable row of the eleven-parameter table its decided prior range and replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r` (`x_B = 2r / (1 + 2r)` is derived), and made probe occupancy a declared per-condition input of the MET conditions (`PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*). An application of a MET-trained posterior to the control recordings inherits that table's ranges and occupancy conventions. Results quoted from earlier runs stand as recorded.
-
 Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py`. The script
 MAP-estimates the model parameters from real single-particle-tracking recordings of
 two control receptors — CD86 and CTLA-4 — by reusing the DIMER-ALP posterior trained
@@ -16,6 +14,15 @@ dataset folder it reads, the output directory it writes, and its default `--kind
 every estimation and reporting behavior is identical, so the canonical MET Experiment
 stage and its outputs are never touched. It lives in `Script_Bank/Analysis`, is not one
 of the canonical pipeline stages, and is kept out of the stage dispatcher.
+
+**The parameter table.** `--condition` names the MET estimator applied (MET-FAB or
+MET-INLB), and that condition binds the parameter table and its keys, exactly as in the
+Experiment stage: eleven learnable rows under MET-FAB, twelve under MET-INLB, whose
+twelfth row is the window-start allocation R_active. The estimator's schema guard, the
+device prior, the SGM scale, the stored `parameter_keys` and every report table follow
+that table; the control kinds never select one, so every value is read under the
+estimator's model, its prior ranges and its condition's declared probe occupancy
+(`PROJECT_CONTEXT.md` §2, *How the prior ranges and the declared inputs are set*).
 
 ## What it does
 
@@ -57,7 +64,7 @@ Single process — estimates and writes the report directly:
 
     MACHINE_PROFILE=<profile> python \
       Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py \
-      --total-time-seconds 2.0 --kinds CD86,CTLA-4 [--dry-run]
+      --condition FAB --total-time-seconds 2.0 --kinds CD86,CTLA-4 [--dry-run]
 
 Multi-GPU — each worker MAP-estimates its share of the (kind, cell) work and writes a
 shard; a separate combine-only `--merge` pass (no GPU) concatenates the shards into the
@@ -65,13 +72,17 @@ final report:
 
     MACHINE_PROFILE=<profile> torchrun --nproc_per_node=4 \
       SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py \
-      --total-time-seconds 2.0 --kinds CD86,CTLA-4 --pool-mode unrestricted
+      --condition FAB --total-time-seconds 2.0 --kinds CD86,CTLA-4 --pool-mode unrestricted
     MACHINE_PROFILE=<profile> python \
       SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py \
-      --total-time-seconds 2.0 --kinds CD86,CTLA-4 --merge
+      --condition FAB --total-time-seconds 2.0 --kinds CD86,CTLA-4 --merge
 
 Arguments:
 
+- `--condition` (required) — the condition of the MET estimator applied (`FAB` or
+  `INLB`): selects its namespace and binds its parameter table and keys (eleven rows
+  under MET-FAB, twelve under MET-INLB). The dry run checks the estimator manifest's keys
+  against the condition's before any GPU work.
 - `--total-time-seconds` (required) — the model-window duration in seconds; must match
   the trained posterior (e.g. `2.0`). It sets the window length each recording is
   chunked into and locates the posterior.
@@ -130,21 +141,27 @@ Inputs:
 ## Outputs
 
 Written to
-`<data_bank>/<posit_subdir>/SRM_AND_SBI_MONOMER_DIMER_ALP_<timing_label>_MAP_Experiment_CD86_CTLA-4_CONTROLS/`
-(for example `SRM_AND_SBI_MONOMER_DIMER_ALP_2S_50FPS_MAP_Experiment_CD86_CTLA-4_CONTROLS/`),
-distinct from the canonical MET Experiment output directory:
+`<data_bank>/<posit_subdir>/SRM_AND_SBI_MONOMER_DIMER_ALP_<CONDITION>_<timing_label>_MAP_Experiment_CD86_CTLA-4_CONTROLS/`
+(for example `SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_MAP_Experiment_CD86_CTLA-4_CONTROLS/`,
+the condition being the estimator's), distinct from the canonical MET Experiment output
+directory:
 
 - `<dir-name>.npz` — the per-(cell, chunk) arrays: `map_estimate` (the numerical MAP
-  candidate, log10 units), `posterior_quantiles` (five levels per parameter per chunk; the
+  candidate, in estimator coordinates: log10 for a log row, the fraction itself for a
+  linear row), `posterior_quantiles` (five levels per parameter per chunk; the
   marginal median is the 0.50 level, located from the manifest), `posterior_sgm` (the SGM of
   the same draws), `scores` (log-density at the returned MAP candidate), `kind_index`,
   `cell`, `chunk`, `kinds`, and `manifest_json` (the computation contract). This is the
   reusable record; downstream analyses (including the temporal-dynamics companion) read it
   through the artifact schema, which refuses the obsolete `inferred_log10` layout.
 - `report.md` — the deliverable: run statistics (conditions, total estimates,
-  aggregation view, per-condition estimate counts, mean MAP log-density), and a table of
-  inferred theta by condition in log10 units, noting explicitly that real data have no
-  ground truth.
+  aggregation view, per-condition estimate counts, mean MAP log-density); the three
+  point-estimate tables by condition in estimator coordinates, each row with its `units`
+  (log10 for a log row, the fraction for a linear row), noting explicitly that real data
+  have no ground truth; the agreement table (dex for a log row, percentage points for a
+  linear row); and, per kind, a flagged-fractions table counting the linear-row values
+  outside [0, 1], which are left as estimated and never clipped. Every table and figure
+  states that its values are read under the estimator's parameter table.
 - `figures/` — one `experiment_<key>.png` per learnable parameter (built by
   `figure_experiment_combined`): the per-condition distribution of the MAP candidate, and
   each chunk's marginal median ± IQR of its draws per condition with the MAP overlaid. Both
@@ -155,7 +172,7 @@ distinct from the canonical MET Experiment output directory:
 ## How to read the result
 
 The report table is a side-by-side comparison of the inferred parameter distributions
-of the two conditions, in log10 units. It answers "how do the inferred parameters differ
+of the two conditions, in estimator coordinates. It answers "how do the inferred parameters differ
 between CD86 and CTLA-4?", not "what is the true value?" — there is no true value to
 compare against on real data. Read differences **between** conditions, and read the
 diffusion parameters (the monomer diffusivity D_A and, through the ratio R_B, the mobile
@@ -204,7 +221,9 @@ coefficients, and the per-window temporal behavior — see
   posteriors. Re-run this analysis on those for the definitive figures.
 - **Relative parameters** (R_B, R_s, R_i) are reported as the dimensionless ratios the
   model samples; the association ratio is not a parameter (it is a declared per-condition
-  constant of the generator), so no figure is emitted for it.
+  constant of the generator), so no figure is emitted for it. The window-start
+  allocation R_active is a learnable row under a MET-INLB estimator only; under MET-FAB
+  it is the declared 0 and has no figure.
 
 ## Reference
 

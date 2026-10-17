@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO / "tests"))
 from srm_and_sbi_monomer_dimer_alp import artifact_schema as S                       # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.detector_nuisance_dli import NuisanceDLI, artifact_path  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming      # noqa: E402
-from srm_and_sbi_monomer_dimer_alp.workflow import detector_workflow, parameter_keys  # noqa: E402
+from srm_and_sbi_monomer_dimer_alp.workflow import detector_workflow, parameter_keys, prior_bounds  # noqa: E402
 import _product_fixtures as fx                                                        # noqa: E402
 
 
@@ -37,9 +37,8 @@ def _companion():
 
 EC = _companion()
 CFG = detector_workflow()
-KEYS = parameter_keys(CFG)
-LO = np.array(CFG.param_module.theta_lower_bound(), float)
-HI = np.array(CFG.param_module.theta_upper_bound(), float)
+KEYS = parameter_keys(CFG, "FAB")
+LO, HI = (np.array(b, float) for b in prior_bounds(CFG, "FAB"))
 D = len(KEYS)
 CELLS, CHUNKS = 12, 10
 N = CELLS * CHUNKS

@@ -57,12 +57,14 @@ from .labeling import LABELING_CONDITIONS
 from . import temporal_dynamics as tdk
 from .visualization_inference import figure_window_drift
 from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical
-from .workflow import parameter_keys, parameter_table
+from .workflow import parameter_keys, parameter_table, prior_bounds
 
 # Conditions are named scientifically wherever a reader sees them; the tokens below survive only
 # as the stored ``kinds`` field of the Experiment output and the recording filenames on disk.
 # Condition naming (stored token <-> scientific name) has ONE definition, in experiment_support.
-from .experiment_support import CONDITION_DISPLAY  # noqa: F401  (re-exported for figures)
+# Every legend, title and table names a recording kind by ``kind_label``, which marks the kinds that
+# are not the estimator's condition as a misspecification test.
+from .experiment_support import CONDITION_DISPLAY, condition_display, kind_label  # noqa: F401  (re-exported for figures)
 
 # Bins for the pooled posterior density, spread uniformly over the prior's decades. The pooled set
 # holds hundreds of thousands of draws, so the bin count is not sample-limited; it is chosen for
@@ -171,8 +173,10 @@ _REFERENCE_DETECTOR = {
 }
 
 _DISPLAY_BIOLOGY = {
-    # stoichiometry block
-    "count_total": "Receptor total", "ratio_dimer_monomer_initial": "Initial dimer/monomer ratio",
+    # stoichiometry block (the reference fraction) and the initialization block (the allocation,
+    # inferred under MET-INLB only)
+    "count_total": "Receptor total", "fraction_basal_dimers_reference": "Basal dimer fraction (reference)",
+    "relative_count_active_dimers_initial": "Initial active-dimer count, relative to capacity",
     "rate_dissociation": "Dissociation rate",
     # mobility block
     "diffusivity_alp": "Monomer diffusivity", "relative_diffusivity_dimer": "Rel. dimer diffusivity",
@@ -197,13 +201,31 @@ _UNIT_BY_KEY = {
 _UNIT_SHORT = {
     "Count": "count", "Square Micrometer Per Second": "$\\mu$m$^2$/s",
     "Dimensionless": "ratio", "Count Per Second": "1/s",
-    "Pixel": "px", "Photon": "photons", "Probability": "probability",
+    "Pixel": "px", "Photon": "photons", "Probability": "probability", "Fraction": "fraction",
 }
+# Key-level unit override, consulted BEFORE the table's UNIT string: the two linear rows are
+# fractions on [0, 1] and must never be labeled "ratio" (the dimensionless relative diffusivities are
+# ratios; the fractions are shares, reported in percent / percentage points).
+_UNIT_OVERRIDE_BY_KEY = {
+    "fraction_basal_dimers_reference": "fraction (reference)",
+    "relative_count_active_dimers_initial": "fraction of capacity",
+}
+
+
+def _unit_of(para):
+    """The axis unit of one table row: the key-level override first, then the table's UNIT string
+    (shortened), then the detector's per-key unit, then ``absolute``."""
+    key = para.get("KEY", "")
+    if key in _UNIT_OVERRIDE_BY_KEY:
+        return _UNIT_OVERRIDE_BY_KEY[key]
+    raw_unit = para.get("UNIT")
+    return (_UNIT_SHORT.get(raw_unit, raw_unit) if raw_unit else _UNIT_BY_KEY.get(key, "absolute"))
 
 
 @dataclass(frozen=True)
 class _TemporalSpec:
     """Everything about this analysis that differs between the two workflows."""
+    condition: str                        # the ESTIMATOR's condition (binds keys, table and box)
     keys: list
     table: list
     prior_low: np.ndarray                 # estimator space
@@ -233,15 +255,21 @@ def _temporal_dynamics_spec(cfg, args) -> _TemporalSpec:
     product_label = paths.product_label(timing.label, getattr(args, "artifact_tag", None))
     out_dir = paths.experiment_recovery_dir(data_bank_root, product_label)
     rec_dir = paths.map_recovery_dir(data_bank_root, product_label)
-    table = parameter_table(cfg)
+    # The ESTIMATOR's condition binds the keys, the table and the box: eleven rows under MET-FAB,
+    # twelve under MET-INLB (the allocation is the twelfth); the detector's table is condition-free.
+    condition = str(args.condition)
+    table = parameter_table(cfg, condition)
+    low, high = prior_bounds(cfg, condition)
     detector = cfg.tag == "detector"
     return _TemporalSpec(
-        keys=parameter_keys(cfg), table=table,
-        prior_low=np.array(cfg.param_module.theta_lower_bound(), dtype=float),
-        prior_high=np.array(cfg.param_module.theta_upper_bound(), dtype=float),
-        # The ONE conversion rule, bound to this workflow's table (all-log for the detector; the
-        # biology table carries the linear initial dimer fraction). Every kernel call goes through
-        # it, so nothing here exponentiates a theta by hand.
+        condition=condition,
+        keys=parameter_keys(cfg, condition), table=table,
+        prior_low=np.array(low, dtype=float),
+        prior_high=np.array(high, dtype=float),
+        # The ONE conversion rule, bound to this workflow's table under the condition (all-log for
+        # the detector; the biology table carries the linear rows: the basal reference fraction f
+        # and, under MET-INLB, the allocation R_active). Every kernel call goes through it, so
+        # nothing here exponentiates a theta by hand.
         to_physical=lambda u: to_physical(u, table),
         log_rows=np.array([is_log_row(e) for e in table], dtype=bool),
         display=(_DISPLAY_DETECTOR if detector else _DISPLAY_BIOLOGY),
@@ -300,6 +328,32 @@ def _apply_reference(ax, ref, source_short, orient="h"):
 # Figures
 # =============================================================================
 
+def _estimator_line(spec, kinds):
+    """The title line every standalone figure carries: the estimator's condition and, when the
+    figure holds recordings of another condition, the misspecification-test warning (its legend
+    marks those curves with ``kind_label``)."""
+    line = f"{condition_display(spec.condition)} estimator"
+    foreign = [condition_display(k) for k in kinds if str(k) != str(spec.condition)]
+    if foreign:
+        line += f" · {', '.join(foreign)} recordings: MISSPECIFICATION TEST"
+    return line
+
+
+def _misspecification_paragraph(spec, kinds):
+    """The warning the report opens with when the product holds recordings of a condition other
+    than the estimator's; empty when every kind is the estimator's own."""
+    foreign = [condition_display(k) for k in kinds if str(k) != str(spec.condition)]
+    if not foreign:
+        return ""
+    est = condition_display(spec.condition)
+    return (f"**MISSPECIFICATION TEST.** The {est} estimator is applied to {', '.join(foreign)} recordings. "
+            f"Every window estimate, drift statistic, pooled density and reference comparison of those "
+            f"recordings is computed under the {est} estimator's assumptions (the parameter table, declared "
+            f"values and training data of its condition), never the recording's own, so it tests the "
+            f"estimator outside its condition rather than describing the dynamics of {', '.join(foreign)}. "
+            f"Every table and figure marks those recordings `[misspecification test]`.")
+
+
 def _figure_trajectory(spec, p_index, key, abs_grid, series, line, family, picks_window,
                        picks_traj, edges, kinds, drift, recovery):
     """The central-trajectory figure: one estimate family, drawn as steps over each window.
@@ -334,17 +388,18 @@ def _figure_trajectory(spec, p_index, key, abs_grid, series, line, family, picks
     r_mean = None if ref is None else _reference_band(ref)[0]
     for e, kind in enumerate(kinds):
         color = CONDITION_COLOR.get(kind, f"C{e}")
-        disp = CONDITION_DISPLAY.get(kind, kind)
+        disp = CONDITION_DISPLAY.get(kind, kind)            # matched against a reference's scope
+        label = kind_label(kind, spec.condition)            # what the reader sees
         ax.step(edges, _step(series[e, :, p_index]), where="post", color=color,
-                linewidth=2.6, label=f"{disp} {family}-window")
+                linewidth=2.6, label=f"{label} {family}-window")
         lv = line[e, p_index]
-        lab = f"{disp} {family}-trajectory = {lv:.3g}"
+        lab = f"{label} {family}-trajectory = {lv:.3g}"
         if r_mean and (applies is None or disp in applies) and np.isfinite(lv):
             lab += f"  ({lv / r_mean:.2g}x reference)"
         ax.axhline(lv, color=color, linestyle="--", linewidth=1.4, alpha=0.9, label=lab)
 
     _finish_axes(ax, edges, para, spec, lo, hi)
-    title = f"{name} ({para['LABEL']}) over the recording"
+    title = f"{name} ({para['LABEL']}) over the recording\n{_estimator_line(spec, kinds)}"
     if recovery and spec.log_rows[p_index]:
         # Both nested tolerances, stated as the multiplicative ranges they mean rather than in dex.
         title += "\nheld-out recovery:  " + "  ·  ".join(
@@ -377,14 +432,14 @@ def _figure_posterior(spec, p_index, key, within_abs, series, family, edges, kin
     hi, lo = -np.inf, np.inf
     for e, kind in enumerate(kinds):
         color = CONDITION_COLOR.get(kind, f"C{e}")
-        disp = CONDITION_DISPLAY.get(kind, kind)
+        label = kind_label(kind, spec.condition)
         q = within_abs[e, :, p_index, :]
         ax.fill_between(edges, _step(q[:, 0]), _step(q[:, 4]), step="post", color=color,
-                        alpha=0.15, linewidth=0, label=f"{disp} posterior 5–95% (typical window)")
+                        alpha=0.15, linewidth=0, label=f"{label} posterior 5–95% (typical window)")
         ax.fill_between(edges, _step(q[:, 1]), _step(q[:, 3]), step="post", color=color,
-                        alpha=0.30, linewidth=0, label=f"{disp} posterior 25–75%")
+                        alpha=0.30, linewidth=0, label=f"{label} posterior 25–75%")
         ax.step(edges, _step(series[e, :, p_index]), where="post", color=color, linewidth=2.2,
-                label=f"{disp} {family}-window")
+                label=f"{label} {family}-window")
         fin = q[np.isfinite(q)]
         if fin.size:
             hi = max(hi, float(np.nanpercentile(fin, 98)))
@@ -393,13 +448,14 @@ def _figure_posterior(spec, p_index, key, within_abs, series, family, edges, kin
         r_lo, r_hi = _apply_reference(ax, ref, spec.reference_short)
         hi, lo = max(hi, r_hi), min(lo, r_lo)
     _finish_axes(ax, edges, para, spec, lo, hi)
-    ax.set_title(f"Within-window posterior interval\n{name} ({para['LABEL']})", fontsize=10.5)
+    ax.set_title(f"Within-window posterior interval\n{name} ({para['LABEL']})\n"
+                 f"{_estimator_line(spec, kinds)}", fontsize=10.5)
     ax.legend(fontsize=7, framealpha=0.9, loc="best")
     fig.tight_layout()
     return fig
 
 
-def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
+def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name, flagged=None):
     """Pooled posterior density over the whole recording -- the classic histogram, time collapsed.
 
     Every window's draws for a condition are pooled into one histogram. Drawing the prior on the
@@ -409,10 +465,12 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
 
     The x axis is in the parameter's own ABSOLUTE units either way -- ticks are plain values, never
     powers of ten and never dex. ``scale`` chooses how that axis is spaced, and the binning, the
-    density's unit, and the prior's shape all follow from it consistently. A LINEAR row (none in
-    the decided biology table; the rule stays general) has no decades to space and its prior is
-    flat per unit, so it is always drawn with ``"linear"`` spacing and a flat prior line, whatever ``scale``
-    asked for -- a decade axis starting at zero does not exist:
+    density's unit, and the prior's shape all follow from it consistently. A LINEAR row (the basal
+    reference fraction f and, under MET-INLB, the allocation R_active) has no decades to space and
+    its prior is flat per unit, so it is always drawn with ``"linear"`` spacing and a flat prior
+    line, whatever ``scale`` asked for -- a decade axis starting at zero does not exist. For a
+    linear row the legend also states, per condition, how many window MAPs lie outside [0, 1]
+    (``flagged``: key -> per-condition counts): they are flagged and counted, never clipped.
 
     ``"log"``     bins uniform in decades, which is where a log-uniform prior is flat. Height is a
                   density PER DECADE and the prior is the horizontal line ``1 / (hi - lo)``. This
@@ -457,18 +515,18 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
         if draws.size == 0:
             continue
         color = CONDITION_COLOR.get(kind, f"C{e}")
-        disp = CONDITION_DISPLAY.get(kind, kind)
+        label = kind_label(kind, spec.condition)
         # Bin in the space the axis is spaced in, so the plotted height is a density with respect to
         # the axis actually shown: per decade of log10 value, or per absolute unit.
         dens, _ = (np.histogram(draws, bins=edges_log, density=True) if log_bins
                    else np.histogram(phys(draws), bins=edges, density=True))
         ax.stairs(dens, edges, color=color, linewidth=2.0, fill=False,
-                  label=f"{disp} pooled ({draws.size:,} draws)")
+                  label=f"{label} pooled ({draws.size:,} draws)")
         ax.stairs(dens, edges, color=color, alpha=0.16, fill=True, linewidth=0)
         peak = max(peak, float(np.nanmax(dens)) if dens.size else 0.0)
         if np.isfinite(mark[e, p_index]):
             ax.axvline(float(mark[e, p_index]), color=color, linestyle=(0, (5, 2)), linewidth=1.8,
-                       alpha=0.9, label=f"{disp} {mark_name} = {mark[e, p_index]:.3g}")
+                       alpha=0.9, label=f"{label} {mark_name} = {mark[e, p_index]:.3g}")
 
     # The prior it started from. A log row: flat per decade, a 1/x curve per absolute unit (what a
     # log-uniform density becomes under x = 10**y -- drawing it flat there would be wrong). A linear
@@ -486,10 +544,12 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
                 linestyle=(0, (4, 3)), linewidth=1.5, label=prior_label)
     if ref is not None:
         _apply_reference(ax, ref, spec.reference_short, orient="v")
+    if not is_log and flagged is not None and key in flagged:
+        counts = ", ".join(f"{kind_label(k, spec.condition)} {int(flagged[key][e])}"
+                           for e, k in enumerate(kinds))
+        ax.plot([], [], " ", label=f"window MAPs outside [{lo:g}, {hi:g}]: {counts} (flagged, not clipped)")
 
-    raw_unit = para.get("UNIT")
-    unit = (_UNIT_SHORT.get(raw_unit, raw_unit) if raw_unit
-            else _UNIT_BY_KEY.get(para.get("KEY", ""), "absolute"))
+    unit = _unit_of(para)
     ax.set_xlim(float(edges[0]), float(edges[-1]))
     if log_bins:
         ax.set_xscale("log")
@@ -517,7 +577,7 @@ def _figure_pooled(spec, p_index, key, pooled, kinds, scale, mark, mark_name):
         # where the two are of comparable height.
         ax.set_ylim(0.0, 1.15 * peak)
     ax.set_title(f"Pooled posterior over the recording (time axis collapsed)\n"
-                 f"{name} ({para['LABEL']})", fontsize=10.5)
+                 f"{name} ({para['LABEL']})\n{_estimator_line(spec, kinds)}", fontsize=10.5)
     ax.legend(fontsize=7, framealpha=0.9, loc="best")
     ax.grid(True, which="both", alpha=0.18)
     fig.tight_layout()
@@ -566,10 +626,7 @@ def _finish_axes(ax, x_edges, para, spec, lo, hi):
     ax.set_xlabel("time [s]")
     ax.set_xlim(float(x_edges[0]), float(x_edges[-1]))
     ax.set_xticks(x_edges)
-    raw_unit = para.get("UNIT")
-    unit = (_UNIT_SHORT.get(raw_unit, raw_unit) if raw_unit
-            else _UNIT_BY_KEY.get(para.get("KEY", ""), "absolute"))
-    ax.set_ylabel(f"inferred [{unit}]")
+    ax.set_ylabel(f"inferred [{_unit_of(para)}]")
     if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
         pad = 0.10 * (hi - lo)
         ax.set_ylim(max(0.0, lo - pad), hi + pad)
@@ -582,21 +639,27 @@ def _finish_axes(ax, x_edges, para, spec, lo, hi):
 # =============================================================================
 
 def _write_report(spec, meta, results, drift, kinds, family, line, picks_window, picks_traj,
-                  pooled=None, pooled_mark_name="", drift_rows=None):
+                  pooled=None, pooled_mark_name="", drift_rows=None, flagged=None):
     """Write the self-contained interpretation report beside the figures.
 
     Every reported quantity is defined verbatim here, keyed by the same name the figures and the
     companion note use, so a reader can judge any number without opening the code.
     """
-    displays = [CONDITION_DISPLAY.get(k, k) for k in kinds]
+    displays = [kind_label(k, spec.condition) for k in kinds]
     L = [f"# Experiment temporal dynamics — {spec.alias} {spec.timing_label}",
          f"Run: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}", ""]
     L.append(f"Generated from `{meta['npz_name']}`. **{meta['n_estimates']} MAP estimates** = "
              f"{len(kinds)} conditions × {meta['n_cells']} recordings × {meta['n_chunks']} "
              f"non-overlapping {meta['step']:g} s windows spanning "
              f"[{meta['edges'][0]:g}, {meta['edges'][-1]:g}) s. Conditions: {', '.join(displays)} "
-             f"(stored tokens {', '.join(kinds)}). Central-estimate family: **{family}**.")
+             f"(stored tokens {', '.join(kinds)}). Estimator: **{condition_display(spec.condition)}** "
+             f"(condition token {spec.condition}; {len(spec.keys)} parameters). Central-estimate family: "
+             f"**{family}**.")
     L.append("")
+    misspec = _misspecification_paragraph(spec, kinds)
+    if misspec:
+        L.append(misspec)
+        L.append("")
     L.append("## What the analysis asks, and what it cannot answer alone")
     L.append("")
     L.append("The Experiment stage reports one **MAP estimate per window** — the point estimate it "
@@ -638,7 +701,8 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
     L.append("")
     L.append("**Distance metric** (both `sgm-*` estimates): physical values (the parameter "
              "table's per-row conversion, `to_physical`: `10**theta` for a log row, the value itself "
-             "for the linear initial dimer fraction), each parameter divided by its physical prior "
+             "for the linear rows, the basal reference fraction f and, under MET-INLB, the allocation "
+             "R_active), each parameter divided by its physical prior "
              "width so no parameter "
              "dominates, Euclidean, **exact medoid** — the member minimizing the summed distance to "
              "every other member of the set. Selection is on **all parameters jointly**, so a "
@@ -653,8 +717,7 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
         L.append("### Which windows were selected")
         L.append("")
         for e, kind in enumerate(kinds):
-            disp = CONDITION_DISPLAY.get(kind, kind)
-            L.append(f"- **{disp}** — `sgm-trajectory`: cell {picks_traj[e][0]}, chunk "
+            L.append(f"- **{kind_label(kind, spec.condition)}** — `sgm-trajectory`: cell {picks_traj[e][0]}, chunk "
                      f"{picks_traj[e][1]} (one realized window). `sgm-window` selected "
                      f"{_cells_label(picks_window[e])} across the {meta['n_chunks']} chunks.")
         L.append("")
@@ -668,7 +731,8 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
     L.append("")
     L.append("For every (condition, cell, parameter) an ordinary least-squares line is fit to the "
              "stored **estimator-space** MAP estimate against time (log10 for a log row, because "
-             "its drift is multiplicative; the value itself for the linear initial dimer fraction), "
+             "its drift is multiplicative; the value itself for the linear rows f and R_active, "
+             "whose drift is additive and is reported in percentage points), "
              "giving a slope and hence fitted endpoints:")
     L.append("")
     L.append("```")
@@ -687,7 +751,9 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
              "units. **Annotated on the figure.** |")
     L.append("| `drift-sign-consistency` | Fraction of cells whose change shares the sign of the "
              "median change. **Annotated on the figure.** |")
-    L.append("| `drift-fold` | Median across cells of `end / start`, a multiplicative factor. |")
+    L.append("| `drift-fold` | Median across cells of `end / start`, a multiplicative factor. Log "
+             "rows only: for a linear row it reads `n/a` (a fraction has no multiplicative scale and "
+             "the ratio is unstable near 0). |")
     L.append("| `drift-dex` | Median across cells of `change`, in log10 units. Log rows only: "
              "for a linear row it reads `n/a`, since its change is already `drift-absolute`. |")
     L.append(f"| `drift-material-fraction` | Fraction of cells whose `|change|` exceeds "
@@ -708,8 +774,11 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
     for r in results:
         i = r["p_index"]
         traj = " | ".join(f"{line[e, i]:.4g}" for e in range(len(kinds)))
+        is_log = bool(spec.log_rows[i])
         stats = " | ".join(
-            f"{drift['drift_absolute'][e, i]:+.3g} / {drift['drift_fold'][e, i]:.2f}x / "
+            (f"{drift['drift_absolute'][e, i]:+.3g}" if is_log
+             else f"{100 * drift['drift_absolute'][e, i]:+.2f} pp")
+            + f" / {_dex(drift['drift_fold'][e, i], '{:.2f}x')} / "
             f"{_dex(drift['drift_dex'][e, i], '{:+.3f}')} / "
             f"{100 * drift['drift_sign_consistency'][e, i]:.0f}% / "
             f"{_dex(100 * drift['drift_material_fraction'][e, i], '{:.0f}%')} / "
@@ -727,7 +796,7 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                     continue
                 v = line[e, i]
                 inside = "inside" if (np.isfinite(v) and r_lo <= v <= r_hi) else "outside"
-                parts.append(f"{disp} {v / r_mean:.2g}x, {inside}")
+                parts.append(f"{kind_label(kind, spec.condition)} {v / r_mean:.2g}x, {inside}")
             rcol = (f"{r_mean:.3g} [{r_lo:.3g}–{r_hi:.3g}] {ref['unit']}; " + "; ".join(parts)
                     if parts else f"{r_mean:.3g} {ref['unit']} (no applicable condition)")
         L.append(f"| {r['name']} ({r['label']}) | {traj} | {stats} | {rcol} |")
@@ -737,6 +806,26 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
              "`*-trajectory` line — and any reference comparison drawn against it — is a summary "
              "over that drift, not a measurement of a constant.")
     L.append("")
+    linear = [r for r in results if not spec.log_rows[r["p_index"]]]
+    if linear:
+        L.append("## Linear rows: window MAPs outside [0, 1]")
+        L.append("")
+        L.append("The MAP ascent is unconstrained, so a window's MAP of a fraction can lie outside its "
+                 "box [0, 1]. Such values are **flagged and counted, never clipped**: they enter every "
+                 "statistic above as the values the optimizer returned, and the counts below say how "
+                 "many windows they are. Their drift is an absolute change in percentage points; no "
+                 "dex band, fold or multiplicative factor applies to a linear row (`n/a`).")
+        L.append("")
+        L.append("| Parameter | " + " | ".join(f"{d}: windows outside [0, 1] / fitted" for d in displays) + " |")
+        L.append("|" + "---|" * (1 + len(displays)))
+        for r in linear:
+            key = r["key"]
+            cells = " | ".join(
+                f"{int((flagged or {}).get(key, [0] * len(kinds))[e])} / "
+                f"{int((flagged or {}).get('_n_fitted', [0] * len(kinds))[e])}"
+                for e in range(len(kinds)))
+            L.append(f"| {r['name']} ({r['label']}) | {cells} |")
+        L.append("")
     L.append("## Uncertainty figure")
     L.append("")
     L.append("`<key>_temporal_posterior.png` shows, at each chunk, the **median across cells of "
@@ -786,7 +875,7 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                  f"answer different questions and need not coincide.")
         L.append("")
         headers = ["parameter", "label"] + [
-            f"{CONDITION_DISPLAY.get(k, k)} {q}" for k in kinds
+            f"{kind_label(k, spec.condition)} {q}" for k in kinds
             for q in ("p05", "median", "p95")]
         rows = []
         for r in results:
@@ -822,8 +911,8 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                  "posterior. Reported because it is what \"the mean of the posterior\" usually "
                  "names, not because it is the better summary.")
         L.append("- `geomean-pooled` — `to_physical(mean(estimator))`, the mean taken in the space "
-                 "the prior is uniform in (the geometric mean for a log row; for the linear initial "
-                 "dimer fraction it coincides with `mean-pooled`).")
+                 "the prior is uniform in (the geometric mean for a log row; for the linear rows f "
+                 "and R_active it coincides with `mean-pooled`).")
         L.append(f"- `{family}-trajectory` — the medoid: one jointly realized vector. Its "
                  "coordinates are a real recording's values and need **not** be marginally "
                  "central; a large `ratio` below means the mixture is skewed for that parameter, "
@@ -841,7 +930,7 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
             for e, kind in enumerate(kinds):
                 ratio = (line[e, i] / med[e, i]) if med[e, i] else float("nan")
                 L.append("| " + " | ".join([
-                    f"`{r['key']}`", CONDITION_DISPLAY.get(kind, kind),
+                    f"`{r['key']}`", kind_label(kind, spec.condition),
                     f"{med[e, i]:.3g}", f"{mea[e, i]:.3g}", f"{geo[e, i]:.3g}",
                     f"{line[e, i]:.3g}", f"{ratio:.2f}x"]) + " |")
         L.append("")
@@ -880,9 +969,11 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                  " that the Evaluation stage reports — a factor of two and a factor of the square "
                  "root of two — restated as the value range they permit, since that is what a "
                  "reader needs in order to judge whether the parameter is usable. A dex band is a "
-                 "multiplicative tolerance and applies to log rows only; the linear initial dimer "
-                 "fraction is flagged as not covered rather than judged against a band that does "
-                 "not fit it.")
+                 "multiplicative tolerance and applies to log rows only; the linear rows (the basal "
+                 "reference fraction f and, under MET-INLB, the allocation R_active) are flagged as "
+                 "not covered rather than judged against a band that does not fit them; their "
+                 "recovery is an absolute error in percentage points, reported by the Evaluation "
+                 "stage.")
         L.append("")
     L.append("Trust a parameter on experimental data when it recovers well on held-out synthetic "
              "data, **and** is stationary where the model says it should be, **and** its posterior "
@@ -905,7 +996,7 @@ def _write_report(spec, meta, results, drift, kinds, family, line, picks_window,
                  f"the posterior's own per-window central 50 % and 90 % intervals (median across "
                  f"cells), one shared band, no per-estimate error bars.")
         L.append("")
-        hdr, rows = tdk.format_drift_rows(drift_rows)
+        hdr, rows = tdk.format_drift_rows(drift_rows, linear_unit="pp")   # the linear rows are fractions
         L.append("| " + " | ".join(hdr) + " |")
         L.append("|" + "---|" * len(hdr))
         for r in rows:
@@ -936,7 +1027,11 @@ def run_temporal_dynamics(cfg, args):
               f"[{'OK' if spec.npz_path.exists() else 'MISSING'}]")
         print(f"  recovery .npz   : {spec.recovery_npz}  "
               f"[{'OK' if spec.recovery_npz.exists() else 'absent (recovery annotation skipped)'}]")
+        print(f"  condition       : {spec.condition} (the estimator's; binds the keys, table and box)")
         print(f"  parameters      : {len(spec.keys)} ({', '.join(spec.keys)})")
+        linear = [k for k, lg in zip(spec.keys, spec.log_rows) if not lg]
+        print("  linear rows     : " + (", ".join(linear) + "  (absolute drift in pp; no dex band, no fold)"
+                                       if linear else "none"))
         print(f"  references for  : {', '.join(spec.references) or 'none'}")
         print("[DRY RUN] no figures written.\n")
         return 0
@@ -986,12 +1081,23 @@ def run_temporal_dynamics(cfg, args):
         series, picks_window = tdk.mean_window(grid, spec.to_physical), None
         line, picks_traj = tdk.mean_trajectory(grid, spec.to_physical), None
     drift = tdk.drift_statistics(grid, centers, spec.to_physical, spec.log_rows)
+    # Linear rows: how many window MAPs lie outside the box [0, 1], per condition. Flagged and
+    # counted here, never clipped; the report and the pooled-figure legend state the counts.
+    flagged = {}
+    for p_index, key in enumerate(spec.keys):
+        if spec.log_rows[p_index]:
+            continue
+        lo_b, hi_b = float(spec.prior_low[p_index]), float(spec.prior_high[p_index])
+        values = grid[:, :, :, p_index]
+        outside = np.isfinite(values) & ((values < lo_b) | (values > hi_b))
+        flagged[key] = [int(outside[e].sum()) for e in range(len(kinds))]
+    flagged["_n_fitted"] = [int(np.isfinite(grid[e, :, :, 0]).sum()) for e in range(len(kinds))]
     # Every stored point estimate, read together: the MAP, the posterior median and the
     # posterior-draw SGM, all present by contract. One table; one overview figure per condition with the
     # posterior's own per-window bands drawn once for the three lines.
     est_grids, _, _ = tdk.point_estimate_grids(map_estimate, kind_index, cell, chunk,
                                                len(kinds), quant, sgm, median_index=qi)
-    drift_rows = tdk.window_drift_rows(est_grids, [CONDITION_DISPLAY.get(k, k) for k in kinds],
+    drift_rows = tdk.window_drift_rows(est_grids, [kind_label(k, spec.condition) for k in kinds],
                                        spec.keys, spec.to_physical, spec.log_rows)
 
     within = None
@@ -1021,21 +1127,24 @@ def run_temporal_dynamics(cfg, args):
 
     print(f"\nLoaded {map_estimate.shape[0]} estimates: {len(kinds)} conditions x "
           f"{n_cells} recordings x {n_chunks} windows.")
+    misspec = _misspecification_paragraph(spec, kinds)
+    if misspec:
+        print("NOTE: " + misspec.replace("**", "").replace("`", ""))
     print(f"  windows            : " + ", ".join(
         f"[{edges[i]:g},{edges[i + 1]:g})" for i in range(n_chunks)) + " s")
     print(f"  central estimate   : {family}-window (timeseries) + {family}-trajectory (line)")
     if family == "sgm":
         print("  sgm-window cells   : " + ", ".join(
-            f"{CONDITION_DISPLAY.get(k, k)}=[{_cells_label(picks_window[e])}]"
+            f"{kind_label(k, spec.condition)}=[{_cells_label(picks_window[e])}]"
             for e, k in enumerate(kinds)))
         print("  sgm-trajectory     : " + ", ".join(
-            f"{CONDITION_DISPLAY.get(k, k)}=(cell {picks_traj[e][0]}, chunk {picks_traj[e][1]})"
+            f"{kind_label(k, spec.condition)}=(cell {picks_traj[e][0]}, chunk {picks_traj[e][1]})"
             for e, k in enumerate(kinds)))
     print(f"  posterior panel    : "
           f"{'on (stored quantiles)' if within is not None else 'off (no posterior_quantiles)'}")
     if pooled is not None:
         print(f"  pooled density     : on — " + ", ".join(
-            f"{CONDITION_DISPLAY.get(k, k)} {pooled[e].shape[0]:,} draws"
+            f"{kind_label(k, spec.condition)} {pooled[e].shape[0]:,} draws"
             for e, k in enumerate(kinds))
             + f" ({cloud.shape[1]:,} per window, {POOLED_BINS} bins over the prior, "
               f"{'/'.join(POOLED_SCALES[args.pooled_scale])}-spaced)")
@@ -1044,8 +1153,15 @@ def run_temporal_dynamics(cfg, args):
               "stage with --dump-posterior-samples)")
     if pooled_mark is not None:
         print(f"  pooled mark        : {pooled_mark_name} (one line per condition)")
-    print(f"  recovery annotation: " + ("off" if recovery is None else
-          ", ".join(f"{tdk.band_label(b)}" for b, _ in recovery)) + "\n")
+    print("  recovery annotation: " + ("off" if recovery is None else
+          ", ".join(f"{tdk.band_label(b)}" for b, _ in recovery)))
+    for key, counts in flagged.items():
+        if key.startswith("_"):
+            continue
+        print(f"  flagged window MAPs: {key} outside [0, 1]: " + ", ".join(
+            f"{kind_label(k, spec.condition)} {counts[e]}" for e, k in enumerate(kinds))
+            + " (counted, never clipped)")
+    print()
 
     wanted = [k.strip() for k in args.params.split(",")] if args.params else None
     spec.fig_dir.mkdir(parents=True, exist_ok=True)
@@ -1068,7 +1184,7 @@ def run_temporal_dynamics(cfg, args):
             # different --pooled-scale cannot silently overwrite the other one.
             for scale in POOLED_SCALES[args.pooled_scale]:
                 figq = _figure_pooled(spec, p_index, key, pooled, kinds, scale,
-                                      pooled_mark, pooled_mark_name)
+                                      pooled_mark, pooled_mark_name, flagged=flagged)
                 stem = f"{key}_temporal_posterior_pooled" + ("" if scale == "linear" else "_log")
                 figq.savefig(str(spec.fig_dir / f"{stem}.png"), dpi=180)
                 plt.close(figq)
@@ -1087,8 +1203,9 @@ def run_temporal_dynamics(cfg, args):
             bands=None if bands_all is None else bands_all[e],
             prior_ranges=[(float(spec.prior_low[i]), float(spec.prior_high[i]))
                           for i in range(len(spec.keys))],
-            title=f"{CONDITION_DISPLAY.get(kind, kind)}: {', '.join(est_grids)} against window "
-                  f"position (lines = median across cells; bands = posterior 50 % / 90 %)",
+            title=f"{kind_label(kind, spec.condition)}: {', '.join(est_grids)} against window "
+                  f"position (lines = median across cells; bands = posterior 50 % / 90 %)\n"
+                  f"{_estimator_line(spec, [kind])}",
             y_label="estimate (estimator space)")
         figo.savefig(str(spec.fig_dir / f"window_drift_overview_{kind}.png"), dpi=180)
         plt.close(figo)
@@ -1100,7 +1217,7 @@ def run_temporal_dynamics(cfg, args):
             "pooled_scale": args.pooled_scale,
             "edges": [float(t) for t in edges], "centers": [float(t) for t in centers]}
     _write_report(spec, meta, results, drift, kinds, family, line, picks_window, picks_traj,
-                  pooled, pooled_mark_name, drift_rows=drift_rows)
+                  pooled, pooled_mark_name, drift_rows=drift_rows, flagged=flagged)
     print(f"  wrote report.md\n\nDone: {len(results)} parameter(s) in {spec.fig_dir}")
     return 0
 
@@ -1144,8 +1261,8 @@ def build_parser(description):
                         "<key>_temporal_posterior_pooled_log.png. 'both' writes both files. For a "
                         "parameter spanning orders of magnitude (the receptor total spans decades) "
                         "the linear axis compresses the low end, so 'log' or 'both' is the better "
-                        "choice when the low end is the question. A linear row, if the table declares "
-                        "one, is always drawn linear with a flat prior.")
+                        "choice when the low end is the question. A linear row (the fraction rows "
+                        "of the biology table) is always drawn linear with a flat prior.")
     p.add_argument("--pooled-mark",
                    choices=("median", "mean", "geometric-mean", "trajectory"), default="median",
                    help="Which SINGLE statistic the pooled histogram marks per condition; the "

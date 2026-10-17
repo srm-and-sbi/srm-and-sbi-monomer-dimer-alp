@@ -11,8 +11,18 @@ The numeric engine already lives in ``evaluation`` (``map_estimate``,
 both workflows. The only per-workflow differences are which parameterization supplies
 the learnable table (for the recovery/coverage tables + per-parameter figures), the
 ``parameter_keys`` schema guard, the device ``build_prior``, and the alias-qualified
-``paths`` -- resolved from the config in ``_evaluation_spec(cfg)``. The estimator path
-is resolved through the shared ``paths.estimator_path`` method for both workflows.
+``paths`` -- resolved from the config AND the ESTIMATOR's condition in
+``_evaluation_spec(cfg, condition)`` through the workflow resolvers (the biology table has
+eleven learnable rows under MET-FAB and twelve under MET-INLB; the detector's six are the
+same for every condition). The estimator path is resolved through the shared
+``paths.estimator_path`` method for both workflows.
+
+Every per-row number carries its unit: dex for a log row, percentage points for a linear
+row (the two fractions), which has no multiplicative band and no ``[log10]`` axis. The
+linear rows' values outside [0, 1] are counted in a flagged-fractions table and left
+unchanged. Under a biology condition the report adds the starting-composition recovery
+section (the allocation and the allocated pairs c per true-capacity stratum under
+MET-INLB; the declared allocation and c = 0 under MET-FAB).
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
     point_estimates_compared_table,
     band_label,
     draw_label,
+    fraction_flag_rows,
     map_estimate,
     optimizer_contract,
     optimizer_summary_lines,
@@ -50,6 +61,7 @@ from srm_and_sbi_monomer_dimer_alp.evaluation import (
     posterior_summary,
     recovery_table,
     short_labels,
+    starting_composition_recovery, starting_composition_tables,
     _theta_repr,
     point_estimate_agreement_table, prior_scale,
 )
@@ -58,35 +70,52 @@ from srm_and_sbi_monomer_dimer_alp.experiment_support import (
 from srm_and_sbi_monomer_dimer_alp.provenance import code_provenance, finalize_code_provenance
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
 from srm_and_sbi_monomer_dimer_alp.io import load_data, load_theta_set, theta_set_status
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_flow, to_physical
+from srm_and_sbi_monomer_dimer_alp.parameterization import (PARAMETERS, RunTiming, is_log_row, parameter_keys_of,
+                                                           to_flow, to_physical)
 from srm_and_sbi_monomer_dimer_alp.utils import console_log_context  # noqa: F401  (entry points import via this module's siblings)
 from srm_and_sbi_monomer_dimer_alp.visualization_inference import (
     figure_recovery_combined, figure_point_estimates_vs_truth)
-from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig
+from srm_and_sbi_monomer_dimer_alp.workflow import (
+    WorkflowConfig, parameter_keys, parameter_table, prior_builder)
 
 
 @dataclass(frozen=True)
 class _EvaluationSpec:
-    """Per-workflow Evaluation specializations resolved from a ``WorkflowConfig``."""
+    """Per-workflow, per-condition Evaluation specializations resolved from a ``WorkflowConfig``
+    and the ESTIMATOR's condition."""
+    condition: str           # the estimator's condition (validated)
     draw_spec: list          # learnable table for the recovery/coverage tables + figures
-    parameter_keys: list     # load_estimator schema guard
+    parameter_keys: list     # load_estimator schema guard + the by-key guard of the writer
+    log_rows: list           # one bool per row: True for a log row (dex), False for a linear row (pp)
     build_prior: Callable    # device prior rebuild for bounded rejection sampling
 
 
-def _evaluation_spec(cfg: WorkflowConfig) -> _EvaluationSpec:
-    """Resolve the Evaluation stage's per-workflow specializations from the workflow config."""
-    m = cfg.param_module
-    if cfg.tag == "detector":
-        return _EvaluationSpec(
-            draw_spec=m.DETECTOR_PARAMETERIZATION,
-            parameter_keys=[e["KEY"] for e in m.DETECTOR_PARAMETERIZATION],
-            build_prior=m.build_prior,
-        )
+def _evaluation_spec(cfg: WorkflowConfig, condition) -> _EvaluationSpec:
+    """Resolve the Evaluation stage's specializations from the workflow config and the
+    ESTIMATOR's condition (``args.condition``), through the workflow resolvers, which validate
+    the token for both workflows (``condition is required``)."""
+    keys = parameter_keys(cfg, condition)
+    table = parameter_table(cfg, condition)
     return _EvaluationSpec(
-        draw_spec=m.PARAMETERIZATION,
-        parameter_keys=m.PARAMETER_KEYS,
-        build_prior=m.build_prior,
+        condition=str(condition),
+        draw_spec=table,
+        parameter_keys=keys,
+        log_rows=[is_log_row(e) for e in table],
+        build_prior=prior_builder(cfg, condition),
     )
+
+
+def _biology_condition_of(draw_spec, condition):
+    """``condition`` when it names a biology condition whose learnable keys equal the table's
+    (the starting-composition section applies), else ``None`` (the detector table, a synthetic
+    table, or no condition passed)."""
+    if condition is None:
+        return None
+    try:
+        expected = parameter_keys_of(str(condition))
+    except (KeyError, ValueError):
+        return None
+    return str(condition) if [e["KEY"] for e in draw_spec] == expected else None
 
 
 def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_path: Path,
@@ -102,11 +131,19 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
     never supplied separately. The three point estimates are read by their stored fields --
     ``map_estimate``, the 0.50 level of ``posterior_quantiles`` located through the manifest, and
     ``posterior_sgm`` -- so the report never re-derives or reinterprets a product with defaults
-    of its own. With ``persist_arrays=False`` (report-only rendering) the arrays on disk are left
-    untouched. Returns the validated manifest.
+    of its own. After validation the product's ``parameter_keys`` are compared, key for key and
+    in order, against ``draw_spec``'s (``artifact_schema.assert_parameter_keys``): the Fab
+    vector keeps eleven columns while a column's meaning can change between tables, so a width
+    check alone cannot catch a product of another table or condition. With
+    ``persist_arrays=False`` (report-only rendering) the arrays on disk are left untouched.
+    ``args.condition``, when present and a biology condition matching ``draw_spec``, selects the
+    starting-composition recovery section. Returns the validated manifest.
     """
     manifest = schema.validate_product(arrays, stage="evaluation",
                                        source=f"evaluation product {recovery_array_path.name}")
+    schema.assert_parameter_keys(manifest, [e["KEY"] for e in draw_spec],
+                                 source=f"evaluation product {recovery_array_path.name}")
+    condition = _biology_condition_of(draw_spec, getattr(args, "condition", None))
     bin_mode = args.bin_mode
     n_bins = args.n_bins or eval_cfg.quantile_bins
     min_count = args.min_count or eval_cfg.quantile_min_count
@@ -171,11 +208,16 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
              "below uses these three tokens. The three are read together; no one replaces the "
              "others.")
 
+    has_linear = not all(is_log_row(p) for p in draw_spec)
+    units_note = ("Each row's 'units' column gives the unit of its error statistics: dex for a log "
+                  "row (an error of 0.3 dex is a factor of two), percentage points (pp) for a linear "
+                  "row (the estimator-coordinate error times 100). " if has_linear else "")
     band_note = (f"The two 'within' columns are the fractions of EVAL videos recovered inside each "
                  f"nested tolerance band, stated as the multiplicative range the band permits: "
-                 f"{band_label(guide)} is +/-{guide:g} in log10 (a factor of two) and "
-                 f"{band_label(guide_tight)} is +/-{guide_tight:g} (a factor of the square root of "
-                 f"two). 'outside prior' is the share beyond the row's prior box. 'corr(inf, true)' "
+                 f"{band_label(guide)} is +/-{guide:g} dex (a factor of two) and "
+                 f"{band_label(guide_tight)} is +/-{guide_tight:g} dex (a factor of the square root of "
+                 f"two); a linear row has no multiplicative band and reads 'n/a' there. "
+                 f"'outside prior' is the share beyond the row's prior box. 'corr(inf, true)' "
                  f"is the correlation between inferred and true values -- near zero when the "
                  f"estimator's output does not depend on its input.")
     for key, arr in estimates.items():
@@ -185,37 +227,67 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
                  "either pool mode -- --pool-mode bounds the candidate pool, not the optimizer's "
                  "steps -- and is a flow optimum rather than a MAP of the prior-supported posterior.")
         reporter.table(
-            f"{key} recovery (per parameter, log10 units)", headers, rows,
-            note=f"error = inferred - true in log10 units for the {key} estimate. {band_note}{extra} "
-                 f"The three recovery tables are read together.")
+            f"{key} recovery (per parameter, estimator coordinates)", headers, rows,
+            note=f"error = inferred - true in estimator coordinates for the {key} estimate. "
+                 f"{units_note}{band_note}{extra} The three recovery tables are read together.")
 
     cov_headers, cov_rows = posterior_coverage_table(draw_spec, true_log10, post_q)
     reporter.table(
         "Posterior calibration (per parameter)", cov_headers, cov_rows,
         note="fraction of truths inside the per-video credible intervals of the draws; a "
-             "calibrated posterior covers ~50% (IQR) and ~90%.")
+             "calibrated posterior covers ~50% (IQR) and ~90%. The last column is in the row's "
+             "unit (dex or pp).")
     cmp_headers, cmp_rows = point_estimates_compared_table(draw_spec, true_log10, estimates)
     reporter.table(
-        "Point estimates compared (per parameter, log10 units)", cmp_headers, cmp_rows,
+        "Point estimates compared (per parameter, estimator coordinates)", cmp_headers, cmp_rows,
         note=f"the three point estimates on the same videos, columns grouped by statistic with the "
              f"estimates consecutive: correlation with the truth, MAE, signed bias (mean of "
-             f"inferred - true) and the share outside the prior box, each for {tok['map']}, "
-             f"{tok['median']} and {tok['sgm']} (definitions above). A conclusion about a parameter "
-             f"is drawn from the row as a whole, never from one column.")
+             f"inferred - true), both in the row's unit (dex or pp), and the share outside the "
+             f"prior box, each for {tok['map']}, {tok['median']} and {tok['sgm']} (definitions "
+             f"above). A conclusion about a parameter is drawn from the row as a whole, never from "
+             f"one column.")
     agr_headers, agr_rows = point_estimate_agreement_table(draw_spec, map_est, post_q, sgm)
     reporter.table(
-        "Point-estimate agreement (per parameter, log10 units)", agr_headers, agr_rows,
+        "Point-estimate agreement (per parameter, estimator coordinates)", agr_headers, agr_rows,
         note="each 'X vs Y' column is the median over videos of the absolute difference between "
-             "the two point estimates (log10). 'MAP outside 90%' is the share of videos whose MAP "
-             "falls outside the central 90% interval of the draws. Large gaps with a high outside "
-             "share establish that the optimized candidate and the draw summaries disagree; the "
-             "cause is not decided by this table and needs separate checks.")
+             "the two point estimates, in the row's unit (dex or pp). 'MAP outside 90%' is the share "
+             "of videos whose MAP falls outside the central 90% interval of the draws. Large gaps "
+             "with a high outside share establish that the optimized candidate and the draw "
+             "summaries disagree; the cause is not decided by this table and needs separate checks.")
+
+    # ---- Flagged fractions: the linear rows' values outside [0, 1], counted, never changed ----
+    ff_headers, ff_rows, n_flagged = fraction_flag_rows(draw_spec, estimates, post_q)
+    if ff_rows:
+        reporter.table(
+            "Flagged fractions (linear rows outside their box)", ff_headers, ff_rows,
+            note="per linear row (a fraction with the box [0, 1]): the number of MAP, median and SGM "
+                 "values that are non-finite or outside the box, and the share of videos whose "
+                 "central 90% interval of the draws reaches beyond it. The values are counted and "
+                 "left as stored -- nothing is clipped; a flagged vector carries NaN in every "
+                 "derived composition quantity. Under the unrestricted pool and the unconstrained "
+                 "ascent such values are flow optima or flow draws outside the prior's support.")
+        reporter.check("fractions_within_box", n_flagged == 0,
+                       f"{n_flagged} flagged value(s) over the three estimates", fatal=False,
+                       note="no point estimate of a linear row lies outside [0, 1]; a failure is "
+                            "reported, counted and carried as NaN downstream, never clipped.")
+
+    # ---- Starting composition (biology): the allocation and c per true-capacity stratum ----
+    if condition is not None:
+        comp = starting_composition_recovery(condition, draw_spec, true_log10, estimates, post_q, qi)
+        for title, headers, rows, note in starting_composition_tables(comp):
+            reporter.table(title, headers, rows, note=note)
+        excluded = sum(comp["flagged"].values())
+        reporter.stat("composition_flagged_vectors", excluded,
+                      note="estimate vectors excluded from the starting-composition section because "
+                           "their fraction or allocation lies outside [0, 1] or their count is not "
+                           "positive (population_valid); counted per estimate in the table notes.")
 
     if reporter.dump:
         for i, para in enumerate(draw_spec):
             key = para["KEY"]
             label = para.get("LABEL") or key
             prior_range = para["PRIOR_RANGE"]
+            log_row = is_log_row(para)
             reporter.save_figure(
                 f"recovery_{key}",
                 figure_recovery_combined(
@@ -223,16 +295,21 @@ def write_recovery_outputs(reporter, args, eval_cfg, draw_spec, recovery_array_p
                     prior_range, label, n_bins=n_bins, min_count=min_count,
                     error_guide=guide, error_guide_tight=guide_tight,
                     error_ylim_floor=eval_cfg.error_ylim_floor,
-                    error_ylim_quantile=eval_cfg.error_ylim_quantile, bin_mode=bin_mode),
+                    error_ylim_quantile=eval_cfg.error_ylim_quantile, bin_mode=bin_mode,
+                    log_row=log_row),
                 caption=f"{key} ({label}). Panels 1-2: the {tok['map']} against the truth and its "
                         f"residual error, with {bin_mode}-binned conditional-quantile bands (drawn "
-                        f"where a bin has >= {min_count} points). Panel 3: the truth against the "
+                        f"where a bin has >= {min_count} points)"
+                        + ("" if log_row else "; a linear row, so the error is absolute and no "
+                                              "multiplicative guide lines are drawn")
+                        + f". Panel 3: the truth against the "
                         f"{tok['median']} with IQR bars (per-video spread of the draws), the "
                         f"{tok['map']} overlaid.",
             )
             fig = figure_point_estimates_vs_truth(
                 true_log10[:, i], {k: v[:, i] for k, v in estimates.items()},
-                post_q[:, i, :], prior_range, label, n_bins=n_bins, min_count=min_count)
+                post_q[:, i, :], prior_range, label, n_bins=n_bins, min_count=min_count,
+                log_row=log_row)
             if fig is not None:
                 reporter.save_figure(
                     f"point_estimates_{key}", fig,
@@ -297,6 +374,19 @@ def _merge_shards(reporter, args, eval_cfg, draw_spec, recovery_dir: Path,
     print(f"Removed {len(shard_paths)} shard file(s).", flush=True)
 
 
+def _estimator_status(estimator_path, expected_keys) -> str:
+    """``OK`` / ``MISSING`` / ``KEY MISMATCH: <reason>`` for a dry-run listing: the estimator
+    manifest's ``parameter_keys`` are compared with the condition's BEFORE any GPU work, so an
+    estimator of another condition or of a superseded table is named at the dry run."""
+    if not Path(estimator_path).exists():
+        return "MISSING"
+    try:
+        artifacts.assert_schema_compatible(estimator_path, expected_parameter_keys=expected_keys)
+    except Exception as exc:  # noqa: BLE001 -- a listing reports, it does not raise
+        return f"KEY MISMATCH: {exc}"
+    return "OK"
+
+
 def _expected_observations(paths, args, data_bank_root, timing_label, compress, draw_spec):
     """The EVAL inventory this run must cover: ``[(task, sim), ...]`` over every EVAL task and
     every simulation it holds (capped by ``--max-sims``). Needs only the theta sets, so the
@@ -313,7 +403,7 @@ def _expected_observations(paths, args, data_bank_root, timing_label, compress, 
 
 def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run the full MAP-recovery evaluation for the given workflow + CLI args."""
-    spec = _evaluation_spec(cfg)
+    spec = _evaluation_spec(cfg, args.condition)
 
     timing = RunTiming(
         total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing,
@@ -388,6 +478,8 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --bin-mode           : {bin_mode}")
     print(f"  --posterior-samples  : {posterior_samples}")
     progress_path = recovery_dir / "progress.log"
+    print(f"  parameter table      : {len(spec.parameter_keys)} learnable rows under {spec.condition} "
+          f"({sum(1 for v in spec.log_rows if not v)} linear)")
     print("\nOutput destinations:")
     print(f"  reads estimator : {estimator_path}")
     print(f"  reads EVAL      : <data_bank>/{paths.video_subdir}/"
@@ -408,8 +500,12 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         ]
         missing = 0
         for role, path in inputs:
-            status = (theta_set_status(path, spec.draw_spec, condition=args.condition) if "theta" in role
-                      else ("OK" if Path(path).exists() else "MISSING"))
+            if "theta" in role:
+                status = theta_set_status(path, spec.draw_spec, condition=args.condition)
+            elif "estimator" in role:
+                status = _estimator_status(path, spec.parameter_keys)
+            else:
+                status = "OK" if Path(path).exists() else "MISSING"
             if status != "OK":
                 missing += 1
             print(f"  reads {role}: {path}  [{status}]")
@@ -570,9 +666,9 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 post_quantiles.append(summary)
                 post_sgm.append(sgm_vec)
                 if show:
-                    print(f"          original theta [LOG] {_theta_repr(true_log)}",
+                    print(f"          original theta [estimator] {_theta_repr(true_log)}",
                           flush=True)
-                    print(f"          original theta [ABS] "
+                    print(f"          original theta [physical] "
                           f"{_theta_repr(to_physical(true_log, spec.draw_spec))}", flush=True)
                 done += 1
                 elapsed = time.time() - loop_start
@@ -585,11 +681,11 @@ def run_evaluation(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                     f"elapsed={elapsed:.1f}s | avg={avg:.1f}s/video | ETA={eta:.0f}s")
                 if debug_log:
                     log_file_only(progress_fh,
-                                  f"pool IQR [LOG] {_theta_repr(map_info['scale'], 4)}")
+                                  f"pool IQR [estimator] {_theta_repr(map_info['scale'], 4)}")
                     log_file_only(progress_fh,
-                                  f"inferred [LOG] {_theta_repr(theta_log)}")
+                                  f"inferred [estimator] {_theta_repr(theta_log)}")
                     log_file_only(progress_fh,
-                                  f"original [LOG] {_theta_repr(true_log)}")
+                                  f"original [estimator] {_theta_repr(true_log)}")
             log_progress(progress_fh,
                          f"task {task} complete ({task_count} videos on this rank in "
                          f"{time.time() - task_start:.1f}s).")
@@ -761,7 +857,7 @@ def build_evaluation_parser() -> argparse.ArgumentParser:
         "--verbose", action="store_true",
         help="Rich per-video console diagnostics: per-stage shapes/timings, "
              "per-step optimization progress, stopping reason, and the optimal "
-             "vs. original theta in log10 and physical units.",
+             "vs. original theta in estimator coordinates and physical units.",
     )
     parser.add_argument(
         "--debug", action="store_true",

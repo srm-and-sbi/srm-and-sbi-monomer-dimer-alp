@@ -4,9 +4,10 @@ This module is the parameter contract for the Detector calibration workflow — 
 special-situation entry point that infers the diffraction-limited-imaging (DLI)
 model with the reaction-diffusion biology marginalized over its full prior: the
 detector re-images the condition's reactive trajectory tier the biology prior generates
-once per condition, so the eleven reaction-diffusion parameters are a nuisance SUPPLIED by
-that tier, never drawn here (the association ratio is a per-condition constant of the
-generator, not a parameter). It is deliberately DECOUPLED
+once per condition, so the condition's reaction-diffusion parameters (eleven under MET-FAB,
+twelve under MET-INLB) are a nuisance SUPPLIED by that tier, never drawn here (the
+association ratio and, under MET-FAB, the window-start allocation are per-condition constants
+of the generator, not parameters). It is deliberately DECOUPLED
 from the canonical ``parameterization.py``: the detector-calibration system is
 similar to but distinct from the production system, its parameter roles differ
 (the imaging parameters are inferred here, marginalized as a nuisance there), and its ranges differ
@@ -123,20 +124,22 @@ _SENTINELS = (NUISANCE_SENTINEL, POSTERIOR_SENTINEL)
 
 _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
     # ----- RDS nuisance: biology marginalized during detector calibration -----
-    # Nuisance-from-object (VALUE = NUISANCE, PRIOR_RANGE = None): the eleven reaction-diffusion
-    # parameters are SUPPLIED by the condition's RDS trajectory tier, which the biology prior
-    # (`parameterization.PARAMETERIZATION`) generates once per condition and both workflows
-    # re-image at the DLI stage -- the tier's `Theta_Set` is the detector's record of this
-    # nuisance. The association ratio is the condition's declared constant
-    # (`parameterization.ConditionSetting`: FAB 0, INLB 1), realized in the tier, not a row. Nothing
-    # is drawn here and no range is duplicated, so the detector marginalizes the biology
-    # prior by construction; these rows declare the role and label the provenance tables.
-    # The ranges live only in the biology table (DETECTOR_WORKFLOW.md sec. 6.1 points there).
+    # Nuisance-from-object (VALUE = NUISANCE, PRIOR_RANGE = None): the condition's reaction-
+    # diffusion parameters are SUPPLIED by its RDS trajectory tier, which the biology prior
+    # (`parameterization.parameterization_of(condition)`: eleven rows under MET-FAB, twelve
+    # under MET-INLB) generates once per condition and both workflows re-image at the DLI stage
+    # -- the tier's `Theta_Set` is the detector's record of this nuisance. The association
+    # ratio is the condition's declared constant (`parameterization.ConditionSetting`: FAB 0,
+    # INLB 1), realized in the tier, not a row; so is the window-start allocation under MET-FAB
+    # (declared 0), while MET-INLB infers it. Nothing is drawn here and no range is
+    # duplicated, so the detector marginalizes the biology prior by construction; these rows
+    # mirror the twelve MASTER keys, declare the role and label the provenance tables. The
+    # ranges live only in the biology table (DETECTOR_WORKFLOW.md sec. 6.1 points there).
     'stoichiometry': [
         {'KEY': 'count_total', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count', 'LABEL': r'$N_{\mathrm{total}}$',
-         'NOTE': 'N_total, the true receptor-subunit total of the simulated patch (probe-bound and unbound); the generator realizes the retained population from it through the condition\'s occupancy. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
-        {'KEY': 'ratio_dimer_monomer_initial', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Dimensionless', 'LABEL': r'$r_{B/A}$',
-         'NOTE': 'Requested initial dimer-to-monomer ratio r = n_B / n_A of the TRUE population (a log row on the 5-25 % band of the basal complex fraction f_B = r / (1 + r) in the biology table; the retained ratio of the initial population is (2 - p) r). RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'N_total, the receptor-subunit total of the underlying population of the simulated patch (probe-bound and unbound); the generator realizes the reference probe-bound population from it through the condition\'s occupancy. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+        {'KEY': 'fraction_basal_dimers_reference', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Fraction', 'LABEL': r'$f_{B}^{ref}$',
+         'NOTE': 'Basal reference fraction f of dimers among the complexes of the underlying population (a LINEAR row uniform on [0, 1] in the biology table), from which the reference probe-bound population is realized. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_dissociation', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{OFF}$',
          'NOTE': 'Dimer unbinding rate kappa_OFF (B_m -> A_m + A_m, every mode), 1/s. Under the labeling model a dissociating one-dye dimer leaves one visible and one invisible daughter -- a signature the detector must see during calibration. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
     ],
@@ -157,6 +160,10 @@ _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
          'NOTE': 'Mobility switching slow -> immobile, shared by all molecular species of the condition, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_immobile_slow', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$k_{is}$',
          'NOTE': 'Mobility switching immobile -> slow, shared by all molecular species of the condition, 1/s. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+    ],
+    'initialization': [  # the window-start allocation: supplied by the tier under MET-INLB (inferred there), the declared constant 0 under MET-FAB
+        {'KEY': 'relative_count_active_dimers_initial', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Fraction', 'LABEL': r'$R_{active}$',
+         'NOTE': 'Initial active-dimer allocation R_active of the window-start composition (a LINEAR row uniform on [0, 1] in the biology table under MET-INLB; MET-FAB declares it 0 on its condition setting, so no Fab theta carries it): c = round(R_active * (A_ref // 2)) probe-bound monomer pairs of the reference population start as two-InlB dimers, conserving N_R. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
     ],
     # ----- Fixed geometry -----
     'geometry': [
@@ -296,11 +303,12 @@ DETECTOR_PARAMETER_KEYS: list[str] = [entry['KEY'] for entry in DETECTOR_PARAMET
 
 # The nuisance parameters form two blocks with different media (DETECTOR_WORKFLOW.md
 # sec. 7 / 9.3): the RDS biology (nuisance-from-object, supplied by the condition's RDS tier,
-# whose eleven-parameter Theta_Set is its record) and the SCOPE camera (nuisance-from-spec,
-# drawn at the DLI stage and recorded as Nuisance_SCOPE). They are grouped by the
-# nested-dict category, so flipping the camera rows to a nuisance does not pull them
-# into the RDS block.
-_RDS_NUISANCE_GROUPS = ('stoichiometry', 'mobility')
+# whose Theta_Set -- eleven labels under MET-FAB, twelve under MET-INLB -- is its record) and
+# the SCOPE camera (nuisance-from-spec, drawn at the DLI stage and recorded as Nuisance_SCOPE).
+# They are grouped by the nested-dict category, so flipping the camera rows to a nuisance does
+# not pull them into the RDS block. The RDS block mirrors the twelve MASTER keys of the
+# biology table in order (import-time check in the biology module's tests).
+_RDS_NUISANCE_GROUPS = ('stoichiometry', 'mobility', 'initialization')
 _SCOPE_NUISANCE_GROUPS = ('camera',)
 
 # RDS biology nuisance subset (marginalized during calibration; supplied by the condition's RDS tier).

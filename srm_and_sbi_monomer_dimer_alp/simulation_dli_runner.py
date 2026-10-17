@@ -75,12 +75,12 @@ from srm_and_sbi_monomer_dimer_alp.labeling import (
     resolve_labeling,
 )
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
-    PARAMETER_RAW_FIND,
-    PARAMETERIZATION,
-    PARAMETERIZATION_RAW,
     PARAMETERS,
     RunTiming,
+    parameterization_of,
+    parameterization_raw_of,
 )
+from srm_and_sbi_monomer_dimer_alp.workflow import _check_condition
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
     extract_subunit_lineage, extract_subunit_positions,
@@ -130,21 +130,33 @@ def _labeling_set_path(paths, task_alias, data_bank_root, timing_label, compress
 
 @dataclass(frozen=True)
 class _DliSpec:
-    """Per-workflow DLI specializations resolved from a ``WorkflowConfig``."""
+    """Per-workflow, per-condition DLI specializations resolved from a ``WorkflowConfig``."""
+    condition: str           # the condition whose tier is re-imaged
     imaging_source: str      # "artifact" (biology) | "prior_box" (detector)
-    diag_spec: list          # sim-0 "Parameters of this video" table: PARAMETERIZATION (11-RDS) | DETECTOR_PARAMETERIZATION (6 imaging)
+    tier_table: list         # the condition's biology table: the schema of the UPSTREAM RDS Theta_Set both workflows check (11 rows under FAB, 12 under INLB)
+    tier_table_raw: list     # the condition's full biology specification (declared rows read as fixed), for the diagnostics tables
+    diag_spec: list          # sim-0 "Parameters of this video" table: the tier table (biology) | DETECTOR_PARAMETERIZATION (6 imaging)
 
 
-def _dli_spec(cfg: WorkflowConfig) -> _DliSpec:
-    """Resolve the DLI stage's per-workflow specializations from the workflow config."""
+def _dli_spec(cfg: WorkflowConfig, condition) -> _DliSpec:
+    """Resolve the DLI stage's specializations from the workflow config and the condition.
+
+    Both workflows read the condition's RDS tier and check its ``Theta_Set`` (the biology
+    labels, under ``Paths.rds_theta_set_path``) against the condition's biology table before
+    rendering; only the imaging source and the diagnostics table differ."""
+    token = _check_condition(cfg, condition)
+    tier_table = parameterization_of(token)
+    tier_table_raw = parameterization_raw_of(token)
     if cfg.tag == "detector":
-        return _DliSpec(imaging_source="prior_box", diag_spec=det.DETECTOR_PARAMETERIZATION)
-    return _DliSpec(imaging_source="artifact", diag_spec=PARAMETERIZATION)
+        return _DliSpec(condition=token, imaging_source="prior_box", tier_table=tier_table,
+                        tier_table_raw=tier_table_raw, diag_spec=det.DETECTOR_PARAMETERIZATION)
+    return _DliSpec(condition=token, imaging_source="artifact", tier_table=tier_table,
+                    tier_table_raw=tier_table_raw, diag_spec=tier_table)
 
 
 def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run the full DLI rendering pipeline for the given workflow + CLI args."""
-    spec = _dli_spec(cfg)
+    spec = _dli_spec(cfg, args.condition)
     artifact = spec.imaging_source == "artifact"   # biology; else detector prior-box
 
     timing = RunTiming(
@@ -281,10 +293,16 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print("  initial fluorescence probabilities (before bleaching and detection; complexes present at initialization):")
     if labeling_plan.probe_rule == "classes":
         s_two = float(labeling_plan.two_probe_share)
-        print(f"    per complex           : monomer {a_mono:.3f} (probe-bound at initialization; a probe-free monomer produced "
-              f"later by a Fab-dimer dissociation never is), one-probe dimer {q:.3f}, two-probe dimer {q_two:.3f}, "
-              f"simulated dimer {(1 - s_two) * q + s_two * q_two:.3f} (averaged over its classes at the two-probe share "
-              f"{s_two:.4f})")
+        if labeling_plan.ligand_classes:
+            print(f"    per complex           : monomer {a_mono:.3f} (probe-bound at initialization), B1 {q:.3f} (one "
+                  f"represented receptor), B2 {q_two:.3f} (two independent coins); the starting B2 share depends on each "
+                  f"simulation's window-start allocation and is recorded per simulation in the Labeling_Set "
+                  f"(the declared independent-binding share of the reference dimers is {s_two:.4f})")
+        else:
+            print(f"    per complex           : monomer {a_mono:.3f} (probe-bound at initialization; a probe-free monomer produced "
+                  f"later by a Fab-dimer dissociation never is), one-Fab dimer {q:.3f}, two-Fab dimer {q_two:.3f}, "
+                  f"simulated dimer {(1 - s_two) * q + s_two * q_two:.3f} (averaged over its classes at the declared "
+                  f"two-Fab share {s_two:.4f})")
         if labeling_plan.ligand_classes:
             print(f"    per represented receptor within a dimer: {a_dim:.4f}   (every represented InlB receptor carries a probe; "
                   f"B1 represents one receptor, B2 two)")
@@ -313,7 +331,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
               f"(calibrated-imaging photophysics artifact; durable tier)")
         print(f"  reads theta sets     : <data_bank>/{paths.theta_subdir}/"
               f"{paths.theta_set_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
-              f"(11-RDS labels; the condition's tier; diagnostics only, not re-written)")
+              f"({len(spec.tier_table)} RDS labels of {condition}; the condition's tier; schema-checked; "
+              f"diagnostics only, not re-written)")
         print(f"  reads trajectories   : <data_bank>/{paths.video_subdir}/"
               f"{paths.trajectory_repo}/{paths.rds_alias}_{timing_label}_TASK_{{n}}/"
               f"{paths.rds_alias}_{timing_label}_TASK_{{n}}_SIM_{{m}}.h5   (the condition's tier, both workflows)")
@@ -349,8 +368,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             print("\nImaging parameters (marginalized per simulation):")
             for group_label, keys in _DLI_PARAM_GROUPS.items():
                 print(f"  --- {group_label} ---")
+                raw_by_key = {p["KEY"]: p for p in spec.tier_table_raw}
                 for key in keys:
-                    para = PARAMETERIZATION_RAW[PARAMETER_RAW_FIND[key]]
+                    para = raw_by_key[key]
                     val = para["VALUE"]
                     unit = para["UNIT"]
                     unit_str = f"        units: {unit}" if unit else ""
@@ -437,9 +457,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                   f"+ SCOPE box {scope_sets.shape} (5).")
             missing = 0 if dli_ok else 1
             for task in task_indices:
-                theta_set_path = paths.theta_set_path(
+                theta_set_path = paths.rds_theta_set_path(
                     task, data_bank_root, timing_label, compress, split)
-                theta_status = theta_set_status(theta_set_path, PARAMETERIZATION, condition=condition)
+                theta_status = theta_set_status(theta_set_path, spec.tier_table, condition=condition)
                 theta_ok = theta_status == "OK"
                 if not theta_ok:
                     missing += 1
@@ -458,7 +478,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 scope_set_path = _nuisance_scope_path(
                     paths, task, data_bank_root, timing_label, compress, split)
                 print(f"  reads theta set      (task {task}): {theta_set_path}  "
-                      f"[{theta_status}]   (11 RDS labels; schema-checked; diagnostics only, not re-written)")
+                      f"[{theta_status}]   ({len(spec.tier_table)} RDS labels of {condition}; schema-checked; "
+                      f"diagnostics only, not re-written)")
                 print(f"  reads trajectories   (task {task}): "
                       f"{traj_present}/{args.task_simulations} present")
                 print(f"  writes Nuisance_DLI   (task {task}): {dli_set_path}")
@@ -480,6 +501,17 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             for task in task_indices:
                 theta_set_path = paths.theta_set_path(
                     task, data_bank_root, timing_label, compress, split)
+                # The UPSTREAM record of the trajectories this pass re-images: the condition's RDS-tier
+                # Theta_Set (biology labels under rds_alias), checked against the condition's biology
+                # table so a superseded tier is never re-imaged; the detector's own six-column record
+                # (theta_set_path above) is what this pass writes, never the subject of the check.
+                upstream_path = paths.rds_theta_set_path(
+                    task, data_bank_root, timing_label, compress, split)
+                upstream_status = theta_set_status(upstream_path, spec.tier_table, condition=condition)
+                if upstream_status != "OK":
+                    missing += 1
+                print(f"  reads upstream RDS theta set (task {task}): {upstream_path}  [{upstream_status}]   "
+                      f"({len(spec.tier_table)} RDS labels of {condition}; schema-checked; the tier's record)")
                 traj_present = 0
                 for sim in range(args.task_simulations):
                     traj_path = paths.trajectory_path(
@@ -548,10 +580,10 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             # biology: the six photophysics from the Nuisance_DLI artifact (recorded as
             # Nuisance_DLI_Theta_Set); READ the learnable 11-RDS Theta_Set for the sim-0
             # diagnostics table (this stage does not re-write it; the RDS stage owns it).
-            rds_theta_set_path = paths.theta_set_path(
+            rds_theta_set_path = paths.rds_theta_set_path(
                 task_alias, data_bank_root, timing_label, compress, split)
-            print(f"  Reading theta set (RDS labels; diagnostics only):  {rds_theta_set_path}")
-            rds_theta_set = load_theta_set(rds_theta_set_path, PARAMETERIZATION, condition=condition)
+            print(f"  Reading theta set (RDS labels of {condition}; diagnostics only):  {rds_theta_set_path}")
+            rds_theta_set = load_theta_set(rds_theta_set_path, spec.tier_table, condition=condition)
             imaging_draw = np.power(10, nuisance_dli.sample(args.task_simulations))  # (sims, 6) physical
             imaging_set_path = _nuisance_dli_path(
                 paths, task_alias, data_bank_root, timing_label, compress, split)
@@ -560,7 +592,20 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             print(f"  Writing Nuisance_SCOPE: {scope_set_path}")
         else:
             # detector: the six imaging are the inference target, drawn from the box and
-            # WRITTEN as the primary Theta_Set (the training label). No RDS theta is read.
+            # WRITTEN as the primary Theta_Set (the training label). The UPSTREAM record of the
+            # trajectories (the condition's RDS-tier Theta_Set, biology labels under rds_alias) is
+            # checked against the condition's biology table BEFORE any output is written, so a
+            # superseded tier is never re-imaged; the detector's own six-column record below is
+            # never the subject of that check.
+            upstream_path = paths.rds_theta_set_path(
+                task_alias, data_bank_root, timing_label, compress, split)
+            upstream_status = theta_set_status(upstream_path, spec.tier_table, condition=condition)
+            print(f"  Upstream RDS theta set (task {task_alias}): {upstream_path}  [{upstream_status}]")
+            if upstream_status != "OK":
+                raise SystemExit(
+                    f"run_dli [{cfg.tag}, {condition}, task {task_alias}]: refusing to re-image the tier: its "
+                    f"RDS Theta_Set is {upstream_status}. The trajectories must carry a record of the "
+                    f"condition's current table ({len(spec.tier_table)} labels); regenerate the tier.")
             rds_theta_set = None
             imaging_draw = learnable_sets[task_alias]                          # (sims, 6) physical labels
             imaging_set_path = paths.theta_set_path(
@@ -754,11 +799,11 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.table(
                     "Parameters of this video (sim 0)", headers, prior_rows,
                     note="The prior bounds and sampled values behind this video. "
-                         "count_total and ratio_dimer_monomer_initial fix the TRUE initial "
-                         "monomer/dimer particle counts; only labeled subunits render (see "
+                         "count_total, the basal reference fraction and, under INLB, the allocation fix "
+                         "the STARTING monomer/dimer particle counts; only labeled subunits render (see "
                          "the labeling record), so the sample frame shows fewer spots.",
                 )
-                fixed_headers, fixed_rows = fixed_parameters_table(PARAMETERIZATION_RAW)
+                fixed_headers, fixed_rows = fixed_parameters_table(spec.tier_table_raw)
                 reporter.table(
                     "Fixed parameters", fixed_headers, fixed_rows,
                     note="Non-learnable parameters held constant across all "

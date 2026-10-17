@@ -126,8 +126,8 @@ def _figure_plane(pool_log, results, keys, xi, yi, rng, to_physical, log_rows):
                edgecolors="k", linewidths=1.2, zorder=6, label="SGM (a realized member)")
     ax.scatter(ur["vom_abs"][xi], ur["vom_abs"][yi], marker="X", s=210, c="magenta",
                edgecolors="k", linewidths=1.2, zorder=6, label="vector of medians")
-    # A log axis only for a log row; a linear row, if the table declared one, is drawn on a linear
-    # axis, since zero has no logarithm and its prior is uniform in the value itself.
+    # A log axis only for a log row; a linear row (the fraction rows of the biology table) is drawn
+    # on a linear axis, since zero has no logarithm and its prior is uniform in the value itself.
     ax.set_xscale("log" if log_rows[xi] else "linear")
     ax.set_yscale("log" if log_rows[yi] else "linear")
     ax.set_xlabel(keys[xi])
@@ -244,8 +244,9 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
                  "choice does not matter, and where they diverge the composite is asserting a "
                  "combination nothing in the collection realized. "
                  f"SGM in-box: {res['sgm_in_box']}; vector-of-medians in-box: {res['vom_in_box']}. "
-                 f"Estimator space is log10 for log rows and the value itself for a linear row "
-                 f"(none in the decided biology table).")
+                 f"Estimator space is log10 for log rows and the value itself for the linear rows "
+                 f"(the basal reference fraction f and, under MET-INLB, the allocation R_active). "
+                 f"A member outside the box is flagged by the in-box columns, never clipped.")
 
     reporter.table(
         "Typicality of the vector of medians versus the SGM",
@@ -278,8 +279,9 @@ def _write_report(args, spec, pool_log, results, in_box, rng, collection_label):
                   note="MET-FAB is the monomer control; MET-INLB is the dimer condition")
     reporter.stat("collection size (vectors)", str(n), note=f"in-box: {int(in_box.sum())} / {n}")
     reporter.stat("space", "absolute (parameterization.to_physical of the estimator-space vectors: "
-                           "10**theta for log rows, the value itself for the linear initial dimer "
-                           "fraction), normalized by the absolute prior range")
+                           "10**theta for log rows, the value itself for the linear rows, the basal "
+                           "reference fraction f and, under MET-INLB, the allocation R_active), "
+                           "normalized by the absolute prior range (1 for both fraction rows)")
     for row in spec.extra_stats:
         reporter.stat(*row)
 
@@ -387,19 +389,21 @@ class _Source:
 def _sgm_spec(cfg, args):
     """Resolve the workflow-specific half of the analysis."""
     from .parameterization import PARAMETERS, RunTiming, is_log_row, to_flow, to_physical
-    from .workflow import parameter_keys as _wf_keys, parameter_table
+    from .workflow import parameter_keys as _wf_keys, parameter_table, prior_bounds
 
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     posit_dir = PARAMETERS.machine.data_bank_root / paths.posit_subdir
     alias = paths.project_alias
-    para = cfg.param_module
     exp_stem = paths.experiment_recovery_pattern.format(project_alias=alias,
                                                         timing_label=timing.label)
     exp_path = posit_dir / exp_stem / f"{exp_stem}.npz"
-    keys = _wf_keys(cfg)
-    table = parameter_table(cfg)
+    # The ESTIMATOR's condition binds the keys, the table and the box (eleven rows under MET-FAB,
+    # twelve under MET-INLB); the detector's are condition-free.
+    keys = _wf_keys(cfg, args.condition)
+    table = parameter_table(cfg, args.condition)
+    low, high = prior_bounds(cfg, args.condition)
 
     collections = {
         "experiment-map": _Source(
@@ -421,23 +425,26 @@ def _sgm_spec(cfg, args):
             "composite built from each dimension independently can sit off the ridge the real "
             "configurations occupy.")
     else:
-        xi, yi = keys.index("ratio_dimer_monomer_initial"), keys.index("rate_dissociation")
+        xi, yi = keys.index("fraction_basal_dimers_reference"), keys.index("rate_dissociation")
         plane_caption = (
-            "Initial dimer-to-monomer ratio versus dissociation rate. The collection members -- per-window "
-            "MAP candidates -- (grey) with the SGM (gold star, a realized member) and the per-dimension "
-            "vector of medians (magenta "
-            "X). These two are the coupled pair at the center of the biological question -- how "
-            "much of the receptor population is dimeric at the window start and how fast those "
-            "dimers dissociate (association is a per-condition constant, not inferred) -- and they "
-            "trade off against each other, so a composite built per dimension can assert a "
-            "ratio/rate combination no recording supported. Both are log rows on log axes; the ratio "
-            "r = n_B / n_A reads as the complex fraction f_B = r / (1 + r).")
+            "Basal reference fraction of dimers f versus dissociation rate. The collection members -- "
+            "per-window MAP candidates -- (grey) with the SGM (gold star, a realized member) and the "
+            "per-dimension vector of medians (magenta X). These two are the coupled pair at the "
+            "center of the biological question -- how much of the receptor population is dimeric and "
+            "how fast those dimers dissociate (association is a per-condition constant, not inferred) "
+            "-- and they trade off against each other, so a composite built per dimension can assert a "
+            "fraction/rate combination no recording supported. f is a linear row on a linear axis "
+            "(its prior is uniform on [0, 1]); the rate is a log row on a log axis. Under MET-INLB f "
+            "is the REFERENCE composition: the window-start composition adds the allocation R_active, "
+            "a further coordinate of the collection. A member outside the box is flagged, never "
+            "clipped.")
     plane = (xi, yi, plane_caption)
     return SGMSpec(
         parameter_keys=keys,
-        theta_low=np.array(para.theta_lower_bound(), dtype=float),
-        theta_high=np.array(para.theta_upper_bound(), dtype=float),
-        # The ONE conversion rule, bound to this workflow's table (all-log for the detector).
+        theta_low=np.array(low, dtype=float),
+        theta_high=np.array(high, dtype=float),
+        # The ONE conversion rule, bound to this workflow's table under the condition (all-log for
+        # the detector; the biology table carries the linear fraction rows).
         to_physical=lambda u: to_physical(u, table),
         to_flow=lambda x: to_flow(x, table),
         log_rows=np.array([is_log_row(e) for e in table], dtype=bool),

@@ -45,7 +45,8 @@ COL = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
 
 
 def schema(generator: str, *, version: str = VERSION, written: str = INSIDE, condition: str = CONDITION) -> dict:
-    table = par.PARAMETERIZATION if generator == "rds" else det.DETECTOR_PARAMETERIZATION
+    # a tier record of a condition carries that condition's table (eleven rows FAB, twelve INLB)
+    table = par.parameterization_of(condition) if generator == "rds" else det.DETECTOR_PARAMETERIZATION
     sc = theta_set_schema(table, condition=condition, timing_label=TIMING, generator=generator)
     sc["package_version"] = version
     sc["written_utc"] = written
@@ -138,12 +139,13 @@ def test_collect_provenance_reads_real_products():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         theta_by_task = {}
+        table = par.parameterization_of(CONDITION)
         for t in (0, 1):
             rds_path = base.theta_set_path(t, root, TIMING, True, SPLIT)
             os.makedirs(os.path.dirname(rds_path), exist_ok=True)
-            low, high = np.array(par.theta_lower_bound()), np.array(par.theta_upper_bound())
-            theta = par.to_physical(np.random.default_rng(t).uniform(low, high, size=(n, len(low))))
-            sc = theta_set_schema(par.PARAMETERIZATION, condition=CONDITION, timing_label=TIMING, generator="rds")
+            low, high = np.array(par.theta_lower_bound(CONDITION)), np.array(par.theta_upper_bound(CONDITION))
+            theta = par.to_physical(np.random.default_rng(t).uniform(low, high, size=(n, len(low))), table)
+            sc = theta_set_schema(table, condition=CONDITION, timing_label=TIMING, generator="rds")
             if t == 1:
                 sc["package_version"] = "0.1.6"      # an earlier generator's tier under the current table
             write_theta_set(rds_path, theta, sc)

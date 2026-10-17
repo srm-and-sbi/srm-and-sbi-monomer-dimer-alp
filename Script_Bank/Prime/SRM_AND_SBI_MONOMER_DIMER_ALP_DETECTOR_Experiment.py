@@ -12,7 +12,8 @@ The Experiment stage runs on ONE shared engine used by both workflows:
 ``srm_and_sbi_monomer_dimer_alp.experiment_runner.run_experiment`` (which routes cell discovery /
 windowing / sharding through the shared ``experiment_support`` module). This entry point is the
 detector shim; the biology twin (``SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py``) is identical except it
-builds the biology config (10 reaction-diffusion parameters). The engine -- including the
+builds the biology config (eleven reaction-diffusion parameters under MET-FAB, twelve under
+MET-INLB). The engine -- including the
 multi-GPU sharding and the ``--merge`` combine step -- is shared.
 
 Outputs (under <data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Experiment/,

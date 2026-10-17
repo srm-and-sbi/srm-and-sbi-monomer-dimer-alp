@@ -17,12 +17,19 @@ stage through its labeling law, and carried by a condition slot in every product
 calibration that marginalizes the full reactive biology prior, and the separated
 stoichiometry–mobility model (two molecular species under MET-FAB and three under MET-INLB, each in three mobility modes; the reaction channels
 generated from the model blocks and the condition's association setting, twenty-four under MET-INLB
-and eleven under MET-FAB; eleven learnable parameters, identical for both conditions, led by the
-conserved receptor total `N_R` and the initial dimer-to-monomer ratio `r`, from which the receptor
-fraction `x_B` is derived), and the decided prior ranges of every learnable row together with the
-declared per-condition probe occupancies (2026-09-14; the occupancies are provisional until the
-collaborators' answers). Pending: the per-condition `Nuisance_DLI` recalibration under the
-DOL-explicit model, and the first per-condition trajectory tier under the decided ranges.
+and eleven under MET-FAB; one master table of twelve learnable rows resolved per condition — eleven
+inferred coordinates under MET-FAB, twelve under MET-INLB, aligned by key — led by the true receptor
+total `N_total`, the basal reference fraction `f` of dimers among the complexes and, under MET-INLB,
+the initial active-dimer allocation `R_active`), the decided prior ranges of every learnable row
+together with the declared per-condition probe occupancies (2026-09-14; the occupancies decided as
+conversion constants on 2026-10-05, after the collaborators' answers), the retained-population model
+(the generator simulates the probe-associated complexes only; MET-INLB dimers carry a ligand class),
+and the window-start composition (2026-10-15): the declared occupancy defines a reference probe-bound
+population from `N_total` and `f`, and under MET-INLB the allocation pairs already probe-bound
+monomers of that population into additional two-InlB dimers before the recording starts, conserving
+the represented receptors and probes. Pending: the per-condition trajectory tiers and detector
+datasets under this composition, and the per-condition `Nuisance_DLI` recalibration that follows
+from them.
 
 **Condition tokens.** The experimental conditions are named `FAB` (MET-FAB, the Fab-labeled
 monomer control) and `INLB` (MET-INLB, the InlB-labeled dimer condition) in every filename,
@@ -77,7 +84,7 @@ The pipeline is a five-stage chain. The first two stages form **generation** (**
 - **Evaluation** — MAP-recovery validation: estimates parameters on the held-out EVAL set and scores recovery against the known ground truth.
 - **Experiment** — experimental-data application: applies the trained posterior to experimental microscopy videos (no ground truth).
 
-**Conditions.** The experimental condition (`FAB` = MET-FAB, `INLB` = MET-INLB) enters at the RDS stage, where the condition's declared association setting selects the reaction network (MET-FAB: no association channel, `R_ON = 0`, pre-existing dimers may dissociate; MET-INLB: the reference intensity, `R_ON = 1`) and produces the condition's own trajectory tier, and again at the DLI stage, where the condition's measured labeling law re-images that tier. Every stage therefore takes `--condition FAB|INLB`, and every product carries the token in its name (`..._ALP_FAB_2S_50FPS_Theta_Set_...`, `..._ALP_FAB_2S_50FPS_Video_Set_...`, `..._ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz`). MET-FAB and MET-INLB are two frozen configurations of one codebase, generated, trained, and validated separately; the condition-slot section of [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) lists how each product carries the token.
+**Conditions.** The experimental condition (`FAB` = MET-FAB, `INLB` = MET-INLB) enters at the RDS stage, where the condition's declared association setting selects the reaction network (MET-FAB: no association channel, `R_ON = 0`, pre-existing dimers may dissociate; MET-INLB: the reference intensity, `R_ON = 1`) and produces the condition's own trajectory tier, and again at the DLI stage, where the condition's measured labeling law re-images that tier. The condition also selects the parameter table: one master table of twelve learnable rows is resolved per condition, MET-FAB declaring the initial active-dimer allocation 0 (eleven inferred coordinates) and MET-INLB inferring it (twelve); the eleven shared coordinates sit at positions 0–10 under both conditions, and every product, estimator and analysis is aligned by parameter key, never by vector position. Every stage therefore takes `--condition FAB|INLB`, and every product carries the token in its name (`..._ALP_FAB_2S_50FPS_Theta_Set_...`, `..._ALP_FAB_2S_50FPS_Video_Set_...`, `..._ALP_DETECTOR_INLB_2S_50FPS_Estimator.npz`). MET-FAB and MET-INLB are two frozen configurations of one codebase, generated, trained, and validated separately; the condition-slot section of [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) lists how each product carries the token.
 
 Each stage is an entry-point under `Script_Bank/Prime/`, run with the active `MACHINE_PROFILE` set. The stages communicate through on-disk artifacts, so a run can **target a single stage** rather than the whole chain: invoking a stage script directly (with `--split {train,test,eval}`) re-runs just that stage against the artifacts already on disk — for example, re-rendering videos with `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (the DLI stage only) over trajectories that an RDS run already wrote to disk. Run any stage with `--help` for its full flag list.
 

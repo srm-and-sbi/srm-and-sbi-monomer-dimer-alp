@@ -1,17 +1,19 @@
 # Experiment temporal dynamics — method and interpretation
 
 Authoritative companion for both workflows' temporal analyses:
-`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py` (biology, the eleven reaction-diffusion
-parameters) and `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Temporal_Dynamics.py` (detector, the six
-imaging parameters). Both are thin shims over one shared engine,
+`SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py` (biology, the reaction-diffusion
+parameters of the estimator's condition: eleven under MET-FAB, twelve under MET-INLB, whose
+window-start allocation is inferred) and `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Temporal_Dynamics.py`
+(detector, the six imaging parameters). Both are thin shims over one shared engine,
 `srm_and_sbi_monomer_dimer_alp.temporal_dynamics_runner`, over the workflow-agnostic kernel
 `srm_and_sbi_monomer_dimer_alp.temporal_dynamics`.
 
-> **Note (2026-09-14).** Release 0.1.4 gave every learnable row of the eleven-parameter biology table its decided prior range and replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r` (`x_B = 2r / (1 + 2r)` is derived), so every biology row is a log row and the prior-reference curves of the pooled figures are log-uniform for all eleven (`PROJECT_CONTEXT.md` §2). Results quoted from earlier runs stand as recorded.
-
 This note documents the **method and its assumptions**. Per-run numbers live in the `report.md`
 each run writes beside its figures, never here, so that this note cannot go stale against a newer
-posterior.
+posterior; the few values quoted below as illustrations come from earlier runs and stand as
+recorded. Every biology row is read on its own scale: the log rows in log10, the two linear rows —
+the basal reference fraction `f` and, under MET-INLB, the allocation `R_active`, both on [0, 1] — in
+the value itself (*Drift* and *Pooled posterior density*, below).
 
 ## What the analysis asks
 
@@ -39,6 +41,19 @@ so a given recording index is the same acquisition in both — which makes each 
 Run both and compare: a flat imaging trajectory pushes a biology trend toward genuine dynamics; a
 drifting one identifies a live confound and localizes it to a channel. **Neither result attributes a
 cause on its own**, and no wording in either report should be read as if it did.
+
+## Recordings of the other condition
+
+An Experiment product can hold recordings of both kinds, while every estimate in it comes from one
+estimator, the one trained for the `--condition` of the run. Recordings of the other kind are then a
+**misspecification test**: their window estimates, drift, pooled densities and reference comparisons
+are computed under the estimator's assumptions (the parameter table, declared values and training data
+of its condition), never the recording's own, so they test the estimator outside its condition rather
+than describe that condition's dynamics. The report opens with this warning and marks every table row
+and column of those recordings `[misspecification test]`; every figure names the estimator's condition
+in its title, adds a `MISSPECIFICATION TEST` line when it holds those recordings, and marks their
+curves the same way. The dynamics of each condition are read from its recordings under its own
+condition's estimator.
 
 ## The central estimate — exactly what is aggregated
 
@@ -120,26 +135,33 @@ representative".
 
 ## Drift — measured per cell, independent of the display
 
-For every (condition, cell, parameter) an ordinary least-squares line is fit to each stored **log10**
-point estimate — the MAP candidate (`map_estimate`), the posterior median and the posterior-draw SGM,
-which every Experiment product carries — against time — log10 because drift is multiplicative —
-giving a slope and hence fitted
-endpoints `change_dex = slope * (t_last - t_first)`, `start`, and `end` in absolute units. Because
+For every (condition, cell, parameter) an ordinary least-squares line is fit to each stored point
+estimate in **estimator coordinates** — the MAP candidate (`map_estimate`), the posterior median and
+the posterior-draw SGM, which every Experiment product carries — against time: log10 for a log row,
+because its drift is multiplicative, and the value itself for a linear row, whose drift is additive.
+That gives a slope and hence fitted endpoints `change = slope * (t_last - t_first)` (dex for a log
+row, an absolute change for a linear row), `start`, and `end` in absolute units. Because
 the fit is per cell, **none of these statistics depends on the central estimate the figures draw.**
 
 | name | definition | where |
 |---|---|---|
-| `drift-absolute` | Median across cells of `end - start`, in the parameter's own units | figure + table |
+| `drift-absolute` | Median across cells of `end - start`, in the parameter's own units (percentage points for a linear row) | figure + table |
 | `drift-sign-consistency` | Fraction of cells whose change shares the sign of the median change | figure + table |
-| `drift-fold` | Median across cells of `end / start`, a multiplicative factor | table |
-| `drift-dex` | Median across cells of `change_dex`, in log10 units | table |
-| `drift-material-fraction` | Fraction of cells whose `\|change_dex\|` exceeds 0.3 dex (a factor of two) | table |
+| `drift-fold` | Median across cells of `end / start`, a multiplicative factor. Log rows only: `n/a` for a linear row, which has no multiplicative scale | table |
+| `drift-dex` | Median across cells of `change`, in log10 units. Log rows only: `n/a` for a linear row, whose change is `drift-absolute` already | table |
+| `drift-material-fraction` | Fraction of cells whose `\|change\|` exceeds 0.3 dex (a factor of two). Log rows only: `n/a` for a linear row, to which a dex threshold does not apply | table |
 | `drift-wilcoxon-p` | Two-sided signed-rank test that the per-cell changes are centered at zero — a **detectability** statement, not a magnitude | table |
 | `reference-ratio` | The `*-trajectory` value divided by the reference mean, where a reference applies to that condition | figure + table |
 | `reference-verdict` | Whether the `*-trajectory` value lies inside the reference band | table |
 
-Fits happen in log10; results are reported in absolute units because that is what reads. Both facts
-are restated in every generated report so no one has to infer which space produced which number.
+Fits happen in estimator coordinates (log10 for a log row, the value itself for a linear row);
+results are reported in absolute units because that is what reads, a linear row's change in
+percentage points. Both facts are restated in every generated report so no one has to infer which
+space produced which number.
+
+**Fractions outside [0, 1] are counted, never clipped.** The MAP ascent is unconstrained, so a
+window's MAP of a linear row can lie outside its box. Such a value enters every statistic as the
+optimizer returned it, and the report counts, per condition, how many fitted windows carry one.
 
 **A time-aggregated summary of a drifting parameter summarizes a non-stationary process.** Where
 `drift-absolute` is large and `drift-sign-consistency` high, the `*-trajectory` line — and any
@@ -225,7 +247,12 @@ collapses into the first two bins under `linear`. Whenever the low end of a wide
 the question — as it is for any statement about few-receptor cells — read the `_log` file, or pass
 `--pooled-scale both` and read them together.
 
-**Why the prior is not a flat line under `linear` spacing.** A log-uniform density is flat in
+**A linear row is always drawn on `linear` spacing.** The basal reference fraction and the
+allocation have a prior uniform in the value itself on [0, 1]: there are no decades to space, the
+prior is a flat line per unit, and the figure uses `linear` spacing whatever `--pooled-scale` asks
+for. Its legend also states, per condition, how many window MAPs lie outside [0, 1].
+
+**Why the prior is not a flat line under `linear` spacing for a log row.** A log-uniform density is flat in
 `y = log10(x)`, not in `x`. Changing variable gives `p(x) = p(y) · |dy/dx| = 1 / ((hi - lo) · x ·
 ln 10)`, a `1/x` curve, and that curve is what the figure draws. Drawing a flat line there would
 misread the Jacobian as evidence, making every parameter appear to have had its low end disfavored
@@ -303,7 +330,9 @@ Trust a parameter on experimental data when it satisfies three independent check
    truth: `[0.50x, 2.00x]` and `[0.71x, 1.41x]`. These are the multiplicative ranges of the log10
    half-widths ±0.3 and ±0.15 dex that the Evaluation stage reports — a factor of two and a factor
    of the square root of two — restated as the value range they permit, because that is the form in
-   which a reader can judge whether a parameter is usable;
+   which a reader can judge whether a parameter is usable. The dex tolerances do not apply to a
+   linear row, and its figure says so instead of drawing them; its recovery is read in percentage
+   points from the Evaluation report;
 2. **it is stationary where the model says it should be** — flat when the underlying property is a
    constant of the system;
 3. **its posterior is narrow relative to its prior** — panel (a) of the uncertainty figure.
@@ -331,16 +360,20 @@ Written to `<data_bank>/<posit>/<alias>_<timing_label>_MAP_Experiment/temporal_d
 ## How to run
 
 ```bash
-# biology — the eleven reaction-diffusion parameters
+# biology — the reaction-diffusion parameters of the condition (eleven under MET-FAB, twelve under MET-INLB)
 MACHINE_PROFILE=<profile> python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_Temporal_Dynamics.py \
-    --total-time-seconds 2.0 [--params rate_dissociation,diffusivity_alp] [--dry-run]
+    --condition FAB --total-time-seconds 2.0 [--params rate_dissociation,diffusivity_alp] [--dry-run]
 
 # detector — the six imaging parameters, on the same recordings
 MACHINE_PROFILE=<profile> python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Temporal_Dynamics.py \
-    --total-time-seconds 2.0 [--params prob_photo_bleach,mu_pc] [--dry-run]
+    --condition FAB --total-time-seconds 2.0 [--params prob_photo_bleach,mu_pc] [--dry-run]
 ```
+
+- `--condition` (required) — the estimator's condition (`FAB` = MET-FAB, `INLB` = MET-INLB): it
+  selects the condition-specific Experiment product and, for the biology, binds the parameter table
+  (eleven rows under MET-FAB, twelve under MET-INLB); the detector's six rows do not depend on it.
 
 - `--total-time-seconds` (required) — the run duration; selects the Experiment output via its
   timing label (e.g. `2.0` → `2S_50FPS`) and must match a completed Experiment run.

@@ -7,6 +7,12 @@ Functions:
 Matplotlib is imported lazily inside the function so HPC headless runs
 that never plot don't pay the import cost.
 
+Every per-parameter figure takes a ``log_row`` flag (default True, the all-log tables): a log
+row's axes are labeled ``[log10]`` and its error panel carries the multiplicative tolerance
+guides in dex; a linear row (the two fractions of the biology table) is drawn in its own
+coordinate, with no ``[log10]`` label and no dex guide lines, since a multiplicative tolerance
+has no meaning for it.
+
 Posterior-level diagnostics (corner plots, posterior-predictive video
 overlays, etc.) can be added here as further analyses are developed.
 """
@@ -16,6 +22,11 @@ import numpy as np
 # Shared with the Evaluation report so a tolerance is written the same way in the table and on the
 # figure; derived from the guide value passed in, never hardcoded, so a reconfigured band stays true.
 from .temporal_dynamics import band_label
+
+
+def _axis_unit(log_row: bool) -> str:
+    """The axis-label suffix of a coordinate: ``[log10]`` for a log row, nothing for a linear row."""
+    return r" [$\log_{10}$]" if log_row else ""
 
 
 def plot_loss_curves(losses_train: np.ndarray,
@@ -145,12 +156,13 @@ def _overlay_quantile_bands(ax, centers, q05, q25, q50, q75, q95):
 
 
 def _draw_recovery_axis(ax, true_log10, map_estimate, prior_range=None,
-                        n_bins=20, min_count=50, bin_mode="quantile"):
-    """Draw the recovery scatter (true vs. inferred, log10) + bands on ``ax``.
+                        n_bins=20, min_count=50, bin_mode="quantile", log_row=True):
+    """Draw the recovery scatter (true vs. inferred, estimator coordinates) + bands on ``ax``.
 
     Points on the dashed identity line are perfectly recovered; conditional
     quantile bands of inferred-given-true overlay where a bin is dense enough.
-    ``bin_mode`` selects data-quantile vs prior-range bin edges.
+    ``bin_mode`` selects data-quantile vs prior-range bin edges. ``log_row`` labels the
+    axes ``[log10]`` for a log row and leaves them unlabeled for a linear row.
     """
     x = np.asarray(true_log10, dtype=float).ravel()
     y = np.asarray(map_estimate, dtype=float).ravel()
@@ -164,8 +176,8 @@ def _draw_recovery_axis(ax, true_log10, map_estimate, prior_range=None,
     centers, q05, q25, q50, q75, q95 = _conditional_quantiles(
         x, y, n_bins, min_count, bin_mode, prior_range)
     bands = _overlay_quantile_bands(ax, centers, q05, q25, q50, q75, q95)
-    ax.set_xlabel(r"true [$\log_{10}$]")
-    ax.set_ylabel(r"inferred [$\log_{10}$]")
+    ax.set_xlabel("true" + _axis_unit(log_row))
+    ax.set_ylabel("inferred" + _axis_unit(log_row))
     ax.set_xlim(limits)
     ax.set_ylim(limits)
     if bands:
@@ -180,15 +192,17 @@ def _draw_recovery_axis(ax, true_log10, map_estimate, prior_range=None,
 def _draw_error_axis(ax, true_log10, map_estimate, prior_range=None,
                      n_bins=20, min_count=50, error_guide=0.3,
                      error_guide_tight=0.15, error_ylim_floor=0.5,
-                     error_ylim_quantile=0.95, bin_mode="quantile"):
-    """Draw the residual-error view (inferred - true, log10) + bands on ``ax``.
+                     error_ylim_quantile=0.95, bin_mode="quantile", log_row=True):
+    """Draw the residual-error view (inferred - true, estimator coordinates) + bands on ``ax``.
 
-    A zero line marks perfect recovery. Two nested tolerance bands are drawn as
-    +/- guide lines, each the log10 of a linear accuracy factor:
+    A zero line marks perfect recovery. For a log row two nested tolerance bands are drawn
+    as +/- guide lines, each the log10 of a linear accuracy factor:
     ``+/- error_guide`` (0.3 ~= log10(2): within a factor of 2) and the tighter
     ``+/- error_guide_tight`` (0.15 ~= log10(sqrt(2)): within a factor of ~1.41).
+    A linear row (``log_row=False``) has no multiplicative tolerance: no guide lines are
+    drawn, the error is absolute, and the y-axis floor is the error quantile alone.
     The y-axis spans ``+/- max(error_ylim_floor, quantile(|error|,
-    error_ylim_quantile))``.
+    error_ylim_quantile))`` for a log row.
     """
     x = np.asarray(true_log10, dtype=float).ravel()
     y = np.asarray(map_estimate, dtype=float).ravel()
@@ -197,21 +211,24 @@ def _draw_error_axis(ax, true_log10, map_estimate, prior_range=None,
     error = y - x
     x_limits = (tuple(prior_range) if prior_range is not None
                 else (float(np.floor(np.min(x))), float(np.ceil(np.max(x)))))
-    half = max(error_ylim_floor, float(np.quantile(np.abs(error), error_ylim_quantile)))
+    q_err = float(np.quantile(np.abs(error), error_ylim_quantile)) if error.size else 0.0
+    half = max(error_ylim_floor, q_err) if log_row else max(q_err, 1e-6)
     ax.axhline(0.0, color="k", linestyle="--", alpha=0.75)
-    # Factor-2 band (0.3 = log10 2) and the tighter factor-sqrt(2) band (0.15 = log10 sqrt 2).
-    ax.axhline(+error_guide, color="k", linestyle=":", alpha=0.60,
-               label=rf"$\pm${error_guide:g} = {band_label(error_guide)}")
-    ax.axhline(-error_guide, color="k", linestyle=":", alpha=0.60)
-    ax.axhline(+error_guide_tight, color="k", linestyle=(0, (1, 3)), alpha=0.45,
-               label=rf"$\pm${error_guide_tight:g} = {band_label(error_guide_tight)}")
-    ax.axhline(-error_guide_tight, color="k", linestyle=(0, (1, 3)), alpha=0.45)
+    if log_row:
+        # Factor-2 band (0.3 = log10 2) and the tighter factor-sqrt(2) band (0.15 = log10 sqrt 2):
+        # multiplicative tolerances, meaningful on a log row only.
+        ax.axhline(+error_guide, color="k", linestyle=":", alpha=0.60,
+                   label=rf"$\pm${error_guide:g} = {band_label(error_guide)}")
+        ax.axhline(-error_guide, color="k", linestyle=":", alpha=0.60)
+        ax.axhline(+error_guide_tight, color="k", linestyle=(0, (1, 3)), alpha=0.45,
+                   label=rf"$\pm${error_guide_tight:g} = {band_label(error_guide_tight)}")
+        ax.axhline(-error_guide_tight, color="k", linestyle=(0, (1, 3)), alpha=0.45)
     ax.scatter(x, error, s=7, color="tab:blue", alpha=0.25)
     centers, q05, q25, q50, q75, q95 = _conditional_quantiles(
         x, error, n_bins, min_count, bin_mode, prior_range)
     bands = _overlay_quantile_bands(ax, centers, q05, q25, q50, q75, q95)
-    ax.set_xlabel(r"true [$\log_{10}$]")
-    ax.set_ylabel(r"error = inferred - true [$\log_{10}$]")
+    ax.set_xlabel("true" + _axis_unit(log_row))
+    ax.set_ylabel("error = inferred - true" + (_axis_unit(log_row) if log_row else " [absolute]"))
     ax.set_xlim(x_limits)
     ax.set_ylim((-half, half))
     if bands:
@@ -224,7 +241,7 @@ def _draw_error_axis(ax, true_log10, map_estimate, prior_range=None,
 
 
 def _draw_posterior_recovery_axis(ax, true_log10, map_inferred, post_median,
-                                  post_q25, post_q75, prior_range=None):
+                                  post_q25, post_q75, prior_range=None, log_row=True):
     """Draw true against the marginal median +/- IQR of the draws, with the MAP overlaid, on ``ax``.
 
     Both estimators are shown so the posterior median is not mistaken for the
@@ -249,8 +266,8 @@ def _draw_posterior_recovery_axis(ax, true_log10, map_inferred, post_median,
                 label="posterior median $\\pm$ IQR")
     ax.scatter(x, mp, marker="x", s=28, color="tab:orange", alpha=0.8,
                zorder=3, label="MAP")
-    ax.set_xlabel(r"true [$\log_{10}$]")
-    ax.set_ylabel(r"inferred [$\log_{10}$]")
+    ax.set_xlabel("true" + _axis_unit(log_row))
+    ax.set_ylabel("inferred" + _axis_unit(log_row))
     ax.set_xlim(limits)
     ax.set_ylim(limits)
     ax.legend(fontsize=8, frameon=False)
@@ -261,14 +278,15 @@ def figure_recovery_combined(true_log10, map_estimate, post_q, median_index,
                              prior_range=None, label="", n_bins=20, min_count=50,
                              error_guide=0.3, error_guide_tight=0.15,
                              error_ylim_floor=0.5,
-                             error_ylim_quantile=0.95, bin_mode="quantile"):
+                             error_ylim_quantile=0.95, bin_mode="quantile", log_row=True):
     """Recovery figure for one parameter, three panels: MAP against truth, MAP error, and the
     marginal median +/- IQR of the draws against truth with the MAP overlaid.
 
     ``post_q`` is the per-observation ``(N, Q)`` quantile array; ``median_index`` locates the
     0.50 level along its last axis (from the product manifest -- never assumed), and the IQR is
     the two levels adjacent to it. Every panel is always drawn: a product carries all three
-    estimates by contract, so there is no absent view to stamp.
+    estimates by contract, so there is no absent view to stamp. ``log_row`` (default True)
+    selects the ``[log10]`` labels and the dex guide lines; a linear row gets neither.
 
     Returns:
         A headless ``matplotlib.figure.Figure``.
@@ -278,22 +296,23 @@ def figure_recovery_combined(true_log10, map_estimate, post_q, median_index,
     fig = Figure(figsize=(16, 5.2))
     ax_rec, ax_err, ax_post = (fig.add_subplot(1, 3, k) for k in (1, 2, 3))
     _draw_recovery_axis(ax_rec, true_log10, map_estimate, prior_range,
-                        n_bins, min_count, bin_mode)
+                        n_bins, min_count, bin_mode, log_row=log_row)
     _draw_error_axis(ax_err, true_log10, map_estimate, prior_range, n_bins,
                      min_count, error_guide=error_guide,
                      error_guide_tight=error_guide_tight,
                      error_ylim_floor=error_ylim_floor,
-                     error_ylim_quantile=error_ylim_quantile, bin_mode=bin_mode)
+                     error_ylim_quantile=error_ylim_quantile, bin_mode=bin_mode,
+                     log_row=log_row)
     q = np.asarray(post_q, dtype=float)
     _draw_posterior_recovery_axis(ax_post, true_log10, map_estimate,
                                   q[:, median_index], q[:, median_index - 1],
-                                  q[:, median_index + 1], prior_range)
+                                  q[:, median_index + 1], prior_range, log_row=log_row)
     if label:
         fig.suptitle(label, fontsize=13)
     return fig
 
 
-def _draw_experiment_distribution_axis(ax, values_by_kind, prior_range=None, seed=0):
+def _draw_experiment_distribution_axis(ax, values_by_kind, prior_range=None, seed=0, log_row=True):
     """Draw the per-condition distribution of the MAP for one parameter on ``ax``.
 
     No ground truth for real data, so this shows the *distribution* of the inferred
@@ -323,11 +342,11 @@ def _draw_experiment_distribution_axis(ax, values_by_kind, prior_range=None, see
     ax.set_xticks(positions)
     ax.set_xticklabels(kinds)
     ax.set_xlabel("experimental condition")
-    ax.set_ylabel(r"inferred [$\log_{10}$]")
+    ax.set_ylabel("inferred" + _axis_unit(log_row))
     ax.set_title("MAP: distribution per condition", fontsize=11)
 
 
-def _draw_experiment_posterior_axis(ax, by_kind, prior_range=None, seed=0):
+def _draw_experiment_posterior_axis(ax, by_kind, prior_range=None, seed=0, log_row=True):
     """Draw each window's marginal median +/- IQR of the draws, with its MAP, per condition.
 
     Each chunk is drawn as its **posterior median** with **IQR (Q25-Q75)** error
@@ -363,19 +382,20 @@ def _draw_experiment_posterior_axis(ax, by_kind, prior_range=None, seed=0):
     ax.set_xticks(range(1, len(kinds) + 1))
     ax.set_xticklabels(kinds)
     ax.set_xlabel("experimental condition")
-    ax.set_ylabel(r"inferred [$\log_{10}$]")
+    ax.set_ylabel("inferred" + _axis_unit(log_row))
     ax.legend(fontsize=8, frameon=False)
     ax.set_title("median +/- IQR of draws, MAP overlaid", fontsize=11)
 
 
 def figure_experiment_combined(values_by_kind, by_kind_post, prior_range=None,
-                               label="", seed=0):
+                               label="", seed=0, log_row=True):
     """Experiment figure for one parameter, two panels: the per-condition distribution of the
     MAP, and each window's marginal median +/- IQR of the draws with its MAP overlaid.
 
-    ``values_by_kind`` is ``{kind: 1D MAP log10}``; ``by_kind_post`` is ``{kind: (n,4)
-    [MAP, median, q25, q75]}``. Both panels are always drawn: a product carries all three
-    estimates by contract.
+    ``values_by_kind`` is ``{kind: 1D MAP in estimator coordinates}``; ``by_kind_post`` is
+    ``{kind: (n,4) [MAP, median, q25, q75]}``. Both panels are always drawn: a product carries
+    all three estimates by contract. ``log_row`` (default True) selects the ``[log10]`` axis
+    labels; a linear row is drawn in its own coordinate.
 
     Returns:
         A headless ``matplotlib.figure.Figure``.
@@ -384,8 +404,8 @@ def figure_experiment_combined(values_by_kind, by_kind_post, prior_range=None,
 
     fig = Figure(figsize=(12, 5.5))
     ax_map, ax_post = fig.add_subplot(1, 2, 1), fig.add_subplot(1, 2, 2)
-    _draw_experiment_distribution_axis(ax_map, values_by_kind, prior_range, seed)
-    _draw_experiment_posterior_axis(ax_post, by_kind_post, prior_range, seed)
+    _draw_experiment_distribution_axis(ax_map, values_by_kind, prior_range, seed, log_row=log_row)
+    _draw_experiment_posterior_axis(ax_post, by_kind_post, prior_range, seed, log_row=log_row)
     if label:
         fig.suptitle(label, fontsize=13)
     return fig
@@ -403,11 +423,13 @@ _DRIFT_STYLE = {
 
 
 def figure_point_estimates_vs_truth(true_log10, estimates, post_q=None, prior_range=None,
-                                    label="", n_bins=20, min_count=50, pad_fraction=0.4):
+                                    label="", n_bins=20, min_count=50, pad_fraction=0.4,
+                                    log_row=True):
     """One panel per point estimate: the estimate against the truth, read as a summary.
 
-    ``estimates`` maps a short name (``"MAP"``, ``"median"``, ``"SGM"``) to a length-N log10
-    array; a ``None`` value is skipped. Each panel shows the videos as a density (hexbin), the
+    ``estimates`` maps a short name (``"MAP"``, ``"median"``, ``"SGM"``) to a length-N array in
+    estimator coordinates; a ``None`` value is skipped. ``log_row`` (default True) selects the
+    ``log10`` axis labels; a linear row is labeled in its own coordinate. Each panel shows the videos as a density (hexbin), the
     binned median of that estimate over equal-count bins of the truth as a line, and one shared
     band: the posterior's own interquartile range, taken as the median across the videos of a
     bin of the per-video Q25 and Q75 (``post_q``, ``(N, 5)`` at Q05/Q25/Q50/Q75/Q95). The band
@@ -467,10 +489,10 @@ def figure_point_estimates_vs_truth(true_log10, estimates, post_q=None, prior_ra
                             f"bias {np.mean(err):+.3f}", transform=ax.transAxes, va="top",
                 fontsize=8.5, bbox=dict(fc="white", ec="none", alpha=0.8))
         ax.set_title(name, color=st["color"], fontsize=11)
-        ax.set_xlabel(f"true log10 {label}".strip())
+        ax.set_xlabel(f"true {'log10 ' if log_row else ''}{label}".strip())
         ax.set_xlim(lo, hi); ax.set_ylim(lo - pad, hi + pad)
         ax.legend(loc="lower right", fontsize=7.5, frameon=False)
-    axes[0].set_ylabel(f"estimate log10 {label}".strip())
+    axes[0].set_ylabel(f"estimate {'log10 ' if log_row else ''}{label}".strip())
     fig.suptitle(f"{label}: point estimates against the truth; band = posterior IQR; "
                  f"dotted red = prior box", fontsize=11)
     fig.tight_layout()
@@ -478,7 +500,7 @@ def figure_point_estimates_vs_truth(true_log10, estimates, post_q=None, prior_ra
 
 
 def figure_point_estimates_by_cell(estimates, post_q, cell_ids, prior_range=None, label="",
-                                   pad_fraction=0.4):
+                                   pad_fraction=0.4, log_row=True):
     """One panel per point estimate on experimental recordings, which carry no truth.
 
     Recordings (cells) are placed along the x axis in the order of their posterior-median value
@@ -490,7 +512,9 @@ def figure_point_estimates_by_cell(estimates, post_q, cell_ids, prior_range=None
     band, identical on every panel because the three estimates come from the same posterior.
     ``estimates`` maps a short name (``"MAP"``, ``"median"``, ``"SGM"``) to a length-N array over
     windows; ``post_q`` is ``(N, 5)``; ``cell_ids`` labels each window's recording. The estimate
-    axis is clipped to the prior box widened by ``pad_fraction`` of its width.
+    axis is clipped to the prior box widened by ``pad_fraction`` of its width. ``log_row``
+    (default True) selects the ``log10`` axis label; a linear row is labeled in its own
+    coordinate.
     """
     from matplotlib.figure import Figure
     names = [n for n, a in estimates.items() if a is not None and np.asarray(a).size]
@@ -541,7 +565,7 @@ def figure_point_estimates_by_cell(estimates, post_q, cell_ids, prior_range=None
         ax.set_xlabel("recording, ordered by its posterior-median value")
         ax.set_ylim(lo - pad, hi + pad)
         ax.legend(loc="lower right", fontsize=7.5, frameon=False)
-    axes[0].set_ylabel(f"estimate log10 {label}".strip())
+    axes[0].set_ylabel(f"estimate {'log10 ' if log_row else ''}{label}".strip())
     fig.suptitle(f"{label}: point estimates per window and recording; band = posterior IQR; "
                  f"dotted red = prior box", fontsize=11)
     fig.tight_layout()

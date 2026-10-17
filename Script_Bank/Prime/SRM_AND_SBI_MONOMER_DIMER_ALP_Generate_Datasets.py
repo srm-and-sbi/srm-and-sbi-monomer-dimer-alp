@@ -10,9 +10,10 @@ One RDS tier per condition, shared by both workflows. The association ratio of t
 reaction-diffusion model is a declared per-condition constant (MET-FAB 0: no association
 channel; MET-INLB 1: the reference convention), so the two conditions' trajectories differ
 and the RDS stage runs once per condition per split. Within a condition the trajectories
-and the eleven-parameter ``Theta_Set`` carry the sibling alias plus the condition token and
-serve both workflows (the biology's learnable labels are the detector's marginalized
-reaction-diffusion nuisance); the DLI passes -- condition-specific (the static labeling law
+and the condition's ``Theta_Set`` (eleven reaction-diffusion labels under MET-FAB, twelve
+under MET-INLB) carry the sibling alias plus the condition token and serve both workflows
+(the biology's learnable labels are the detector's marginalized reaction-diffusion
+nuisance); the DLI passes -- condition-specific (the static labeling law
 of MET-FAB or MET-INLB re-images that condition's trajectories) and workflow-specific (the
 detector draws the six imaging labels from its prior box; the biology draws them from the
 condition's calibrated ``Nuisance_DLI`` artifact) -- fan out over ``--workflows`` for each
@@ -23,7 +24,11 @@ it and REFUSES to run over an existing tier: the RDS stage would replace the tra
 and the ``Theta_Set`` with a fresh draw, silently mislabeling every video already rendered
 from the old tier; ``--overwrite-rds`` lifts that refusal deliberately. With ``--reuse-rds``
 the RDS stage is skipped and every requested condition's tier must be present for every
-planned task. The biology DLI needs
+planned task WITH THE CURRENT SCHEMA (the condition's table and token, checked record by
+record; a superseded tier is refused with its reason, never re-imaged). The RDS stage itself
+refuses to write a task into a tier holding records of another schema (its mixed-schema
+guard); ``--overwrite-rds`` passes it ``--supersede-tier`` so a deliberate regeneration can
+replace them. The biology DLI needs
 the condition's ``Nuisance_DLI`` artifact (minted by the detector chain), so a biology pass
 is refused up front, before anything runs, when a requested condition has none.
 
@@ -110,6 +115,10 @@ def _run(script: Path, label: str, split: str, tasks: int, seed: Optional[int],
     # the DLI entry points have no such flag). Omit when None -> the code default.
     if script == _RDS and args.skin_factor is not None:
         cmd += ["--skin-factor", str(args.skin_factor)]
+    # --overwrite-rds regenerates a tier in place: the RDS stage's mixed-schema guard must then
+    # tolerate the superseded records it replaces (records without a readable schema still refuse).
+    if script == _RDS and args.overwrite_rds:
+        cmd.append("--supersede-tier")
     # --condition selects the tier (RDS: the association setting is per condition) and the
     # labeling law (DLI); every stage pass takes it.
     if condition is not None:
@@ -180,8 +189,12 @@ def _plan(args: argparse.Namespace) -> dict:
 
 
 def _tier_status(plan: dict, args: argparse.Namespace) -> Dict[tuple, tuple]:
-    """Per (split, condition): how many of the planned tasks already have that condition's
-    tier ``Theta_Set`` (the tier's per-task marker; the trajectories sit beside it)."""
+    """Per (split, condition): ``(n_ok, n_present, planned)`` -- how many of the planned tasks hold
+    that condition's tier ``Theta_Set`` with the CURRENT schema (the condition's table and token,
+    ``io.theta_set_status``), how many hold any record at all (the tier's per-task marker; the
+    trajectories sit beside it), and the plan. A superseded tier counts as present but not OK."""
+    from srm_and_sbi_monomer_dimer_alp.io import theta_set_status
+    from srm_and_sbi_monomer_dimer_alp.parameterization import parameterization_of
     timing_label = _timing_label(args)
     compress = not args.no_compress
     status = {}
@@ -189,10 +202,16 @@ def _tier_status(plan: dict, args: argparse.Namespace) -> Dict[tuple, tuple]:
         root = PARAMETERS.machine.root_for(split.upper())
         for condition in args.conditions:
             paths = PARAMETERS.paths.with_condition(condition)
-            present = sum(
-                paths.theta_set_path(task, root, timing_label, compress, split.upper()).exists()
-                for task in range(tasks))
-            status[(split, condition)] = (present, tasks)
+            table = parameterization_of(condition)
+            n_ok = n_present = 0
+            for task in range(tasks):
+                state = theta_set_status(paths.theta_set_path(task, root, timing_label, compress, split.upper()),
+                                         table, condition=condition)
+                if state != "MISSING":
+                    n_present += 1
+                if state == "OK":
+                    n_ok += 1
+            status[(split, condition)] = (n_ok, n_present, tasks)
     return status
 
 
@@ -233,27 +252,36 @@ def main(args: argparse.Namespace) -> None:
     print(f"  workflows        : {', '.join(args.workflows)}   (one DLI pass each, over each condition's tier)")
     print(f"  conditions       : {', '.join(args.conditions)}   (one RDS tier each -- the association setting is per condition -- and its DLI labeling law)")
     print()
-    print(f"  {'split':<7}{'cond':<6}{'tasks':>7}{'samples':>9}{'seed':>7}{'tier present':>14}")
+    print(f"  {'split':<7}{'cond':<6}{'tasks':>7}{'samples':>9}{'seed':>7}{'tier (current/present/planned)':>32}")
     tier = _tier_status(plan, args)
     for split, tasks, seed in plan["splits"]:
         for condition in args.conditions:
-            present, planned = tier[(split, condition)]
-            print(f"  {split.upper():<7}{condition:<6}{tasks:>7}{tasks * sims:>9}{str(seed):>7}{f'{present}/{planned}':>14}")
+            n_ok, present, planned = tier[(split, condition)]
+            print(f"  {split.upper():<7}{condition:<6}{tasks:>7}{tasks * sims:>9}{str(seed):>7}"
+                  f"{f'{n_ok}/{present}/{planned}':>32}")
+    print("  (current = records carrying the condition's current schema; present = any record)")
     print(div)
 
     # ---- Prerequisite checks (refuse before anything runs) --------------
     problems = []
     for split, tasks, _seed in plan["splits"]:
         for condition in args.conditions:
-            present, planned = tier[(split, condition)]
-            if args.reuse_rds and present < planned:
+            n_ok, present, planned = tier[(split, condition)]
+            if args.reuse_rds and n_ok < planned:
+                superseded = present - n_ok
                 problems.append(
-                    f"--reuse-rds: split {split.upper()} has the {condition} tier for {present}/{planned} "
-                    f"planned tasks; generate it first (drop --reuse-rds) or shrink the plan.")
+                    f"--reuse-rds: split {split.upper()} has the {condition} tier with the current schema for "
+                    f"{n_ok}/{planned} planned tasks"
+                    + (f" ({superseded} record(s) carry another schema: a superseded tier, SCHEMA MISMATCH)"
+                       if superseded else "")
+                    + "; generate it first (drop --reuse-rds), regenerate it (--overwrite-rds) or shrink the plan.")
             if not args.reuse_rds and not args.overwrite_rds and present > 0:
+                kind = ("the current schema" if n_ok == present else
+                        f"{present - n_ok} record(s) of a superseded schema" if n_ok == 0 else
+                        f"{n_ok} current and {present - n_ok} superseded record(s)")
                 problems.append(
                     f"split {split.upper()} already holds the {condition} tier for {present}/{planned} planned "
-                    f"tasks; the RDS stage would replace those trajectories and Theta_Set with a fresh "
+                    f"tasks ({kind}); the RDS stage would replace those trajectories and Theta_Set with a fresh "
                     f"draw and silently mislabel every video already rendered from them. Pass "
                     f"--reuse-rds to re-image the existing tier, or --overwrite-rds to regenerate it.")
     if "biology" in args.workflows:

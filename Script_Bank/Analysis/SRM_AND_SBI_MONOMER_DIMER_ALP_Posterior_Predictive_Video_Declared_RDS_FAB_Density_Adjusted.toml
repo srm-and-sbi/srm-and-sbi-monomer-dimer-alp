@@ -22,8 +22,9 @@
 # per bound Fab; the derived occupancy 0.0148 realizes the retained population from the receptor
 # total at the RDS stage (labeling.resolve_labeling; PROJECT_CONTEXT.md sec. 2, Modeling assumptions).
 #
-# Units are physical (counts, um^2/s, 1/s, dimensionless ratios). The biology prior box of every
-# row is in PROJECT_CONTEXT.md sec. 2; a value outside it is recorded as an extrapolation.
+# Units are physical (counts, um^2/s, 1/s, dimensionless ratios and fractions). The biology prior box of
+# every row is in PROJECT_CONTEXT.md sec. 2; a log row outside it is recorded as an extrapolation, a
+# fraction outside [0, 1] is refused at load.
 
 [scenario]
 name = "FAB_DECLARED_RDS_DENSITY_ADJUSTED"
@@ -56,17 +57,22 @@ TRUE receptor subunits, probe-bound and unbound, in the whole simulated field (2
 open lateral boundary), not in the cell footprint; the retained population the generator simulates is \
 about 1.7 % of it."""
 
-[parameters.ratio_dimer_monomer_initial]
-value = 0.08108
+[parameters.fraction_basal_dimers_reference]
+value = 0.075
 basis = "declared assumption (external reference range)"
-source = """r = n_B/n_A = f/(1 - f) at an initial complex fraction f = 7.5 %, the middle of the \
-5-10 % working range for resting MET taken from the project's analyses (literature context: \
-Baldering et al., iScience 24, 101895 (2021), doi:10.1016/j.isci.2020.101895, 5 +/- 1 % estimated \
-dimers at rest by quantitative PALM of endogenously tagged MET in HEK293T; Dietz et al., BMC \
-Biophysics 6, 6 (2013), 18 % of spots assigned to a dimeric component in fixed HeLa, stated as an \
-underestimate). The range spans r = 0.053-0.111. It is an INITIAL composition: under MET-FAB there \
-is no association channel, so dissociation (below) depletes it during the recording. A published \
-cluster or spot fraction is a different estimand, measured in other cells with other labels."""
+source = """f = 7.5 %, the basal REFERENCE fraction of dimers among the complexes of the underlying \
+population (f = D / (M + D); the declared occupancy then defines the reference probe-bound \
+population the generator places), the middle of the 5-10 % working range for resting MET taken \
+from the project's analyses (literature context: Baldering et al., iScience 24, 101895 (2021), \
+doi:10.1016/j.isci.2020.101895, 5 +/- 1 % estimated dimers at rest by quantitative PALM of \
+endogenously tagged MET in HEK293T; Dietz et al., BMC Biophysics 6, 6 (2013), 18 % of spots \
+assigned to a dimeric component in fixed HeLa, stated as an underestimate). The range spans \
+f = 0.05-0.10; the prior box of the row is [0, 1]. Under MET-FAB the initial active-dimer \
+allocation is declared 0 (no ligand classes), so the STARTING (window-start) composition IS the \
+reference composition and no allocation row is stated here. It is an INITIAL composition: under \
+MET-FAB there is no association channel, so dissociation (below) depletes it during the recording. \
+A published cluster or spot fraction is a different estimand, measured in other cells with other \
+labels."""
 
 [parameters.rate_dissociation]
 value = 0.1

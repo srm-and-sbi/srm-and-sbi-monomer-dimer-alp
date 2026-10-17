@@ -47,6 +47,11 @@ def test_banner_under_inlb_reports_b1_and_b2_apart():
     text = _run(["--condition", "INLB"])
     assert "every represented InlB receptor carries a probe; B1 represents one receptor, B2 two" in text
     assert "probe-free partner" not in text
+    # the starting B2 share carries the window-start allocation and is recorded per simulation; the
+    # banner no longer presents the declared two-probe share as the starting share
+    assert "the starting B2 share depends on each simulation's window-start allocation" in text
+    assert "averaged over its classes" not in text
+    assert "12 RDS labels of INLB" in text
     text = _run(["--condition", "INLB", "--occupancy", "0.5"])
     assert "per complex           : monomer 0.250, B1 0.250 (one represented receptor), B2 0.438 (two independent coins)" in text
     print("PASS: DLI banner, InlB B1 and B2 apart")

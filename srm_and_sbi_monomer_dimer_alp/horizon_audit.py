@@ -1,8 +1,9 @@
 """Horizon-audit kernel: does inherited latent state break the reset assumption?
 
 The estimator is trained on independently initialized model-window simulations: every training
-video begins with freshly placed particles whose stoichiometry (receptor total N_total, initial
-dimer-to-monomer ratio r) is the drawn theta. The
+video begins with freshly placed particles whose stoichiometry (the receptor total N_total, the
+basal reference fraction of dimers f and, under MET-INLB, the initial active-dimer allocation
+R_active) is the drawn theta. The
 experimental analysis, however, slices each long continuous recording into consecutive
 model-length windows and runs the estimator on every window. Those two ensembles are equal in
 window length but not necessarily in distribution: a later window of a continuous recording
@@ -31,7 +32,8 @@ experimental window drift, only whether this mechanism reproduces it.
 TWO KINDS OF ESTIMAND. Rates and diffusivities are constant model parameters: their truth is the
 drawn theta in every window, so window dependence in their estimates is spurious by definition.
 The stoichiometry coordinates are initial conditions of a dynamic state: after the first window
-the population has evolved (the receptor total is conserved, the dimer fraction is not), so a later
+the population has evolved (the receptor total is conserved, the dimer fraction is not, and the
+allocation R_active describes the window start only), so a later
 window's inferred composition must be compared against the actual population in that window
 (extracted from the trajectory as species counts), not against theta -- comparing against theta
 instead measures how far the state has drifted, which is a property of the dynamics, not an
@@ -147,12 +149,13 @@ def quantile_errors(post_q, true_flow):
     """Median error and credible-interval coverage of per-window posterior quantiles.
 
     ``post_q`` is ``(N, D, 5)`` holding the ``[Q05, Q25, Q50, Q75, Q95]`` posterior quantiles in
-    estimator space (log10 for log rows, the value itself for the linear dimer fraction);
+    estimator space (log10 for log rows, the value itself for the linear rows: the basal
+    reference fraction f and, under MET-INLB, the allocation R_active);
     ``true_flow`` broadcasts against ``(N, D)`` in the same space -- a single constant theta
     serves every window, a per-window truth supplies one row per window.
 
     Returns ``(errors, cover50, cover90)``: the signed ``Q50 - truth`` in estimator space
-    (``(N, D)`` float: dex for log rows, an absolute difference for a linear row if the table declared one), and boolean
+    (``(N, D)`` float: dex for log rows, an absolute difference for the linear rows), and boolean
     coverage indicators of the 50% (IQR) and 90% (Q05-Q95) intervals. A
     calibrated posterior covers ~50% / ~90%; systematic positional decay of coverage in the
     continuous ensemble only is the horizon signature.

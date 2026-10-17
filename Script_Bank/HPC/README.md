@@ -258,6 +258,25 @@ shifts the global task index so a later submission appends tasks rather than
 regenerating existing ones. The per-task global index is
 `tid = TASK_OFFSET + SLURM_ARRAY_TASK_ID * ntasks_per_node + k`.
 
+A tier accepts new tasks only under its own schema. Before simulating a task, the RDS
+stage reads the schema (never the array) of every other `Theta_Set` of the tier and
+refuses to append beside a record of another schema or one without a readable schema,
+naming each such record; an in-progress write is tolerated because records are built under
+`.partial` names and published so that the final name only ever holds a complete record paired
+with its own schema, and a record that another task is replacing while the scan runs is read
+whole or skipped, never refused as unreadable. This does not make concurrent replacement and
+reading safe: never regenerate a tier while training, rendering or an analysis is reading it. A
+superseded tier (one generated under an earlier parameter table) is therefore moved aside
+before the regeneration is submitted, never grown or overwritten in place by an appending
+submission; the dataset orchestrator's `--overwrite-rds` passes the stage
+`--supersede-tier` for a deliberate in-place regeneration, which tolerates the superseded
+records it replaces (records without a readable schema still refuse). The detector render
+pass checks the tier's `Theta_Set` schema against the condition's biology table before
+rendering and refuses a superseded tier, so a forgotten move-aside stops at the next stage
+rather than mixing revised tasks into an old tier. The guard is a mixed-schema check; it
+proves neither dataset nor generator identity. Campaign membership is established separately,
+by the prior-realization audit's P7 (`DETECTOR_WORKFLOW.md` §9.10).
+
 **Production (`general1`), 1000 sims/task, one node per split:**
 
 ```bash

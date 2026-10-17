@@ -194,12 +194,14 @@ def test_the_figure_names_the_synthetic_source():
     rng = np.random.default_rng(0)
     experimental = rng.integers(150, 400, size=(4, 16, 16)).astype(np.uint16)
     synth = rng.integers(150, 400, size=(4, 16, 16)).astype(np.uint16)
-    rds = np.array([bio.prior_center(e) for e in bio.PARAMETERIZATION])
+    fab_table = bio.parameterization_of("FAB")
+    rds = np.array([bio.prior_center(e) for e in fab_table])
     with tempfile.TemporaryDirectory() as tmp, matplotlib.rc_context({"svg.fonttype": "none"}):
         path = Path(tmp) / "Comparison.svg"                 # text kept as text, so it can be read back
         ppv._save_comparison_png(
             path, experimental, synth, "FAB", 0, None, "full", rds, ppv._fixed_imaging_theta(),
             synth_label=ppv.synthetic_source_label("rds", declared_biology=True), labeling_row=row,
+            rds_table=fab_table,
             imaging_label="FIXED imaging (calibrated Nuisance_DLI + MET SCOPE)",
             rds_label="DECLARED reaction-diffusion (FAB_DECLARED_RDS, absolute)",
             motion_desc="from the declared reaction-diffusion configuration (not a draw)",
@@ -233,7 +235,8 @@ def test_the_figure_names_the_synthetic_source():
             with tempfile.TemporaryDirectory() as tmp:
                 ppv._save_comparison_png(Path(tmp) / "C.png", experimental, synth, "FAB", 0, None, "full",
                                          rds_vector, imaging, synth_label="SYNTH (declared reaction-diffusion)",
-                                         labeling_row=row, labeling_desc=ppv.labeling_description(
+                                         labeling_row=row, rds_table=fab_table,
+                                         labeling_desc=ppv.labeling_description(
                                              resolve_labeling("FAB", "binomial:1.6412:4").record()))
         finally:
             matplotlib.axes.Axes.text = real_text
@@ -241,11 +244,20 @@ def test_the_figure_names_the_synthetic_source():
         return blocks[0]
     imaging = ppv._fixed_imaging_theta({"sigma_r": 0.23714, "prob_photo_bleach": 0.056234})
     rds_vector = rds.copy()
-    rds_vector[[e["KEY"] for e in bio.PARAMETERIZATION].index("ratio_dimer_monomer_initial")] = 0.0316228
+    rds_vector[[e["KEY"] for e in fab_table].index("fraction_basal_dimers_reference")] = 0.0316228
     block = provenance_block(imaging, rds_vector)
     assert max(len(line) for line in block.split("\n")) <= ppv.PROVENANCE_WIDTH
     assert "sigma_r=0.237" in block and "p_bleach=0.056" in block and "0.2371" not in block
-    assert "r_B/A=0.032" in block and "0.0316" not in block
+    # the fraction row's compact value, labeled by the row's LABEL stripped of the TeX markers
+    assert "f_B^ref=0.032" in block and "0.0316" not in block and "r_B/A" not in block
+    assert "R_active" not in block, "a Fab vector carries no allocation row"
+    # the table is required: a vector of another width is refused, never relabeled by position
+    try:
+        provenance_block(imaging, np.append(rds, 0.5))
+    except ValueError as exc:
+        assert "must correspond" in str(exc)
+    else:
+        raise AssertionError("a vector of another width must be refused")
     flat = " ".join(line.strip() for line in block.split("\n"))      # the text with its wraps undone
     assert "Binomial(sites=4, mean=1.641)" in flat
     assert "(* outside prior / SCOPE box)" not in block
@@ -277,7 +289,7 @@ def test_the_figure_names_the_synthetic_source():
         ppv._save_comparison_png(
             path, experimental, synth, "FAB", 0, None, "percentile", rds, ppv._fixed_imaging_theta(),
             synth_label=ppv.synthetic_source_label("rds", declared_biology=True), labeling_row=row,
-            display_percentiles=(1, 99.9))
+            rds_table=fab_table, display_percentiles=(1, 99.9))
         text = re.sub(r'"data:[^"]*"', '""', path.read_text())
     assert "norm percentile [p1, p99.9]" in text
 
@@ -286,7 +298,7 @@ def test_the_figure_names_the_synthetic_source():
 # The receptor-total match
 # ==========================================================================================
 
-V = 0.012391                   # visible hosts per TRUE subunit under the MET-FAB retained-population rule, r = 0.081
+V = 0.011894875                # fluorescent hosts per TRUE subunit under MET-FAB at the declared f = 0.075
 BOX = (1000.0, 100000.0)
 KW = dict(initial=6000, tolerance=0.03, max_iterations=6, max_count=100000, min_elasticity=0.3,
           prior_box=BOX)
@@ -602,26 +614,36 @@ def test_the_spot_count_reuses_the_count_match_rule_and_counts_fixed_windows():
 
 def _fixture_fields(experimental, synth, *, workflow="biology", map_block="rds", rds_source="declared",
                     map_theta=None, map_source="declared", labeling_record=None, imaging_identity=None,
-                    synth_label="SYNTH (declared reaction-diffusion)", rds_outside=()):
-    """A clip's fields as the engine saves them (the keys of its ``np.savez_compressed`` call)."""
-    plan = resolve_labeling("FAB")
-    record = ({"scenario": {"name": "FAB_DECLARED_RDS"}, "path": "Declared_RDS_FAB.toml", "sha256": "0" * 64}
-              if rds_source == "declared" else {"basis": "fixture"})
+                    synth_label="SYNTH (declared reaction-diffusion)", rds_outside=(), condition="FAB",
+                    rds_keys=None, rds_provenance=None):
+    """A clip's fields as the engine saves them (the keys of its ``np.savez_compressed`` call); the
+    reaction-diffusion vector and its keys are the ``condition``'s unless given."""
+    plan = resolve_labeling(condition)
+    record = ({"scenario": {"name": f"{condition}_DECLARED_RDS"}, "path": f"Declared_RDS_{condition}.toml",
+               "sha256": "0" * 64} if rds_source == "declared" else {"basis": "fixture"})
+    table = bio.parameterization_of(condition)
+    composition = bio.realize_initial_composition(
+        count_total=1e4, fraction_basal_dimers_reference=0.5,
+        relative_count_active_dimers_initial=(0.0 if condition == "FAB" else 0.5), condition=condition)
     return dict(
         experimental=np.asarray(experimental, dtype=np.uint16), synth=np.asarray(synth, dtype=np.uint16),
         imaging_physical=ppv._fixed_imaging_theta(), imaging_keys=np.array(det.DETECTOR_IMAGING_KEYS),
         map_theta=np.array([]) if map_theta is None else np.asarray(map_theta, dtype=float),
         map_keys=np.array(["k"]), map_block=map_block, workflow=workflow,
-        rds_provenance=np.array([bio.prior_center(e) for e in bio.PARAMETERIZATION]),
-        rds_keys=np.array(ppv._NUISANCE_KEYS), rds_source=rds_source, rds_record_json=json.dumps(record),
-        rds_outside_prior=np.array(list(rds_outside), dtype=str), condition="FAB", labeling_law=plan.law_name,
+        rds_provenance=(np.array([bio.prior_center(e) for e in table]) if rds_provenance is None
+                        else np.asarray(rds_provenance, dtype=float)),
+        rds_keys=np.array(ppv._rds_keys(condition) if rds_keys is None else list(rds_keys)),
+        rds_source=rds_source, rds_record_json=json.dumps(record),
+        rds_declared_json=json.dumps(bio.declared_row_values(condition)),
+        initial_composition_json=json.dumps(ppv.initial_composition_record(composition)),
+        rds_outside_prior=np.array(list(rds_outside), dtype=str), condition=condition, labeling_law=plan.law_name,
         dye_counts=np.zeros(10, dtype=np.int64), n_subunits=1000, n_dyes=261,
         labeling_columns=np.array(LABELING_SET_COLUMNS),
         labeling_row=np.array([1000, 261, 136, 860, 124, 70, 10, 2, 1.0, 0.5037, 68, 2, 0.00744]),
         occupancy_source=plan.occupancy_source, occupancy_monomer=1.0, occupancy_dimer=0.5037,
         labeling_record_json=json.dumps(labeling_record if labeling_record is not None else plan.record()),
         imaging_record_json=json.dumps(imaging_identity if imaging_identity is not None else {"artifact": "REF"}),
-        synth_label=synth_label, package_version="test", kind="MET-FAB", cell=0, chunk=-1,
+        synth_label=synth_label, package_version="test", kind=f"MET-{condition}", cell=0, chunk=-1,
         map_source=map_source, seed=7, frame_time_seconds=0.02, n_frames=int(np.asarray(experimental).shape[0]),
         experimental_tif="/data/Experiment_FAB_Cell_0_20S_RAW.tif", imaging_desc="fixture imaging",
         nuisance_tag="REF")
@@ -709,7 +731,9 @@ def test_the_figure_is_drawn_from_the_clip_alone():
     assert x["rds_label"] == "DECLARED reaction-diffusion (FAB_DECLARED_RDS, absolute)"
     assert x["motion_desc"] == "from the declared reaction-diffusion configuration (not a draw)"
     assert x["sel_desc"] is None and not x["fixed_imaging"] and not x["fixed_nuisance"]
-    assert len(x["rds_table"]) == len(bio.PARAMETERIZATION) and x["synth_label"] == "SYNTH (declared reaction-diffusion)"
+    assert len(x["rds_table"]) == len(bio.parameterization_of("FAB")) == 11
+    assert [e["KEY"] for e in x["rds_table"]] == ppv._rds_keys("FAB")
+    assert x["synth_label"] == "SYNTH (declared reaction-diffusion)"
     assert x["labeling_desc"] == ppv.labeling_description(resolve_labeling("FAB").record())
     assert x["cell"] == 0 and x["kind"] == "MET-FAB"
     assert np.array_equal(x["experimental"], exp) and np.array_equal(x["synth"], syn)
@@ -732,7 +756,8 @@ def test_the_figure_is_drawn_from_the_clip_alone():
                                                      imaging_identity={"set_imaging_overrides": {"mu_pc": 250.7}},
                                                      synth_label="SYNTH (fixed imaging)"), det_cfg)
     assert x["imaging_label"] == "FIXED imaging (MET values) WITH OVERRIDES (mu_pc=250.7)"
-    assert x["fixed_imaging"] and x["fixed_nuisance"] and x["sel_desc"] is None and x["rds_table"] is None
+    assert x["fixed_imaging"] and x["fixed_nuisance"] and x["sel_desc"] is None
+    assert len(x["rds_table"]) == 11, "the detector's nuisance is labeled by the condition's biology table"
     assert x["rds_label"] == "NUISANCE reaction-diffusion (marginalized)" and x["motion_desc"] is None
     x = ppv.comparison_figure_inputs(_fixture_fields(exp, syn, workflow="detector", map_block="imaging",
                                                      rds_source="drawn", map_theta=[1.0] * 6, map_source="cell-sgm",
@@ -746,7 +771,7 @@ def test_the_figure_is_drawn_from_the_clip_alone():
                                                          synth_label="SYNTH (MAP imaging)"), det_cfg)
         assert x["motion_desc"] == "from the declared reaction-diffusion configuration"
         assert x["rds_label"] == "DECLARED reaction-diffusion (FAB_DECLARED_RDS, absolute)"
-        assert x["fixed_imaging"] is fixed and x["rds_table"] is None
+        assert x["fixed_imaging"] is fixed and len(x["rds_table"]) == 11
     # A biology sensitivity render names its imaging overrides; out-of-prior keys are carried to the figure.
     x = ppv.comparison_figure_inputs(_fixture_fields(exp, syn, imaging_identity={"set_imaging_overrides": {"mu_pc": 250.7}},
                                                      rds_outside=("count_total",)), bio_cfg)
@@ -772,6 +797,273 @@ def test_the_figure_is_drawn_from_the_clip_alone():
     for key, value in direct.items():
         other = reopened[key]
         assert (np.array_equal(value, other) if isinstance(value, np.ndarray) else value == other), key
+
+
+def test_an_inlb_fixture_states_twelve_values_by_key_and_a_permuted_fixture_is_refused():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.axes
+    exp, syn = _partly_overlapping_clips()
+    bio_cfg = biology_workflow()
+    inlb_keys = ppv._rds_keys("INLB")
+    assert len(inlb_keys) == 12 and inlb_keys[:11] == ppv._rds_keys("FAB")
+    assert inlb_keys[-1] == "relative_count_active_dimers_initial"
+    fields = _fixture_fields(exp, syn, condition="INLB")
+    x = ppv.comparison_figure_inputs(fields, bio_cfg)
+    assert [e["KEY"] for e in x["rds_table"]] == inlb_keys and x["nuisance"].shape == (12,)
+    assert x["kind"] == "MET-INLB" and x["rds_label"] == "DECLARED reaction-diffusion (INLB_DECLARED_RDS, absolute)"
+    # the figure's provenance states all twelve values, each by its key's label
+    blocks, real_text = [], matplotlib.axes.Axes.text
+    def recording_text(self, px, py, s, *a, **k):
+        if k.get("family") == "monospace":
+            blocks.append(s)
+        return real_text(self, px, py, s, *a, **k)
+    matplotlib.axes.Axes.text = recording_text
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            ppv.draw_comparison_figure(fields, Path(tmp) / "C.png", bio_cfg)
+    finally:
+        matplotlib.axes.Axes.text = real_text
+    flat = " ".join(line.strip() for line in blocks[0].split("\n"))
+    for entry in bio.parameterization_of("INLB"):
+        label = entry["LABEL"].translate({ord(c): None for c in "${}\\"})
+        assert f"{label}=" in flat, label
+    assert "R_active=0.5" in flat and "f_B^ref=0.5" in flat
+    # the clip's composition record carries the starting counts of the InlB prior center at N = 1e4
+    composition = json.loads(fields["initial_composition_json"])
+    assert (composition["n_monomers"], composition["n_dimers_one_probe"], composition["n_dimers_two_probe"]) == (79, 302, 48)
+    # a permuted key order, the other condition's keys, and a clip without keys are refused
+    for bad in (list(reversed(inlb_keys)), ppv._rds_keys("FAB") + ["rate_dissociation"], ppv._rds_keys("FAB")):
+        bad_fields = _fixture_fields(exp, syn, condition="INLB", rds_keys=bad,
+                                     rds_provenance=np.ones(len(bad)))
+        try:
+            ppv.comparison_figure_inputs(bad_fields, bio_cfg)
+        except ValueError as exc:
+            assert "rds_keys" in str(exc) and "refused" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"keys {bad} must be refused")
+    keyless = dict(fields)
+    del keyless["rds_keys"]
+    try:
+        ppv.comparison_figure_inputs(keyless, bio_cfg)
+    except ValueError as exc:
+        assert "rds_keys" in str(exc)
+    else:
+        raise AssertionError("a clip without rds_keys must be refused")
+    # a Fab fixture carrying the allocation row as its twelfth key is refused as well
+    try:
+        ppv.comparison_figure_inputs(_fixture_fields(exp, syn, condition="FAB", rds_keys=inlb_keys,
+                                                     rds_provenance=np.ones(12)), bio_cfg)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a Fab clip with twelve keys must be refused")
+    # the vector sources take the condition: a drawn InlB nuisance has twelve values inside the box,
+    # a pinned one sits at the prior centers (0.5 for both fraction rows)
+    drawn = ppv._draw_nuisance_physical("INLB", np.random.default_rng(0))
+    assert drawn.shape == (12,) and ppv.rds_outside_prior(drawn, "INLB") == []
+    assert ppv._draw_nuisance_physical("FAB", np.random.default_rng(0)).shape == (11,)
+    pinned = ppv._fixed_nuisance_physical("INLB")
+    assert pinned[inlb_keys.index("fraction_basal_dimers_reference")] == 0.5 and pinned[-1] == 0.5
+    try:
+        ppv._fixed_nuisance_physical("FAB", overrides={"relative_count_active_dimers_initial": 0.3})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("the allocation is not a Fab nuisance key")
+    try:
+        ppv.rds_outside_prior(drawn, "FAB")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a twelve-value vector is not a Fab vector")
+    # The run records, in every clip, the keys of its reaction-diffusion vector, the rows its condition
+    # declares as constants and the window-start composition it realized: a declared render of each
+    # condition, end to end, with the simulation stubbed (the stub places exactly the composition the
+    # engine realized, as the generator does) and the imaging resolution replaced by a fixed vector.
+    from unittest import mock
+    toml_text = TOML.read_text()
+    calls = []
+
+    def stub_simulate(condition, rds_vector, imaging_physical, plan, n_frames, traj_path, seed=None, verbose=False):
+        calls.append((condition, np.asarray(rds_vector, dtype=float).copy()))
+        c = bio.population_from_theta(np.asarray(rds_vector, dtype=float), condition).item(())
+        row = dict(n_subunits=c.n_subunits, n_dyes=c.n_subunits, n_labeled_subunits=c.n_subunits,
+                   monomers_0=c.n_monomers, monomers_visible_0=c.n_monomers, dimers_0=c.n_dimers,
+                   dimers_visible_0=c.n_dimers, dimers_two_labeled_0=c.n_dimers_two_probe,
+                   occupancy_monomer=1.0, occupancy_dimer=1.0, dimers_one_probe_0=c.n_dimers_one_probe,
+                   dimers_two_probe_0=c.n_dimers_two_probe, two_probe_share=float(plan.two_probe_share))
+        rng = np.random.default_rng(1)
+        return {"synth": rng.integers(150, 400, size=(n_frames, 8, 8)).astype(float),
+                "dye_counts": np.ones(c.n_subunits, dtype=np.int64),
+                "labeling_row": np.array([row[k] for k in LABELING_SET_COLUMNS], dtype=float),
+                "n_subunits": c.n_subunits}
+
+    real_spec = ppv._ppv_spec
+    for condition, extra in (("FAB", ""), ("INLB", '\n[parameters.relative_count_active_dimers_initial]\n'
+                                                     'value = 0.5\nbasis = "prior center (test fixture)"\n'
+                                                     'source = "test fixture"\n')):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir = Path(tmp_dir)
+            declared = tmp_dir / f"Declared_RDS_{condition}.toml"
+            declared.write_text(toml_text.replace('condition = "FAB"', f'condition = "{condition}"') + extra)
+            recording = tmp_dir / f"Experiment_{condition}_Cell_0_20S_RAW.tif"
+            recording.write_bytes(b"not read: the recording readers are stubbed")
+
+            def isolated_spec(cfg, args, _recording=recording, _out=tmp_dir / "out"):
+                spec = real_spec(cfg, args)
+                spec["experimental_tif"], spec["out_dir"] = _recording, _out
+                spec["imaging_physical"] = lambda a, map_theta: (ppv._fixed_imaging_theta(), "fixture imaging",
+                                                                 {"source": "fixture"})
+                return spec
+
+            args = ppv.build_parser("t").parse_args(["--total-time-seconds", "2", "--kind", f"MET-{condition}",
+                                                    "--cell", "0", "--declared-rds", str(declared),
+                                                    "--display-norm", "full", "--seed", "3"])
+            rng = np.random.default_rng(2)
+            with mock.patch.object(ppv, "_ppv_spec", isolated_spec), \
+                 mock.patch.object(ppv, "inspect_recording", lambda path: (50, 8, 8)), \
+                 mock.patch.object(ppv, "read_recording",
+                                   lambda path: rng.integers(150, 400, size=(50, 8, 8)).astype(np.uint16)), \
+                 mock.patch.object(ppv, "simulate_and_render", stub_simulate):
+                assert ppv.run_posterior_predictive_video(biology_workflow(), args) == 0
+            clip_path = next((tmp_dir / "out").glob("*_Synthetic_Video.npz"))
+            assert next((tmp_dir / "out").glob("*_Comparison.png")).stat().st_size > 0
+            with np.load(clip_path) as clip:
+                keys = [str(k) for k in clip["rds_keys"]]
+                assert keys == ppv._rds_keys(condition) and len(keys) == (11 if condition == "FAB" else 12)
+                assert str(clip["condition"]) == condition and clip["rds_provenance"].shape == (len(keys),)
+                assert json.loads(str(clip["rds_declared_json"])) == bio.declared_row_values(condition)
+                recorded = json.loads(str(clip["initial_composition_json"]))
+                value = dict(zip(keys, clip["rds_provenance"]))
+                expect = bio.realize_initial_composition(
+                    count_total=value["count_total"], fraction_basal_dimers_reference=value["fraction_basal_dimers_reference"],
+                    relative_count_active_dimers_initial=value.get("relative_count_active_dimers_initial", 0.0),
+                    condition=condition)
+                assert recorded == ppv.initial_composition_record(expect)
+                assert (recorded["n_monomers"], recorded["n_dimers"]) == ((127, 20) if condition == "FAB"
+                                                                          else (expect.n_monomers, expect.n_dimers))
+                if condition == "INLB":
+                    assert recorded["n_pairs_allocated"] > 0, "the InlB render places allocated pairs"
+            assert calls[-1][0] == condition and calls[-1][1].shape == (len(keys),)
+
+
+def test_a_fraction_outside_the_box_is_refused_at_load_and_never_reaches_simulate_and_render():
+    from unittest import mock
+    from srm_and_sbi_monomer_dimer_alp import experiment_support
+    text = TOML.read_text()
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "Declared_RDS_FAB_bad.toml"
+        bad.write_text(text.replace("value = 0.075", "value = 1.2"))
+        try:
+            ppv.load_declared_rds(bad, "FAB", 0)
+        except ValueError as exc:
+            assert "[0, 1]" in str(exc) and "fraction_basal_dimers_reference" in str(exc), str(exc)
+        else:
+            raise AssertionError("a declared f of 1.2 must be refused at load")
+        # the same through a --set-rds override, and the allocation key under Fab
+        try:
+            ppv.load_declared_rds(TOML, "FAB", 0, overrides={"fraction_basal_dimers_reference": 1.2})
+        except ValueError as exc:
+            assert "[0, 1]" in str(exc)
+        else:
+            raise AssertionError("an override of 1.2 must be refused")
+        with_alloc = Path(tmp) / "Declared_RDS_FAB_alloc.toml"
+        with_alloc.write_text(text + '\n[parameters.relative_count_active_dimers_initial]\nvalue = 0.0\n'
+                                     'basis = "x"\nsource = "y"\n')
+        try:
+            ppv.load_declared_rds(with_alloc, "FAB", 0)
+        except ValueError as exc:
+            assert "declares" in str(exc) and "relative_count_active_dimers_initial" in str(exc)
+        else:
+            raise AssertionError("the allocation key under Fab must be refused")
+        # the valid file loads with the condition's keys and the composition realizes
+        vector, record = ppv.load_declared_rds(TOML, "FAB", 0)
+        assert record["keys"] == ppv._rds_keys("FAB") and record["condition"] == "FAB"
+        composition = ppv._preflight_initial_composition(vector, "FAB", "declared")
+        assert (composition.n_monomers, composition.n_dimers) == (127, 20)
+    # Both declared files reproduce, at every declared receptor total, the counts of the ratio form they
+    # replaced (r = n_B / n_A = 0.08108, realized by the earlier initializer, transcribed here): the
+    # fraction 0.075 changes the coordinate, not the population.
+    p = bio.occupancy_of("FAB")
+
+    def ratio_form(n_total, r=0.08108):
+        n_monomers_true, n_dimers_true = n_total / (1.0 + 2.0 * r), r * n_total / (1.0 + 2.0 * r)
+        return int(round(p * n_monomers_true)), int(round(p * (2.0 - p) * n_dimers_true))
+
+    density = TOML.with_name(TOML.stem + "_Density_Adjusted.toml")
+    checked = 0
+    for path, cells in ((TOML, (0,)), (density, (0, 4, 5, 16, 26, 32, 43, 45, 49, 53))):
+        for cell in cells:
+            vector, record = ppv.load_declared_rds(path, "FAB", cell)
+            value = dict(zip(record["keys"], vector))
+            assert value["fraction_basal_dimers_reference"] == 0.075 and record["outside_prior"] == []
+            c = ppv._preflight_initial_composition(vector, "FAB", "declared")
+            assert (c.n_monomers, c.n_dimers) == ratio_form(value["count_total"]), (path.name, cell)
+            checked += 1
+    assert checked == 11
+    # the preflight refuses a vector with f = 1.2 for every source name, before any simulation
+    fab_table = bio.parameterization_of("FAB")
+    vector = np.array([bio.prior_center(e) for e in fab_table])
+    vector[ppv._rds_keys("FAB").index("fraction_basal_dimers_reference")] = 1.2
+    for source in ("map", "pinned", "drawn"):
+        try:
+            ppv._preflight_initial_composition(vector, "FAB", source)
+        except SystemExit as exc:
+            assert source in str(exc) and "cannot be realized" in str(exc) and "clipped" in str(exc)
+        else:
+            raise AssertionError("f = 1.2 must be refused by the preflight")
+    # in the run, the preflight precedes the simulation and follows the vector's resolution
+    names = [_call_name(c.func) for c in _run_calls()]
+    assert names.index("_preflight_initial_composition") < names.index("simulate_and_render")
+    assert names.index("rds_outside_prior") < names.index("_preflight_initial_composition")
+    # end to end with the MAP source: a MAP with f = 1.2 stops the run before simulate_and_render
+    real_spec = ppv._ppv_spec
+
+    def isolated_spec(cfg, args):
+        S = real_spec(cfg, args)
+        S["map_npz"] = Path(tmp_dir) / "MAP.npz"
+        S["experimental_tif"] = Path(tmp_dir) / "Experiment_FAB_Cell_0_20S_RAW.tif"
+        S["out_dir"] = Path(tmp_dir) / "out"
+        S["imaging_physical"] = lambda a, map_theta: (ppv._fixed_imaging_theta(), "fixture imaging", {"source": "fixture"})
+        return S
+
+    def forbidden(what):
+        def _stub(*args, **kwargs):
+            raise AssertionError(f"{what} must not be reached")
+        return _stub
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        (Path(tmp_dir) / "MAP.npz").write_bytes(b"not read: _load_map_theta is stubbed")
+        (Path(tmp_dir) / "Experiment_FAB_Cell_0_20S_RAW.tif").write_bytes(b"not read: inspect_recording is stubbed")
+        args = ppv.build_parser("t").parse_args(["--total-time-seconds", "2", "--kind", "MET-FAB", "--cell", "0"])
+        with mock.patch.object(ppv, "_ppv_spec", isolated_spec), \
+             mock.patch.object(ppv, "_load_map_theta", lambda *a, **k: vector), \
+             mock.patch.object(ppv, "inspect_recording", lambda path: (1000, 256, 256)), \
+             mock.patch.object(ppv, "read_recording", lambda path: np.zeros((1000, 4, 4), dtype=np.uint16)), \
+             mock.patch.object(experiment_support, "read_recording", forbidden("read_recording")), \
+             mock.patch.object(ppv, "simulate_and_render", forbidden("simulate_and_render")):
+            try:
+                ppv.run_posterior_predictive_video(biology_workflow(), args)
+            except SystemExit as exc:
+                assert "map" in str(exc) and "cannot be realized" in str(exc), str(exc)
+            else:
+                raise AssertionError("a MAP with f = 1.2 must stop the run")
+        assert not (Path(tmp_dir) / "out").exists(), "the refusal comes before any output folder"
+
+
+def test_count_match_visibility_equals_the_helper_and_the_fluorescence_function():
+    from srm_and_sbi_monomer_dimer_alp.labeling import expected_fluorescent_complexes
+    plan = resolve_labeling("FAB")
+    n_total = 1e7
+    for f in (0.0, 0.075, 0.25, 1.0):
+        pop = bio.realize_population(count_total=n_total, fraction_basal_dimers_reference=f,
+                                     relative_count_active_dimers_initial=0.0, condition="FAB")
+        expected = float(expected_fluorescent_complexes(pop, plan)) / n_total
+        v = cm.visible_hosts_per_subunit(plan, f)
+        assert np.isclose(v, expected, rtol=2e-4), (f, v, expected)
+    assert np.isclose(cm.visible_hosts_per_subunit(plan, 0.075), 0.011894875, atol=2e-7)
+    assert np.isclose(V, 0.011894875)
 
 
 def _notebook_config(clip, norm_mode=None, second=None):
@@ -979,6 +1271,58 @@ def test_a_labeling_arm_records_itself_and_refuses_before_any_work():
             raise AssertionError("an existing arm output must be refused")
 
 
+def test_a_labeling_arm_refuses_a_source_clip_of_another_table_before_any_work():
+    """The labeling arm's preflight (``assert_source_keys``): the source clip's stored ``rds_keys``
+    must be the condition's, key for key and in order. A clip without them, with the other
+    condition's keys or with the retired ratio row stops the run before any output, under
+    ``--dry-run`` too; the condition's own keys pass and the dry run writes nothing."""
+    import dataclasses
+    exp, syn = _partly_overlapping_clips()
+    fab_keys = ppv._rds_keys("FAB")
+    stale = {"no keys": None, "the other condition's keys": ppv._rds_keys("INLB"),
+             "the retired ratio row": [k if k != "fraction_basal_dimers_reference" else "ratio_dimer_monomer_initial"
+                                       for k in fab_keys]}
+    original = bio.PARAMETERS.machine
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        object.__setattr__(bio.PARAMETERS, "machine",
+                           dataclasses.replace(original, data_bank_root=root, scratch_data_bank_root=None))
+        try:
+            paths = biology_workflow().paths.with_condition("FAB")
+            label = bio.RunTiming(total_time_seconds=2.0, frames=bio.PARAMETERS.simulation.timing).label
+            out_dir = root / paths.posit_subdir / f"{paths.project_alias}_{label}_Posterior_Predictive_Video"
+            out_dir.mkdir(parents=True)
+            stem = ppv._build_stem(paths.project_alias, label, "MET-FAB", 0, None, "cell-sgm", "20S",
+                                   run_label="REF", declared_rds=True, map_block="rds")
+            source = ppv.render_output_paths(out_dir, stem)
+            source["trajectory"].write_bytes(b"never read before the preflight")
+            arm_clip = ppv.render_output_paths(out_dir, f"{stem}_BINOMIAL4")["clip"]
+            argv = ["--total-time-seconds", "2", "--kind", "MET-FAB", "--cell", "0", "--source-label", "REF",
+                    "--labeling-law", "FAB_BINOMIAL", "--arm-label", "BINOMIAL4"]
+            for name, keys in stale.items():
+                fields = _fixture_fields(exp, syn)
+                if keys is None:
+                    del fields["rds_keys"]
+                else:
+                    fields["rds_keys"] = np.array(keys)
+                np.savez_compressed(source["clip"], **fields)
+                for extra in ([], ["--dry-run"]):
+                    before = sorted(q.name for q in out_dir.iterdir())
+                    try:
+                        arm.main(argv + extra)
+                    except SystemExit as exc:
+                        assert "rds_keys" in str(exc) and "refused" in str(exc), (name, str(exc))
+                    else:
+                        raise AssertionError(f"a source clip with {name} was accepted")
+                    assert sorted(q.name for q in out_dir.iterdir()) == before and not arm_clip.exists()
+            np.savez_compressed(source["clip"], **_fixture_fields(exp, syn))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                assert arm.main(argv + ["--dry-run"]) == 0
+            assert "[DRY RUN] cell 0" in out.getvalue() and not arm_clip.exists()
+        finally:
+            object.__setattr__(bio.PARAMETERS, "machine", original)
+
+
 def test_the_spot_count_report_states_each_recordings_receptor_total():
     def results(totals):
         cells = {}
@@ -993,11 +1337,11 @@ def test_the_spot_count_report_states_each_recordings_receptor_total():
         report = Path(tmp) / "Spot_Count.md"
         spots.write_report(results({0: 550.0, 16: 3162.0}), report)
         text = report.read_text()
-        assert "The receptor total is declared per recording (column N_R)" in text
+        assert "The receptor total N is declared per recording (column N)" in text
         assert "| 0 | 550 | 150 | 0.60 |" in text and "| 16 | 3162 | 150 | 0.60 |" in text
         assert "Every render declares" not in text and "same receptor total" not in text
         spots.write_report(results({0: 1000.0, 5: 1000.0}), report)
-        assert "Every render declares the receptor total N_R = 1000." in report.read_text()
+        assert "Every render declares the receptor total N = 1000." in report.read_text()
 
 
 def test_every_video_renderer_defaults_to_the_percentile_window():

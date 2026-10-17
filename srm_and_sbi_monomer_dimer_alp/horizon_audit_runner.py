@@ -26,10 +26,12 @@ CLI subcommand so the expensive stages can be split across machines and resumed:
 
 DESIGN DECISIONS.
 
-* STATE TRUTH = THE WINDOW-START POPULATION. The estimator's stoichiometry labels (receptor total
-  N_total, initial dimer-to-monomer ratio r, read as the receptor fraction x_B) are the initial
-  populations of its training windows, so the
-  start state is what it was trained to report.
+* STATE TRUTH = THE WINDOW-START POPULATION. The estimator's stoichiometry labels (the receptor
+  total N_total, the basal reference fraction f and, under MET-INLB, the allocation R_active, read
+  through the population binding as the receptor fraction x_B of the reference population) are the
+  initial populations of its training windows, so the
+  start state is what it was trained to report. R_active is a state coordinate of the window
+  start, never a constant.
   The within-window mean and end populations, and the unrounded theta label, are retained as
   explicitly secondary sensitivity references -- judging against them manufactures an estimand
   mismatch that can dwarf the real error (measured on the smoke: 36 pp fake vs ~1 pp real).
@@ -79,6 +81,7 @@ import hashlib
 import json
 import shutil
 import time
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -87,19 +90,19 @@ import numpy as np
 from . import horizon_audit as ha
 from . import population_composition as pc
 from .diagnostics import DiagnosticReporter
-from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical, ratio_to_receptor_fraction
+from .parameterization import PARAMETERS, RunTiming, entry_to_physical, is_log_row, to_physical
 from .labeling import LABELING_CONDITIONS, LABELING_SET_COLUMNS, label_trajectory, resolve_labeling
+from .population_composition_runner import stoichiometry_binding
 from .simulation_rds_support import (
     build_simulation, build_system, collapse_species_axis, extract_subunit_lineage,
     extract_trajectory_poses, rank_to_species,
 )
-from .workflow import parameter_table
+from .workflow import parameter_keys as _wf_keys, parameter_table, prior_bounds, prior_builder
 
-# The stoichiometry coordinates, in the order the composition kernel expects: the receptor total
-# N_total and the initial dimer-to-monomer ratio r (both log rows); the kernel reads the second as the
-# receptor fraction x_B = 2r / (1 + 2r), so every binding below composes ratio_to_receptor_fraction.
-_COUNT_KEYS = (PARAMETERS.simulation.rds.stoichiometry.count_total_key,
-               PARAMETERS.simulation.rds.stoichiometry.composition_ratio_key)
+# The stoichiometry coordinates are bound per condition in the spec (``stoichiometry_binding``):
+# the receptor total N_total (a log row), the basal reference fraction f (linear) and, under
+# MET-INLB, the allocation R_active (linear); the binding maps them to the kernel's reference pair
+# (N_total, x_B = 2 f / (1 + f)) and flags a draw outside a fraction's box with NaN.
 # Species-count column order of every per-frame trace: monomer first, dimer second.
 _SPECIES_ORDER = PARAMETERS.simulation.rds.molecular_species_names
 
@@ -118,20 +121,25 @@ def _horizon_audit_spec(cfg, args):
     """Resolve paths, keys and timings for the audit; biology-only by construction.
 
     The audit needs the full reactive system (the inherited state IS the reaction state) and the
-    stoichiometry coordinates (receptor total, initial dimer fraction) among the learnable
-    parameters; the detector workflow has neither, so it is refused explicitly rather than
-    producing a meaningless run.
+    stoichiometry coordinates (the receptor total, the basal reference fraction and, under
+    MET-INLB, the allocation) among the learnable parameters; the detector workflow has neither,
+    so it is refused explicitly rather than producing a meaningless run. The keys, bounds, prior
+    and table are the ESTIMATOR's condition's (``args.condition``).
     """
     if cfg.tag != "biology":
         raise SystemExit(
             f"The horizon audit applies to the biology workflow only: the {cfg.tag} workflow "
             f"marginalizes the reaction-diffusion block, so a continuous reactive trajectory has "
             f"no inferred counterpart to audit.")
-    keys = list(cfg.param_module.PARAMETER_KEYS)
-    missing = [k for k in _COUNT_KEYS if k not in keys]
-    if missing:
-        raise SystemExit(f"parameterization lacks the stoichiometry keys {missing}; "
-                         f"the audit's dynamic-state comparison needs both.")
+    condition = str(args.condition)
+    keys = list(_wf_keys(cfg, condition))
+    table = parameter_table(cfg, condition)
+    try:
+        binding = stoichiometry_binding(table, keys, condition)
+    except ValueError as exc:
+        raise SystemExit(f"parameterization lacks the stoichiometry keys under {condition}; "
+                         f"the audit's dynamic-state comparison needs them ({exc}).") from None
+    lower, upper = prior_bounds(cfg, condition)
     window = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)
     continuous = RunTiming(total_time_seconds=args.continuous_seconds,
@@ -146,12 +154,12 @@ def _horizon_audit_spec(cfg, args):
     out_dir = (data_bank_root / paths.posit_subdir
                / f"{paths.project_alias}_{window.label}_Horizon_Audit")
     return dict(
-        paths=paths, keys=keys,
-        count_index=tuple(keys.index(k) for k in _COUNT_KEYS),
-        lower=np.asarray(cfg.param_module.theta_lower_bound(), dtype=float),
-        upper=np.asarray(cfg.param_module.theta_upper_bound(), dtype=float),
-        build_prior=cfg.param_module.build_prior,
-        table=parameter_table(cfg),
+        paths=paths, keys=keys, condition=condition, binding=binding,
+        count_index=binding.count_index,
+        lower=np.asarray(lower, dtype=float),
+        upper=np.asarray(upper, dtype=float),
+        build_prior=prior_builder(cfg, condition),
+        table=table,
         window=window, continuous=continuous,
         n_windows=continuous.frame_count // window.frame_count,
         estimator_path=paths.estimator_path(data_bank_root, window.label),
@@ -724,32 +732,33 @@ def _fd_of_counts(counts):
     return pc.composition_from_counts(counts)[..., pc.DIMER_INDEX]
 
 
-def _fd_of_parameters(theta_flow, count_index, table):
+def _fd_of_parameters(theta_flow, binding):
     """Dimer-complex fraction from estimator-space theta rows ``(..., D)`` (draws, labels, MAPs).
 
-    Selects the two stoichiometry coordinates, maps them to physical ``(N_total, r)`` with the ONE
-    conversion rule bound to their table rows, reads the ratio as x_B = 2r / (1 + 2r), and forms
-    the fraction through the same kernel definition the trajectory path uses.
+    The condition's ``binding`` (``population_composition_runner.stoichiometry_binding``) selects
+    the stoichiometry coordinates, maps them to physical values with the ONE conversion rule bound
+    to their table rows and forms the REFERENCE pair (N_total, x_B = 2 f / (1 + f)); a draw with a
+    fraction outside [0, 1] is flagged (NaN), never clipped. The fraction is then formed through
+    the same kernel definition the trajectory path uses.
     """
-    idx = list(count_index)
-    rows = [table[i] for i in idx]
-    pair = np.array(to_physical(np.asarray(theta_flow, dtype=float)[..., idx], rows), dtype=float)
-    pair[..., 1] = ratio_to_receptor_fraction(pair[..., 1])
-    return pc.composition(pair)[..., pc.DIMER_INDEX]
+    return pc.composition(binding.reference_pair(binding.select(theta_flow)))[..., pc.DIMER_INDEX]
 
 
-def _fd_draw_stats(draws, count_index, table):
+def _fd_draw_stats(draws, binding):
     """Per-window f_B mean and quantiles from the within-draw fraction distribution.
 
     ``draws`` is ``(N, S, D)`` in estimator space. The fraction is formed INSIDE each draw
     (each draw's coordinates co-occur, so no coordinate-wise composite is formed), giving an
     ``(N, S)`` distribution; returns its mean and the
     [5, 25, 75, 95] percentile bands -- the f_B credible intervals whose coverage is judged
-    against the start-state truth.
+    against the start-state truth. Flagged draws are NaN and drop out of the nan-aware
+    statistics.
     """
-    fd = _fd_of_parameters(draws, count_index, table)                        # (N, S)
-    q = np.percentile(fd, [5, 25, 75, 95], axis=-1)                          # (4, N)
-    return fd.mean(axis=-1), q
+    fd = _fd_of_parameters(draws, binding)                                   # (N, S)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        q = np.nanpercentile(fd, [5, 25, 75, 95], axis=-1)                   # (4, N)
+        return np.nanmean(fd, axis=-1), q
 
 
 def _figure_error_vs_position(table, keys, cont_abs, reset_abs, count_index):
@@ -784,7 +793,7 @@ def _figure_error_vs_position(table, keys, cont_abs, reset_abs, count_index):
     for j in range(n_params, n_rows * n_cols):
         axes[j // n_cols, j % n_cols].axis("off")
     fig.suptitle("ABSOLUTE posterior-median error (estimator space: dex for log rows, absolute "
-                 "for the linear dimer fraction) vs window position -- truth = drawn theta\n"
+                 "for the linear rows f and R_active) vs window position -- truth = drawn theta\n"
                  "(stoichiometry panels read STATE DRIFT against the stale t=0 label, not "
                  "estimator error; the state audit is the f_B figure)", fontsize=9)
     fig.supxlabel("window position", fontsize=9)
@@ -951,9 +960,10 @@ def _phase_analyze(spec, args):
     delta_signed = ha.paired_position_effect(cont_err, reset_err)   # secondary (bias)
 
     # ---- the state read: f_B from draws, judged against the window-START truth ----
-    fd_cont_mean, fd_cont_q = zip(*(_fd_draw_stats(data["cont_draws"][t], count_index, table)
+    binding = spec["binding"]
+    fd_cont_mean, fd_cont_q = zip(*(_fd_draw_stats(data["cont_draws"][t], binding)
                                     for t in range(n_traj)))
-    fd_reset_mean, fd_reset_q = zip(*(_fd_draw_stats(data["reset_draws"][t], count_index, table)
+    fd_reset_mean, fd_reset_q = zip(*(_fd_draw_stats(data["reset_draws"][t], binding)
                                       for t in range(n_traj)))
     fd_cont = np.stack(fd_cont_mean)                                # (T, W)
     fd_reset = np.stack(fd_reset_mean)                              # (T, R)
@@ -964,7 +974,7 @@ def _phase_analyze(spec, args):
     te_cont = _fd_of_counts(data["cont_true_end"])
     ts_reset = _fd_of_counts(data["reset_true_start"])              # (T, R)
     tm_reset = _fd_of_counts(data["reset_true_mean"])
-    label_fd = _fd_of_parameters(data["theta"], count_index, table)       # unrounded label
+    label_fd = _fd_of_parameters(data["theta"], binding)                  # unrounded label
     fd_cov = {
         "cont_c50": ((ts_cont >= fd_cont_q[:, 1]) & (ts_cont <= fd_cont_q[:, 2])).astype(float),
         "cont_c90": ((ts_cont >= fd_cont_q[:, 0]) & (ts_cont <= fd_cont_q[:, 3])).astype(float),
@@ -1126,8 +1136,8 @@ def _phase_analyze(spec, args):
         # f_B: strata in composition space (prespecified bins), margin point-composed from the
         # recovery medians -- the audit's own f_B margin is formed INSIDE each draw, so the two
         # differ slightly; the prior-averaged point-composed value is reported for comparison.
-        rec_fd_true = _fd_of_parameters(rec_true, count_index, table)
-        rec_fd_med = _fd_of_parameters(rec_med, count_index, table)
+        rec_fd_true = _fd_of_parameters(rec_true, binding)
+        rec_fd_med = _fd_of_parameters(rec_med, binding)
         fd_edges = np.array([0.0, 0.2, 0.8, 1.0])
         fd_coh_lab = np.clip(np.digitize(ts_cont[:, -1], fd_edges[1:-1]), 0, 2)
         fd_rec_lab = np.clip(np.digitize(rec_fd_true, fd_edges[1:-1]), 0, 2)
@@ -1201,7 +1211,7 @@ def _phase_analyze(spec, args):
                  f"{np.nanmean(fd_cov['cont_c90'][:, 0]):.2f}",
                  f"{np.nanmean(fd_cov['cont_c50'][:, -1]):.2f} / "
                  f"{np.nanmean(fd_cov['cont_c90'][:, -1]):.2f}"],
-                ["stoichiometry N_total, x_B (STALE t=0 truth -- state drift, expected to fail late)",
+                ["stoichiometry N_total, f and (MET-INLB) R_active (STALE t=0 truth -- state drift, expected to fail late)",
                  f"{np.nanmean(reset_c50[:, :, list(count_index)]):.2f} / "
                  f"{np.nanmean(reset_c90[:, :, list(count_index)]):.2f}",
                  f"{np.nanmean(cont_c50[:, 0, list(count_index)]):.2f} / "
@@ -1235,16 +1245,14 @@ def _phase_analyze(spec, args):
                         "(rounding) effect of the initial composition.")
 
     # ---- state-support drift + flow mass outside the training box ----
-    # The trained box is over the stoichiometry coordinates (N_total, r), so the TRUE start
-    # populations (species counts) are read back as (total receptors, receptors in dimers) through
-    # the kernel and compared with the box mapped to physical units, the ratio edges mapped to
-    # x_B = 2r / (1 + 2r) (monotone, so the box maps to a box). N_total is conserved by construction,
-    # so only the integer realization of a draw near an edge can leave the box; the statistic is
-    # kept as the honest sanity check of that.
-    count_rows = [table[i] for i in count_index]
-    lo_c = np.array(to_physical(spec["lower"][list(count_index)], count_rows), dtype=float)
-    hi_c = np.array(to_physical(spec["upper"][list(count_index)], count_rows), dtype=float)
-    lo_c[1], hi_c[1] = ratio_to_receptor_fraction(lo_c[1]), ratio_to_receptor_fraction(hi_c[1])
+    # The trained box is over the stoichiometry coordinates (N_total, f and, under MET-INLB,
+    # R_active), so the TRUE start populations (species counts) are read back as (total receptors,
+    # receptors in dimers) through the kernel and compared with the box mapped through the binding
+    # to the reference pair: f = 0 and f = 1 map to x_B = 0 and 1 (monotone, so the box maps to a
+    # box). N_total is conserved by construction, so only the integer realization of a draw near an
+    # edge can leave the box; the statistic is kept as the honest sanity check of that.
+    lo_c = binding.reference_pair(binding.select(spec["lower"]))
+    hi_c = binding.reference_pair(binding.select(spec["upper"]))
     start_comp = pc.composition_from_counts(data["cont_true_start"])           # (T, W, 5)
     start_pairs = start_comp[..., [pc.RECEPTORS_INDEX, pc.RECEPTORS_IN_DIMERS_INDEX]]
     outside = (start_pairs < lo_c) | (start_pairs > hi_c)
@@ -1524,29 +1532,42 @@ def _phase_selftest(spec, args):
 # Entry point + CLI
 # =============================================================================
 
-# The audit is disabled under the retained-population generator. Its composition metrics read the
-# trajectory's RETAINED species census (``n_B / (n_A + n_B)`` over the class counts ``[A, B]``, with
-# ``B1`` and ``B2`` aggregated and every ``B`` counted as two subunits) and judge the estimator's
-# TRUE composition (the inferred ``(N_total, r)``) against it. Under the retained population the
-# two are different quantities: at the band ceiling (true ``f_B`` 25 %) MET-FAB's retained complex
-# fraction is about 40 % and its retained count is about 2 % of ``N_total``, and MET-INLB's ``B1``
-# carries one retained subunit, not two. The comparison is therefore not meaningful until the
-# audit's estimands are restated for the retained population (the retained census mapped back to
-# the true population through the condition's occupancy, and ``B1`` counted by its one subunit).
-# Reports recorded before this stand for the generator they were produced under.
+# The audit is disabled under the simulated-population generator, for two mismatches between its
+# estimands and what the trajectory holds. (1) The composition metrics read the trajectory's
+# RETAINED (simulated, probe-bound) species census (``n_B / (n_A + n_B)`` over the class counts
+# ``[A, B]``, with ``B1`` and ``B2`` aggregated and every ``B`` counted as two subunits) and judge
+# the estimator's underlying REFERENCE composition (the inferred N_total and the basal reference
+# fraction f) against it. These are different populations: the represented population is the
+# occupancy-thinned, rounded image of the underlying one (at f = 0.25, N_total = 1e5, MET-FAB
+# places 886 monomers and 586 dimers, about 2 % of N_total, with a dimer share of complexes near
+# 40 %), and MET-INLB's ``B1`` carries one represented subunit, not two. (2) Under MET-INLB the
+# window-start ALLOCATION turns c = round(R_active x capacity) probe-bound monomer pairs into
+# active dimers before the first frame, so the window-start census differs from the reference
+# composition by the allocation, and a later window inherits a state the reference never
+# describes. The comparison is therefore not meaningful until the audit's estimands are restated
+# for the represented population at the window start (the census mapped back to the underlying
+# population through the condition's occupancy, ``B1`` counted by its one subunit, and the
+# starting composition after the allocation as the state truth). Reports recorded before this
+# stand for the generator they were produced under.
 HORIZON_AUDIT_DISABLED = (
-    "the horizon audit is disabled under the retained-population generator: its composition "
-    "metrics compare the inferred TRUE composition (N_total, r) with the trajectory's RETAINED "
-    "species census, which are different populations (PROJECT_CONTEXT.md sec. 2, 'Modeling "
-    "assumptions of the MET model'; Script_Bank/Analysis/..._Horizon_Audit.md). Restate the "
-    "audit's estimands for the retained population before running any phase.")
+    "the horizon audit is disabled under the simulated-population generator, for two mismatches: "
+    "(1) its composition metrics compare the inferred underlying REFERENCE composition (N_total, "
+    "the basal reference fraction f) with the trajectory's RETAINED (represented, probe-bound) "
+    "species census, which are different populations; (2) under MET-INLB the window-start "
+    "allocation (R_active, c = round(R_active x capacity) pairs turned into active dimers) makes "
+    "the window-start census differ from the reference composition, and the audit's state truth "
+    "would have to be the starting composition after the allocation (PROJECT_CONTEXT.md sec. 2, "
+    "'Modeling assumptions of the MET model'; Script_Bank/Analysis/..._Horizon_Audit.md). Restate "
+    "the audit's estimands for the represented population at the window start before running any "
+    "phase.")
 
 
 def run_horizon_audit(cfg, args):
     """Shared entry point. ``cfg`` is a WorkflowConfig; ``args`` the parsed CLI namespace.
 
     Refuses every phase, the dry run included, while :data:`HORIZON_AUDIT_DISABLED` holds (see
-    the note above it).
+    the note above it): the refusal comes BEFORE the spec is built, so no path is resolved and
+    nothing is touched.
     """
     raise SystemExit(HORIZON_AUDIT_DISABLED)
     spec = _horizon_audit_spec(cfg, args)

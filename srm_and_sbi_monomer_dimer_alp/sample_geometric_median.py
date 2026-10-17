@@ -6,7 +6,7 @@ parameters it is summarizing: every function takes vectors, a prior box, and ret
 THE METHOD. Given a collection of parameter vectors, the honest single-vector summary is the median
 VECTOR, not the vector of per-dimension medians. Real parameter clouds are correlated -- in imaging a
 spot's peak brightness scales with its width; in the reaction-diffusion model the receptor total,
-the initial dimer fraction and the rates that interconvert the species move together -- so taking
+the basal reference fraction of dimers and the rates that interconvert the species move together -- so taking
 each dimension's median independently composes a vector whose coordinates never co-occurred. That
 composite can land in a region of parameter space the collection never visited, and for a
 multimodal cloud it drifts into the low-density valley BETWEEN the modes, which is the worst

@@ -16,7 +16,8 @@ real dynamics or an acquisition confound, and one workflow's estimates cannot di
 THE ONE ARRAY EVERYTHING STARTS FROM. All functions here operate on the MAP grid
 
     G[k, c, t, p]   MAP estimate in estimator space (log10 for log rows; the value itself for
-                    the linear initial dimer fraction)
+                    the linear rows: the basal reference fraction f and, under MET-INLB, the
+                    allocation R_active)
       k = condition        c = cell (recording)
       t = chunk (window)   p = parameter
 
@@ -67,9 +68,10 @@ MATERIAL_DRIFT_DEX = 0.3
 # stage reports. Kept separate from MATERIAL_DRIFT_DEX even though the wider one coincides
 # numerically: one is a tolerance on recovery against known truth, the other a threshold on drift
 # across a recording, and conflating them would tie two unrelated decisions to one constant.
-# Both are DEX quantities and therefore apply to LOG rows only: for a linear row (none in the decided
-# biology table; the rule stays general) a dex band is meaningless, so every band-based statistic below reports NaN for it and
-# the runner says so instead of silently applying log arithmetic to a linear coordinate.
+# Both are DEX quantities and therefore apply to LOG rows only: for a linear row (the two fraction
+# rows of the biology table, f and R_active) a dex band is meaningless, so every band-based statistic
+# below reports NaN for it and the runner says so instead of silently applying log arithmetic to a
+# linear coordinate; a linear row's error is an absolute difference, reported in percentage points.
 RECOVERY_BANDS_DEX = (0.3, 0.15)
 
 
@@ -347,7 +349,8 @@ def drift_statistics(grid_flow, times, to_physical, log_rows, threshold=MATERIAL
 
     For every (condition, cell, parameter) an ordinary least-squares line is fit to the stored
     estimator-space MAP estimate against time -- log10 for log rows, because their drift is
-    multiplicative; the value itself for the linear initial dimer fraction -- giving a slope and
+    multiplicative; the value itself for the linear rows (the basal reference fraction f and,
+    under MET-INLB, the allocation R_active), whose drift is additive -- giving a slope and
     hence a fitted start and end value:
 
         change     = slope * (t_last - t_first)           (dex for a log row; absolute for a linear row)
@@ -359,8 +362,11 @@ def drift_statistics(grid_flow, times, to_physical, log_rows, threshold=MATERIAL
     what is measured. Named results, all shaped ``(n_kinds, D)`` unless noted:
 
         drift_absolute          median across cells of (end - start), in the parameter's own units
+                                (a linear row's drift, reported in percentage points by the runner)
         drift_sign_consistency  fraction of cells whose change shares the median's sign
-        drift_fold              median across cells of (end / start), a multiplicative factor
+        drift_fold              median across cells of (end / start), a multiplicative factor --
+                                LOG ROWS ONLY (NaN for a linear row: a ratio of two values near 0
+                                is unstable and a fraction has no multiplicative scale)
         drift_dex               median across cells of change, in log10 units -- LOG ROWS ONLY
                                 (NaN for a linear row, whose change is drift_absolute already)
         drift_material_fraction fraction of cells whose |change| exceeds ``threshold`` dex -- LOG
@@ -409,9 +415,11 @@ def drift_statistics(grid_flow, times, to_physical, log_rows, threshold=MATERIAL
         material = np.nanmean(over, axis=1)
         fold = np.nanmedian(end / start, axis=1)
     # Dex statistics are undefined for a linear row: flag with NaN rather than report a number that
-    # only looks like a dex.
+    # only looks like a dex. The fold is multiplicative too (and unstable near 0), so it is NaN for
+    # the linear rows as well; their drift is drift_absolute, in the fraction's own units.
     median_dex = np.where(log_rows, median_dex, np.nan)
     material = np.where(log_rows, material, np.nan)
+    fold = np.where(log_rows, fold, np.nan)
     pvals = np.full((n_kinds, dim), np.nan)
     try:
         from scipy.stats import wilcoxon
@@ -508,7 +516,9 @@ def window_drift_rows(grids, kinds, keys, to_physical, log_rows, threshold=MATER
     a recording (``drift_statistics`` fitted against the window index, so the change equals the
     fitted difference between the last and the first window):
 
-        change_median     median across cells of the change (dex for a log row, absolute otherwise)
+        change_median     median across cells of the change (dex for a log row; an absolute
+                          difference for a linear row, rendered by ``format_drift_rows`` in
+                          percentage points for a fraction)
         change_iqr        interquartile range of the per-cell changes across cells
         sign_consistency  fraction of cells whose change shares the median's sign
         material_fraction fraction of cells with |change| > ``threshold`` dex (log rows; NaN otherwise)
@@ -548,15 +558,33 @@ def window_drift_rows(grids, kinds, keys, to_physical, log_rows, threshold=MATER
     return rows
 
 
-def format_drift_rows(rows):
-    """Render ``window_drift_rows`` output as report-table headers and string rows."""
+LINEAR_DRIFT_UNITS = ("pp", "abs")
+
+
+def format_drift_rows(rows, linear_unit="abs"):
+    """Render ``window_drift_rows`` output as report-table headers and string rows.
+
+    A log row's change is in dex. A linear row's change is an absolute difference, rendered in
+    the unit the caller states: ``"abs"`` (the default; the change in the row's own units), right
+    for any linear row such as a direct estimator's linear spread, or ``"pp"`` (percentage
+    points, 100 x the change) for a FRACTION -- every linear row of the package's parameter
+    tables, the basal reference fraction f and the allocation R_active, is one, so the
+    Experiment and temporal-dynamics stages pass it. The IQR is in the unit of its row's change.
+    No dex threshold applies to a linear row (``n/a``).
+    """
+    if linear_unit not in LINEAR_DRIFT_UNITS:
+        raise ValueError(f"format_drift_rows: linear_unit={linear_unit!r}; expected one of {LINEAR_DRIFT_UNITS}.")
     headers = ["condition", "parameter", "estimate", "cells", "change first->last (median)",
                "IQR across cells", "sign consistency", "cells over 0.3 dex", "signed-rank p"]
     out = []
     for r in rows:
-        unit = "dex" if r["is_log"] else "abs"
-        out.append([r["kind"], r["parameter"], r["estimate"], str(r["n_cells"]),
-                    f"{r['change_median']:+.3f} {unit}", f"{r['change_iqr']:.3f}",
+        if r["is_log"]:
+            change, iqr = f"{r['change_median']:+.3f} dex", f"{r['change_iqr']:.3f}"
+        elif linear_unit == "pp":
+            change, iqr = f"{100 * r['change_median']:+.1f} pp", f"{100 * r['change_iqr']:.1f}"
+        else:
+            change, iqr = f"{r['change_median']:+.3f} abs", f"{r['change_iqr']:.3f}"
+        out.append([r["kind"], r["parameter"], r["estimate"], str(r["n_cells"]), change, iqr,
                     f"{100 * r['sign_consistency']:.0f}%",
                     ("n/a" if not np.isfinite(r["material_fraction"])
                      else f"{100 * r['material_fraction']:.0f}%"),

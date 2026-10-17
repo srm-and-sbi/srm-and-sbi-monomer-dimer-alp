@@ -12,7 +12,10 @@ Inference is workflow-agnostic -- the training engine already lives in
 ``setup_training`` / ``train_loop``). The only per-workflow differences are which
 parameterization supplies the learnable table / prior bounds / keys / roles, the
 alias-qualified ``paths``, the ``theta_dim``, and the workflow tag stamped into
-metadata. Those are resolved from the config in ``_inference_spec(cfg)``; the
+metadata. Those are resolved from the config and the estimator's condition in
+``_inference_spec(cfg, condition)`` (eleven theta coordinates under MET-FAB, twelve under
+MET-INLB, six for the detector; the biology theta standardization 'independent', fitted from
+all TRAIN task-0 labels); the
 engine body carries no workflow branch.
 
 This is the single home for the three inference-robustness features that the two
@@ -34,7 +37,7 @@ import dataclasses
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -54,56 +57,59 @@ from srm_and_sbi_monomer_dimer_alp.inference_support import (
     resolve_topology,
     setup_training,
     resolve_accumulation_steps,
+    theta_standardization_batch,
     train_loop,
 )
 from srm_and_sbi_monomer_dimer_alp.parameterization import NETWORK_PRESETS, PARAMETERS, RunTiming
 from srm_and_sbi_monomer_dimer_alp.test_loss_distribution import TestLossDistribution
 from srm_and_sbi_monomer_dimer_alp.utils import log_memory_state
-from srm_and_sbi_monomer_dimer_alp.workflow import WorkflowConfig, parameter_table
+from srm_and_sbi_monomer_dimer_alp.workflow import (
+    WorkflowConfig, parameter_keys, parameter_table, parameter_table_raw, prior_bounds,
+)
 
 
 @dataclass(frozen=True)
 class _InferenceSpec:
-    """Per-workflow Inference specializations resolved from a ``WorkflowConfig``."""
-    draw_spec: list          # the learnable table (PARAMETERIZATION | DETECTOR_PARAMETERIZATION)
-    raw_spec: list           # the full parameter table (*_RAW), for the TLD manifest
+    """Per-workflow, per-condition Inference specializations resolved from a ``WorkflowConfig``."""
+    condition: str           # the ESTIMATOR's condition (FAB / INLB)
+    draw_spec: list          # the learnable table under the condition (biology: 11 or 12 rows; detector: 6)
+    raw_spec: list           # the full parameter table under the condition (declared rows read as fixed), for the TLD manifest
     parameter_keys: list     # learnable keys, in column order
-    lower_bound: list        # log10 prior lower bounds
-    upper_bound: list        # log10 prior upper bounds
+    lower_bound: list        # prior lower bounds in estimator space (log10 for log rows, the value for linear rows)
+    upper_bound: list        # prior upper bounds in estimator space
     role_of: Callable        # role_of(param_row) -> "learnable"/"fixed"/"nuisance_*"
     theta_dim: int           # len(parameter_keys)
+    theta_standardization: Optional[str]   # biology: parameterization.THETA_STANDARDIZATION; detector: None (the flow default)
 
 
-def _inference_spec(cfg: WorkflowConfig) -> _InferenceSpec:
-    """Resolve the Inference stage's per-workflow specializations from the workflow config.
+def _inference_spec(cfg: WorkflowConfig, condition) -> _InferenceSpec:
+    """Resolve the Inference stage's specializations from the workflow config and the
+    estimator's condition (validated for both workflows; the biology table is per condition).
 
-    ``theta_lower_bound`` / ``theta_upper_bound`` / ``role_of`` share their names
-    across the two parameterization modules; only the learnable/raw TABLE symbols
-    differ, so those are selected here.
+    ``role_of`` shares its name across the two parameterization modules; the tables, keys and
+    bounds come through the workflow resolvers. The biology theta standardization is the
+    workflow's declared choice (``THETA_STANDARDIZATION``), applied after any preset; the
+    detector keeps the flow configuration's value.
     """
-    m = cfg.param_module
-    if cfg.tag == "detector":
-        draw_spec = m.DETECTOR_PARAMETERIZATION
-        raw_spec = m.DETECTOR_PARAMETERIZATION_RAW
-        keys = [entry["KEY"] for entry in m.DETECTOR_PARAMETERIZATION]
-    else:
-        draw_spec = m.PARAMETERIZATION
-        raw_spec = m.PARAMETERIZATION_RAW
-        keys = m.PARAMETER_KEYS
+    keys = parameter_keys(cfg, condition)
+    lower, upper = prior_bounds(cfg, condition)
+    standardization = None if cfg.tag == "detector" else cfg.param_module.THETA_STANDARDIZATION
     return _InferenceSpec(
-        draw_spec=draw_spec,
-        raw_spec=raw_spec,
+        condition=str(condition),
+        draw_spec=parameter_table(cfg, condition),
+        raw_spec=parameter_table_raw(cfg, condition),
         parameter_keys=keys,
-        lower_bound=m.theta_lower_bound(),
-        upper_bound=m.theta_upper_bound(),
-        role_of=m.role_of,
+        lower_bound=lower,
+        upper_bound=upper,
+        role_of=cfg.param_module.role_of,
         theta_dim=len(keys),
+        theta_standardization=standardization,
     )
 
 
 def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     """Run the full inference training pipeline for the given workflow + CLI args."""
-    spec = _inference_spec(cfg)
+    spec = _inference_spec(cfg, args.condition)
 
     timing = RunTiming(
         total_time_seconds=args.total_time_seconds, frames=PARAMETERS.simulation.timing,
@@ -134,6 +140,12 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         network_cfg = dataclasses.replace(network_cfg, **preset["network"])
     if preset["flow"]:
         flow_cfg = dataclasses.replace(flow_cfg, **preset["flow"])
+    # The biology theta standardization is the workflow's declared choice, applied AFTER the
+    # preset (no preset touches it), so the banner, maf_args and the rebuild spec agree.
+    if spec.theta_standardization is not None:
+        flow_cfg = dataclasses.replace(flow_cfg, z_score_x=spec.theta_standardization)
+    theta_standardization_source = ("all theta labels of TRAIN task 0" if spec.theta_standardization is not None
+                                    else "two-row dummy batch (pooled, structured)")
     paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     div = "=" * 72
 
@@ -219,10 +231,12 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             0, train_data_root, timing_label, compress, "TRAIN")
         train_theta = paths.theta_set_path(
             0, train_data_root, timing_label, compress, "TRAIN")
+        print(f"\n[DRY RUN] parameter table of {spec.condition}: {spec.theta_dim} coordinates "
+              f"{spec.parameter_keys}; theta standardization {flow_cfg.z_score_x} ({theta_standardization_source})")
         print(f"\n[DRY RUN] TRAIN namespace ({args.tasks} task(s) expected, probing TASK_0):")
         for role, set_path in (("TRAIN video set", train_video),
                                ("TRAIN theta set", train_theta)):
-            status = (theta_set_status(set_path, spec.draw_spec) if "theta" in role
+            status = (theta_set_status(set_path, spec.draw_spec, condition=spec.condition) if "theta" in role
                       else ("OK" if Path(set_path).exists() else "MISSING"))
             print(f"  reads {role}: {set_path}  [{status}]")
             if status != "OK":
@@ -235,7 +249,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             print(f"\n[DRY RUN] TEST namespace ({args.test_tasks} task(s) expected, probing TASK_0):")
             for role, set_path in (("TEST video set", test_video),
                                    ("TEST theta set", test_theta)):
-                status = (theta_set_status(set_path, spec.draw_spec) if "theta" in role
+                status = (theta_set_status(set_path, spec.draw_spec, condition=spec.condition) if "theta" in role
                           else ("OK" if Path(set_path).exists() else "MISSING"))
                 print(f"  reads {role}: {set_path}  [{status}]")
                 if status != "OK":
@@ -281,6 +295,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
           f"num_transforms={flow_cfg.num_transforms}, num_blocks={flow_cfg.num_blocks}, "
           f"dropout={flow_cfg.dropout_probability}, batch_norm={flow_cfg.use_batch_norm}, "
           f"z_score={flow_cfg.z_score_x}/{flow_cfg.z_score_y})   preset: {preset_name}")
+    print(f"  theta     : {spec.theta_dim} coordinates of {spec.condition} {spec.parameter_keys}; "
+          f"standardization {flow_cfg.z_score_x} fitted from {theta_standardization_source}")
     if args.resurrect:
         print(f"  RESURRECT : hot-restart from {resurrect_state_path} if present, "
               f"else cold-load {checkpoint_path}")
@@ -317,10 +333,20 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # build_maf needs a representative (batch_x, batch_y) pair to compute output dims.
     dummy_train, _ = build_datasets(
         train_tasks=1, data_bank_root=train_data_root, timing_label=timing_label,
-        compress=compress, paths=paths, parameterization=parameter_table(cfg),
+        compress=compress, paths=paths, parameterization=spec.draw_spec,
     )
     dummy_loader = DataLoader(dummy_train, batch_size=2, num_workers=0)
     video_dummy, theta_dummy = next(iter(dummy_loader))
+    # The batch that FIXES the theta standardization (build_maf fits z_score_x once from
+    # batch_x and never refits): the biology hands over every theta label of TRAIN task 0
+    # (about a thousand prior draws in estimator coordinates), because an 'independent'
+    # standardization estimated from two rows mis-scales coordinates by an order of magnitude;
+    # the detector keeps the two-row dummy under its 'structured' (pooled scalar) default.
+    # build_maf accepts unequal batch sizes for batch_x and batch_y (checked on sbi 0.26.1).
+    if spec.theta_standardization is not None:
+        theta_batch = theta_standardization_batch(dummy_train)
+    else:
+        theta_batch = theta_dummy
 
     # Theta-width guard: the loaded labels must be exactly the learnable width this
     # workflow infers. A mismatch means the DLI stage wrote the wrong theta labels
@@ -379,7 +405,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         use_batch_norm=flow_cfg.use_batch_norm,
     )
     posterior_estimator = build_maf(
-        batch_x=theta_dummy,
+        batch_x=theta_batch,
         batch_y=video_dummy,
         embedding_net=embedding_net,
         **maf_args,
@@ -407,7 +433,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         test_tasks=args.test_tasks,
         test_loss_distribution=use_tld,
         paths=paths,
-        parameterization=parameter_table(cfg),
+        parameterization=spec.draw_spec,
     )
 
     if reporter.enabled:
@@ -451,7 +477,12 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "artifact_tag": args.artifact_tag,
             "network_preset": preset_name,
             "test_set_id": f"TEST/{timing_label}",
-            "theta_space": "log10",
+            # estimator coordinates: log10 for log rows, the value itself for linear rows; the
+            # label stays "log10" when every row is log (the detector), "estimator" otherwise
+            "theta_space": "log10" if all(bool(p.get("LOG_FLAG")) for p in spec.draw_spec) else "estimator",
+            "theta_log_flag": [bool(p.get("LOG_FLAG")) for p in spec.draw_spec],
+            "theta_standardization": flow_cfg.z_score_x,
+            "theta_standardization_source": theta_standardization_source,
             "theta_keys": list(spec.parameter_keys),  # learnable = the theta columns, in order
             "parameter_table": [   # FULL table (learnable + fixed) with roles, declaration order
                 {"key": p["KEY"],
@@ -469,7 +500,9 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         def commit_new_best(best_epoch, best_test_loss, gathered):
             task, sim, loss, theta = gathered
             best_metadata = {
-                "timing_label": timing_label, "workflow": cfg.tag,
+                "timing_label": timing_label, "workflow": cfg.tag, "condition": spec.condition,
+                "theta_standardization": flow_cfg.z_score_x,
+                "theta_standardization_source": theta_standardization_source,
                 "artifact_tag": args.artifact_tag, "network_preset": preset_name,
                 "best_test_loss": float(best_test_loss),
                 "train_videos": tld_manifest["train_videos"],
@@ -563,6 +596,9 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         finish_metadata = {
             "timing_label": timing_label,
             "workflow": cfg.tag,
+            "condition": spec.condition,
+            "theta_standardization": flow_cfg.z_score_x,
+            "theta_standardization_source": theta_standardization_source,
             "artifact_tag": args.artifact_tag,
             "network_preset": preset_name,
             "best_test_loss": (float(optimum_loss_test)

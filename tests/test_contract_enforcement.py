@@ -198,7 +198,7 @@ def test_writers_refuse_invalid_products_before_persisting_or_rendering():
         c = _experiment_product(rng); c["map_estimate"][0, 0] = np.inf
         rep = DiagnosticReporter(stage="Experiment", enabled=True, dump=True, dump_dir=tmp / "c",
                                  run_label="T", timestamp="now")
-        expect_schema_error(lambda: controls.write_experiment_outputs(rep, xargs, eval_cfg, tmp / "c" / "p.npz",
+        expect_schema_error(lambda: controls.write_experiment_outputs(rep, xargs, eval_cfg, SPEC, tmp / "c" / "p.npz",
                                                                       c, run_start=0.0), "non-finite map_estimate")
         assert not (tmp / "c" / "p.npz").exists()
 
@@ -206,7 +206,7 @@ def test_writers_refuse_invalid_products_before_persisting_or_rendering():
 def test_report_only_rendering_for_experiment_and_controls_leaves_arrays_untouched():
     from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
     from srm_and_sbi_monomer_dimer_alp.experiment_runner import write_experiment_outputs
-    from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, PARAMETER_KEYS
+    from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, parameter_keys_of, parameterization_of
     eval_cfg = PARAMETERS.inference.evaluation
     rng = np.random.default_rng(14)
     xargs = SimpleNamespace(aggregation="pooled", seed=None)
@@ -221,11 +221,13 @@ def test_report_only_rendering_for_experiment_and_controls_leaves_arrays_untouch
                                        persist_arrays=False)
         assert man["n_observations"] == 15 and path.read_bytes() == before
         assert (tmp / "x" / "report.md").exists() and any((tmp / "x" / "figures").iterdir())
-        # Controls writer renders with the biology table; build a product of that width.
+        # Controls writer renders with the table it is given (the MET estimator's condition, here
+        # MET-FAB: eleven rows); build a product of that width and keys.
         controls = _controls_module()
-        n_keys = len(PARAMETER_KEYS)
+        fab_keys = list(parameter_keys_of("FAB"))
+        n_keys = len(fab_keys)
         ids = [(0, c, t) for c in range(3) for t in range(5)]
-        m = valid_manifest("experiment", len(ids), parameter_keys=list(PARAMETER_KEYS),
+        m = valid_manifest("experiment", len(ids), parameter_keys=fab_keys,
                            sgm_scale=[1.0] * n_keys)
         c = product("experiment", ids, rng, manifest=m)
         for key in ("map_estimate", "posterior_sgm"):
@@ -235,10 +237,17 @@ def test_report_only_rendering_for_experiment_and_controls_leaves_arrays_untouch
         before = cpath.read_bytes()
         rep = DiagnosticReporter(stage="Experiment", enabled=True, dump=True, dump_dir=tmp / "c",
                                  run_label="T", timestamp="now")
-        man = controls.write_experiment_outputs(rep, xargs, eval_cfg, cpath, c, run_start=0.0,
-                                                persist_arrays=False)
+        man = controls.write_experiment_outputs(rep, xargs, eval_cfg, parameterization_of("FAB"), cpath, c,
+                                                run_start=0.0, persist_arrays=False)
         assert man["n_observations"] == 15 and cpath.read_bytes() == before
         assert (tmp / "c" / "report.md").exists()
+        # A product of another table is refused by key before anything is rendered.
+        rep = DiagnosticReporter(stage="Experiment", enabled=True, dump=True, dump_dir=tmp / "c2",
+                                 run_label="T", timestamp="now")
+        expect_schema_error(lambda: controls.write_experiment_outputs(
+            rep, xargs, eval_cfg, parameterization_of("INLB"), cpath, c, run_start=0.0,
+            persist_arrays=False), "parameter_keys")
+        assert not (tmp / "c2" / "report.md").exists()
 
 
 # ---- 3. consumers: schema loader everywhere, exact parameter keys ------------------------------

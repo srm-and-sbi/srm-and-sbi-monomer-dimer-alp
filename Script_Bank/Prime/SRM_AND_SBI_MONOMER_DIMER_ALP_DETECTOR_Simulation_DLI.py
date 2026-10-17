@@ -10,8 +10,10 @@ The five SCOPE camera parameters are still marginalized (recorded as ``Nuisance_
 trajectories consumed here are the CONDITION's RDS tier -- the trajectories the single RDS entry
 point (``SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py --condition <FAB|INLB>``) generates once
 per condition, under the sibling alias plus the condition token, for both workflows; their
-eleven-parameter ``Theta_Set`` is, to this workflow, the record of the reaction-diffusion nuisance
-it marginalizes. The detector has no RDS stage of its own. Every
+``Theta_Set`` (eleven reaction-diffusion labels under MET-FAB, twelve under MET-INLB) is, to this
+workflow, the record of the reaction-diffusion nuisance it marginalizes, and it is checked
+against the condition's current table before any video is rendered (a superseded tier is
+refused). The detector has no RDS stage of its own. Every
 product this stage writes namespaces under the ``_DETECTOR`` qualifier and the condition token,
 so nothing collides with biology.
 

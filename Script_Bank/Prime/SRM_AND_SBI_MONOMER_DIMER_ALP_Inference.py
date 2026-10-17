@@ -4,7 +4,8 @@ Loads (video, theta) pairs from the previous RDS + DLI stages, trains a masked
 autoregressive flow (MAF) density estimator conditioned on a Complex3DCNN +
 TemporalTransformer embedding of the videos, and saves the trained estimator as a
 self-describing, version-portable artifact for downstream sampling. The biology
-workflow infers the 10 reaction-diffusion parameters.
+workflow infers the condition's reaction-diffusion parameters (eleven under MET-FAB, twelve
+under MET-INLB, whose window-start allocation is inferred); ``--condition`` is required.
 
 The Inference stage runs on ONE shared engine used by both the biology and the detector
 workflows: ``srm_and_sbi_monomer_dimer_alp.inference_runner.run_inference`` (which builds on the

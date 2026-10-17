@@ -64,6 +64,13 @@ def condition_token(condition):
     return KIND_OF_CONDITION.get(condition, condition)
 
 
+def kind_label(kind, condition):
+    """The scientific name of a recording kind, marked as a misspecification test when it is not
+    the estimator's condition -- the label every derived table and figure gives such recordings."""
+    name = condition_display(kind)
+    return name if str(kind) == str(condition) else f"{name} [misspecification test]"
+
+
 def discover_cells(experiment_dir, kind, span):
     """Return the sorted cell indices with a recording on disk for a given kind.
 

@@ -299,7 +299,8 @@ def test_an_estimator_artifact_restores_the_selected_architecture():
 
 def test_the_persisted_estimators_of_record_load_under_the_new_class_unchanged():
     """The baseline and CAP256 detector estimators, when this machine holds them: their rebuild
-    specifications predate the encoder settings, so the defaults apply, and they embed a video."""
+    specifications predate the encoder settings, so the defaults apply, they record the structured
+    theta standardization with a 0-d shift buffer, and they embed a video."""
     root = PARAMETERS.machine.data_bank_root
     found = sorted(glob.glob(str(root / "Posit" / "*_DETECTOR_FAB_2S_50FPS_Estimator.npz"))
                    + glob.glob(str(root / "Posit" / "*_DETECTOR_FAB_2S_50FPS_CAP256_Estimator.npz")))
@@ -308,9 +309,16 @@ def test_the_persisted_estimators_of_record_load_under_the_new_class_unchanged()
         return
     from srm_and_sbi_monomer_dimer_alp.embedding_space_distance import embed_videos
     for path in found:
-        spec = artifacts.load_estimator_manifest(path)["rebuild_spec"]["embedding_args"]
+        rebuild = artifacts.load_estimator_manifest(path)["rebuild_spec"]
+        spec = rebuild["embedding_args"]
         assert "spatial_pooling" not in spec and "first_spatial_kernel" not in spec, path
+        # The persisted detector estimators record the structured theta standardization: one pooled
+        # shift (a 0-d buffer), not one per coordinate.
+        assert rebuild["maf_args"]["z_score_x"] == "structured", path
         posterior = artifacts.load_estimator(path, device="cpu")
+        shift = [t for name, t in posterior.posterior_estimator.state_dict().items()
+                 if "embedding" not in name and name.endswith("_transforms.0._shift")]
+        assert len(shift) == 1 and tuple(shift[0].shape) == (), (path, [tuple(t.shape) for t in shift])
         net = _encoder_of(posterior.posterior_estimator)
         assert (net.first_spatial_kernel, net.extra_spatial_convs, net.spatial_pooling) == (3, 0, "mean")
         width = 256 if "CAP256" in path else 128

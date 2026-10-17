@@ -6,15 +6,35 @@ engine `srm_and_sbi_monomer_dimer_alp/horizon_audit_runner.py` (statistics kerne
 phases, and how to read its report — so the analysis can be used and understood without
 reverse-engineering the code.
 
-> **Note (2026-09-14).** Release 0.1.4 replaced the linear initial dimer fraction `x_B` by the initial dimer-to-monomer ratio `r = n_B / n_A` (log10 on [−2, 2]; `x_B = 2r / (1 + 2r)` is derived) and gave every learnable row its decided prior range (`PROJECT_CONTEXT.md` §2); the composition a drawn theta sets is realized from `(N_R, r)`. Where this note names `x_B`, read the derived fraction. Results quoted from earlier runs stand as recorded.
+## Status: disabled
 
-> **Note (2026-10-05).** The audit is **disabled** under the retained-population generator (`run_horizon_audit` refuses every phase, the dry run included). Its composition metrics read the trajectory's **retained** species census (`n_B / (n_A + n_B)` over the class counts, with `B1` and `B2` aggregated and every `B` counted as two subunits) and judge the estimator's **true** composition (the inferred `N_total`, `r`) against it. Under the retained population these are different quantities: at the band ceiling (true `f_B` 25 %) the MET-FAB retained complex fraction is about 40 % and the retained count about 2 % of `N_total`, and a MET-INLB `B1` carries one retained subunit, not two. The audit stays disabled until its estimands are restated for the retained population (the retained census mapped back to the true population through the condition's occupancy, `B1` counted by its one subunit). Results recorded below stand for the generator they were produced under.
+The audit is **disabled**: `run_horizon_audit` refuses every phase, the dry run included, before any path
+is resolved (`horizon_audit_runner.HORIZON_AUDIT_DISABLED`). Its estimands do not match what the simulator
+places, for two reasons.
+
+1. Its composition metrics read the trajectory's species census of the represented, probe-bound population
+   (`n_B / (n_A + n_B)` over the class counts, with `B1` and `B2` aggregated and every `B` counted as two
+   subunits) and judge the estimator's underlying reference composition (the inferred receptor total
+   `N_total` and basal reference fraction `f`) against it. These are different populations: the represented
+   population is the occupancy-thinned, rounded image of the underlying one (at `f = 0.25` and
+   `N_total = 100,000`, MET-FAB places 886 monomers and 586 dimers, about 2 % of `N_total` in represented
+   receptors, with a dimer share of complexes near 40 %), and a MET-INLB `B1` carries one represented
+   subunit, not two.
+2. Under MET-INLB the window-start allocation pairs `c = round(R_active × capacity)` probe-bound monomer
+   pairs into two-InlB dimers before the first frame, so the window-start census differs from the reference
+   composition by the allocation, and a later window inherits a state the reference never describes.
+
+The audit stays disabled until its estimands are restated for the represented population at the window
+start: the census mapped back to the underlying population through the condition's occupancy, `B1` counted
+by its one subunit, and the starting composition after the allocation as the state truth. The design below
+and the results it quotes stand for the generator they were produced under.
 
 ## The question
 
 The estimator is trained on **independently initialized model-window simulations**: every training
-video begins with freshly placed particles whose composition (the receptor total `N_R`, the
-initial dimer fraction `x_B`, and the stationary mode occupancies) is set by the drawn theta. The
+video begins with freshly placed particles whose window-start composition (from the receptor total
+`N_total`, the basal reference fraction `f` and, under MET-INLB, the initial active-dimer allocation
+`R_active`) and stationary mode occupancies are set by the drawn theta. The
 experimental analysis, however, slices each **continuous 20 s recording** into consecutive
 model-length windows and runs the estimator on every window. Equal window length does not
 guarantee equal observation distributions: a later window of a continuous recording inherits the

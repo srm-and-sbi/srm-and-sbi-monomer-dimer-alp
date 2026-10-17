@@ -26,8 +26,15 @@ example, which this NLL artifact does not carry.
 
 Everything is read from the artifact's own manifest, so the analysis stays correct if the
 live parameterization changes and generalizes to any number of learnable parameters, for
-either workflow, with no edits. Pure analysis: numpy, with scipy + matplotlib imported
-lazily; imports nothing from ``parameterization`` / ``artifacts``, so it is unit-testable.
+either workflow, with no edits. The theta are in ESTIMATOR coordinates (``theta_space``
+``"estimator"``: log10 for a log row, the value itself for a linear row; the label stays
+``"log10"`` for an all-log table such as the detector's), and each row's scale is read from
+the manifest's ``theta_log_flag`` (or the table's ``log_flag``), so the prior width is in dex
+for a log row and absolute for a linear one (a [0, 1] row contributes ``ln 1 = 0`` to the
+prior-reference NLL). NLL values and the information gain compare only within one
+parameterization: the density is over a different space when the keys or scales differ.
+Pure analysis: numpy, with scipy + matplotlib imported lazily; imports nothing from
+``parameterization`` / ``artifacts``, so it is unit-testable.
 """
 from __future__ import annotations
 
@@ -48,13 +55,44 @@ def learnable_entries(manifest):
     return [entry for entry in table if entry.get("role") == "learnable"]
 
 
+def theta_log_flags(manifest, entries=None):
+    """One boolean per learnable column, True for a log row: the manifest's ``theta_log_flag``
+    when recorded, else the learnable entries' ``log_flag`` (``None`` reads as a log row, the
+    convention of an all-log table)."""
+    flags = manifest.get("theta_log_flag")
+    if flags is not None:
+        return [bool(v) for v in flags]
+    entries = learnable_entries(manifest) if entries is None else entries
+    return [bool(e.get("log_flag", True)) if e.get("log_flag") is not None else True for e in entries]
+
+
+def theta_space_check(manifest, log_flags):
+    """``(ok, detail)`` of the ``theta_space`` label: ``"estimator"`` is always accepted (log10
+    for a log row, the value itself for a linear row); ``"log10"`` is accepted only when every
+    row is a log row; anything else, or ``"log10"`` beside a linear row, is refused."""
+    space = manifest.get("theta_space", "?")
+    all_log = all(log_flags)
+    if space == "estimator":
+        return True, f"theta_space=estimator ({sum(1 for v in log_flags if not v)} linear row(s))"
+    if space == "log10":
+        return all_log, (f"theta_space=log10, every row a log row" if all_log else
+                         f"theta_space=log10 but {sum(1 for v in log_flags if not v)} row(s) are linear")
+    return False, f"theta_space={space!r} is neither 'estimator' nor 'log10'"
+
+
+def width_units(log_flags):
+    """The unit of each prior width: ``'dex'`` for a log row, ``'abs'`` for a linear row."""
+    return ["dex" if v else "abs" for v in log_flags]
+
+
 def prior_reference_nll(entries):
     """Uniform-prior NLL = sum of ``ln(prior-range width)`` over learnable params.
 
     The no-information baseline: for a uniform prior over the learnable box the expected NLL
     is the constant log prior-box volume. Returns ``(nll_prior, widths)`` where
-    ``widths[j] = high_j - low_j`` in the parameter's own units (log10 here), matching the
-    space the density is scored in.
+    ``widths[j] = high_j - low_j`` in the parameter's own estimator coordinate (dex for a log
+    row, absolute for a linear row), matching the space the density is scored in; a [0, 1]
+    row contributes ``ln 1 = 0``.
     """
     widths = []
     for entry in entries:
@@ -178,12 +216,15 @@ def figure_ecdf(loss, nll_prior):
     return fig
 
 
-def figure_loss_vs_theta(loss, theta, keys, nll_prior):
-    """Per-parameter joint density of NLL vs parameter value, with the median trend."""
+def figure_loss_vs_theta(loss, theta, keys, nll_prior, log_flags=None):
+    """Per-parameter joint density of NLL vs parameter value, with the median trend. The
+    panel's x label names the row's coordinate: ``log10`` for a log row, ``linear`` for a
+    linear row (``log_flags``; ``None`` = every row a log row)."""
     from matplotlib.colors import LogNorm
     from matplotlib.figure import Figure
 
     n = len(keys)
+    log_flags = [True] * n if log_flags is None else [bool(v) for v in log_flags]
     ncol = min(5, n)
     nrow = int(np.ceil(n / ncol))
     fig = Figure(figsize=(3.5 * ncol, 3.1 * nrow), layout="constrained")
@@ -202,7 +243,7 @@ def figure_loss_vs_theta(loss, theta, keys, nll_prior):
                 label="median NLL")
         ax.axhline(nll_prior, color="#C44E52", linestyle="--", linewidth=0.9)
         ax.set_title(key, fontsize=9)
-        ax.set_xlabel("value (log10)", fontsize=7)
+        ax.set_xlabel("value (log10)" if log_flags[j] else "value (linear)", fontsize=7)
         ax.set_ylabel("NLL", fontsize=7)
         ax.tick_params(labelsize=6)
     vmax = max(2.0, max(float(hb.get_array().max()) for hb in hexbins))

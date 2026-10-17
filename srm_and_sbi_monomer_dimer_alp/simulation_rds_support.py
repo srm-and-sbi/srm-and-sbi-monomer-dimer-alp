@@ -51,10 +51,10 @@ Functions:
     build_simulation(stem, theta, condition, ...)
         Wraps the system in a Simulation, registers observables (per-frame
         particle positions, per-step reaction counts, per-step reaction
-        records), and places the initial RETAINED particles uniformly in the box: the
-        integer composition realized from (N_total, r) through the condition's occupancy
-        (``realize_initial_composition``) and each particle's mode from the stationary law of
-        the switching chain. Returns the runnable Simulation.
+        records), and places the STARTING particles uniformly in the box: the window-start
+        composition realized from (N_total, f, R_active) through the condition's occupancy
+        and allocation (``realize_initial_composition``) and each particle's mode from the
+        stationary law of the switching chain. Returns the runnable Simulation.
 
     extract_trajectory_poses(tray, ...)
         Reads a saved .h5 trajectory file and produces a dense
@@ -90,9 +90,10 @@ import numpy as np
 import readdy
 
 from .parameterization import (
-    PARAMETERIZATION,
+    MASTER_PARAMETER_KEYS,
     PARAMETERS,
-    parameter_find,
+    declared_row_values,
+    parameter_keys_of,
     realize_initial_composition,
 )
 
@@ -117,18 +118,32 @@ class ReactionChannel(NamedTuple):
     rate_key: str
 
 
-def theta_by_key(theta: np.ndarray) -> dict:
-    """Physical parameter values keyed by parameter KEY (``theta`` in canonical order)."""
+def theta_by_key(theta: np.ndarray, condition: str) -> dict:
+    """Physical parameter values keyed by KEY, in MASTER order, for one theta of ``condition``.
+
+    ``theta`` holds the condition's learnable rows (``parameter_keys_of(condition)``: eleven
+    under MET-FAB, twelve under MET-INLB; the width is checked). The rows the condition
+    declares as constants are merged in from ``declared_row_values`` (FAB: the allocation 0),
+    so both conditions map to the same twelve keys and every consumer aligns by key.
+    """
     theta = np.asarray(theta, dtype=float)
-    if theta.shape != (len(PARAMETERIZATION),):
-        raise ValueError(f"theta has shape {theta.shape}; expected ({len(PARAMETERIZATION)},).")
-    return {para["KEY"]: float(theta[i]) for i, para in enumerate(PARAMETERIZATION)}
+    keys = parameter_keys_of(condition)
+    if theta.shape != (len(keys),):
+        raise ValueError(f"theta has shape {theta.shape}; the {condition} table expects ({len(keys)},) "
+                         f"with keys {keys}.")
+    values = {key: float(theta[i]) for i, key in enumerate(keys)}
+    declared = declared_row_values(condition)
+    overlap = sorted(set(values) & set(declared))
+    if overlap:
+        raise ValueError(f"theta of {condition} carries {overlap}, which the condition declares as constants.")
+    values.update({key: float(value) for key, value in declared.items()})
+    return {key: values[key] for key in MASTER_PARAMETER_KEYS}
 
 
-def diffusion_coefficients(theta: np.ndarray) -> dict:
+def diffusion_coefficients(theta: np.ndarray, condition: str) -> dict:
     """Diffusion coefficient of every particle type, um^2/s: D[X, m] = D_A * species * mode factor."""
     rds = PARAMETERS.simulation.rds
-    values = theta_by_key(theta)
+    values = theta_by_key(theta, condition)
     d_a = values[rds.mobility.diffusivity_key]
     mode_factor = {mode: (1.0 if key is None else values[key])
                    for mode, key in zip(rds.mobility.modes, rds.mobility.mode_ratio_keys)}
@@ -166,7 +181,7 @@ def reaction_channels(theta: np.ndarray, condition: str) -> Tuple[ReactionChanne
     """
     rds = PARAMETERS.simulation.rds
     sto, mob = rds.stoichiometry, rds.mobility
-    values = theta_by_key(theta)
+    values = theta_by_key(theta, condition)
     species = rds.species_for(condition)
     dimers = [s for s in species if s.stoichiometry == "dimer"]
     mono = sto.monomer.name
@@ -203,16 +218,17 @@ def reaction_channels(theta: np.ndarray, condition: str) -> Tuple[ReactionChanne
     return tuple(channels)
 
 
-def stationary_mode_law(theta: np.ndarray) -> np.ndarray:
+def stationary_mode_law(theta: np.ndarray, condition: str) -> np.ndarray:
     """Stationary occupancies of the isolated switching chain, one probability per mode.
 
     For the sequential chain the detailed-balance ratio pi[m+1] / pi[m] equals the forward
     over the backward rate of the link between them, so pi_f : pi_s : pi_i =
-    1 : k_fs/k_sf : (k_fs/k_sf)(k_si/k_is). This is the initial-mode law for every particle;
-    it is NOT the steady state of the reactive system (reactions with inheritance disturb it).
+    1 : k_fs/k_sf : (k_fs/k_sf)(k_si/k_is). This is the initial-mode law for every particle
+    placed, the allocated two-InlB dimers included; it is NOT the steady state of the reactive
+    system (reactions with inheritance disturb it).
     """
     mob = PARAMETERS.simulation.rds.mobility
-    values = theta_by_key(theta)
+    values = theta_by_key(theta, condition)
     forward = {(frm, to): values[key] for frm, to, key in mob.switching}
     weights = [1.0]
     for i in range(len(mob.modes) - 1):
@@ -229,8 +245,9 @@ def build_system(theta: np.ndarray,
 
     Args:
         theta: Learnable-parameter values in PHYSICAL units (``parameterization.to_physical``
-            of an estimator-space sample), 1D of length ``len(PARAMETERIZATION)`` in the
-            canonical order.
+            of an estimator-space sample), 1D in the order of the condition's table
+            (``parameterization_of(condition)``: eleven values under MET-FAB, twelve under
+            MET-INLB).
         condition: The stored condition token (``FAB`` or ``INLB``); selects the declared
             association ratio and therefore which channels exist (``reaction_channels``).
         verbose: If True, print the per-type diffusion constants and every channel's rate.
@@ -259,7 +276,7 @@ def build_system(theta: np.ndarray,
     stem_geometry = PARAMETERS.simulation.stem
     reaction_distance_nm = stem_geometry.particle_diameter_nm
     product_distance_nm = stem_geometry.fission_product_distance_nm
-    coefficients = diffusion_coefficients(theta)
+    coefficients = diffusion_coefficients(theta, condition)
     channels = reaction_channels(theta, condition)
 
     stem = readdy.ReactionDiffusionSystem(
@@ -291,7 +308,7 @@ def build_system(theta: np.ndarray,
             raise ValueError(f"unknown channel kind {ch.kind!r}")
 
     if verbose:
-        values = theta_by_key(theta)
+        values = theta_by_key(theta, condition)
         d_a = values[rds.mobility.diffusivity_key]
         print("  Diffusion coefficients per particle type (um^2/s): "
               + ", ".join(f"{k}={v:.4g}" for k, v in coefficients.items()))
@@ -323,11 +340,14 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
     Args:
         stem: ReactionDiffusionSystem from ``build_system``.
         theta: The same physical parameter vector passed to ``build_system``; supplies the
-            true receptor total N_total, the requested initial dimer-to-monomer ratio r, and the
-            switching rates whose stationary law draws each particle's initial mode.
+            receptor total N_total, the basal reference fraction f, the window-start allocation
+            R_active (under MET-INLB; MET-FAB declares it 0), and the switching rates whose
+            stationary law draws each particle's initial mode.
         condition: The same condition token passed to ``build_system``; its occupancy realizes
-            the retained population from (N_total, r) and its ligand classes decide which dimer
-            species are placed (``parameterization.realize_initial_composition``).
+            the reference probe-bound population from (N_total, f), its declared or inferred
+            allocation turns probe-bound monomer pairs into two-InlB dimers, and its ligand
+            classes decide which dimer species are placed
+            (``parameterization.realize_initial_composition``).
         seed: RNG seed for the initial composition's mode draw and the placement. None ->
             non-deterministic. Note: this seed only controls the NumPy RNG; ReaDDy's own
             RNG for reactions and diffusion has its own mechanism.
@@ -342,17 +362,21 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
             - 'reaction_counts' observable at every step (stride=1),
             - 'reactions' observable at every step (stride=1): one record per event with
               its educt and product particle ids, read back by ``extract_subunit_lineage``,
-            - the initial particles: ``realize_initial_composition(N_total, r, condition)`` gives
-              the integer retained monomer and dimer counts, the dimers split into their probe
-              classes (B1 / B2 under INLB; one species B under FAB, whose classes are assigned
-              at labeling); each particle's mode is drawn from ``stationary_mode_law``, positions
-              are uniform in the box.
+            - the initial particles: ``realize_initial_composition`` gives the STARTING counts
+              (the reference probe-bound population realized from (N_total, f) through the
+              occupancy, then the allocation of probe-bound monomer pairs into two-InlB
+              dimers under MET-INLB), the dimers split into their probe classes (B1 / B2 under
+              INLB; one species B under FAB, whose classes are assigned at labeling); each
+              particle's mode is drawn from ``stationary_mode_law``, positions are uniform in
+              the box. The placed subunits are asserted to equal N_R.
     """
     rds = PARAMETERS.simulation.rds
-    values = theta_by_key(theta)
+    values = theta_by_key(theta, condition)
+    sto = rds.stoichiometry
     composition = realize_initial_composition(
-        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key], condition)
-    mode_law = stationary_mode_law(theta)
+        count_total=values[sto.count_total_key], fraction_basal_dimers_reference=values[sto.basal_fraction_key],
+        relative_count_active_dimers_initial=values[sto.active_allocation_key], condition=condition)
+    mode_law = stationary_mode_law(theta, condition)
 
     smut = stem.simulation(kernel="CPU")
 
@@ -395,17 +419,30 @@ def build_simulation(stem: "readdy.ReactionDiffusionSystem",
                 positions = rng.uniform(low=lo, high=hi, size=(n_type, 3))
                 smut.add_particles(type=type_name, positions=positions)
 
+    # The placed subunits are the conserved represented receptor count N_R: one per monomer, two
+    # per two-subunit dimer host, one per B1 (its probe-free partner is not represented).
+    placed_subunits = sum(n * rds.subunit_counts_per_type[rds.particle_type_names.index(name)]
+                          for name, n in initial_counts.items())
+    if placed_subunits != composition.n_subunits:
+        raise AssertionError(f"build_simulation [{condition}]: placed {placed_subunits} subunits, the composition "
+                             f"holds N_R = {composition.n_subunits}; the placement must conserve N_R.")
+
     if verbose:
-        classes = (f" (B1 {composition.n_dimers_one_probe} + B2 {composition.n_dimers_two_probe})"
-                   if composition.ligand_classes else
-                   f" (expected two-Fab share {composition.two_probe_share:.4f}, assigned at labeling)")
-        print(f"  Initial retained composition [{condition}]: N_total={composition.n_total_true:.0f} true subunits "
-              f"at occupancy {composition.occupancy:.4f} -> N_R={composition.n_subunits} retained subunits: "
-              f"{composition.n_monomers} monomers + {composition.n_dimers} dimers{classes}; "
-              f"r requested {composition.ratio_requested:.4g} (true f_B {composition.complex_fraction_true:.4f}), "
-              f"retained ratio expected {composition.ratio_retained_expected:.4g}, realized "
-              f"{composition.ratio_realized:.4g} (retained f_B {composition.complex_fraction_retained:.4f}, "
-              f"x_B {composition.receptor_fraction_retained:.4f})")
+        c = composition
+        classes = (f" (B1 {c.n_dimers_one_probe} + B2 {c.n_dimers_two_probe})" if c.ligand_classes else
+                   f" (one-/two-Fab classes assigned at labeling at the declared share {c.two_probe_share:.4f})")
+        allocation = (f"allocation R_active = {c.relative_count_active_dimers_initial:.4f} of capacity "
+                      f"{c.capacity} -> c = {c.n_pairs_allocated} pairs" if c.ligand_classes else
+                      "allocation: declared 0")
+        print(f"  Window-start composition [{condition}]: N_total={c.n_total_true:.0f} underlying subunits at "
+              f"occupancy {c.occupancy:.4f}, basal reference fraction f = {c.fraction_basal_dimers_reference:.4f}")
+        print(f"    reference: {c.n_monomers_reference} probe-bound monomers + {c.n_dimers_reference} dimers "
+              f"({c.n_dimers_one_probe} one-probe + {c.n_dimers_two_probe_reference} two-probe); {allocation}")
+        print(f"    start (placed): {c.n_monomers} monomers + {c.n_dimers} dimers{classes}; N_R = {c.n_subunits} "
+              f"represented receptors, {c.n_probe_bound_receptors_expected:.1f} probe-bound (expected under FAB)")
+        print(f"    underlying: M {c.n_monomers_underlying_reference:.1f} -> {c.n_monomers_underlying_start:.1f}, "
+              f"D {c.n_dimers_underlying_reference:.1f} -> {c.n_dimers_underlying_start:.1f}; "
+              f"f_start = {c.fraction_basal_dimers_start:.4f}, active share (derived) = {c.active_share:.4f}")
         print("  Stationary mode law (f, s, i): " + ", ".join(f"{p:.4f}" for p in mode_law))
         print(f"  Initial particle counts per type: {initial_counts}")
 
@@ -424,11 +461,13 @@ def initial_species_counts(composition) -> Tuple[Tuple[str, int], ...]:
 
 
 def initial_composition_of(theta: np.ndarray, condition: str):
-    """The ``InitialComposition`` a simulation of ``theta`` (physical) under ``condition`` is seeded with."""
-    rds = PARAMETERS.simulation.rds
-    values = theta_by_key(theta)
+    """The ``InitialComposition`` a simulation of ``theta`` (physical, the condition's table)
+    under ``condition`` is seeded with: reference population, allocation and starting counts."""
+    sto = PARAMETERS.simulation.rds.stoichiometry
+    values = theta_by_key(theta, condition)
     return realize_initial_composition(
-        values[rds.stoichiometry.count_total_key], values[rds.stoichiometry.composition_ratio_key], condition)
+        count_total=values[sto.count_total_key], fraction_basal_dimers_reference=values[sto.basal_fraction_key],
+        relative_count_active_dimers_initial=values[sto.active_allocation_key], condition=condition)
 
 
 # =============================================================================

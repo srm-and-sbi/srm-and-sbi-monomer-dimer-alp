@@ -3,9 +3,10 @@
 The pipeline runs **two mirrored workflows** over the same five stages (RDS, DLI,
 Inference, Evaluation, Experiment):
 
-  - **biology**  -- infers the eleven reaction-diffusion parameters (receptor
-    total, initial dimer fraction, unbinding rate, monomer diffusivity, three
-    diffusion ratios, four switching rates) and marginalizes the imaging block.
+  - **biology**  -- infers the condition's reaction-diffusion parameters (receptor
+    total, basal reference fraction, unbinding rate, monomer diffusivity, three
+    diffusion ratios, four switching rates: eleven coordinates under MET-FAB, plus the
+    window-start allocation under MET-INLB, twelve) and marginalizes the imaging block.
     This is the unqualified entry point / ``project_alias``.
   - **detector** -- infers the six imaging parameters and marginalizes the
     reaction-diffusion domain and the camera (SCOPE) block. Its data namespaces
@@ -87,29 +88,77 @@ def detector_workflow() -> WorkflowConfig:
     )
 
 
-def parameter_keys(cfg) -> list:
-    """This workflow's learnable-parameter keys, in theta order.
+# ---- Per-workflow, per-condition resolvers -------------------------------------------------
+# The biology table is per CONDITION (eleven learnable rows under MET-FAB, twelve under
+# MET-INLB: parameterization.parameterization_of), the detector's six-row table is not. Every
+# shared runner resolves its keys, tables, bounds and prior through these functions with the
+# ESTIMATOR's condition (``args.condition``), never a recording kind, so the conditional lives
+# in one place; the condition token is validated for both workflows, because every product of
+# either workflow is per condition. A runner that reached into ``cfg.param_module`` directly
+# would work for whichever workflow its author tested and fail for the other.
 
-    The two parameterization modules name this table differently by design -- biology exposes
-    ``PARAMETER_KEYS``, detector ``DETECTOR_PARAMETER_KEYS`` -- so every shared runner would
-    otherwise repeat the same conditional, and a runner that forgot it would work for whichever
-    workflow its author tested and raise ``AttributeError`` for the other. Resolved once, here.
-    """
+def _check_condition(cfg, condition) -> str:
+    """The validated condition token (``FAB`` / ``INLB``); refuses None and unknown tokens for
+    BOTH workflows."""
+    from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS
+    tokens = PARAMETERS.simulation.rds.condition_tokens
+    if condition is None:
+        raise ValueError(f"workflow {cfg.tag!r}: the condition is required (one of {tokens}); every "
+                         f"product of either workflow is per condition.")
+    token = str(condition)
+    if token not in tokens:
+        raise ValueError(f"workflow {cfg.tag!r}: unknown condition {condition!r}; the model declares {tokens}.")
+    return token
+
+
+def parameter_keys(cfg, condition) -> list:
+    """This workflow's learnable-parameter keys under ``condition``, in theta order (biology:
+    ``parameter_keys_of(condition)``; detector: the six imaging keys, the same for every
+    condition)."""
+    token = _check_condition(cfg, condition)
     para = cfg.param_module
-    keys = getattr(para, "PARAMETER_KEYS", None)
-    if keys is None:
-        keys = para.DETECTOR_PARAMETER_KEYS
-    return list(keys)
+    if cfg.tag == "detector":
+        return list(para.DETECTOR_PARAMETER_KEYS)
+    return list(para.parameter_keys_of(token))
 
 
-def parameter_table(cfg):
-    """This workflow's full parameter table (the per-parameter dicts carrying KEY, LABEL, ...).
-
-    Same naming asymmetry as :func:`parameter_keys`: ``PARAMETERIZATION`` for biology,
-    ``DETECTOR_PARAMETERIZATION`` for detector.
-    """
+def parameter_table(cfg, condition) -> list:
+    """This workflow's learnable table under ``condition`` (the per-parameter dicts carrying KEY,
+    LABEL, PRIOR_RANGE, LOG_FLAG, ...): ``parameterization_of(condition)`` for biology,
+    ``DETECTOR_PARAMETERIZATION`` for detector."""
+    token = _check_condition(cfg, condition)
     para = cfg.param_module
-    table = getattr(para, "PARAMETERIZATION", None)
-    if table is None:
-        table = para.DETECTOR_PARAMETERIZATION
-    return table
+    if cfg.tag == "detector":
+        return list(para.DETECTOR_PARAMETERIZATION)
+    return para.parameterization_of(token)
+
+
+def parameter_table_raw(cfg, condition) -> list:
+    """This workflow's FULL table under ``condition`` (learnable, fixed and nuisance rows with
+    their roles): ``parameterization_raw_of(condition)`` for biology, whose declared rows read
+    as fixed; ``DETECTOR_PARAMETERIZATION_RAW`` for detector."""
+    token = _check_condition(cfg, condition)
+    para = cfg.param_module
+    if cfg.tag == "detector":
+        return list(para.DETECTOR_PARAMETERIZATION_RAW)
+    return para.parameterization_raw_of(token)
+
+
+def prior_bounds(cfg, condition) -> tuple:
+    """``(lower, upper)`` bounds of this workflow's prior box under ``condition``, in estimator
+    space (lists of floats, one per learnable row)."""
+    token = _check_condition(cfg, condition)
+    para = cfg.param_module
+    if cfg.tag == "detector":
+        return list(para.theta_lower_bound()), list(para.theta_upper_bound())
+    return list(para.theta_lower_bound(token)), list(para.theta_upper_bound(token))
+
+
+def prior_builder(cfg, condition):
+    """A callable ``(device='cpu') -> BoxUniform`` over this workflow's learnable rows under
+    ``condition`` (biology closes over the condition; the detector prior is condition-free)."""
+    token = _check_condition(cfg, condition)
+    para = cfg.param_module
+    if cfg.tag == "detector":
+        return lambda device="cpu": para.build_prior(device=device)
+    return lambda device="cpu": para.build_prior(token, device=device)

@@ -5,8 +5,10 @@ The companion to ``Evaluation.py``: where Evaluation recovers parameters from he
 ``map_estimate`` to *real* experimental videos, for which there is no ground truth. Each cell's
 long recording is split into model-length chunks; the MAP theta is estimated per chunk, and the
 report shows the distribution of inferred parameters per experimental condition (kind), so
-conditions can be compared (e.g. ALP vs BET). The biology workflow infers the 10
-reaction-diffusion parameters.
+conditions can be compared (MET-FAB against MET-INLB, each under its own estimator). The
+biology workflow infers the condition's reaction-diffusion parameters (eleven under MET-FAB,
+twelve under MET-INLB); ``--condition`` names the ESTIMATOR's condition, under which every
+derived quantity is computed, whatever recording kinds are analyzed.
 
 The Experiment stage runs on ONE shared engine used by both the biology and the detector
 workflows: ``srm_and_sbi_monomer_dimer_alp.experiment_runner.run_experiment`` (which routes cell

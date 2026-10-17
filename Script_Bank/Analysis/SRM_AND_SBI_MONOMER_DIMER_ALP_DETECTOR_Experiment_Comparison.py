@@ -54,7 +54,7 @@ from srm_and_sbi_monomer_dimer_alp.detector_nuisance_dli import NuisanceDLI, art
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (PARAMETERS, RunTiming, entry_to_physical,
                                                             is_log_row, to_physical)
-from srm_and_sbi_monomer_dimer_alp.workflow import detector_workflow, parameter_keys, parameter_table
+from srm_and_sbi_monomer_dimer_alp.workflow import detector_workflow, parameter_keys, parameter_table, prior_bounds
 
 VIEWS = ("MAP", "median", "SGM")
 VIEW_NAMES = {"MAP": "MAP", "median": "posterior median", "SGM": "SGM"}
@@ -104,11 +104,11 @@ def resolve(cfg, args):
     out_dir = Path(args.out_dir) if args.out_dir else \
         posit / f"{paths.project_alias}_{plain}_Experiment_Comparison_{suffix}"
     vector = artifact_path(posit, paths.project_alias, plain, args.vector_tag) if args.vector_tag else None
+    lower, upper = prior_bounds(cfg, args.condition)
     return dict(timing=timing, paths=paths, posit=posit, columns=columns, out_dir=out_dir, vector=vector,
                 vector_tag=args.vector_tag, condition=args.condition,
-                keys=parameter_keys(cfg), table=parameter_table(cfg),
-                lo=np.array(cfg.param_module.theta_lower_bound(), dtype=float),
-                hi=np.array(cfg.param_module.theta_upper_bound(), dtype=float))
+                keys=parameter_keys(cfg, args.condition), table=parameter_table(cfg, args.condition),
+                lo=np.array(lower, dtype=float), hi=np.array(upper, dtype=float))
 
 
 def sha256_of(path):

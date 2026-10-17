@@ -40,20 +40,24 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import (
     prior_sampling_table,
 )
 from srm_and_sbi_monomer_dimer_alp.experiment_support import CONDITION_DISPLAY
-from srm_and_sbi_monomer_dimer_alp.io import theta_set_schema, write_theta_set
+from srm_and_sbi_monomer_dimer_alp.io import (
+    theta_set_schema, tier_record_paths, tier_schema_scan, write_theta_set,
+)
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
-    PARAMETERIZATION,
-    PARAMETERIZATION_RAW,
     PARAMETERS,
     RunTiming,
+    declared_row_values,
     is_log_row,
+    parameterization_of,
+    parameterization_raw_of,
+    prior_center,
     theta_lower_bound,
     theta_upper_bound,
     to_physical,
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
-    build_simulation, build_system, initial_composition_of, reaction_channels,
+    build_simulation, build_system, initial_composition_of, rank_to_molecule, reaction_channels,
 )
 from srm_and_sbi_monomer_dimer_alp.utils import (
     SINK, SOCK, log_memory_state, log_resource_limits, probe_resources,
@@ -69,6 +73,7 @@ _UNIT_DISPLAY = {
     "Square Micrometer Per (Count*Second)": "μm²/(count·s)",
     "Count Per Second": "count/s",
     "Dimensionless": "dimensionless",
+    "Fraction": "fraction",
 }
 
 
@@ -84,9 +89,9 @@ def _build_sim(theta, condition, seed, skin_factor, verbose):
 
 def _require_biology_config(cfg: WorkflowConfig) -> None:
     """A condition's RDS tier is generated once, through the biology config, whose ``Paths``
-    carry the unqualified sibling alias and whose parameter table is the eleven-parameter prior
-    the tier samples. A detector config here would only re-generate the same tier under a
-    qualified name, so it is refused."""
+    carry the unqualified sibling alias and whose parameter table is the condition's prior
+    (eleven coordinates under MET-FAB, twelve under MET-INLB) the tier samples. A detector
+    config here would only re-generate the same tier under a qualified name, so it is refused."""
     if cfg.tag != "biology":
         raise ValueError(
             f"run_rds: a condition's RDS trajectory tier is shared by both workflows and is "
@@ -116,6 +121,11 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     condition = args.condition
     paths = cfg.paths.with_condition(condition)
     r_on = rds_cfg.association_ratio_of(condition)
+    # The condition's table, its declared constants and its full specification, bound once:
+    # every draw, schema, banner and diagnostic of this run reads them.
+    table = parameterization_of(condition)
+    declared = declared_row_values(condition)
+    table_raw = parameterization_raw_of(condition)
     div = "=" * 72
 
     print(div)
@@ -175,7 +185,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
           f"monomer/dimer classification {rds_cfg.molecular_species_names} (the census axis); "
           f"modes {rds_cfg.mobility.modes} = (fast, slow, immobile); "
           f"inheritance: {rds_cfg.mobility.inheritance}")
-    _n_channels = len(reaction_channels(np.array([para['VALUE'] for para in PARAMETERIZATION], dtype=float), condition))
+    _n_channels = len(reaction_channels(np.array([prior_center(para) for para in table], dtype=float), condition))
     print(f"  reaction channels under {condition}: {_n_channels} "
           f"({'3 fissions + 8 mobility switches, no association' if r_on == 0.0 else '6 fusions + 3 fissions + 3 conversions B1 -> A + 12 mobility switches'})")
 
@@ -188,12 +198,17 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  theta sets      : <data_bank>/{paths.theta_subdir}/"
           f"{paths.rds_alias}_{timing_label}_Theta_Set_TASK_{{n}}.{output_fmt}   "
           f"(biology labels = detector RDS nuisance)")
+    print(f"\nParameter table of {condition}: {len(table)} inferred coordinates "
+          f"({sum(1 for p in table if not is_log_row(p))} linear, the rest log10)")
+    print(f"  keys              : {[p['KEY'] for p in table]}")
+    print(f"  declared constants: {declared if declared else 'none'}"
+          + ("   (the window-start allocation is declared, not inferred, under this condition)" if declared else ""))
 
     if args.verbose:
-        print(f"\nLearnable theta prior spec ({len(PARAMETERIZATION)} parameters, "
+        print(f"\nLearnable theta prior spec ({len(table)} parameters, "
               f"sampled in estimator space, mapped to physical values by to_physical; "
-              f"decided prior ranges of 2026-09-14):")
-        for para in PARAMETERIZATION:
+              f"decided prior ranges of 2026-09-14, composition rows revised 2026-10-15):")
+        for para in table:
             lo, hi = para["PRIOR_RANGE"]
             unit = _UNIT_DISPLAY.get(para["UNIT"], para["UNIT"])
             derived = para.get("DERIVED_UNIT")
@@ -244,15 +259,16 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         return
 
     # ---- Sample the parameter sets in estimator space, map to physical values ----
-    # (the one shared rule per row: log rows exponentiated; every row of the decided table is log)
-    low = np.array(theta_lower_bound())
-    high = np.array(theta_upper_bound())
+    # (the one shared rule per row: log rows exponentiated, the two linear fraction rows pass
+    # through; the box is the condition's table, eleven or twelve coordinates)
+    low = np.array(theta_lower_bound(condition))
+    high = np.array(theta_upper_bound(condition))
     rng = np.random.default_rng(args.seed)
-    theta_log10 = rng.uniform(
+    theta_flow = rng.uniform(
         low=low, high=high,
         size=(n_rows, args.task_simulations, len(low)),
     )
-    theta_sets = to_physical(theta_log10)
+    theta_sets = to_physical(theta_flow, table)
 
     run_start = time.time()
 
@@ -268,14 +284,42 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         traj_dir = paths.trajectory_dir(task_alias, data_bank_root, timing_label, split)
         traj_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write the sampled set WITH its schema (io.write_theta_set: .zarr attrs, or a JSON
-        # sidecar beside a plain .npy). The schema names the eleven keys in order, their prior
-        # bounds and scales, the condition and timing, and the package version, so no reader
-        # can consume this tier under a different table (io.load_theta_set refuses it).
         theta_set_path = paths.theta_set_path(
             task_alias, data_bank_root, timing_label, compress, split)
+
+        # ---- Mixed-schema guard: a tier accepts new tasks only under its own schema -----
+        # Every OTHER record of the tier (final names only; a `.partial` name is an in-progress
+        # write of a concurrent task and is skipped, and so is a record that a concurrent task is
+        # replacing at the moment it is read) is classified against this run's table and
+        # condition, reading schemas only. A mismatched record (a superseded tier that was not
+        # moved aside) or an unknown record (no readable schema: unknown is never a compatibility
+        # verdict) refuses the task before anything is written. --supersede-tier, which
+        # Generate_Datasets passes under --overwrite-rds, tolerates mismatched records of the
+        # tier being replaced deliberately; unknown records still refuse. This is a mixed-schema
+        # check, not proof of dataset identity.
+        others = [p for p in tier_record_paths(theta_set_path.parent, paths.theta_set_pattern,
+                                               project_alias=paths.rds_alias, timing_label=timing_label,
+                                               split=split)
+                  if p.resolve() != theta_set_path.resolve()]
+        scan = tier_schema_scan(others, table, condition=condition)
+        print(f"  Tier schema scan ({len(others)} other record(s)): {scan.verdict}")
+        if scan.unknown or (scan.mismatched and not args.supersede_tier):
+            raise SystemExit(
+                f"run_rds [{condition}, task {task_alias}]: refusing to write into a tier that holds records "
+                f"of another schema or without a readable schema -- {scan.verdict}. Move the superseded "
+                f"tier aside, or pass --supersede-tier (Generate_Datasets --overwrite-rds) to replace a "
+                f"tier generated under another table deliberately; unreadable records always refuse.")
+        if scan.mismatched:
+            print(f"  --supersede-tier: {len(scan.mismatched)} superseded record(s) are being replaced.")
+
+        # Write the sampled set WITH its schema (io.write_theta_set: .zarr attrs, or a JSON
+        # sidecar bound by digest to a plain .npy; built under .partial names and published so
+        # that the final name only ever holds a complete record paired with its own schema). The schema
+        # names the condition's keys in order, their prior bounds and scales, the condition and
+        # timing, and the package version, so no reader can consume this tier under a different
+        # table or condition (io.load_theta_set refuses it).
         theta_set_data = theta_sets[task]  # shape (task_simulations, n_params)
-        theta_schema = theta_set_schema(PARAMETERIZATION, condition=condition,
+        theta_schema = theta_set_schema(table, condition=condition,
                                         timing_label=timing_label, generator="rds")
         write_theta_set(theta_set_path, theta_set_data, theta_schema)
         print(f"  Theta_Set schema: {len(theta_schema['parameter_keys'])} keys, condition "
@@ -291,7 +335,7 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             run_label=f"{paths.rds_alias}_{timing_label}_TASK_{task_alias}_{split}",
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         )
-        theta_log10_task = theta_log10[task]
+        theta_flow_task = theta_flow[task]
 
         # ---- Per-simulation loop ----------------------------------------
         for sim in range(args.task_simulations):
@@ -300,11 +344,13 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
             if args.verbose:
                 print(f"\n  Sampled theta (sim {sim + 1}|{args.task_simulations}):")
-                for i, para in enumerate(PARAMETERIZATION):
+                for i, para in enumerate(table):
                     val = theta[i]
                     scale = "log10" if is_log_row(para) else "linear"
-                    print(f"    {para['KEY']:<32}  =  {val:10.4g}   "
-                          f"({scale} coordinate = {theta_log10[task][sim][i]:+.3f})")
+                    print(f"    {para['KEY']:<36}  =  {val:10.4g}   "
+                          f"({scale} coordinate = {theta_flow_task[sim][i]:+.3f})")
+                for key, value in declared.items():
+                    print(f"    {key:<36}  =  {value:10.4g}   (declared constant of {condition})")
 
             # Placement RNG follows --seed (default None -> non-deterministic).
             # Generation is non-deterministic by design: ReaDDy's stepper is
@@ -334,9 +380,9 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             if reporter.enabled and sim == 0:
                 composition = initial_composition_of(theta, condition)
                 total_initial = composition.n_monomers + composition.n_dimers
-                theta_log10_sim = theta_log10_task[sim]
-                in_bounds = bool(np.all(theta_log10_sim >= low)
-                                 and np.all(theta_log10_sim <= high))
+                theta_flow_sim = theta_flow_task[sim]
+                in_bounds = bool(np.all(theta_flow_sim >= low)
+                                 and np.all(theta_flow_sim <= high))
 
                 reporter.checkpoint(
                     "theta sample (sim 0)",
@@ -346,21 +392,27 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.check(
                     "theta_in_prior_bounds", in_bounds,
                     "all estimator-space values within the prior box",
-                    note="the sampled parameters lie inside the prior box they were "
-                         "drawn from (log10 for every row of the decided table).",
+                    note="the sampled parameters lie inside the prior box they were drawn from "
+                         "(log10 for log rows, the value itself for the two linear fraction rows).",
                 )
+                c = composition
+                allocation = (f"allocation R_active={c.relative_count_active_dimers_initial:.4f} of capacity "
+                              f"{c.capacity} -> c={c.n_pairs_allocated} pairs" if c.ligand_classes
+                              else "allocation declared 0 (reference = start)")
                 reporter.stat(
                     "initial_composition",
-                    f"N_total={composition.n_total_true:.0f} true -> N_R={composition.n_subunits} retained: "
-                    f"{composition.n_monomers} monomers + {composition.n_dimers} dimers "
-                    f"({composition.n_dimers_one_probe} one-probe + {composition.n_dimers_two_probe} two-probe)",
-                    note=f"retained population realized from the sampled true total and requested "
-                         f"dimer-to-monomer ratio r={composition.ratio_requested:.4g} (true f_B="
-                         f"{composition.complex_fraction_true:.4f}) at occupancy {composition.occupancy:.4f}; "
-                         f"retained ratio expected {composition.ratio_retained_expected:.4g}, realized "
-                         f"{composition.ratio_realized:.4g}; the retained count "
-                         f"({'n_A + n_B1 + 2 n_B2' if composition.ligand_classes else 'n_A + 2 n_B'}) is "
-                         f"conserved by every channel.",
+                    f"reference: {c.n_monomers_reference} probe-bound monomers + {c.n_dimers_reference} dimers "
+                    f"({c.n_dimers_one_probe} one-probe + {c.n_dimers_two_probe_reference} two-probe); "
+                    f"start (placed): {c.n_monomers} monomers + {c.n_dimers} dimers "
+                    f"({c.n_dimers_one_probe} one-probe + {c.n_dimers_two_probe} two-probe); N_R={c.n_subunits}",
+                    note=f"window-start composition realized from N_total={c.n_total_true:.0f} at occupancy "
+                         f"{c.occupancy:.4f} with basal reference fraction f={c.fraction_basal_dimers_reference:.4f}; "
+                         f"{allocation}; underlying M {c.n_monomers_underlying_reference:.1f} -> "
+                         f"{c.n_monomers_underlying_start:.1f}, D {c.n_dimers_underlying_reference:.1f} -> "
+                         f"{c.n_dimers_underlying_start:.1f}, f_start={c.fraction_basal_dimers_start:.4f}, derived "
+                         f"active share={c.active_share:.4f}; the represented count "
+                         f"({'n_A + n_B1 + 2 n_B2' if c.ligand_classes else 'n_A + 2 n_B'}) is conserved by the "
+                         f"allocation and by every channel.",
                 )
                 reporter.check(
                     "initial_particles_positive", total_initial > 0,
@@ -370,26 +422,26 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 reporter.check_file("trajectory", traj_path)
 
                 # Full prior-range vs sampled-value summary for this simulation.
-                headers, prior_rows = prior_sampling_table(PARAMETERIZATION, theta)
+                headers, prior_rows = prior_sampling_table(table, theta)
                 reporter.table(
                     "Prior sampling (sim 0)", headers, prior_rows,
-                    note="Prior box (estimator space) and the value drawn for this "
-                         "simulation. count_total and ratio_dimer_monomer_initial fix the "
-                         "initial monomer/dimer numbers the run was seeded with (see "
+                    note="Prior box (estimator space) and the value drawn for this simulation. "
+                         "count_total, the basal reference fraction and, under INLB, the allocation fix "
+                         "the starting monomer/dimer numbers the run was seeded with (see "
                          "initial_composition) -- cross-check against the rendered video.",
                 )
-                fixed_headers, fixed_rows = fixed_parameters_table(PARAMETERIZATION_RAW)
+                fixed_headers, fixed_rows = fixed_parameters_table(table_raw)
                 reporter.table(
                     "Fixed parameters", fixed_headers, fixed_rows,
-                    note="Non-learnable parameters held constant across all "
-                         "simulations (Known scientific constants + tuning "
-                         "Hyperparameters): camera, PSF, photophysics, capture "
-                         "radius, brightness quantiles.",
+                    note="Non-learnable parameters held constant across all simulations (Known "
+                         "scientific constants + tuning Hyperparameters, and the condition's declared "
+                         "constants): camera, PSF, photophysics, capture radius, brightness quantiles"
+                         + (", the declared window-start allocation" if declared else "") + ".",
                 )
                 reporter.stat(
                     "total_initial_particles", total_initial,
-                    note="monomer + dimer particles of the retained population placed at t=0 (the "
-                         "retained subunit total N_R counts a two-subunit dimer twice and a one-probe "
+                    note="monomer + dimer particles of the starting population placed at t=0 (the "
+                         "represented subunit total N_R counts a two-subunit dimer twice and a one-probe "
                          "INLB dimer once).",
                 )
 
@@ -397,6 +449,33 @@ def run_rds(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 tray = readdy.Trajectory(filename=str(traj_path))
                 _, recs = tray.read_observable_reaction_counts()
                 reaction_counts = recs["reactions"]
+
+                # Frame-0 census: the particles the trajectory holds at its first frame are the
+                # STARTING counts of the window-start composition, per molecular species, and their
+                # subunits are N_R. Fatal: a disagreement means the placement and the record differ.
+                _, ranks_per_frame, _, _ = tray.read_observable_particles()
+                molecule_of_rank = rank_to_molecule(tray)
+                frame0 = np.asarray(ranks_per_frame[0])
+                census = {}
+                for rank in np.unique(frame0):
+                    census[molecule_of_rank[int(rank)]] = int(np.sum(frame0 == rank)) + census.get(molecule_of_rank[int(rank)], 0)
+                sto = rds_cfg.stoichiometry
+                expected = ({sto.monomer.name: c.n_monomers, sto.dimer_one_probe.name: c.n_dimers_one_probe,
+                             sto.dimer_two_probe.name: c.n_dimers_two_probe} if c.ligand_classes
+                            else {sto.monomer.name: c.n_monomers, sto.dimer.name: c.n_dimers})
+                expected = {k: v for k, v in expected.items() if v}
+                subunits_of_molecule = {sp.name: sp.subunits for sp in sto.species}
+                census_subunits = sum(n * subunits_of_molecule[m] for m, n in census.items())
+                reporter.check(
+                    "frame0_census_equals_starting_counts",
+                    census == expected and census_subunits == c.n_subunits,
+                    f"frame 0 {census} ({census_subunits} subunits) vs starting counts {expected} (N_R {c.n_subunits})",
+                    note="the trajectory's first frame holds exactly the starting counts of the window-start "
+                         "composition (reference population plus the allocation under INLB).",
+                )
+                if census != expected or census_subunits != c.n_subunits:
+                    raise AssertionError(f"run_rds debug [{condition}]: frame-0 census {census} ({census_subunits} "
+                                         f"subunits) differs from the starting counts {expected} (N_R {c.n_subunits}).")
                 for rec_name, rec_counts in reaction_counts.items():
                     reporter.stat(
                         f"events[{rec_name}]", int(np.sum(rec_counts)),
@@ -525,6 +604,14 @@ def build_rds_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-compress", action="store_true",
         help="Save theta sets as .npy instead of compressed .zarr.",
+    )
+    parser.add_argument(
+        "--supersede-tier", action="store_true",
+        help="Replace a tier generated under another parameter table deliberately: the mixed-schema "
+             "guard then tolerates the tier's mismatched records (they are being regenerated) instead "
+             "of refusing the task. Records without a readable schema always refuse. Generate_Datasets "
+             "passes this under --overwrite-rds; the default refuses to write into a tier that holds "
+             "records of another schema.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",

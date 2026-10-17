@@ -18,6 +18,14 @@ diffusion gap is small (~13%). So the per-species split (D_A/D_B/counts) is NOT 
 trustworthy oligomeric decomposition here -- the robust read-out is the diffusion
 SCALE (compared against the reported mobile diffusion), not monomer-vs-dimer identity.
 
+THE PARAMETER TABLE: ``--condition`` names the MET estimator applied (MET-FAB or MET-INLB), and
+its condition binds the parameter table and keys (eleven learnable rows under MET-FAB, twelve
+under MET-INLB): the estimator's schema guard, the device prior, the SGM scale, the stored
+``parameter_keys`` and every report table; the control kinds never select it. Every per-row
+number carries its unit (log10 for a log row, the fraction itself or percentage points for a
+linear row), and the linear rows' values outside [0, 1] are counted per kind in a
+flagged-fractions table and left unchanged.
+
 Inputs (real microscopy, copied into the data bank by the user):
     <data_bank>/Experiment/SPT_Data_CD86_CTLA-4_CONTROLS_S-BIAD1369/
         Experiment_{CD86|CTLA-4}_Cell_{n}_{span}S_RAW.tif   -- 16-bit raw SPT video.
@@ -56,6 +64,7 @@ from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
     ESTIMATE_DEFINITIONS_VERSION, QUANTILE_LEVELS,
     draw_label,
+    fraction_flag_rows,
     map_estimate,
     optimizer_contract,
     optimizer_summary_lines,
@@ -71,7 +80,8 @@ from srm_and_sbi_monomer_dimer_alp.experiment_support import (
     inspect_recording, merge_validated_shards, preflight_recordings, read_cell_chunks, save_shard)
 from srm_and_sbi_monomer_dimer_alp.provenance import code_provenance, finalize_code_provenance
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, PARAMETERIZATION, PARAMETER_KEYS, RunTiming, build_prior
+from srm_and_sbi_monomer_dimer_alp.parameterization import (
+    PARAMETERS, RunTiming, build_prior, is_log_row, parameter_keys_of, parameterization_of)
 from srm_and_sbi_monomer_dimer_alp.utils import console_log_context
 from srm_and_sbi_monomer_dimer_alp.visualization_inference import figure_experiment_combined
 
@@ -122,16 +132,31 @@ def _aggregate_by_kind(estimate, kind_index, cell_arr, kinds, mode, n_params):
     return out
 
 
-def write_experiment_outputs(reporter, args, eval_cfg, array_path: Path,
+def _estimator_note(args, draw_spec) -> str:
+    """The sentence every table and figure carries: the control recordings are read under the
+    MET estimator's condition and its parameter table, never under a table of their own."""
+    condition = getattr(args, "condition", None)
+    name = f"MET-{condition}" if condition else "the MET"
+    return (f" Every value is read under {name} estimator's parameter table ({len(draw_spec)} "
+            f"learnable rows); the control receptors have no table of their own.")
+
+
+def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Path,
                              arrays: dict, run_start, persist_arrays: bool = True) -> dict:
     """Validate the product on entry, persist it and write the report + figures (the same
     three-estimate contract as the MET Experiment stage: ``map_estimate``, the 0.50 level of
     ``posterior_quantiles`` located through the manifest, ``posterior_sgm``). The manifest is
     decoded from the arrays, never supplied separately; the writer is the validation boundary.
-    ``persist_arrays=False`` renders the report without touching the arrays on disk. Returns
-    the validated manifest."""
+    ``draw_spec`` is the parameter table of the MET estimator's condition, passed explicitly;
+    after validation the product's ``parameter_keys`` are compared with it key for key and in
+    order (``artifact_schema.assert_parameter_keys``), so a product of another table is never
+    rendered under this one. ``persist_arrays=False`` renders the report without touching the
+    arrays on disk. Returns the validated manifest."""
     manifest = schema.validate_product(arrays, stage="experiment",
                                        source=f"controls product {array_path.name}")
+    schema.assert_parameter_keys(manifest, [e["KEY"] for e in draw_spec],
+                                 source=f"controls product {array_path.name}")
+    table_note = _estimator_note(args, draw_spec)
     tok = short_labels()
     qi = schema.median_level_index(manifest)
     scores = np.asarray(arrays["scores"], dtype=float)
@@ -154,7 +179,7 @@ def write_experiment_outputs(reporter, args, eval_cfg, array_path: Path,
     agg_desc = ("pooled over (cell x chunk)" if args.aggregation == "pooled"
                 else "one point per cell (median over its chunks)")
     by_kind = {key: _aggregate_by_kind(arr, kind_index, cell_of, kinds, args.aggregation,
-                                       len(PARAMETERIZATION))
+                                       len(draw_spec))
                for key, arr in ((tok["map"], map_est), (tok["median"], median), (tok["sgm"], sgm))}
     reporter.check("estimates_nonempty", n_estimates > 0,
                    f"{n_estimates} windows estimated over experimental recordings",
@@ -188,26 +213,54 @@ def write_experiment_outputs(reporter, args, eval_cfg, array_path: Path,
              "below uses these three tokens. The three are read together; no one replaces the "
              "others.")
     for key in (tok["map"], tok["median"], tok["sgm"]):
-        headers, rows = experiment_table(PARAMETERIZATION, by_kind[key], kinds)
-        reporter.table(f"{key} theta by condition (log10 units)", headers, rows,
+        headers, rows = experiment_table(draw_spec, by_kind[key], kinds)
+        reporter.table(f"{key} theta by condition (estimator coordinates)", headers, rows,
                        note=f"no ground truth for experimental recordings; values are the "
-                            f"distribution of the {key} estimate per condition ({agg_desc}). The "
-                            f"three tables are read together.")
-    cmp_headers, cmp_rows = experiment_estimates_compared_table(PARAMETERIZATION, by_kind, kinds)
-    reporter.table("Point estimates compared (per parameter, log10 units)", cmp_headers, cmp_rows,
+                            f"distribution of the {key} estimate per condition ({agg_desc}), in the "
+                            f"row's estimator coordinate ('units': log10 for a log row, the fraction "
+                            f"itself for a linear row). The three tables are read together."
+                            + table_note)
+    cmp_headers, cmp_rows = experiment_estimates_compared_table(draw_spec, by_kind, kinds)
+    reporter.table("Point estimates compared (per parameter, estimator coordinates)", cmp_headers,
+                   cmp_rows,
                    note=f"the three point estimates on the same windows ({agg_desc}), columns "
                         f"grouped by statistic with the estimates consecutive, each for "
-                        f"{tok['map']}, {tok['median']} and {tok['sgm']} (definitions above). A "
-                        f"statement about a parameter is read from the row as a whole.")
+                        f"{tok['map']}, {tok['median']} and {tok['sgm']} (definitions above), in "
+                        f"the row's estimator coordinate. A statement about a parameter is read "
+                        f"from the row as a whole." + table_note)
     agr_headers, agr_rows = point_estimate_agreement_table(
-        PARAMETERIZATION, map_est, post_q, sgm, groups=[kinds[k] for k in kind_index])
-    reporter.table("Point-estimate agreement (per parameter, log10 units)", agr_headers, agr_rows,
+        draw_spec, map_est, post_q, sgm, groups=[kinds[k] for k in kind_index])
+    reporter.table("Point-estimate agreement (per parameter, estimator coordinates)", agr_headers,
+                   agr_rows,
                    note="median over windows of the absolute difference between two point "
-                        "estimates (log10), and the share of windows whose MAP falls outside the "
-                        "central 90% interval of the draws.")
+                        "estimates, in the row's unit (dex for a log row, percentage points for a "
+                        "linear row), and the share of windows whose MAP falls outside the "
+                        "central 90% interval of the draws." + table_note)
+
+    # ---- Flagged fractions per kind: the linear rows' values outside [0, 1], counted ---------
+    n_flagged_total = 0
+    for ki, kind in enumerate(kinds):
+        m = kind_index == ki
+        ff_headers, ff_rows, n_flagged = fraction_flag_rows(
+            draw_spec, {tok["map"]: map_est[m], tok["median"]: median[m], tok["sgm"]: sgm[m]}, post_q[m])
+        if not ff_rows:
+            break
+        n_flagged_total += n_flagged
+        reporter.table(
+            f"Flagged fractions, {kind} (linear rows outside their box)", ff_headers, ff_rows,
+            note="per linear row (a fraction with the box [0, 1]): the number of MAP, median and SGM "
+                 "window values that are non-finite or outside the box, and the share of windows "
+                 "whose central 90% interval of the draws reaches beyond it. Counted and left as "
+                 "stored -- nothing is clipped." + table_note)
+    if not all(is_log_row(p) for p in draw_spec):
+        reporter.check("fractions_within_box", n_flagged_total == 0,
+                       f"{n_flagged_total} flagged value(s) over the three estimates and all kinds",
+                       fatal=False,
+                       note="no point estimate of a linear row lies outside [0, 1]; a failure is "
+                            "reported and counted, never clipped.")
 
     if reporter.dump and n_estimates:
-        for i, para in enumerate(PARAMETERIZATION):
+        for i, para in enumerate(draw_spec):
             key = para["KEY"]
             label = para.get("LABEL") or key
             prior_range = para["PRIOR_RANGE"]
@@ -221,11 +274,11 @@ def write_experiment_outputs(reporter, args, eval_cfg, array_path: Path,
             reporter.save_figure(
                 f"experiment_{key}",
                 figure_experiment_combined(values, by_kind_post, prior_range, label,
-                                           seed=args.seed),
+                                           seed=args.seed, log_row=is_log_row(para)),
                 caption=f"{key} ({label}). Left: per-condition distribution of the {tok['map']} "
                         f"({agg_desc}). Right: each window's {tok['median']} +/- IQR of its draws "
                         f"per condition, the {tok['map']} overlaid. The {tok['sgm']} is tabulated "
-                        f"above and its gap to the median is in the agreement table.",
+                        f"above and its gap to the median is in the agreement table." + table_note,
             )
 
     reporter.summary()
@@ -246,7 +299,7 @@ def _save_shard(topo, out_dir: Path, arrays: dict, run_start) -> None:
           flush=True)
 
 
-def _merge_shards(reporter, args, eval_cfg, out_dir: Path, array_path: Path, run_start,
+def _merge_shards(reporter, args, eval_cfg, draw_spec, out_dir: Path, array_path: Path, run_start,
                   expected_ids) -> None:
     """Combine every validated per-shard product into the final report (no estimation); the
     shards must describe one computation and cover exactly the expected windows."""
@@ -267,10 +320,22 @@ def _merge_shards(reporter, args, eval_cfg, out_dir: Path, array_path: Path, run
                   note="per-rank shards combined; the merge requires every rank and every "
                        "expected (kind, cell, chunk) window.")
     print(f"Merged {merged['scores'].shape[0]} estimates from {n_used} shard(s).", flush=True)
-    write_experiment_outputs(reporter, args, eval_cfg, array_path, merged, run_start)
+    write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path, merged, run_start)
     for shard_path in shard_paths:
         shard_path.unlink()
     print(f"Removed {len(shard_paths)} shard file(s).", flush=True)
+
+
+def _estimator_status(estimator_path, expected_keys) -> str:
+    """``OK`` / ``MISSING`` / ``KEY MISMATCH: <reason>`` for the dry-run listing: the estimator
+    manifest's ``parameter_keys`` against the estimator condition's, before any GPU work."""
+    if not Path(estimator_path).exists():
+        return "MISSING"
+    try:
+        artifacts.assert_schema_compatible(estimator_path, expected_parameter_keys=expected_keys)
+    except Exception as exc:  # noqa: BLE001 -- a listing reports, it does not raise
+        return f"KEY MISMATCH: {exc}"
+    return "OK"
 
 
 def _selected_recordings(experiment_dir, paths, kinds, cells_by_kind, span):
@@ -308,6 +373,10 @@ def main(args: argparse.Namespace) -> None:
     paths = PARAMETERS.paths.with_condition(args.condition)   # the MET estimator's condition namespace
     eval_cfg = PARAMETERS.inference.evaluation
     span = args.experiment_span_seconds
+    # The MET estimator's condition binds the parameter table and keys (eleven rows under
+    # MET-FAB, twelve under MET-INLB), as in the Experiment stage; the control kinds never do.
+    draw_spec = parameterization_of(args.condition)
+    parameter_keys = list(parameter_keys_of(args.condition))
 
     # ---- Global RNG / precision settings ---------------------------------
     if args.seed is not None:   # None -> non-deterministic (consistent with generation)
@@ -394,6 +463,8 @@ def main(args: argparse.Namespace) -> None:
     print(f"  --kinds                   : {kinds}")
     for kind in kinds:
         print(f"      {kind}: cells {cells_by_kind[kind]}")
+    print(f"  parameter table           : {len(parameter_keys)} learnable rows under MET-"
+          f"{args.condition} ({sum(1 for e in draw_spec if not is_log_row(e))} linear)")
     print(f"  --max-cells               : {args.max_cells}  (0 = all discovered)")
     print(f"  --aggregation             : {args.aggregation}")
     print(f"  point estimates           : map, median, sgm  (all three, always; "
@@ -423,9 +494,12 @@ def main(args: argparse.Namespace) -> None:
         ]
         missing = 0
         for role, path in checks:
-            ok = Path(path).exists()
-            missing += not ok
-            print(f"  reads {role}: {path}  [{'OK' if ok else 'MISSING'}]")
+            if "estimator" in role:
+                status = _estimator_status(path, parameter_keys)
+            else:
+                status = "OK" if Path(path).exists() else "MISSING"
+            missing += status != "OK"
+            print(f"  reads {role}: {path}  [{status}]")
         for kind in kinds:
             discovered = _discover_cells(experiment_dir, kind, span)
             print(f"  discovered {kind} recordings: {len(discovered)} cell(s) "
@@ -453,7 +527,7 @@ def main(args: argparse.Namespace) -> None:
                                               n_frames, step_frames)
         except RecordingLayoutError as exc:
             raise SystemExit(f"--merge: {exc}")
-        _merge_shards(reporter, args, eval_cfg, out_dir, array_path, run_start, expected)
+        _merge_shards(reporter, args, eval_cfg, draw_spec, out_dir, array_path, run_start, expected)
         return
 
     reporter.check_file("estimator artifact", estimator_path)
@@ -462,14 +536,14 @@ def main(args: argparse.Namespace) -> None:
     device = topo.device
     vista_device = torch.device("cpu")
     posterior = artifacts.load_estimator(estimator_path, device=str(device),
-                                          expected_parameter_keys=PARAMETER_KEYS)
+                                          expected_parameter_keys=parameter_keys)
     posterior.posterior_estimator.to(device)
     if device.type == "cuda":
         # Rebuild the prior on THIS worker's device for bounded rejection sampling.
         # Under multi-GPU sharding each rank binds its own cuda:local_rank, so reusing
         # the pickled _prior (saved on cuda:0) would mix devices; rebuilding is
         # equivalent on the single-GPU path. Mirrors Evaluation.py.
-        posterior.prior = build_prior(device=str(device))
+        posterior.prior = build_prior(args.condition, device=str(device))
 
     # ---- Provenance captured at STARTUP (code as loaded, checkpoint actually loaded, the
     # launcher's invocation identity, this rank's execution attempt); the implementation records
@@ -532,7 +606,7 @@ def main(args: argparse.Namespace) -> None:
 
     # ---- The three point estimates over (kind, cell, chunk) --------------
     scores, map_est, post_quantiles, post_sgm = [], [], [], []
-    sgm_scale = prior_scale(PARAMETERIZATION)
+    sgm_scale = prior_scale(draw_spec)
     kind_index, cell_of, chunk_of = [], [], []
     shard_note = (f" [shard rank {topo.rank}/{topo.world_size}: {len(my_work)} of "
                   f"{len(flat_work)} cells]" if topo.is_distributed else "")
@@ -602,8 +676,8 @@ def main(args: argparse.Namespace) -> None:
                                  f"elapsed={elapsed:.1f}s | avg={avg:.1f}s | ETA={eta:.0f}s")
                     if debug_log:
                         log_file_only(progress_fh,
-                                      f"pool IQR [LOG] {_theta_repr(map_info['scale'], 4)}")
-                        log_file_only(progress_fh, f"inferred [LOG] {_theta_repr(theta_log)}")
+                                      f"pool IQR [estimator] {_theta_repr(map_info['scale'], 4)}")
+                        log_file_only(progress_fh, f"inferred [estimator] {_theta_repr(theta_log)}")
                 log_progress(progress_fh, f"{kind} cell {cell} complete "
                                           f"({n_cell_chunks} chunks in "
                                           f"{time.time() - cell_start:.1f}s).")
@@ -617,7 +691,7 @@ def main(args: argparse.Namespace) -> None:
 
     # ---- Assemble, validate, write ---------------------------------------
     manifest = schema.build_manifest(
-        stage="experiment", parameter_keys=PARAMETER_KEYS,
+        stage="experiment", parameter_keys=parameter_keys,
         coordinate_transform="parameterization.to_flow (log10 for log rows, linear rows as-is)",
         pool_mode=pool_mode, draw_label=draw_label(pool_mode), n_summary_draws=posterior_samples,
         quantile_levels=QUANTILE_LEVELS, sgm_scale=sgm_scale, sgm_coordinates="estimator",
@@ -639,7 +713,7 @@ def main(args: argparse.Namespace) -> None:
             posterior_quantiles=np.asarray(post_quantiles, dtype=float),
             posterior_sgm=np.asarray(post_sgm, dtype=float))
     else:
-        arrays = schema.empty_product_arrays("experiment", n_parameters=len(PARAMETER_KEYS),
+        arrays = schema.empty_product_arrays("experiment", n_parameters=len(parameter_keys),
                                              n_levels=len(QUANTILE_LEVELS),
                                              run_fields={"kinds": np.asarray(kinds)})
     arrays[schema.MANIFEST_KEY] = schema.encode_manifest(manifest)
@@ -656,7 +730,7 @@ def main(args: argparse.Namespace) -> None:
     if topo.is_distributed:
         _save_shard(topo, out_dir, arrays, run_start)
     else:
-        write_experiment_outputs(reporter, args, eval_cfg, array_path, arrays, run_start)
+        write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path, arrays, run_start)
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -667,9 +741,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--condition", required=True, choices=LABELING_CONDITIONS,
-        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
-             "condition-specific data and estimator namespace (the condition slot of the "
-             "runtime grammar).",
+        help="Condition of the MET estimator applied (FAB = MET-FAB, INLB = MET-INLB): selects its "
+             "namespace and binds its parameter table and keys (eleven learnable rows under "
+             "MET-FAB, twelve under MET-INLB); the control kinds never select the table.",
     )
     parser.add_argument(
         "--total-time-seconds", type=float,

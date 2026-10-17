@@ -27,8 +27,12 @@ slow s), excluding the immobile mode i:
 
     D_mix_mobile = sum_X sum_{m in {f,s}} n_X pi_m D[X, m] / sum_X sum_{m in {f,s}} n_X pi_m   [um^2/s]
 
-with n_A = N_R (1 - x_B), n_B = N_R x_B / 2 the species composition from the inferred
-receptor total N_R and initial dimer-to-monomer ratio r (x_B = 2r / (1 + 2r)), pi_m the
+with n_A = M_start, n_B = D_start the underlying monomers and dimers at the window start,
+computed per window by the ONE population helper (``parameterization.population_from_theta``)
+under the MET estimator's condition: the inferred receptor total N and basal reference fraction
+f give the reference population M_ref = N (1 - f) / (1 + f), D_ref = N f / (1 + f), and under
+MET-INLB the window-start allocation R_active turns c probe-bound monomer pairs into dimers
+(M_start = M_ref - 2c, D_start = D_ref + c; under MET-FAB c = 0 by declaration); pi_m the
 stationary occupancy of mode m
 under the inferred switching rates (the initial-mode law the simulator seeds with), and
 D[X, m] = D_A * (R_B if X = B) * (1, R_s)[m] the per-type diffusion coefficients. Because
@@ -38,13 +42,17 @@ D_A', D_B' the mode-averaged mobile diffusivities of monomer and dimer (D_B' = R
 D_mix lies between D_A' and D_B'; the headline figure compares, per receptor, the
 inferred D_mix (solid, condition color) against the experimental D_mobile (solid, a
 separate per-condition color, so experiment and inference never share a color); D_A',
-D_B' and the dimer-complex split f_B = n_B / (n_A + n_B) are reported in the run's report
-table, not drawn on the figure. On these out-of-distribution controls the model's A / B
+D_B', the reference fraction f and the starting dimer-complex split f_start = n_B / (n_A + n_B)
+are reported in the run's report table, not drawn on the figure. A window whose fraction rows
+(f, and R_active under MET-INLB) lie outside [0, 1] -- possible under unrestricted pooling -- is
+flagged: it is left out of the whole mixture readout, counted per receptor in the report, and
+its values are never clipped (the per-parameter figures show them as estimated). On these
+out-of-distribution controls the model's A / B
 assignment is not physically ordered -- under unrestricted pooling the dimer factor R_B
 can leave its (0, 1] prior (dimer "faster" than monomer) and D_A can leave its training
 prior -- which is exactly why the number-weighted D_mix, robust to the A / B
 mis-assignment, is the readout rather than D_A' or D_B' alone. D_mix is read as a point
-between D_A' and D_B', not as a resolved mixture unless f_B is informative.
+between D_A' and D_B', not as a resolved mixture unless f_start is informative.
 
 D_A is stored in um^2/s (the estimator-space value mapped through
 parameterization.to_physical), so D_mix_mobile is directly comparable to an experimental
@@ -66,8 +74,9 @@ The posterior was trained on always-visible permanent-label emitters; the contro
 recordings use an exchangeable, blinking SiR-S5 HaloTag probe. The diffusion
 coefficient is a per-track property read from the displacement statistics of a
 molecule while it is visible, so it is robust to how many molecules are lit at once
-and survives the mismatch. The stoichiometry and the rates (N_R, x_B, kappa_OFF, the
-switching rates k_*) instead depend on the number of co-visible emitters and on
+and survives the mismatch. The stoichiometry and the rates (N, f, the allocation R_active
+under MET-INLB, kappa_OFF, the switching rates k_*) instead depend on the number of
+co-fluorescent emitters and on
 track continuity, both corrupted by blinking, so they are NOT read quantitatively here.
 The controls are also constitutive monomer / dimer references, not the dynamic
 A + A <=> B dimerization with fast / slow / immobile mobility switching the posterior
@@ -100,7 +109,8 @@ INPUTS / OUTPUTS
 =============================================================================
 Reads  <data_bank>/<posit_subdir>/<project_alias>_{timing_label}_MAP_Experiment_CD86_CTLA-4_CONTROLS/
          <same>.npz
-       arrays used: map_estimate (N,12) estimator-space MAP candidate, kind_index (N,), cell (N,),
+       arrays used: map_estimate (N, D) estimator-space MAP candidate (D = 11 under a MET-FAB
+       estimator, 12 under MET-INLB, keys checked against the condition's table), kind_index (N,), cell (N,),
        chunk (N,), kinds (2,) = ['CD86','CTLA-4']. Optionally the sibling MAP_Recovery
        .npz (same timing) annotates each parameter with its ground-truth recovery
        quality on simulated EVAL data (a property of the posterior, so it applies
@@ -128,6 +138,7 @@ Usage:
 
 import argparse
 import sys
+import warnings
 
 import numpy as np
 
@@ -139,10 +150,11 @@ from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp.parameterization import (
-    PARAMETERS, PARAMETERIZATION, RunTiming, entry_to_physical, is_log_row, to_physical,
+    PARAMETERS, RunTiming, declared_row_values, entry_to_physical, is_log_row, parameter_keys_of,
+    parameterization_of, population_from_theta, population_valid, to_physical,
 )
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (
-    diffusion_coefficients, stationary_mode_law, theta_by_key,
+    diffusion_coefficients, stationary_mode_law,
 )
 
 # ---------------------------------------------------------------------------
@@ -190,15 +202,15 @@ EXPERIMENTAL_CITATION = (
 # No per-parameter experimental band applies to these controls: the only transferable
 # experimental comparison is the mobile-diffusion headline (D_mix_mobile vs D_mobile,
 # above). Kept as an empty mapping so the per-parameter figure / report reference
-# branches (which key on PARAMETERIZATION KEYs) uniformly no-op.
+# branches (which key on the parameter table's KEYs) uniformly no-op.
 EXPERIMENTAL_REFERENCE = {}
 
-# Short human-readable name per parameter KEY (titles); the LaTeX symbol comes from
-# PARAMETERIZATION[...]['LABEL'] and the unit from ['UNIT'].
+# Short human-readable name per parameter KEY (titles); the LaTeX symbol comes from the
+# condition's table (parameterization_of(condition)[...]['LABEL']) and the unit from ['UNIT'].
 PARAM_DISPLAY_NAME = {
     # stoichiometry block
     "count_total": "Receptor total",
-    "ratio_dimer_monomer_initial": "Initial dimer/monomer ratio",
+    "fraction_basal_dimers_reference": "Reference basal dimer fraction",
     "rate_dissociation": "Dissociation rate",
     # mobility block
     "diffusivity_alp": "Monomer diffusivity",
@@ -209,26 +221,37 @@ PARAM_DISPLAY_NAME = {
     "rate_slow_fast": "Switching rate slow->fast",
     "rate_slow_immobile": "Switching rate slow->immobile",
     "rate_immobile_slow": "Switching rate immobile->slow",
+    # initialization block (learnable under MET-INLB; MET-FAB declares it 0)
+    "relative_count_active_dimers_initial": "Window-start active-dimer allocation",
 }
 
-# Compact axis unit from the PARAMETERIZATION 'UNIT' string.
+# Compact axis unit from the table's 'UNIT' string.
 UNIT_SHORT = {
     "Count": "count",
     "Square Micrometer Per Second": "$\\mu$m$^2$/s",
     "Dimensionless": "ratio",
     "Count Per Second": "1/s",
+    "Fraction": "fraction",
 }
 
 
-def _abs(map_flow):
-    """Convert stored estimator-space MAP values (last axis = PARAMETERIZATION order) to physical.
+def _abs(map_flow, table):
+    """Convert stored estimator-space MAP values (last axis = ``table`` order) to physical.
 
-    The ONE conversion rule (``parameterization.to_physical``): log rows are exponentiated
-    (10**theta), the linear initial dimer fraction passes through unchanged. The
-    relative-diffusivity parameters (R_B, R_s, R_i) are dimensionless ratios, so their
-    physical value is the ratio itself.
+    The ONE conversion rule (``parameterization.to_physical`` with the condition's table): log
+    rows are exponentiated (10**theta), the linear rows -- the basal reference fraction f and,
+    under MET-INLB, the allocation R_active -- pass through unchanged. The relative-diffusivity
+    parameters (R_B, R_s, R_i) are dimensionless ratios, so their physical value is the ratio
+    itself.
     """
-    return to_physical(map_flow)
+    return to_physical(map_flow, table)
+
+
+def _nanmean(values) -> float:
+    """Mean over the finite entries; NaN when there are none (no warning)."""
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(values)
+    return float(values[finite].mean()) if finite.any() else float("nan")
 
 
 def _reference_band(ref):
@@ -262,22 +285,23 @@ def _reshape_to_grid(map_estimate, kind_index, cell, chunk, n_kinds):
     return grid, n_cells, n_chunks
 
 
-def _recovery_within_band(recovery_npz_path, band=0.3):
+def _recovery_within_band(recovery_npz_path, table, band=0.3):
     """Per-parameter fraction of EVAL videos recovered within +/- `band` dex (log rows only).
 
     Reads the sibling MAP_Recovery product (true_log10 + map_estimate) if present, so
     each temporal figure can be annotated with how well that parameter is even
     recoverable on ground-truth data. A dex band is a multiplicative tolerance and does
-    not apply to the linear initial dimer fraction, whose entry is NaN (flagged, not
-    silently computed). Returns None if absent or lacking the arrays.
+    not apply to the linear rows (the basal reference fraction and, under MET-INLB, the
+    allocation), whose entries are NaN (flagged, not silently computed). The product's keys
+    must be ``table``'s, key for key and in order. Returns None if absent or lacking the arrays.
     """
     try:
         if not recovery_npz_path.exists():
             return None
         arrays, manifest = schema.load_product(recovery_npz_path, stage="evaluation")
-        schema.assert_parameter_keys(manifest, PARAMETER_KEYS, source=str(recovery_npz_path))
+        schema.assert_parameter_keys(manifest, [p["KEY"] for p in table], source=str(recovery_npz_path))
         err = np.abs(np.asarray(arrays["map_estimate"], float) - np.asarray(arrays["true_log10"], float))
-        log_rows = np.array([is_log_row(p) for p in PARAMETERIZATION], dtype=bool)
+        log_rows = np.array([is_log_row(p) for p in table], dtype=bool)
         return np.where(log_rows, np.mean(err <= band, axis=0), np.nan)   # (n_param,)
     except schema.SchemaError:
         raise      # an obsolete or malformed Recovery product is an error, not a missing annotation
@@ -285,7 +309,7 @@ def _recovery_within_band(recovery_npz_path, band=0.3):
         return None
 
 
-def _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac=None):
+def _temporal_figure(p_index, key, abs_grid, x, kinds, table, recovery_frac=None):
     """Build the temporal-dynamics figure for one parameter; return (Figure, per-condition time-avgs).
 
     Solid line  = mean over cells of the (absolute) MAP estimate at each time point.
@@ -297,9 +321,11 @@ def _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac=None):
 
     The y-limits are derived from the certainty bands (mean +/- SD) and the reference,
     NOT from the full data range -- so outlier per-cell trajectories are clipped away
-    and the informative region fills the plot.
+    and the informative region fills the plot. A log row's axis starts at zero at most; a
+    linear row's axis follows its band below zero too, so a fraction estimated outside [0, 1]
+    stays in view.
     """
-    para = PARAMETERIZATION[p_index]
+    para = table[p_index]
     unit = para["UNIT"]
     label = para["LABEL"]
     name = PARAM_DISPLAY_NAME.get(key, key)
@@ -351,7 +377,8 @@ def _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac=None):
         band_hi, band_lo = 1.0, 0.0
     span = band_hi - band_lo
     pad = 0.12 * span if span > 0 else (0.1 * abs(band_hi) + 1e-9)
-    ax.set_ylim(max(0.0, band_lo - pad), band_hi + pad)   # params are non-negative
+    # physical log-row values are positive; a linear row (a fraction) can be estimated below 0
+    ax.set_ylim(max(0.0, band_lo - pad) if is_log_row(para) else band_lo - pad, band_hi + pad)
     # denser y-ticks (labeled majors + finer unlabeled minors); no grid (distracting)
     ax.yaxis.set_major_locator(MaxNLocator(nbins=11))
     ax.yaxis.set_minor_locator(AutoMinorLocator(2))
@@ -371,32 +398,37 @@ def _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac=None):
     return fig, time_avgs
 
 
-def _key_index(key):
-    """Column index of a parameter KEY within PARAMETERIZATION (= map_estimate columns)."""
-    for i, p in enumerate(PARAMETERIZATION):
+def _key_index(key, table):
+    """Column index of a parameter KEY within ``table`` (= map_estimate columns)."""
+    for i, p in enumerate(table):
         if p["KEY"] == key:
             return i
-    raise KeyError(f"parameter KEY not found in PARAMETERIZATION: {key}")
+    raise KeyError(f"parameter KEY not found in the parameter table: {key}")
 
 
-def _prior_bounds(key):
-    """Absolute-unit (lo, hi) prior bounds for a parameter KEY, from PARAMETERIZATION.
+def _prior_bounds(key, table):
+    """Absolute-unit (lo, hi) prior bounds for a parameter KEY, from ``table``.
 
     Used only to flag when the unrestricted-pool MAP has left the training prior on the
     out-of-distribution controls (a diagnostic, not a correction).
     """
-    p = PARAMETERIZATION[_key_index(key)]
+    p = table[_key_index(key, table)]
     lo, hi = p["PRIOR_RANGE"]
     return float(entry_to_physical(p, lo)), float(entry_to_physical(p, hi))
 
 
-def _mobile_mixture(abs_grid):
+def _mobile_mixture(abs_grid, condition):
     """Number-weighted mobile mixture diffusivity D_mix_mobile (+ its bracket), per (kind, cell, chunk).
 
-    From the physical-unit grid (last axis = PARAMETERIZATION order) reads, per window:
-      * the species composition n_A = N_R (1 - x_B), n_B = N_R x_B / 2 from the receptor
-        total (count_total) and the initial dimer-to-monomer ratio (ratio_dimer_monomer_initial,
-        read as x_B = 2r / (1 + 2r));
+    From the physical-unit grid (last axis = the order of ``parameterization_of(condition)``,
+    the MET estimator's condition) reads, per window:
+      * the window-start composition n_A = M_start, n_B = D_start (underlying monomers and
+        dimers) from the ONE population helper (``parameterization.population_from_theta``):
+        the receptor total N (count_total) and the basal reference fraction f
+        (fraction_basal_dimers_reference) give the reference population M_ref = N (1 - f) /
+        (1 + f), D_ref = N f / (1 + f), and the allocation (relative_count_active_dimers_initial;
+        inferred under MET-INLB, the declared 0 under MET-FAB) moves c probe-bound monomer
+        pairs into dimers, M_start = M_ref - 2c, D_start = D_ref + c;
       * the per-type diffusion coefficients D[X, m] = D_A * (R_B if X = B) * (1, R_s, R_i)[m]
         (simulation_rds_support.diffusion_coefficients, the generator's own definition);
       * the stationary occupancy pi_m of the isolated switching chain
@@ -408,42 +440,66 @@ def _mobile_mixture(abs_grid):
     and because the switching rates are shared by both species the mode weights cancel in
     the species split, so D_mix = (n_A d_A + n_B d_B) / (n_A + n_B) with the mode-averaged
     mobile diffusivities d_X = sum_{m mobile} pi_m D[X, m] / sum_{m mobile} pi_m.
-    Returns (d_mix, d_a, d_b, f_b), each shaped (n_kinds, n_cells, n_chunks), where
-    f_b = n_B / (n_A + n_B) is the dimer-complex fraction (equal among the mobile complexes
-    and overall, since the modes are shared). d_a and d_b bracket D_mix (within the prior
-    d_b = R_B d_a <= d_a; on out-of-distribution controls under unrestricted pooling R_B can
-    leave (0, 1], flipping the bracket) and are reported alongside because the weights (the
-    composition) are the label-fragile quantity while d_a, d_b are robust. Windows with any
-    non-finite parameter yield NaN.
+
+    A window whose composition inputs fail the helper's validity rule
+    (``parameterization.population_valid``: N finite and > 0, f and R_active finite in [0, 1],
+    R_active the declared constant under MET-FAB) is FLAGGED: it carries NaN in every
+    returned quantity, so each mixture number comes from the same windows, and is counted in
+    ``flagged``; nothing is clipped. A window with a non-finite parameter (never estimated)
+    carries NaN and is not flagged.
+
+    Returns a dict of arrays shaped (n_kinds, n_cells, n_chunks): ``d_mix``, ``d_a``, ``d_b``,
+    ``f`` (the reference fraction as estimated), ``f_start`` = n_B / (n_A + n_B) (the starting
+    dimer-complex fraction, equal among the mobile complexes and overall, since the modes are
+    shared; f_start = f under MET-FAB), and ``flagged`` (bool). d_a and d_b bracket D_mix (within
+    the prior d_b = R_B d_a <= d_a; on out-of-distribution controls under unrestricted pooling
+    R_B can leave (0, 1], flipping the bracket) and are reported alongside because the weights
+    (the composition) are the label-fragile quantity while d_a, d_b are robust.
     """
     grid = np.asarray(abs_grid, dtype=float)
     rds = PARAMETERS.simulation.rds
-    mono, dim = rds.stoichiometry.monomer.name, rds.stoichiometry.dimer.name
+    sto = rds.stoichiometry
+    mono, dim = sto.monomer.name, sto.dimer.name
     mobile_modes = list(rds.mobility.modes[:-1])           # all but the (last, immobile) mode
-    n_r_index = _key_index(rds.stoichiometry.count_total_key)
-    ratio_index = _key_index(rds.stoichiometry.composition_ratio_key)
+    keys = list(parameter_keys_of(condition))
+    if grid.shape[-1] != len(keys):
+        raise ValueError(f"_mobile_mixture [{condition}]: the grid has {grid.shape[-1]} parameters; "
+                         f"the condition's table has {len(keys)} ({keys}).")
+    index = {key: i for i, key in enumerate(keys)}
     shape = grid.shape[:-1]
-    d_mix, d_a, d_b, f_b = (np.full(shape, np.nan) for _ in range(4))
-    for index in np.ndindex(*shape):
-        theta = grid[index]
-        if not np.isfinite(theta).all():
-            continue
-        coeff = diffusion_coefficients(theta)                    # {type_name: D}
-        pi = dict(zip(rds.mobility.modes, stationary_mode_law(theta)))
+    if sto.active_allocation_key in index:
+        r_active = grid[..., index[sto.active_allocation_key]]
+    else:                                                   # declared under the condition (MET-FAB: 0)
+        r_active = np.full(shape, float(declared_row_values(condition)[sto.active_allocation_key]))
+    estimated = np.isfinite(grid).all(axis=-1)
+    valid = estimated & population_valid(
+        count_total=grid[..., index[sto.count_total_key]],
+        fraction_basal_dimers_reference=grid[..., index[sto.basal_fraction_key]],
+        relative_count_active_dimers_initial=r_active, condition=condition)
+    out = {name: np.full(shape, np.nan) for name in ("d_mix", "d_a", "d_b", "f", "f_start")}
+    out["flagged"] = estimated & ~valid
+    if not valid.any():
+        return out
+    population = population_from_theta(grid[valid], condition)      # the valid windows only
+    n_a = np.asarray(population.n_monomers_underlying_start, dtype=float)
+    n_b = np.asarray(population.n_dimers_underlying_start, dtype=float)
+    da, db = np.empty(n_a.shape), np.empty(n_a.shape)
+    for j, theta in enumerate(grid[valid]):
+        coeff = diffusion_coefficients(theta, condition)              # {type_name: D}
+        pi = dict(zip(rds.mobility.modes, stationary_mode_law(theta, condition)))
         w = sum(pi[m] for m in mobile_modes)
-        da = sum(pi[m] * coeff[rds.type_name(mono, m)] for m in mobile_modes) / w
-        db = sum(pi[m] * coeff[rds.type_name(dim, m)] for m in mobile_modes) / w
-        n_r, ratio = theta[n_r_index], theta[ratio_index]
-        x_b = 2.0 * ratio / (1.0 + 2.0 * ratio)             # receptor fraction in dimers from the ratio
-        n_a, n_b = n_r * (1.0 - x_b), 0.5 * n_r * x_b
-        total = n_a + n_b
-        d_a[index], d_b[index] = da, db
-        d_mix[index] = (n_a * da + n_b * db) / total if total > 0 else np.nan
-        f_b[index] = n_b / total if total > 0 else np.nan
-    return d_mix, d_a, d_b, f_b
+        da[j] = sum(pi[m] * coeff[rds.type_name(mono, m)] for m in mobile_modes) / w
+        db[j] = sum(pi[m] * coeff[rds.type_name(dim, m)] for m in mobile_modes) / w
+    total = n_a + n_b
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["d_mix"][valid] = np.where(total > 0, (n_a * da + n_b * db) / np.where(total > 0, total, 1.0), np.nan)
+    out["d_a"][valid], out["d_b"][valid] = da, db
+    out["f"][valid] = np.asarray(population.fraction_basal_dimers_reference, dtype=float)
+    out["f_start"][valid] = np.asarray(population.fraction_basal_dimers_start, dtype=float)
+    return out
 
 
-def _dmix_figure(d_mix, d_a, d_b, f_b, x, kinds):
+def _dmix_figure(mixture, x, kinds):
     """Headline figure: inferred mobile mixture diffusivity D_mix_mobile vs experiment.
 
     A clean inferred-vs-experiment comparison, one comparison per condition. Every line
@@ -453,18 +509,24 @@ def _dmix_figure(d_mix, d_a, d_b, f_b, x, kinds):
       * experimental D_mobile per condition -- a separate per-condition color
         (EXPERIMENTAL_CONDITION_COLOR), a flat reference line with a value +/- SD band.
     Experiment and inference never share a color, and the two experimental references
-    stay distinguishable. d_A, d_B and the dimer-complex split f_B are intentionally NOT drawn
-    (they are in the report table) so the figure stays uncluttered.
-    Returns (Figure, {display: {'dmix','d_a','d_b','f_b'}}).
+    stay distinguishable. d_A, d_B, the reference fraction f and the starting split f_start
+    are intentionally NOT drawn (they are in the report table) so the figure stays
+    uncluttered. ``mixture`` is the dict of ``_mobile_mixture``; flagged windows are NaN there
+    and so are left out of every line and band here.
+    Returns (Figure, {display: {'dmix','d_a','d_b','f','f_start','n_flagged','n_windows'}}).
     """
+    d_mix = mixture["d_mix"]
     fig, ax = plt.subplots(figsize=(6.8, 5.2))
 
     summaries = {}
     for e, kind in enumerate(kinds):
         disp = CONDITION_DISPLAY.get(kind, kind)
         summaries[disp] = {
-            "dmix": float(np.nanmean(d_mix[e])), "d_a": float(np.nanmean(d_a[e])),
-            "d_b": float(np.nanmean(d_b[e])), "f_b": float(np.nanmean(f_b[e]))}
+            "dmix": _nanmean(d_mix[e]), "d_a": _nanmean(mixture["d_a"][e]),
+            "d_b": _nanmean(mixture["d_b"][e]), "f": _nanmean(mixture["f"][e]),
+            "f_start": _nanmean(mixture["f_start"][e]),
+            "n_flagged": int(np.count_nonzero(mixture["flagged"][e])),
+            "n_windows": int(np.count_nonzero(np.isfinite(d_mix[e]) | mixture["flagged"][e]))}
 
     band_hi, band_lo = -np.inf, np.inf
 
@@ -485,8 +547,12 @@ def _dmix_figure(d_mix, d_a, d_b, f_b, x, kinds):
     for e, kind in enumerate(kinds):
         disp = CONDITION_DISPLAY.get(kind, kind)
         color = CONDITION_COLOR.get(kind, f"C{e}")
-        mean = np.nanmean(d_mix[e], axis=0)
-        std = np.nanstd(d_mix[e], axis=0)
+        if not np.isfinite(d_mix[e]).any():
+            continue                                         # every window flagged or missing
+        with warnings.catch_warnings():       # a time point whose windows are all flagged reads NaN
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            mean = np.nanmean(d_mix[e], axis=0)
+            std = np.nanstd(d_mix[e], axis=0)
         band_hi = max(band_hi, float(np.nanmax(mean + std)))
         band_lo = min(band_lo, float(np.nanmin(mean - std)))
         ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.15, linewidth=0)
@@ -528,10 +594,11 @@ def _write_report(fig_dir, meta, results):
              f"{', '.join(f'{t:g}' for t in meta['x'])} s. Conditions: "
              f"{', '.join(displays)} (raw kinds {', '.join(meta['kinds'])}).")
     L.append("")
-    L.append("Ad-hoc reuse of the DIMER-ALP MET posterior on the CD86 / CTLA-4 control "
-             "receptors. The transferable observable across the label / model mismatch "
-             "is the diffusion coefficient; counts and rates are not read quantitatively "
-             "here (see Caveats).")
+    L.append(f"Ad-hoc reuse of the DIMER-ALP {meta['condition_display']} posterior "
+             f"({meta['n_parameters']} learnable rows) on the CD86 / CTLA-4 control "
+             "receptors; every value is read under that estimator's parameter table. The "
+             "transferable observable across the label / model mismatch is the diffusion "
+             "coefficient; counts and rates are not read quantitatively here (see Caveats).")
     L.append("")
     L.append("## Diffusion readout vs experiment (headline)")
     L.append("")
@@ -539,29 +606,43 @@ def _write_report(fig_dir, meta, results):
              "number-weighted mobile mixture diffusivity "
              "**D_mix_mobile = (n_A·d_A + n_B·d_B) / (n_A + n_B)** (µm²/s, in the condition "
              "color) against the experimental mobile-fraction diffusion coefficient "
-             "D_mobile (in a separate per-condition color). Here n_A = N_R (1 − x_B) and "
-             "n_B = N_R x_B / 2 are the species composition from the inferred receptor total "
-             "and initial dimer-to-monomer ratio (x_B = 2r / (1 + 2r)), and d_A, d_B = R_B·d_A are the monomer and dimer "
+             "D_mobile (in a separate per-condition color). Here n_A = M_start and "
+             "n_B = D_start are the underlying monomers and dimers at the window start, from "
+             "the population helper: the inferred receptor total N and basal reference "
+             "fraction f give the reference population M_ref = N (1 − f) / (1 + f), "
+             "D_ref = N f / (1 + f), and the window-start allocation (inferred under MET-INLB, "
+             "declared 0 under MET-FAB) turns c probe-bound monomer pairs into dimers "
+             "(M_start = M_ref − 2c, D_start = D_ref + c). d_A, d_B = R_B·d_A are the monomer and dimer "
              "diffusivities averaged over the MOBILE modes (fast, slow) with the stationary "
              "occupancies of the inferred switching chain; the immobile mode is excluded. "
-             "d_A, d_B — which bracket D_mix in either order — and the dimer-complex split "
-             "f_B = n_B / (n_A + n_B) are given in the table below rather than on the "
-             "figure. D_A is stored in µm²/s, so the comparison needs no unit conversion, "
+             "d_A, d_B — which bracket D_mix in either order — the reference fraction f and "
+             "the starting dimer-complex split f_start = n_B / (n_A + n_B) are given in the "
+             "table below rather than on the figure (f_start = f when no pair is allocated). "
+             "D_A is stored in µm²/s, so the comparison needs no unit conversion, "
              "and the acquisition geometry matches (50 FPS, 256² px, ~157 nm/px).")
     L.append("")
-    L.append("| Condition | D_mix_mobile | d_A (monomer, mobile modes) | d_B (dimer, mobile modes) | f_B | "
-             "Experimental D_mobile |")
-    L.append("|---|---|---|---|---|---|")
+    L.append("| Condition | D_mix_mobile | d_A (monomer, mobile modes) | d_B (dimer, mobile modes) | "
+             "f (reference) | f_start (window start) | flagged windows | Experimental D_mobile |")
+    L.append("|---|---|---|---|---|---|---|---|")
     for k, d in zip(meta["kinds"], displays):
         s = dmix.get(d, {})
         ref = EXPERIMENTAL_D_MOBILE.get(k)
         refstr = "—" if ref is None else f"{ref['value']:.3f} ± {ref['sd']:.3f} µm²/s"
         L.append(f"| {d} | {s.get('dmix', float('nan')):.3f} | {s.get('d_a', float('nan')):.3f} "
-                 f"| {s.get('d_b', float('nan')):.3f} | {s.get('f_b', float('nan')):.2f} | {refstr} |")
+                 f"| {s.get('d_b', float('nan')):.3f} | {s.get('f', float('nan')):.2f} "
+                 f"| {s.get('f_start', float('nan')):.2f} "
+                 f"| {s.get('n_flagged', 0)} of {s.get('n_windows', 0)} | {refstr} |")
+    L.append("")
+    L.append("A **flagged window** is one whose composition rows fail the population helper's "
+             "validity rule (f, and the allocation under MET-INLB, finite and in [0, 1]; N "
+             "finite and positive) — possible because unrestricted pooling lets the MAP leave "
+             "the prior box. It is left out of every column of this table, so each row's "
+             "numbers come from the same windows, and its values are never clipped: the "
+             "per-parameter figures show them as estimated.")
     L.append("")
     # Flag conditions whose MAP left the training prior (unrestricted pooling on OOD data).
-    da_lo, da_hi = _prior_bounds("diffusivity_alp")
-    rb_lo, rb_hi = _prior_bounds("relative_diffusivity_dimer")
+    da_lo, da_hi = _prior_bounds("diffusivity_alp", meta["table"])
+    rb_lo, rb_hi = _prior_bounds("relative_diffusivity_dimer", meta["table"])
     flags = []
     for k, d in zip(meta["kinds"], displays):
         s = dmix.get(d, {})
@@ -623,9 +704,9 @@ def _write_report(fig_dir, meta, results):
     L.append("- **Label / model mismatch.** The posterior was trained on always-visible "
              "permanent-label emitters; these controls use an exchangeable, blinking "
              "SiR-S5 HaloTag probe. Diffusion (D) is a per-track property and transfers; "
-             "the stoichiometry and the rates (N_R, x_B, κ_OFF, the switching rates k_*) "
-             "depend on co-visible-emitter numbers and track continuity and are "
-             "**not** read quantitatively here.")
+             "the stoichiometry and the rates (N, f, the allocation R_active under MET-INLB, "
+             "κ_OFF, the switching rates k_*) depend on co-fluorescent-emitter numbers and "
+             "track continuity and are **not** read quantitatively here.")
     L.append("- **Not the trained mechanism.** CD86 (monomer) and CTLA-4 (dimer) are "
              "constitutive oligomeric-state controls, not the dynamic A + A ⇌ B "
              "dimerization with fast / slow / immobile mobility switching the posterior "
@@ -636,16 +717,19 @@ def _write_report(fig_dir, meta, results):
              "in µm²/s, so D_mix_mobile is directly comparable to the experimental "
              "D_mobile with no conversion.")
     L.append("- **D_mix weights are the fragile quantity.** D_mix is number-weighted and "
-             "the composition (N_R, x_B) is label-fragile; if f_B collapses toward 0 or 1, "
-             "D_mix approaches d_A or d_B. Read it within the [d_B, d_A] bracket, not as a "
-             "resolved mixture, unless f_B is informative.")
+             "the composition (N, f and the allocation) is label-fragile; if f_start collapses "
+             "toward 0 or 1, D_mix approaches d_A or d_B. Read it within the [d_B, d_A] "
+             "bracket, not as a resolved mixture, unless f_start is informative.")
     L.append("- **Blinking / photobleaching** drives a downward drift of the receptor "
              "total (fewer visible emitters in later windows) — a real non-stationarity "
              "in a confounded parameter, not receptor loss.")
     L.append("- **First-pass posteriors** (interrupted training) — absolute values will "
              "sharpen with the production posteriors; re-run this analysis on those.")
-    L.append("- Relative parameters (R_B, R_s, R_i) are shown as dimensionless ratios; "
-             "the initial composition is the log10 dimer-to-monomer ratio r, read as x_B = 2r / (1 + 2r).")
+    L.append("- Relative parameters (R_B, R_s, R_i) are shown as dimensionless ratios. The "
+             "composition rows are fractions read as estimated (linear rows): the basal "
+             "reference fraction f, the share of dimers among the complexes of the reference "
+             "population, and, under a MET-INLB estimator, the window-start allocation "
+             "R_active, the share of the possible probe-bound monomer pairs turned into dimers.")
     L.append("- The pooled **posterior-distribution** panels are a documented, "
              "not-yet-implemented extension (they need the full per-window sample pool, "
              "not the stored quantiles).")
@@ -665,6 +749,10 @@ def main(args):
     timing_label = timing.label
     data_bank_root = PARAMETERS.machine.data_bank_root
     paths = PARAMETERS.paths.with_condition(args.condition)   # the MET estimator's condition namespace
+    # The MET estimator's condition binds the parameter table (eleven rows under MET-FAB, twelve
+    # under MET-INLB); the control kinds CD86 / CTLA-4 never select it.
+    table = parameterization_of(args.condition)
+    keys = list(parameter_keys_of(args.condition))
 
     out_dir = (data_bank_root / paths.posit_subdir /
                CONTROLS_RECOVERY_PATTERN.format(
@@ -685,6 +773,8 @@ def main(args):
     print(div)
     print(f" {paths.project_alias} — Control Experiment Temporal Dynamics (CD86 / CTLA-4)")
     print(f" timing_label : {timing_label}   chunk step : {step_seconds} s")
+    print(f" estimator    : MET-{args.condition} ({len(keys)} learnable rows, "
+          f"{sum(1 for e in table if not is_log_row(e))} linear)")
     print(f" reads npz    : {npz_path}")
     print(f" writes       : {fig_dir}  (figures + report.md)")
     print(div)
@@ -703,7 +793,7 @@ def main(args):
             f"--total-time-seconds {args.total_time_seconds} first.")
 
     arrays, manifest = schema.load_product(npz_path, stage="experiment")
-    schema.assert_parameter_keys(manifest, PARAMETER_KEYS, source=str(npz_path))
+    schema.assert_parameter_keys(manifest, keys, source=str(npz_path))
     map_estimate = np.asarray(arrays["map_estimate"], dtype=float)
     kind_index = arrays["kind_index"].astype(int)
     cell = arrays["cell"].astype(int)
@@ -712,37 +802,41 @@ def main(args):
 
     grid, n_cells, n_chunks = _reshape_to_grid(
         map_estimate, kind_index, cell, chunk, len(kinds))
-    abs_grid = _abs(grid)
+    abs_grid = _abs(grid, table)
     x = step_seconds * np.arange(n_chunks)
-    recovery_frac = _recovery_within_band(recovery_npz)
+    recovery_frac = _recovery_within_band(recovery_npz, table)
 
     print(f"\nLoaded {map_estimate.shape[0]} MAP estimates: "
           f"{len(kinds)} conditions x {n_cells} cells x {n_chunks} chunks. "
           f"Recovery annotation: {'on' if recovery_frac is not None else 'off (no MAP_Recovery .npz)'}.")
     print(f"Time points: {[float(t) for t in x]} s\n")
 
-    keys = [p["KEY"] for p in PARAMETERIZATION]
+    plotted = list(keys)
     if args.params:
         wanted = [k.strip() for k in args.params.split(",")]
-        keys = [k for k in keys if k in wanted]
+        plotted = [k for k in keys if k in wanted]
 
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     # Headline: number-weighted mobile mixture diffusivity D_mix_mobile per condition,
     # against the experimental mobile-fraction D_mobile (the transferable observable).
-    d_mix, d_a, d_b, f_b = _mobile_mixture(abs_grid)
-    dmix_fig, dmix_summary = _dmix_figure(d_mix, d_a, d_b, f_b, x, kinds)
+    mixture = _mobile_mixture(abs_grid, args.condition)
+    dmix_fig, dmix_summary = _dmix_figure(mixture, x, kinds)
     dmix_png = fig_dir / "dmix_mobile_temporal.png"
     dmix_fig.savefig(str(dmix_png), dpi=180)
     plt.close(dmix_fig)
     print(f"  wrote {dmix_png.name}  [headline: D_mix_mobile vs experimental D_mobile]")
+    for disp, summary in dmix_summary.items():
+        if summary["n_flagged"]:
+            print(f"  {disp}: {summary['n_flagged']} of {summary['n_windows']} window(s) flagged "
+                  f"(composition rows outside [0, 1]); left out of the mixture readout, not clipped")
 
     results = []
-    for p_index, para in enumerate(PARAMETERIZATION):
+    for p_index, para in enumerate(table):
         key = para["KEY"]
-        if key not in keys:
+        if key not in plotted:
             continue
-        fig, time_avgs = _temporal_figure(p_index, key, abs_grid, x, kinds, recovery_frac)
+        fig, time_avgs = _temporal_figure(p_index, key, abs_grid, x, kinds, table, recovery_frac)
         out_png = fig_dir / f"{key}_temporal.png"
         fig.savefig(str(out_png), dpi=180)
         plt.close(fig)
@@ -768,7 +862,8 @@ def main(args):
         "n_cells": n_cells, "n_chunks": n_chunks, "step": step_seconds,
         "x": [float(t) for t in x], "kinds": kinds,
         "displays": [CONDITION_DISPLAY.get(k, k) for k in kinds],
-        "dmix": dmix_summary,
+        "dmix": dmix_summary, "table": table, "n_parameters": len(table),
+        "condition_display": f"MET-{args.condition}",
     }
     _write_report(fig_dir, meta, results)
     print(f"  wrote report.md")
@@ -782,9 +877,9 @@ def parse_args(argv=None):
                     "the real experimental recordings (per non-overlapping MAP chunk).")
     parser.add_argument(
         "--condition", required=True, choices=LABELING_CONDITIONS,
-        help="Experimental condition of the run (FAB = MET-FAB, INLB = MET-INLB): selects the "
-             "condition-specific data and estimator namespace (the condition slot of the "
-             "runtime grammar).",
+        help="Condition of the MET estimator the control run used (FAB = MET-FAB, INLB = MET-INLB): "
+             "selects its namespace and its parameter table (eleven learnable rows under MET-FAB, "
+             "twelve under MET-INLB); the control kinds never select the table.",
     )
     parser.add_argument(
         "--total-time-seconds", type=float, required=True,

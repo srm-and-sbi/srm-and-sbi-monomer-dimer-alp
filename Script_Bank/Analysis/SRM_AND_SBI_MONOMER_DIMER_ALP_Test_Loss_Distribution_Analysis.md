@@ -8,15 +8,13 @@ distribution, an interpretable reference for what the numbers mean, and which re
 parameter space the estimator finds hard. This note explains how to run it and how to read its
 outputs, so the analysis can be used and understood without reverse-engineering the code.
 
-> **Note (2026-09-14).** Release 0.1.4 gave every learnable row of the biology table its decided prior range and replaced the linear initial dimer fraction `x_B` by the log dimer-to-monomer ratio `r`, so the decided biology table has no linear row (the per-row rule below stays general). Because `NLL_prior = ln V` is recomputed from each artifact's own prior box, baselines and information gains of estimators trained under the earlier ranges are not comparable with those trained under the decided ranges. Earlier results stand as recorded.
-
 **One tool, both workflows.** Both workflows write a Test-Loss-Distribution artifact whose
 manifest is self-describing, so the analysis is workflow-agnostic and built once over the
 shared-engine pattern: a workflow-agnostic kernel (`test_loss_analysis.py`), a shared runner
 (`test_loss_analysis_runner.py`), and two thin namespaced shims. The only per-workflow
 difference is which alias-qualified `Posit/` the canonical artifact is resolved from; the
-entry-point name carries the namespace (biology's 11 reaction-diffusion parameters, or the
-detector's 6 imaging parameters).
+entry-point name carries the namespace (biology's reaction-diffusion parameters, eleven under
+MET-FAB and twelve under MET-INLB, or the detector's 6 imaging parameters).
 
 This is a post-hoc, read-only analysis step, not one of the canonical pipeline stages. It
 lives in `Script_Bank/Analysis`, is never wired into the stage dispatcher, and is purely
@@ -30,14 +28,19 @@ the artifact — including directly on an arbitrary `.npz` with no machine profi
 At its best epoch the Inference stage records one per-example negative log-likelihood (NLL)
 over the fixed held-out TEST set — the `.npz` snapshot written by `TestLossDistribution`,
 holding parallel `keys` (the stable `(task, sim)` identity), `theta` (the true parameter
-vector, in log10), and `loss` (the per-example NLL), plus a self-describing `manifest`. The
+vector, in estimator coordinates: log10 for a log row, the value itself for a linear row), and
+`loss` (the per-example NLL), plus a self-describing `manifest`. The
 NLL is the log score of the trained posterior: `loss = -log q(theta | video)`, the density the
 estimator places on the true parameter given that example's video. Lower is better; the mean
 of this array is the scalar test loss the training log reports.
 
 Every parameter fact the analysis needs — the learnable keys, their roles, their prior ranges,
-the log flags, and the run provenance — is read from the artifact's own manifest, not from the
-live parameterization. The artifact is therefore the single source of truth for its own
+the log flags, the condition, the coordinate space (`theta_space`: `estimator` when the table holds
+a linear row, `log10` for an all-log table such as the detector's), the theta standardization and
+its source, and the run provenance — is read from the artifact's own manifest, not from the
+live parameterization. The manifest's parameter table is the condition's: a row the condition
+declares as a constant (under MET-FAB the window-start allocation, declared 0) appears as a fixed
+row, not as a learnable column. The artifact is therefore the single source of truth for its own
 analysis: the report stays correct even if the parameterization later changes, and the code
 generalizes to any number of learnable parameters without edits.
 
@@ -69,7 +72,10 @@ ln(range_j)` (natural log; each `range_j` is the width of parameter `j`'s prior 
 the estimator space the density is scored in — `log10` for a log row, the value itself for a
 linear row). This is the no-information baseline: an estimator
 that learned nothing — returning the prior for every video — scores exactly `NLL_prior` on
-every example. The analysis reports it three ways:
+every example. Because `NLL_prior` and every log score are computed in the artifact's own
+coordinates and box, baselines and information gains compare only between artifacts of one
+table (the same keys, scales and boxes) and one condition: a change of coordinates changes the
+density by its Jacobian, and a change of box changes `V`. The analysis reports it three ways:
 
 - **Information gain** — `NLL_prior - mean_NLL`, in nats: how far below the baseline the mean
   sits, i.e. how much the estimator has learned over the prior.
@@ -167,10 +173,13 @@ carries three tables:
 ## Caveats
 
 - **The reference is scored in the density's space.** The uniform-prior NLL is computed from
-  the prior-range widths in the log10 parameter space the artifact stores (`theta_space =
-  log10`), matching the space the estimator's log score is evaluated in. The analysis checks
-  this space assumption and states it; if a future artifact scored its density in a different
-  space, the reference would have to be recomputed in that space.
+  the prior-range widths in the estimator coordinates the artifact stores — log10 for a log row,
+  the value itself for a linear row, per the manifest's `theta_log_flag` (`theta_space =
+  estimator`; the label `log10` is accepted for an all-log table) — matching the space the
+  estimator's log score is evaluated in. The analysis checks the label against the per-row
+  flags and states it, with the linear rows named in the provenance table; if an artifact
+  scored its density in a different space, the reference would have to be recomputed in that
+  space.
 - **This is a density-fit view, not a calibration certificate.** A low NLL means the posterior
   places high density on the true parameter; it does not, on its own, certify that the
   posterior's credible intervals have correct coverage. Calibration and coverage

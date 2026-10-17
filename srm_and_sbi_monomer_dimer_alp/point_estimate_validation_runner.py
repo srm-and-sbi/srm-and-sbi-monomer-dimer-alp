@@ -39,7 +39,7 @@ from .inference_support import resolve_topology
 from .io import load_data, load_theta_set, theta_set_status
 from .parameterization import PARAMETERS, RunTiming, to_flow
 from .provenance import IMPLEMENTATION_FILES, code_provenance, file_sha256, finalize_code_provenance
-from .workflow import WorkflowConfig
+from .workflow import WorkflowConfig, parameter_keys, parameter_table, prior_builder
 
 #: Files whose contents determine this utility's numbers: the estimate implementation plus the
 #: utility itself. Hashed at startup and again at write time.
@@ -53,20 +53,25 @@ REPORT_EXCEEDANCE_ROWS = 100      # exceedances listed in the report; the full l
 
 @dataclass(frozen=True)
 class _ValidationSpec:
-    """Per-workflow specializations, resolved from the workflow config."""
+    """Detector specializations, resolved from the workflow config and the condition."""
+    condition: str
     draw_spec: list
     parameter_keys: list
     build_prior: Callable
 
 
-def _validation_spec(cfg: WorkflowConfig) -> _ValidationSpec:
-    m = cfg.param_module
-    if cfg.tag == "detector":
-        return _ValidationSpec(draw_spec=m.DETECTOR_PARAMETERIZATION,
-                               parameter_keys=[e["KEY"] for e in m.DETECTOR_PARAMETERIZATION],
-                               build_prior=m.build_prior)
-    return _ValidationSpec(draw_spec=m.PARAMETERIZATION, parameter_keys=list(m.PARAMETER_KEYS),
-                           build_prior=m.build_prior)
+def _validation_spec(cfg: WorkflowConfig, condition) -> _ValidationSpec:
+    """The detector's table, keys and prior under ``condition`` (validated by the workflow
+    resolvers). A biology workflow is refused explicitly: the dim subgroup rule
+    (``point_estimate_validation.DIM_SUBGROUP``) is a detector rule, and an untested biology
+    branch is not carried."""
+    keys = parameter_keys(cfg, condition)          # validates the condition for both workflows
+    if cfg.tag != "detector":
+        raise ValueError(f"the point-estimate validation and the MAP benchmark are detector-scoped "
+                         f"utilities; workflow {cfg.tag!r} is refused (their subgroup rule is a "
+                         f"detector rule).")
+    return _ValidationSpec(condition=str(condition), draw_spec=parameter_table(cfg, condition),
+                           parameter_keys=keys, build_prior=prior_builder(cfg, condition))
 
 
 def _frozen_observations(theta_paths, spec, condition, max_sims):
@@ -102,7 +107,7 @@ def run_point_estimate_validation(cfg: WorkflowConfig, args: argparse.Namespace)
     if args.phase not in pev.PHASES:
         raise SystemExit(f"--phase {args.phase}: only {pev.PHASES} is implemented; the SGM and MAP "
                          f"phases are added when their protocols are frozen.")
-    spec = _validation_spec(cfg)
+    spec = _validation_spec(cfg, args.condition)
     eval_cfg = PARAMETERS.inference.evaluation
     timing = RunTiming(total_time_seconds=args.total_time_seconds,
                        frames=PARAMETERS.simulation.timing)

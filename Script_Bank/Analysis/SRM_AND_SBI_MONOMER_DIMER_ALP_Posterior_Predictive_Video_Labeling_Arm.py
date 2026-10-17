@@ -5,13 +5,16 @@ Part of the posterior-predictive video check (``SRM_AND_SBI_MONOMER_DIMER_ALP_Po
 For each recording given, the persisted render (``--source-label``, e.g. ``REF``) is reused whole: its
 trajectory file, its imaging vector, its seed and the very subunits it labeled. Only the dye counts of
 those labeled subunits are drawn again, from the law given (``--labeling-law``, a registry key such as
-``FAB_BINOMIAL`` or ``family:mean[:shape]``) conditioned on at least one dye, so the visible subunits and
+``FAB_BINOMIAL`` or ``family:mean[:shape]``) conditioned on at least one dye, so the fluorescent subunits and
 the motion are identical in both arms and the arms differ in the dye multiplicity alone. The clip is
 rendered through the production renderer and written beside the source as
 ``<source stem>_<ARM>_Synthetic_Video.npz`` with the comparison figure ``..._Comparison.png``; the source's
 provenance is carried over with the labeling fields replaced (``labeling_law``, ``dye_counts``,
 ``labeling_row``, ``labeling_record_json``, ``synth_label``). Nothing is overwritten: an existing arm file
-stops the run before any work. No trajectory is simulated.
+stops the run before any work. A source clip whose stored reaction-diffusion keys (``rds_keys``) are not the
+condition's, key for key and in order, is refused before any work and under ``--dry-run``: the arm carries
+the source's provenance over whole, so a clip of another parameter table is never relabeled by position.
+No trajectory is simulated.
 
 This is a test tool. The arm's law is not adopted anywhere by running it; the production labeling law and
 the training data are untouched. The occupancy recorded is the source render's (the labeled subunits are
@@ -39,7 +42,7 @@ from srm_and_sbi_monomer_dimer_alp import posterior_predictive_video_runner as p
 from srm_and_sbi_monomer_dimer_alp.experiment_support import KIND_OF_CONDITION
 from srm_and_sbi_monomer_dimer_alp.labeling import (LABELING_SET_COLUMNS, LabelingLaw, labeling_rng,
                                                     labeling_summary, resolve_labeling_law)
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, parameter_keys_of
 from srm_and_sbi_monomer_dimer_alp.simulation_dli_support import render_dli_video
 from srm_and_sbi_monomer_dimer_alp.simulation_rds_support import (collapse_species_axis, extract_subunit_lineage,
                                                                   extract_trajectory_poses, monomer_ranks)
@@ -62,6 +65,23 @@ def arm_dye_counts(source_counts: np.ndarray, law: LabelingLaw, rng: np.random.G
     labeled = source_counts > 0
     out[labeled] = positive_conditioned_counts(law, int(labeled.sum()), rng)
     return out
+
+
+def assert_source_keys(source_clip: Path, condition: str) -> None:
+    """Refuse a source clip whose reaction-diffusion keys are not ``condition``'s (exact key and order).
+    The arm carries the source's provenance over whole and the comparison figure labels the stored
+    vector by these keys, so a clip without ``rds_keys``, or with the keys of another table (an earlier
+    release's, or the other condition's), stops the run before any work."""
+    with np.load(source_clip, allow_pickle=False) as src:
+        if "rds_keys" not in src.files:
+            raise SystemExit(f"{source_clip.name} stores no 'rds_keys': it predates the per-condition "
+                             f"reaction-diffusion vector and is refused (render the source again).")
+        stored = [str(k) for k in np.asarray(src["rds_keys"]).ravel()]
+    expected = list(parameter_keys_of(condition))
+    if stored != expected:
+        raise SystemExit(f"{source_clip.name}: its rds_keys {stored} differ from the {condition} keys "
+                         f"{expected}; the clip belongs to another parameter table and is refused (exact "
+                         f"key and order match required; render the source again).")
 
 
 def histogram(counts: np.ndarray) -> dict:
@@ -165,6 +185,7 @@ def main(argv=None):
         for key in ("clip", "trajectory"):
             if not source[key].exists():
                 raise SystemExit(f"source render missing for cell {cell}: {source[key]}")
+        assert_source_keys(source["clip"], kind_token)              # preflight, before any work
         outputs = ppv.render_output_paths(out_dir, f"{source_stem}_{arm_token}")
         del outputs["trajectory"]                                   # the arm simulates nothing
         ppv.refuse_existing_outputs(outputs, hint="Another labeling arm of this render needs its own --arm-label.")

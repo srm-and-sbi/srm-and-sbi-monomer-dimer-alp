@@ -74,9 +74,9 @@ class CalibrationInputs:
     """Pre-drawn diagnostic inputs the runner collects in one streaming pass.
 
     All arrays span the same ``N`` EVAL videos and live in the active workflow's
-    target-theta space (``d = 10`` biology, ``6`` detector). The kernel never sees a
-    raw video: the runner draws these while streaming the EVAL set, then drops the
-    videos.
+    target-theta space, the estimator coordinates (``d = 11`` biology under MET-FAB, ``12``
+    under MET-INLB, ``6`` detector). The kernel never sees a raw video: the runner draws
+    these while streaming the EVAL set, then drops the videos.
 
     Attributes:
         truths: ``(N, d)`` ground-truth theta (drawn from the prior, so the EVAL set is
@@ -88,6 +88,10 @@ class CalibrationInputs:
         truth_log_probs: ``(N,)`` ``log q(theta_true | x_i)`` -- needed for coverage.
         sample_log_probs: ``(N, L)`` ``log q(theta_l | x_i)`` -- needed for coverage.
         embeddings: ``(N, e)`` learned ``x``-embeddings -- needed only for L-C2ST.
+        log_rows: one boolean per dimension, True for a log row (the coordinate is log10 of
+            the physical value; a bias converts to a multiplicative factor) and False for a
+            linear row (the two fractions: a bias is in absolute units, percentage points when
+            reported). ``None`` means every row is a log row (an all-log table).
     """
 
     truths: np.ndarray
@@ -97,6 +101,7 @@ class CalibrationInputs:
     truth_log_probs: Optional[np.ndarray] = None
     sample_log_probs: Optional[np.ndarray] = None
     embeddings: Optional[np.ndarray] = None
+    log_rows: Optional[Sequence[bool]] = None
 
     def __post_init__(self):
         truths = np.asarray(self.truths)
@@ -110,6 +115,8 @@ class CalibrationInputs:
             raise ValueError(f"samples {samples.shape} inconsistent with truths {truths.shape}")
         if len(self.theta_keys) != d:
             raise ValueError(f"theta_keys has {len(self.theta_keys)} keys; expected d={d}")
+        if self.log_rows is not None and len(self.log_rows) != d:
+            raise ValueError(f"log_rows has {len(self.log_rows)} entries; expected d={d}")
         if np.asarray(self.prior_samples).shape != (n, d):
             raise ValueError(f"prior_samples must be (N, d)=({n}, {d})")
         if self.truth_log_probs is not None and np.asarray(self.truth_log_probs).shape != (n,):
@@ -130,6 +137,13 @@ class CalibrationInputs:
     @property
     def dim(self) -> int:
         return int(np.asarray(self.truths).shape[1])
+
+    @property
+    def log_flags(self) -> list:
+        """One boolean per dimension (True = log row); all True when ``log_rows`` is None."""
+        if self.log_rows is None:
+            return [True] * self.dim
+        return [bool(v) for v in self.log_rows]
 
 
 @dataclass(frozen=True)
@@ -513,9 +527,10 @@ class ParameterDiagnosis:
     bias_z: float          # mean(z): systematic offset in units of the posterior's own sd
     spread_z: float        # sd(z): actual error / claimed sd. 1 = honest, >1 = too narrow
     sharpness: float       # posterior sd / prior width: how much the data constrained it
-    bias_theta: float      # the same offset in theta units (log10 here)
-    bias_factor: float     # and as a multiplicative factor on the physical parameter
+    bias_theta: float      # the same offset in estimator coordinates (dex for a log row, absolute for a linear one)
+    bias_factor: float     # and as a multiplicative factor on the physical parameter (log rows; NaN for a linear row)
     defect: str            # "ok" | "location (high|low)" | "width (too narrow|too wide)"
+    log_row: bool = True   # True for a log row; a linear row has no multiplicative factor
 
 
 # A location error counts once it is an appreciable fraction of the posterior's own width;
@@ -531,10 +546,13 @@ def diagnose(inputs: CalibrationInputs) -> list:
     Returns one :class:`ParameterDiagnosis` per target-theta dimension. ``sharpness`` uses
     the prior width recovered from the ground-truth values themselves: the held-out theta
     are prior draws, and for the box-uniform priors both workflows use, ``width =
-    sqrt(12) * sd``, so no prior object has to be threaded in.
+    sqrt(12) * sd``, so no prior object has to be threaded in. ``bias_factor`` is
+    ``10 ** |bias_theta|`` for a log row and NaN for a linear row (``inputs.log_rows``), whose
+    offset is absolute (percentage points when reported) and has no multiplicative form.
     """
     truths = np.asarray(inputs.truths)
     samples = np.asarray(inputs.samples)
+    log_flags = inputs.log_flags
     median = np.median(samples, axis=1)                     # (N, d)
     post_sd = samples.std(axis=1)                           # (N, d)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -556,8 +574,9 @@ def diagnose(inputs: CalibrationInputs) -> list:
             spread_z=spread_z,
             sharpness=(mean_sd / prior_width[j]) if prior_width[j] > 0 else float("nan"),
             bias_theta=bias_theta,
-            bias_factor=float(10.0 ** abs(bias_theta)),
+            bias_factor=float(10.0 ** abs(bias_theta)) if log_flags[j] else float("nan"),
             defect=_defect_label(-bias_z, spread_z),
+            log_row=bool(log_flags[j]),
         ))
     return out
 
@@ -696,6 +715,7 @@ def _subset(inputs: CalibrationInputs, index: np.ndarray) -> CalibrationInputs:
         truth_log_probs=take(inputs.truth_log_probs),
         sample_log_probs=take(inputs.sample_log_probs),
         embeddings=take(inputs.embeddings),
+        log_rows=inputs.log_rows,
     )
 
 

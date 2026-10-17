@@ -13,10 +13,10 @@ sec. 9.3, Phase D): the six photophysics (``mu_r``, ``sigma_r``, ``mu_pc``, ``si
 ``Nuisance_DLI`` artifact (the calibrated-imaging pool minted by the detector workflow), and
 the five SCOPE camera parameters (``gamma``, ``kappa_o``, ``kappa_b``, ``kappa_s``,
 ``kappa_q``) are drawn per simulation from their a-priori box. Both are recorded, per task,
-as self-labeling ``Theta_Set`` variants beside the learnable eleven-parameter RDS ``Theta_Set``, then
+as self-labeling ``Theta_Set`` variants beside the condition's RDS ``Theta_Set``, then
 concatenated into the eleven-key imaging vector the renderer consumes. The learnable
-``Theta_Set`` (the eleven reaction-diffusion labels the estimator inverts, stored as physical
-values) is READ here only for
+``Theta_Set`` (the condition's reaction-diffusion labels the estimator inverts, eleven under
+MET-FAB and twelve under MET-INLB, stored as physical values) is READ here only for
 the sim-0 diagnostics table and is never re-written by this stage. The ``Nuisance_DLI``
 artifact is a REQUIRED input built by a user-driven analysis step; if absent, the stage fails
 loud naming the analysis to run.
@@ -37,10 +37,10 @@ Outputs (the ``{timing_label}`` token, e.g. ``2S_50FPS``, is rendered from
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Nuisance_SCOPE_Theta_Set_TASK_{n}_{split}.zarr
         -- the five SCOPE camera parameters drawn from their a-priori box (physical)
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Labeling_Set_TASK_{n}_{split}.zarr
-        -- the per-simulation labeling record (requested and realized initial dimer fraction,
-           true and visible initial composition by molecular species)
+        -- the per-simulation labeling record (the starting composition at frame 0 by molecular
+           species and its fluorescent part; the declared two-probe share of the reference dimers)
     (``<project_alias>`` here carries the condition: ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_...``;
-    the trajectories and the eleven-parameter ``Theta_Set`` it reads carry the sibling alias plus
+    the trajectories and the condition's ``Theta_Set`` it reads carry the sibling alias plus
     the condition token, ``SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_...``, no workflow qualifier)
 
 Usage:
