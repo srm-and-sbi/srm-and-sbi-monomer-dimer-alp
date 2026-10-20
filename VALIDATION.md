@@ -1215,6 +1215,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_fleet_sync.py` | 10 | the fleet sync: every failure status propagates, and a live sync counts as a success only after the content verification |
 | `tests/test_gradient_accumulation.py` | 6 | gradient accumulation to a fixed global batch: the step resolution and the equivalence with a whole-group batch |
 | `tests/test_inference_network.py` | 10 | the embedding network and its encoder-screening settings: the defaults reproduce the original network, every preset builds at every documented duration, passes stay finite |
+| `tests/test_information_budget.py` | 6 | the budget kernel: the field-noise derivation, the model's operating point of each condition, no typed operating-point constant, the bound's scaling with the noise |
 | `tests/test_labeling_compliance.py` | 9 | every renderer of simulated trajectories labels them the way the training data were labeled |
 | `tests/test_map_benchmark.py` | 6 | the MAP benchmark's batched optimizer engine against the serial reference loop |
 | `tests/test_map_optimizer_invariant.py` | 14 | regression tests for the MAP seed-then-optimize step |
@@ -1237,7 +1238,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_training_log_readout.py` | 5 | the training-log readout on synthetic Inference logs: settings, epochs, best TEST loss, warm restarts, chains and configurations |
 | `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
 
-Total: 276 tests over 33 files.
+Total: 282 tests over 34 files.
 
 ## 4. Troubleshooting
 

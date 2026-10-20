@@ -89,19 +89,24 @@ The rate alone is then barely constrained, however many frames are collected. A 
 treats the amplitude and offset as known misses this entirely and is optimistic by an order of
 magnitude precisely where the answer matters.
 
-With all three folded in, the bound in dex at the MET-FAB emitter density is:
+With all three folded in, the bound in dex at the MET-FAB operating point is below. The operating point is
+computed by the budget utility from the current model, never typed in: the retained population at the
+prior center, about 119 fluorescent complexes at 2.03 dyes per labeled subunit, and from it and the
+SCOPE camera block the relative noise of the whole-field curve, about 0.036 per frame; the table is
+regenerated whenever either moves:
 
 | recording | p = 0.01 | p = 0.032 | p = 0.10 | p = 0.32 |
 |---|---|---|---|---|
-| 2 s (100 frames) | 1817 | 178 | 16.5 | 1.26 |
-| 20 s (1000 frames) | 6.01 | 0.65 | **0.083** | **0.019** |
-| 60 s (3000 frames) | 0.43 | **0.057** | **0.014** | **0.011** |
+| 2 s (100 frames) | 2316 | 227 | 21.1 | 1.60 |
+| 20 s (1000 frames) | 7.66 | 0.83 | 0.11 | **0.024** |
+| 60 s (3000 frames) | 0.54 | **0.073** | **0.018** | **0.014** |
 
 Bold entries are inside the 0.10 dex acceptance threshold. The prior is 1.5 dex wide, so any
 bound above that is no constraint at all. Read plainly: under this reduced model the benchmark
 standard deviation exceeds the threshold by more than an order of magnitude everywhere at 2 s
-(1.26 dex at the top of the prior against a 1.5 dex prior width, thousands of dex at the bottom),
-and falls inside the threshold only in the upper half of the prior at 20 s. The benchmark is approximate — an unbiased decay-rate
+(1.60 dex at the top of the prior against a 1.5 dex prior width, thousands of dex at the bottom),
+falls inside the threshold only at the top of the prior at 20 s (0.106 dex at p = 0.10, just outside), and
+sits inside it from p = 0.032 up at 60 s. The benchmark is approximate — an unbiased decay-rate
 estimator using total fluorescence, with an effective-sample-size adjustment for the flicker
 correlation — and does not establish a fundamental recovery limit for inference from the full
 video; it is the reason this estimator is held to its threshold at 1000 frames and not at 100.
@@ -112,7 +117,9 @@ decided by an **observable** eligibility rule, never by the benchmark or the tru
 decay is at least three times the residual scatter, and the fit's own standard error on log10 p is
 at most 0.25 dex. The accuracy threshold applies to the usable recordings; the recovery of the
 rejected ones is reported beside them, so that selection cannot hide a failure. The report states
-the benchmark at the prior center as explanatory context only.
+the benchmark at the prior center as explanatory context only, computed at run time for the scene it
+analyzed: the condition's model operating point for a tier or the experimental recordings, and the
+synthetic scene's own single-dye emitters for the selftest.
 
 ## Requirements
 

@@ -159,10 +159,12 @@ ELIGIBILITY = {"min_decay_snr": 3.0, "max_se_log10": 0.25}
 # used -- it is unavailable on an experimental recording.
 LAMBDA_RATE_DEFAULT = 10 ** (0.5 * sum(det.DETECTOR_PARAMETERIZATION[det.DETECTOR_FIND["lambda_rate"]]["PRIOR_RANGE"]))
 ACCEPTANCE = {"prob_bleach_mae_dex": 0.10, "acceptance_frames": 1000}
-# Relative noise of the total-fluorescence curve per frame at the MET-FAB emitter density, taken
-# from the kernel so this script and the budget utility cannot quote different values for the same
-# quantity. Used only to state the information bound beside the result.
-RELATIVE_NOISE = ib.FIELD_RELATIVE_NOISE_MET_FAB
+# The relative noise of the total-fluorescence curve that the stated information bound takes is
+# never typed here: it is derived at run time by `information_budget.operating_relative_noise` for
+# the scene the bound is quoted for (the condition's model operating point for a tier or the
+# experimental recordings; the selftest scene's own single-dye emitters), so this script and the
+# budget utility cannot quote different values for the same quantity. Used only to state the
+# information bound beside the result.
 SELFTEST_SEED = 20260918
 
 
@@ -1053,12 +1055,18 @@ def main(argv=None):
              f"({LAMBDA_RATE_DEFAULT:.2f} at the prior center unless --lambda-rate is given).")
     lam_ctx = LAMBDA_RATE_DEFAULT if args.lambda_rate is None else args.lambda_rate
     p_ctx = 10 ** (0.5 * (lo_p + hi_p))
-    bound_ctx = ib.crb_prob_bleach_dex(float(p_ctx), int(n_frames), RELATIVE_NOISE, lambda_rate=lam_ctx,
+    noise = (ib.operating_relative_noise(None, n_emitters=args.selftest_subunits, dyes_per_spot=1.0)
+             if args.selftest else ib.operating_relative_noise(args.condition))
+    at_point = (f"the selftest scene's {args.selftest_subunits} single-dye emitters" if args.selftest else
+                f"the model's operating point of {noise['operating_point']['n_emitters']} fluorescent complexes "
+                f"({noise['dyes_per_spot']:.2f} dyes per labeled subunit) at the {args.condition} prior center")
+    bound_ctx = ib.crb_prob_bleach_dex(float(p_ctx), int(n_frames), noise["relative_noise"], lambda_rate=lam_ctx,
                                        frame_time_seconds=PARAMETERS.simulation.timing.frame_time_seconds)["sd_dex"]
     reporter.stat("information-budget benchmark at the prior center (dex)", float(bound_ctx),
                   note="explanatory context only, not an eligibility rule: the approximate standard deviation an "
                        "unbiased total-fluorescence estimator is not expected to beat at this recording length "
-                       "(DETECTOR_WORKFLOW.md sec. 9.5)")
+                       f"(DETECTOR_WORKFLOW.md sec. 9.5); computed at run time at {at_point}, relative field noise "
+                       f"{noise['relative_noise']:.4f} per frame")
 
     np.savez_compressed(os.path.join(out_dir, "direct_fluorescence_loss.npz"),
                         truth=truth, estimate=estimate, theta=theta_all, valid=valid, usable=usable,

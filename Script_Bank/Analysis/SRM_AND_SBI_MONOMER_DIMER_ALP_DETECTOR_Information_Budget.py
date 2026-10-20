@@ -44,7 +44,8 @@ Usage (from the repo root):
         Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Information_Budget.py \\
         --total-time-seconds 2.0
 
-    ... --n-emitters 143            # another operating point (the default is the model's, see operating_point)
+    ... --n-emitters 143            # another operating point; the field noise follows it
+    ... --relative-noise 0.03       # override the derived field noise
     ... --measured measured.json   # overlay direct/neural numbers into the comparison table
     ... --dry-run                  # resolve settings and print what it would compute
 
@@ -71,7 +72,7 @@ from srm_and_sbi_monomer_dimer_alp import information_budget as ib  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
-    PARAMETERS, RunTiming, parameterization_of, population_from_theta, prior_center,
+    PARAMETERS, RunTiming,
 )
 
 assert os.path.abspath(ib.__file__).startswith(REPO_ROOT), (
@@ -80,40 +81,6 @@ assert os.path.abspath(ib.__file__).startswith(REPO_ROOT), (
 )
 
 STAGE = "Information_Budget"
-
-
-
-def operating_point(condition: str) -> dict:
-    """The operating point of one recording under ``condition``, from the model: the retained
-    population at the condition's prior center (``parameterization.population_from_theta``), its
-    expected number of fluorescent complexes under the production labeling rule
-    (``labeling.expected_fluorescent_complexes``), and the mean dye count of a labeled subunit,
-    E[dye | dye >= 1], under the condition's law.
-
-    Under MET-FAB the prior center (receptor total 10^4, basal reference fraction 0.5) retains
-    245 subunits in 49 monomers and 98 dimers, 148 of them probe-bound; at 0.806 fluorescent per
-    bound probe that is about 119 fluorescent complexes, inside the first-2 s spot counts of the
-    sixty deposited MET-FAB recordings (median 143, quartiles 79 and 218: the A9 reference the
-    prior-realization audit reads). The mean dye count of a labeled subunit under FAB_POISSON is
-    1.64 / 0.806 = 2.03.
-    """
-    theta = np.array([prior_center(row) for row in parameterization_of(condition)], dtype=float)
-    population = population_from_theta(theta, condition)
-    plan = lab.resolve_labeling(condition)
-    q = float(plan.law.fluorescent_probability)
-    n_monomers = int(np.squeeze(population.n_monomers))
-    n_dimers = int(np.squeeze(population.n_dimers))
-    n_subunits = int(np.squeeze(population.n_subunits))
-    n_bound = float(n_subunits) if plan.ligand_classes else n_monomers + n_dimers * (1.0 + float(plan.two_probe_share))
-    n_fluorescent = float(np.squeeze(lab.expected_fluorescent_complexes(population, plan)))
-    return dict(condition=condition, n_emitters=int(round(n_fluorescent)), n_fluorescent=n_fluorescent,
-                dyes_per_spot=float(plan.law.mean / q), fluorescent_per_bound_probe=q, law=plan.law_name,
-                n_subunits=n_subunits, n_monomers=n_monomers, n_dimers=n_dimers, n_probe_bound=n_bound)
-
-
-# Relative noise of the whole-field fluorescence curve, from the kernel so the budget
-# and the estimator cannot quote different values for the same quantity.
-DEFAULT_RELATIVE_NOISE = ib.FIELD_RELATIVE_NOISE_MET_FAB
 
 
 def prior_box() -> dict:
@@ -220,18 +187,23 @@ def main(argv=None):
     ap.add_argument("--dyes-per-spot", type=float, default=None,
                     help="mean dyes on a labeled subunit; default: E[dye | dye >= 1] under the condition's "
                          "labeling law.")
-    ap.add_argument("--relative-noise", type=float, default=DEFAULT_RELATIVE_NOISE,
-                    help="relative noise of the total-fluorescence curve, per frame.")
+    ap.add_argument("--relative-noise", type=float, default=None,
+                    help="relative noise of the total-fluorescence curve per frame; default: derived from the "
+                         "emitters, the dyes per spot, the brightness prior center and the SCOPE camera block "
+                         "(information_budget.operating_relative_noise).")
     ap.add_argument("--measured", default=None,
                     help="optional JSON with measured direct/neural spreads to overlay.")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args(argv)
-    op = operating_point(args.condition)
+    op = ib.operating_point(args.condition)
     if args.n_emitters is None:
         args.n_emitters = op["n_emitters"]
     if args.dyes_per_spot is None:
         args.dyes_per_spot = op["dyes_per_spot"]
+    rn = ib.operating_relative_noise(args.condition, args.n_emitters, args.dyes_per_spot)
+    if args.relative_noise is None:
+        args.relative_noise = rn["relative_noise"]
 
     data_bank_root = PARAMETERS.machine.data_bank_root
     dt = PARAMETERS.simulation.timing.frame_time_seconds
@@ -254,7 +226,10 @@ def main(argv=None):
               f"{op['n_probe_bound']:.0f} probe-bound, {op['fluorescent_per_bound_probe']:.3f} fluorescent per "
               f"bound probe -> {op['n_fluorescent']:.1f} fluorescent complexes; {op['dyes_per_spot']:.2f} dyes "
               f"on a labeled subunit ({op['law']})")
-        print(f"  relative noise  : {args.relative_noise}")
+        print(f"  relative noise  : {args.relative_noise:.4f}" + ("" if args.relative_noise != rn["relative_noise"] else
+              f" = field noise {rn['field_noise_adu']:.3g} ADU / emitter signal {rn['emitter_signal_adu']:.3g} ADU per frame "
+              f"(background of {rn['n_pixels']} pixels under the EMCCD variance law at the SCOPE center; "
+              f"{args.n_emitters} spots x {args.dyes_per_spot:.2f} dyes x {rn['mu_pc']:.0f} photons x gamma kappa_q)"))
         print(f"  compare lengths : {args.compare_seconds} s")
         print(f"  measured overlay: {args.measured or '(none)'}")
         return 0
@@ -274,6 +249,13 @@ def main(argv=None):
     reporter.stat("fluorescent emitters", args.n_emitters,
                   note=f"spots available to any estimator; the model's operating point is {op['n_fluorescent']:.1f} "
                        f"fluorescent complexes of the retained population at the {args.condition} prior center")
+    reporter.stat("relative noise of the field curve, per frame", args.relative_noise,
+                  note=("overridden on the command line" if args.relative_noise != rn["relative_noise"] else
+                        f"derived at this operating point: field noise {rn['field_noise_adu']:.3g} ADU "
+                        f"(background of {rn['n_pixels']} pixels under the EMCCD variance law at the SCOPE center) "
+                        f"over an emitter signal of {rn['emitter_signal_adu']:.3g} ADU ({args.n_emitters} spots x "
+                        f"{args.dyes_per_spot:.2f} dyes x {rn['mu_pc']:.0f} photons x gamma kappa_q); it scales as one "
+                        f"over the spot count, so it is recomputed from the model on every run"))
     reporter.stat("photons per spot per frame", budget["spot_photons"],
                   note="median brightness times the mean dyes on a labeled subunit")
     reporter.stat("per-spot sd(ln sigma), one frame", budget["per_spot_log_width"],
@@ -408,15 +390,15 @@ def main(argv=None):
              "sample size enters the information with the wrong sign or power.")
 
     p_mid = box["prob_photo_bleach"]["center"]
-    short = ib.crb_prob_bleach_dex(p_mid, 100, DEFAULT_RELATIVE_NOISE)["sd_dex"]
-    long_ = ib.crb_prob_bleach_dex(p_mid, 1000, DEFAULT_RELATIVE_NOISE)["sd_dex"]
+    short = ib.crb_prob_bleach_dex(p_mid, 100, args.relative_noise)["sd_dex"]
+    long_ = ib.crb_prob_bleach_dex(p_mid, 1000, args.relative_noise)["sd_dex"]
     reporter.check(
         "a longer recording tightens the decay bound", long_ < short,
         f"{long_:.5f} dex at 1000 frames vs {short:.5f} dex at 100", fatal=False,
         note="Decay-rate information grows with duration, so the bound must shrink. A "
              "violation would mean the time axis enters the Fisher sum incorrectly.")
 
-    correlated = ib.crb_prob_bleach_dex(p_mid, 1000, DEFAULT_RELATIVE_NOISE,
+    correlated = ib.crb_prob_bleach_dex(p_mid, 1000, args.relative_noise,
                                         lambda_rate=box["lambda_rate"]["center"],
                                         frame_time_seconds=dt)["sd_dex"]
     reporter.check(
@@ -429,8 +411,8 @@ def main(argv=None):
 
     reporter.check(
         "the shallow-decay degeneracy widens the bound most at small p",
-        (ib.crb_prob_bleach_dex(box["prob_photo_bleach"]["low"], 1000, DEFAULT_RELATIVE_NOISE)["sd_dex"]
-         > ib.crb_prob_bleach_dex(box["prob_photo_bleach"]["high"], 1000, DEFAULT_RELATIVE_NOISE)["sd_dex"]),
+        (ib.crb_prob_bleach_dex(box["prob_photo_bleach"]["low"], 1000, args.relative_noise)["sd_dex"]
+         > ib.crb_prob_bleach_dex(box["prob_photo_bleach"]["high"], 1000, args.relative_noise)["sd_dex"]),
         "the bound at the bottom of the prior exceeds the bound at the top", fatal=False,
         note="A shallower decay is closer to a straight line, so the amplitude, rate and offset "
              "are more degenerate and the rate is less constrained. If this ordering reversed, "
@@ -444,7 +426,7 @@ def main(argv=None):
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
         json.dump(dict(
             n_frames=timing.frame_count, n_emitters=args.n_emitters, dyes_per_spot=args.dyes_per_spot,
-            relative_noise=args.relative_noise, operating_point=op,
+            relative_noise=args.relative_noise, operating_point=op, relative_noise_derivation=rn,
             spot_photons=budget["spot_photons"],
             per_spot_log_width=budget["per_spot_log_width"],
             mu_r_bound_dex=w["center"]["sd_log_scale_dex"],

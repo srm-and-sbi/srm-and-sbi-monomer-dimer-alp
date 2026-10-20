@@ -84,6 +84,17 @@ sits in the good regime; without linking `sqrt(v)` is about 0.086, comparable to
 and the bottom of the prior is genuinely information-starved. That is what averaging within a
 track buys, and it matches what the direct estimator measures.
 
+**Relative noise of the field curve.** The photobleaching bound reads the field total of each
+frame as one point with relative noise `eps`. That number is derived, never typed: the field's
+noise is the optical background of every pixel under the EMCCD variance law, `sqrt(n_px (2 gamma²
+kappa_q kappa_o + kappa_s²))`, and the signal is the emitters', `spots × dyes per spot × mu_pc × gamma
+kappa_q`, both at the SCOPE center and the brightness prior center. The noise holds no spot count and
+the signal is proportional to it, so `eps` scales as one over the number of fluorescent spots: it is a
+property of the operating point, which follows the biology model (the count prior, the occupancy, the
+composition rule, the labeling law). The utility therefore evaluates it from the current model on every
+run and states the derivation in its report; at the MET-FAB operating point it is about 0.036 per
+frame. The fluorescence-loss estimator obtains the figure the same way for the scene it analyzed.
+
 **Photobleaching.** The curve is `S(t) = A exp(-k t) + B` with the amplitude and offset
 unknown, so the bound is the `(k, k)` entry of the **inverse** of the 3 × 3 information matrix,
 not the reciprocal of its own diagonal. That distinction decides the answer. Where the decay is
@@ -109,8 +120,8 @@ recording carries roughly **three** effectively independent samples of the decay
 hundred. It is easy to omit, and omitting it makes the recordings look far more informative
 than they are. Combined with the shallow-decay degeneracy above, it puts the benchmark standard
 deviation for `prob_photo_bleach` more than an order of magnitude above the 0.10 dex threshold
-anywhere in its prior for a 2 s recording (1.26 dex at the top against a 1.5 dex prior width),
-and inside that threshold only in the upper half of the prior at 20 s — see
+anywhere in its prior for a 2 s recording (1.60 dex at the top against a 1.5 dex prior width),
+and inside that threshold only at the top of the prior at 20 s — see
 `DETECTOR_WORKFLOW.md` §9.5 for the table. The effective-sample-size adjustment is an approximation
 to the correlated decay likelihood, not an exact treatment of it, so the result is an approximate
 precision benchmark for an unbiased decay-rate estimator using total fluorescence and not a
@@ -137,12 +148,10 @@ prior center under the production labeling rule, about 119 under MET-FAB (245 re
 49 monomers and 98 dimers, 148 of them probe-bound, 0.806 fluorescent per bound probe), which lies
 inside the first-2 s spot counts of the sixty deposited MET-FAB recordings (median 143, quartiles 79
 and 218). `--dyes-per-spot` defaults to the mean dye count of a labeled subunit under the condition's
-law, 2.03 under MET-FAB. The dry run and the report state the operating point used. The relative
-noise of the whole-field curve is the kernel's constant, 0.028, derived at a density of 154 spots,
-the operating point of the earlier model; the bleaching table of `DETECTOR_WORKFLOW.md` §9.5 and the
-benchmark the fluorescence-loss estimator states beside its result are computed at it. At the current
-operating point the same derivation gives about 0.036, which would widen the bleaching bounds by
-about 1.3; that revision is a decision and is not made here. `--compare-seconds`
+law, 2.03 under MET-FAB. `--relative-noise` overrides the relative noise of the whole-field curve, which
+is otherwise derived from the same operating point and the SCOPE camera block (*Relative noise of the
+field curve* above); an emitter count passed on the command line moves it along. The dry run and the
+report state the operating point and the derivation used. `--compare-seconds`
 tabulates the duration scaling, defaulting to the 2 s training clips and the 20 s
 experimental recordings. `--measured` takes a small JSON of measured direct and neural
 spreads and overlays them into the comparison table. `--dry-run` resolves the settings and

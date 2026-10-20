@@ -5,6 +5,57 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.42 - 2026-10-20
+
+The information budget's operating point and the field noise it implies are computed from the model on every run.
+A typed constant for either goes stale with any change of the count prior, the occupancy, the composition rule, the
+labeling law or the camera block, and one did: the relative noise of the whole-field curve still belonged to the
+emitter count of the model before the retained population, so the budget quoted population bounds at one operating
+point and the bleaching bound at another.
+
+### Changed
+
+- `information_budget.FIELD_RELATIVE_NOISE_MET_FAB` is removed. `information_budget.field_relative_noise` carries the
+  derivation in code: the background of the field's pixels under the EMCCD variance law,
+  `sqrt(n_px (2 gamma² kappa_q kappa_o + kappa_s²))`, against the emitters' signal, `spots × dyes per spot × mu_pc ×
+  gamma kappa_q`; the noise holds no spot count and the signal is proportional to it, so the figure scales as one over
+  the number of fluorescent spots and belongs to an operating point, never to the camera alone.
+  `information_budget.operating_point(condition)` (moved into the kernel from the budget utility) gives the spots and
+  the dyes per spot of the retained population at the condition's prior center, and
+  `information_budget.operating_relative_noise(condition, n_emitters, dyes_per_spot)` evaluates the derivation from the
+  current model: the SCOPE center for the camera block, the center of the `mu_pc` prior for the brightness, the stem's
+  field for the pixels; a synthetic scene passes its own count and dyes. The result carries every input, so a report
+  can state what its bound was computed at. At the MET-FAB operating point the figure is 0.0357 per frame (0.0276 at
+  the 154 spots the constant was typed for; 0.0576 for the fluorescence-loss selftest's 150 single-dye emitters).
+- The budget utility derives the relative noise from its operating point unless `--relative-noise` overrides it, so an
+  emitter count passed on the command line moves it along; the dry run, the report and the summary state the
+  derivation. The fluorescence-loss estimator computes the benchmark it states beside its result at run time for the
+  scene it analyzed: the condition's model operating point for a tier or the experimental recordings, the selftest
+  scene's own emitters for the selftest; its note says so.
+- The bleaching table of `DETECTOR_WORKFLOW.md` §9.5, the budget note and the fluorescence-loss note are regenerated at
+  the derived noise, every entry 1.27 times its former value: 2 s 2316, 227, 21.1, 1.60; 20 s 7.66,
+  0.83, 0.106, 0.024; 60 s 0.54, 0.073, 0.018, 0.014 dex at p = 0.01, 0.032, 0.10 and 0.32. The reading changes
+  at one cell: at 20 s the bound is inside the 0.10 dex threshold only at the top of the prior (p = 0.10: 0.083 to
+  0.106); the 2 s reading (no constraint) and the 60 s reading (inside from p = 0.032 up) stand. The three
+  documents state the operating point and that the table is regenerated whenever it moves.
+
+### Tests
+
+- `tests/test_information_budget.py` (6): the derivation reproduces the hand calculation; the operating point of each
+  condition is the retained population's fluorescent complexes at the prior center; the relative noise follows the
+  operating point and the SCOPE center, scales as one over the spot count, and a scene without a condition and without
+  its own count is refused; no typed operating-point constant remains in the kernel or the two readers; the decay
+  bound is linear in the relative noise. `VALIDATION.md` §3.6 lists it: 282 tests over 34 files.
+
+### Verification
+
+- **Full suite**, each `tests/*.py` run directly: 282 PASS over 34 files, every file exiting 0 and no file short of its
+  definitions (276 over 33 at 0.1.41 plus the six new tests). The budget utility's dry run states the derivation for both
+  conditions, an emitter count passed on the command line moves the noise along, and its full run into a scratch folder
+  passes every self-check at the derived noise; the fluorescence-loss utility's selftest and tier dry runs resolve. AST,
+  markdown-reference and command-line sweeps clean.
+- **Not run:** any generation, training, rendering or HPC job; the fluorescence-loss selftest.
+
 ## 0.1.41 - 2026-10-20
 
 The cleanup after the sanity check of the window-start composition: the glossary's *fluorescent* replaces *visible*

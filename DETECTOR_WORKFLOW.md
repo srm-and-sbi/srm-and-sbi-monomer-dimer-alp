@@ -1287,20 +1287,26 @@ is barely constrained however many frames are collected. A bound that treats the
 offset as known misses this and is optimistic by an order of magnitude exactly where the answer
 decides a design question. The bound below profiles them out.
 
-Bound on `prob_photo_bleach` in dex, at the MET-FAB emitter density, with all three effects
+Bound on `prob_photo_bleach` in dex at the MET-FAB operating point, with all three effects
 included (bold = inside the 0.10 dex threshold the direct estimator is held to; the prior is
-1.5 dex wide, so a bound above that is no constraint at all):
+1.5 dex wide, so a bound above that is no constraint at all). The operating point is computed by
+the utility from the current model and never typed in: the retained population at the MET-FAB
+prior center, about 119 fluorescent complexes at 2.03 dyes per labeled subunit, and from it and
+the SCOPE camera block the relative noise of the whole-field curve, the background of the field's
+pixels under the EMCCD variance law against the emitters' signal, about 0.036 per frame. The
+table is regenerated whenever either of them moves:
 
 | recording | p = 0.01 | p = 0.032 | p = 0.10 | p = 0.32 |
 |---|---|---|---|---|
-| 2 s (100 frames) | 1817 | 178 | 16.5 | 1.26 |
-| 20 s (1000 frames) | 6.01 | 0.65 | **0.083** | **0.019** |
-| 60 s (3000 frames) | 0.43 | **0.057** | **0.014** | **0.011** |
+| 2 s (100 frames) | 2316 | 227 | 21.1 | 1.60 |
+| 20 s (1000 frames) | 7.66 | 0.83 | 0.11 | **0.024** |
+| 60 s (3000 frames) | 0.54 | **0.073** | **0.018** | **0.014** |
 
 Read plainly: under this reduced model the estimated standard deviation of an unbiased
 `prob_photo_bleach` estimate exceeds the 0.10 dex threshold by more than an order of magnitude
-everywhere at 2 s (1.26 dex at the top of the prior, thousands of dex at the bottom, against a 1.5 dex
-prior width), and falls inside that threshold only in the upper half of the prior at 20 s. The budget provides an approximate
+everywhere at 2 s (1.60 dex at the top of the prior, thousands of dex at the bottom, against a 1.5 dex
+prior width), falls inside that threshold only at the top of the prior at 20 s (0.106 dex at p = 0.10, just
+outside), and sits inside it from p = 0.032 up at 60 s. The budget provides an approximate
 precision benchmark for an unbiased decay-rate estimator using total fluorescence; the
 effective-sample-size adjustment approximates the correlated decay likelihood rather than treating it
 exactly, and the benchmark does not establish a fundamental recovery limit for inference from the

@@ -65,7 +65,9 @@ from typing import Optional
 import numpy as np
 
 __all__ = [
-    "FIELD_RELATIVE_NOISE_MET_FAB",
+    "operating_point",
+    "field_relative_noise",
+    "operating_relative_noise",
     "pixel_variance_adu",
     "spot_fisher_information",
     "crb_log_width_one_spot",
@@ -78,23 +80,112 @@ __all__ = [
 ]
 
 
-# Relative noise of the WHOLE-FIELD fluorescence curve, per frame, at the MET-FAB emitter
-# density. Defined here so the budget utility and the fluorescence-loss estimator cannot
-# drift apart: they quoted 0.018 and 0.028 independently at one point, which silently made
-# the published identifiability table disagree with the tool that produced it.
-#
-# Derivation: the per-frame field noise is dominated by the optical background over the
-# 256 x 256 grid, sqrt(n_px * (2 gamma^2 kappa_q kappa_o + kappa_s^2)) ~ 7.7e4 ADU, against an
-# emitter signal of about 154 spots x 2.03 dyes x mu_pc x gamma x kappa_q ~ 2.8e6 ADU. The
-# value is SPECIFIC to that emitter density: a single-dye scene of 150 emitters measures
-# 0.058 instead, and any bound quoted for such a scene must use that figure.
-# The 154 spots are the operating point of the earlier model (1233 subunits at a fluorescent
-# fraction of 0.125). The retained population at the current MET-FAB prior center holds about
-# 119 fluorescent complexes (the budget utility's `operating_point`), where the same derivation
-# gives about 0.036. The value stays at 0.028 because the bleaching table of DETECTOR_WORKFLOW.md
-# sec. 9.5 and the benchmark the fluorescence-loss estimator states beside its result are computed
-# at it; moving it rescales those bounds by about 1.3 and is a decision to take with them.
-FIELD_RELATIVE_NOISE_MET_FAB = 0.028
+# =============================================================================
+# The operating point, and the relative noise of the whole-field curve
+# =============================================================================
+# Nothing in this section is a typed constant. The spot count follows the biology model (the
+# count prior, the occupancy, the composition rule, the labeling law), the camera block is the
+# SCOPE center and the brightness the center of the detector prior; any of them can move with a
+# release, so every reader evaluates these functions at run time and states the values it used.
+# A typed value went stale once: an emitter count of the model before the retained population
+# lived on in the budget's default and in a field-noise constant derived from it, and the budget
+# then quoted population bounds at one operating point and a bleaching bound at another.
+
+def operating_point(condition: str) -> dict:
+    """The operating point of one recording under ``condition``, from the model.
+
+    The retained population at the condition's prior center (``parameterization.population_from_theta``
+    on the physical prior center of every row), its expected number of fluorescent complexes under
+    the production labeling rule (``labeling.expected_fluorescent_complexes``), and the mean dye
+    count of a labeled subunit, E[dye | dye >= 1], under the condition's law.
+
+    Under MET-FAB the prior center (receptor total 10^4, basal reference fraction 0.5) retains 245
+    subunits in 49 monomers and 98 dimers, 148 of them probe-bound; at 0.806 fluorescent per bound
+    probe that is about 119 fluorescent complexes, inside the first-2 s spot counts of the sixty
+    deposited MET-FAB recordings (median 143, quartiles 79 and 218: the A9 reference the
+    prior-realization audit reads). A labeled subunit carries 1.64 / 0.806 = 2.03 dyes on average
+    under FAB_POISSON. Under MET-INLB the same construction gives about 226 complexes at one dye each.
+
+    Returns:
+        ``n_emitters`` (the rounded count), ``n_fluorescent`` (unrounded), ``dyes_per_spot``,
+        ``fluorescent_per_bound_probe``, ``law``, and the population's ``n_subunits``,
+        ``n_monomers``, ``n_dimers``, ``n_probe_bound``.
+    """
+    from .labeling import expected_fluorescent_complexes, resolve_labeling
+    from .parameterization import parameterization_of, population_from_theta, prior_center
+    theta = np.array([prior_center(row) for row in parameterization_of(condition)], dtype=float)
+    population = population_from_theta(theta, condition)
+    plan = resolve_labeling(condition)
+    q = float(plan.law.fluorescent_probability)
+    n_monomers = int(np.squeeze(population.n_monomers))
+    n_dimers = int(np.squeeze(population.n_dimers))
+    n_subunits = int(np.squeeze(population.n_subunits))
+    n_bound = (float(n_subunits) if plan.ligand_classes
+               else n_monomers + n_dimers * (1.0 + float(plan.two_probe_share)))
+    n_fluorescent = float(np.squeeze(expected_fluorescent_complexes(population, plan)))
+    return dict(condition=condition, n_emitters=int(round(n_fluorescent)), n_fluorescent=n_fluorescent,
+                dyes_per_spot=float(plan.law.mean / q), fluorescent_per_bound_probe=q, law=plan.law_name,
+                n_subunits=n_subunits, n_monomers=n_monomers, n_dimers=n_dimers, n_probe_bound=n_bound)
+
+
+def field_relative_noise(n_emitters: float, dyes_per_spot: float, mu_pc: float, gamma: float,
+                         kappa_q: float, kappa_o: float, kappa_s: float, n_pixels: int) -> dict:
+    """Relative noise of the WHOLE-FIELD fluorescence curve per frame, ``eps = noise / signal``.
+
+    The field total of one frame is the sum of every pixel. Its noise is dominated by the optical
+    background: under the EMCCD variance law each pixel carries ``2 gamma^2 kappa_q kappa_o +
+    kappa_s^2`` ADU^2 of background variance, and ``n_pixels`` independent pixels add their
+    variances, so ``noise = sqrt(n_pixels (2 gamma^2 kappa_q kappa_o + kappa_s^2))`` ADU. The
+    emitter signal is ``n_emitters x dyes_per_spot x mu_pc x gamma kappa_q`` ADU. The noise term
+    holds no spot count and the signal is proportional to it, so ``eps`` scales as one over the
+    number of fluorescent spots: it is a property of an operating point, never of the camera alone,
+    and must be evaluated for the scene a bound is quoted for (``operating_relative_noise``).
+
+    Left out, deliberately: the emitters' own shot noise (a few percent of the background variance
+    at the MET-FAB operating point), pixel correlations, and bleaching within a frame. It is the
+    simple operating-point figure the decay bound (``crb_decay_rate``) takes as ``relative_noise``.
+
+    Returns:
+        ``relative_noise``, ``field_noise_adu``, ``emitter_signal_adu`` and the inputs.
+    """
+    noise = float(np.sqrt(float(n_pixels) * (2.0 * gamma ** 2 * kappa_q * kappa_o + kappa_s ** 2)))
+    signal = float(n_emitters) * float(dyes_per_spot) * float(mu_pc) * float(gamma) * float(kappa_q)
+    if signal <= 0:
+        raise ValueError("field_relative_noise needs a positive emitter signal (spots, dyes, brightness, gain).")
+    return dict(relative_noise=noise / signal, field_noise_adu=noise, emitter_signal_adu=signal,
+                n_emitters=float(n_emitters), dyes_per_spot=float(dyes_per_spot), mu_pc=float(mu_pc),
+                gamma=float(gamma), kappa_q=float(kappa_q), kappa_o=float(kappa_o), kappa_s=float(kappa_s),
+                n_pixels=int(n_pixels))
+
+
+def operating_relative_noise(condition: Optional[str], n_emitters: Optional[float] = None,
+                             dyes_per_spot: Optional[float] = None) -> dict:
+    """``field_relative_noise`` evaluated from the current model.
+
+    The spots and the dyes per spot come from ``operating_point(condition)`` unless given (a
+    synthetic scene passes its own; ``condition`` may then be None), the camera block is the SCOPE
+    center, the brightness the center of the ``mu_pc`` prior, and the pixels those of the imaged
+    field. The result carries every input and, when it was used, the operating point, so a report
+    can state what its bound was computed at.
+    """
+    from .detector_parameterization import DETECTOR_NUISANCE_SCOPE, DETECTOR_PARAMETERIZATION
+    from .parameterization import PARAMETERS
+    point = None
+    if n_emitters is None or dyes_per_spot is None:
+        if condition is None:
+            raise ValueError("operating_relative_noise needs a condition, or both n_emitters and dyes_per_spot.")
+        point = operating_point(condition)
+        n_emitters = point["n_emitters"] if n_emitters is None else n_emitters
+        dyes_per_spot = point["dyes_per_spot"] if dyes_per_spot is None else dyes_per_spot
+    center = lambda entry: 10 ** (0.5 * (entry["PRIOR_RANGE"][0] + entry["PRIOR_RANGE"][1]))
+    scope = {entry["KEY"]: center(entry) for entry in DETECTOR_NUISANCE_SCOPE}
+    mu_pc = {entry["KEY"]: center(entry) for entry in DETECTOR_PARAMETERIZATION}["mu_pc"]
+    n_pixels = int(PARAMETERS.simulation.stem.root_size_px) ** 2
+    out = field_relative_noise(n_emitters, dyes_per_spot, mu_pc, scope["gamma"], scope["kappa_q"],
+                               scope["kappa_o"], scope["kappa_s"], n_pixels)
+    out["condition"] = condition
+    out["operating_point"] = point
+    return out
 
 
 # =============================================================================
