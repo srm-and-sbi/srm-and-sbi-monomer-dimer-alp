@@ -211,8 +211,8 @@ sampled diffusion and reaction rates per simulation together with the window-sta
 under MET-FAB `allocation: declared 0`). This is the MET-FAB tier, shared
 by both workflows: the detector smoke (§2.5) re-images these same trajectories under
 the FAB labeling law. The second condition has its own tier, because the association
-setting differs (MET-INLB associates at the reference intensity, MET-FAB has no
-association channel): generate it with the same three commands and `--condition INLB`.
+setting differs (MET-FAB has no association channel, MET-INLB associates at the
+reference intensity): generate it with the same three commands and `--condition INLB`.
 Never re-run the RDS stage over a condition's existing tier — it would replace the tier
 and mislabel the videos already rendered from it.
 
@@ -247,7 +247,7 @@ share plus the pairs the window-start allocation formed — a MET-FAB basal dime
 Fab with the declared share `p / (2 − p)` = 0.0074 or one Fab on one random subunit;
 one dye draw per bound probe. The condition's occupancy — MET-INLB 0.0476 (the
 equilibrium at 0.25 nM with `K_D` 5 nM), MET-FAB 0.0148 (derived from the declared
-Fab/InlB visibility ratio 0.5 and the INLB anchor) — is a conversion that defines the
+Fab/InlB fluorescence ratio 0.5 and the INLB anchor) — is a conversion that defines the
 reference probe-bound population from `N_total` and the basal reference fraction `f`
 at the RDS stage and sets the two-probe share of the reference dimers (`two_probe_share`
 in the `Labeling_Set` records that declared share, not the starting `B2` share); the
@@ -261,7 +261,7 @@ as the default pass, so run it on a throwaway smoke tier and never over a tier
 that feeds training or calibration:
 
 ```bash
-# SENSITIVITY RUN, not a training tier: re-image a throwaway INLB smoke tier under the within-dimer alternative (every InlB dimer carries two ligands: monomer subunits 0.5, dimer subunits 1.0; both-subunits-labeled share among visible dimers 1/3 instead of 1/7 (equal to the two-dye share under the one-dye-per-ligand InlB law))
+# SENSITIVITY RUN, not a training tier: re-image a throwaway INLB smoke tier under the within-dimer alternative (every InlB dimer carries two ligands: monomer subunits 0.5, dimer subunits 1.0; both-subunits-labeled share among fluorescent dimers 1/3 instead of 1/7 (equal to the two-dye share under the one-dye-per-ligand InlB law))
 python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py --condition INLB --total-time-seconds 2.0 --split eval --tasks 2 --task-simulations 10 --video-dtype-bits 8 --seed None --occupancy A=0.5,B=1.0
 ```
 
@@ -293,10 +293,10 @@ law), and the workflow's `Labeling_Set` (P4: the recorded probe rule and the dec
 two-probe share of the reference dimers, the realized probe classes against the starting
 counts, the fluorescent fractions and the two-labeled share against the starting-population
 arithmetic, and the emitters per subunit), compares the simulated
-visible counts with the deposited recordings' spot counts descriptively (P5,
-Special_Analyses A9), and always corroborates the theoretical visibility chain of the
+fluorescent counts with the deposited recordings' spot counts descriptively (P5,
+Special_Analyses A9), and always corroborates the theoretical fluorescence chain of the
 retained population through the DLI stage's own labeling path on a synthetic lineage for
-both conditions, including the FAB/INLB visibility ratio of the true population against the
+both conditions, including the FAB/INLB fluorescence ratio of the true population against the
 declared one (P6). The report ends with theory, code path, and products side by side.
 Nothing is simulated or rendered; it takes seconds. `--workflow detector` reads the
 detector's `Labeling_Set` instead of the biology's. With `--campaign-version` it also
@@ -314,8 +314,8 @@ MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SB
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --condition FAB --split train --total-time-seconds 2 --trajectories 8
 # the checks themselves, on in-memory draws from the prior and the declared occupancies (no tier needed)
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --selftest
-# the visibility chain alone (P6, both conditions): theory vs the DLI code path, no tier needed
-MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --visibility
+# the fluorescence chain alone (P6, both conditions): theory vs the DLI code path, no tier needed
+MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --fluorescence
 # campaign membership (P7) of a detector pass before training: the package version of the campaign's release,
 # every task 0..199 present with 1000 rows per set, written inside the campaign's window
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py --condition FAB --split train --total-time-seconds 2 --workflow detector --campaign-version <version> --expected-tasks 200 --task-simulations 1000 --campaign-window <start>..<end>
@@ -1190,9 +1190,54 @@ done
   out, the stored compositions NaN); and a temporal-dynamics run whose figures and tables
   name the estimator and mark the other condition's recordings a misspecification test.
 - The structure audit (deterministic tier) and the prior-realization audit (`--selftest`,
-  `--visibility`, and P0–P4 on a generated tier; section 2.2b) complete the check on
+  `--fluorescence`, and P0–P4 on a generated tier; section 2.2b) complete the check on
   products; the audit's R6 timing at the Fab high-load case (`f` = 1, dissociation at its
   ceiling) is re-measured before a campaign is sized.
+
+### 3.6 Test inventory
+
+Every test file, with the number of `test_*` functions it defines and what it checks. The suite is run
+file by file as section 3.5 shows, and a file's PASS lines are compared with its count below: a file
+printing fewer PASS lines than it defines has not run every test. The inventory is kept current with the
+files; a new or removed test file changes this table and the changelog entry of its release.
+
+| file | tests | what it checks |
+|---|---|---|
+| `tests/test_artifact_schema.py` | 7 | the numerical-product schema: validation, obsolete-field rejection, the manifest contract, shard merging, the cache contract and report-only rendering |
+| `tests/test_composition_reporting.py` | 13 | composition reporting under the window-start composition: the stoichiometry binding, per-draw summaries, flagged draws, starting-composition recovery, the expected-fluorescence function, a population-composition run on a product with no valid draw, and the temporal labels of a misspecification test |
+| `tests/test_condition_resolver.py` | 14 | the per-condition tables (eleven under MET-FAB, twelve under MET-INLB), alignment by key, the `Theta_Set` schema with its refusals and publication, the tier scan, and the stage resolvers of both workflows |
+| `tests/test_contract_enforcement.py` | 18 | the three-estimate contract: every guarantee has a negative test that reproduces the violation and shows it refused |
+| `tests/test_direct_estimator_guards.py` | 30 | the direct-estimator utilities: purpose guard, run folders, harness contrasts, observables |
+| `tests/test_dli_banner.py` | 3 | the detector DLI stage's dry-run banner under the probe-class rule and under the `--occupancy` override |
+| `tests/test_embedding_probe.py` | 3 | the embedding probe's arithmetic: a linear signal is recovered, an absent parameter scores no better than the null, the split is disjoint, the report is written |
+| `tests/test_estimator_scorecard.py` | 6 | the estimator scorecard on synthetic, schema-valid records: alignment by identifier, the recovery, coverage and paired log-density numbers, the flags |
+| `tests/test_experiment_comparison.py` | 5 | the Experiment comparison on synthetic products: alignment by identifier, the location, prior-box shares and discrepancy numbers of the three point estimates |
+| `tests/test_fleet_sync.py` | 10 | the fleet sync: every failure status propagates, and a live sync counts as a success only after the content verification |
+| `tests/test_gradient_accumulation.py` | 6 | gradient accumulation to a fixed global batch: the step resolution and the equivalence with a whole-group batch |
+| `tests/test_inference_network.py` | 10 | the embedding network and its encoder-screening settings: the defaults reproduce the original network, every preset builds at every documented duration, passes stay finite |
+| `tests/test_labeling_compliance.py` | 9 | every renderer of simulated trajectories labels them the way the training data were labeled |
+| `tests/test_map_benchmark.py` | 6 | the MAP benchmark's batched optimizer engine against the serial reference loop |
+| `tests/test_map_optimizer_invariant.py` | 14 | regression tests for the MAP seed-then-optimize step |
+| `tests/test_median_reference.py` | 3 | the median reference of the point-estimate validation (phase 1): implementation checks |
+| `tests/test_mixed_scale_reports.py` | 11 | mixed-scale reporting: per-row units (dex versus percentage points), no multiplicative band for linear rows, the by-key refusals of the writers, the flagged-fraction tables |
+| `tests/test_model_structure_audit_placement.py` | 2 | the placement geometry of the model-structure audit: the isotropic-axis fraction and the identity-checked re-fusion count of R8 |
+| `tests/test_point_estimates_contract.py` | 4 | the three-point-estimate contract: central definitions, stored-field mapping, retired options |
+| `tests/test_point_estimate_validation.py` | 9 | point-estimate validation (phase 1): the kernel's definitions, checks and gates, and the runner end to end on a tiny synthetic data bank |
+| `tests/test_posterior_predictive_video.py` | 29 | the posterior-predictive video check: never overwrites, never renders beyond its limits unasked, names what its synthetic is made from; the count match, the declared configurations, the labeling arm, the notebook and the helpers |
+| `tests/test_prior_realization_audit_campaign.py` | 3 | P7 of the prior-realization audit: campaign membership against a frozen specification |
+| `tests/test_raw_decline_cross_check.py` | 2 | the raw-domain decline cross-check on synthetic records built to known relations |
+| `tests/test_rds_dry_run_per_condition.py` | 4 | the trajectory stage per condition: the dry run, a stubbed run writing stores of the condition's width, the mixed-schema guard, the orchestrator's tier status |
+| `tests/test_render_frame_blocking.py` | 5 | the renderer's 2 s frame-block integration of the PSF: its output must not change |
+| `tests/test_retained_population.py` | 7 | the simulated-population model: species inventory, channels, initialization, lineage, labeling, and the absence of the removed names |
+| `tests/test_selection_user.py` | 8 | the `selection_user` Nuisance_DLI: one explicitly chosen, fixed imaging vector selected by its own tag |
+| `tests/test_sgm_reference.py` | 5 | sample-geometric-median correctness on small, hand-checkable clouds |
+| `tests/test_subunit_positions.py` | 6 | the lean trajectory reader of the DLI stage against the dense one |
+| `tests/test_temporal_dynamics_drift.py` | 3 | the within-recording drift kernel of the temporal dynamics |
+| `tests/test_theta_standardization.py` | 4 | the theta standardization of the flow: what `build_maf` fixes from `batch_x`, the biology's `independent` choice, the detector's `structured` default, the artifact round trip |
+| `tests/test_training_log_readout.py` | 5 | the training-log readout on synthetic Inference logs: settings, epochs, best TEST loss, warm restarts, chains and configurations |
+| `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
+
+Total: 276 tests over 33 files.
 
 ## 4. Troubleshooting
 

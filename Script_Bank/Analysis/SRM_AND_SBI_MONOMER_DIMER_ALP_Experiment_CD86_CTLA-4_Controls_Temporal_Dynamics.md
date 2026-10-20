@@ -33,12 +33,12 @@ whether its transferable observable — the diffusion coefficient — lands on t
 values.
 
 Only the diffusion coefficient is read quantitatively, because of a deliberate
-**label / model mismatch**: the posterior was trained on always-visible permanent-label
+**label / model mismatch**: the posterior was trained on always-fluorescent permanent-label
 emitters, whereas the control recordings use an exchangeable, blinking SiR-S5 HaloTag
 probe. The diffusion coefficient is a per-track property, read from the displacement
-statistics of a molecule *while it is visible*, so it is insensitive to how many
+statistics of a molecule *while it is fluorescent*, so it is insensitive to how many
 molecules are lit at once and transfers across the mismatch. Counts and rates depend on
-the number of co-visible emitters and on track continuity — both corrupted by blinking —
+the number of co-fluorescent emitters and on track continuity — both corrupted by blinking —
 so they are not interpreted here. The controls are also constitutive states, not the
 dynamic A + A ⇌ B dimerization mechanism with mobility switching the posterior encodes; they bracket the
 diffusion scale and stress-test transferability, they do not exercise the kinetic model.
@@ -156,7 +156,7 @@ be.
 
 ## Caveats
 
-- **Label / model mismatch.** Exchangeable, blinking SiR-S5 vs the always-visible
+- **Label / model mismatch.** Exchangeable, blinking SiR-S5 vs the always-fluorescent
   permanent-label training regime. Diffusion transfers; the composition and the rates
   (N, f, the allocation under MET-INLB, κ_OFF, the switching rates) do not and are not
   read quantitatively.

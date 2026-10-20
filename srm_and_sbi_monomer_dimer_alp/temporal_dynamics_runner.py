@@ -40,9 +40,8 @@ names, unit labels, and the external reference values -- are resolved once in
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 import numpy as np
 

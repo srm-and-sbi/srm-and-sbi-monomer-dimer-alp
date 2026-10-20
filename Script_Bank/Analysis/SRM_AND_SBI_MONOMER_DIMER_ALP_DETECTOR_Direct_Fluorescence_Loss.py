@@ -10,7 +10,7 @@ nothing is learned.
 Why the observable is total fluorescence, and why the recording must be long
 
     Total flux is linear in the number of surviving dyes, which is what the parameter
-    controls. A count of visible spots is NOT a substitute: a two-dye spot stays visible when
+    controls. A count of fluorescent spots is NOT a substitute: a two-dye spot stays fluorescent when
     one of its dyes bleaches, so counting spots understates the loss and does so in a way that
     depends on the labeling law. `DETECTOR_WORKFLOW.md` sec. 9.4 makes the same point.
 
@@ -399,7 +399,6 @@ def run_experiment_mode(args, reporter, out_dir, paths, timing, data_bank_root, 
     recording, two disclosed variants of the fit, the model-free decline readings and the pixel
     statistics of the opening and closing windows. Nothing is pooled by the estimator.
     """
-    from matplotlib.figure import Figure
 
     domain = args.domain
     exclude_frames = int(round(args.exclude_opening_seconds / timing.frame_time_seconds))

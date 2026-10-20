@@ -25,7 +25,6 @@ report lands in the ``Posit/`` tier alongside the estimators it compares.
 from __future__ import annotations
 
 import argparse
-import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path

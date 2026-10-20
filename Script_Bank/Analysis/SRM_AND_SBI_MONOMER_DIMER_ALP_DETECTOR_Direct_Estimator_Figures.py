@@ -22,7 +22,6 @@ the arrays file. Exit status 0 when every figure was written, 2 when the folder 
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import sys

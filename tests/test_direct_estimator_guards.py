@@ -172,7 +172,7 @@ def test_every_utility_refuses_an_existing_run_folder_before_computing():
 # ---- flicker harness: the linking contrast reads the same detections -------------------------
 
 def _harness_case(n_frames=60):
-    """Two visible subunits detected in every frame; an emitter with no visible subunit nearby
+    """Two fluorescent subunits detected in every frame; an emitter with no fluorescent subunit nearby
     detected in frames 10-20 (unmatched); a second fit beside subunit 0 in frame 30."""
     true_xy = np.zeros((n_frames, 2, 2))
     true_xy[:, 0], true_xy[:, 1] = (20.0, 20.0), (60.0, 60.0)
@@ -193,11 +193,11 @@ def _points(traces):
 
 def test_linking_contrast_reads_the_same_detections():
     hm = _load("Direct_Flicker_Mismatch")
-    m, true_xy, visible = _harness_case()
-    matched = hm.match_to_subunits(m, true_xy, visible)
+    m, true_xy, fluorescent = _harness_case()
+    matched = hm.match_to_subunits(m, true_xy, fluorescent)
     assert (matched == hm.UNMATCHED).sum() == 11 and (matched == hm.SECOND_FIT).sum() == 1
     tid = die.link_spot_tracks(m["frame_index"], m["x"], m["y"], frame_stride=1)
-    scene = dict(spot_photons=np.zeros((60, 2)), dye_photons=np.zeros((60, 2)), visible=visible)
+    scene = dict(spot_photons=np.zeros((60, 2)), dye_photons=np.zeros((60, 2)), fluorescent=fluorescent)
     lv = {level: hm.level_traces(level, scene, m, tid, matched, 5)
           for level in ("fitted_oracle", "fitted_linked", "production")}
     assert len(lv["fitted_oracle"]) == len(lv["fitted_linked"]) == 2

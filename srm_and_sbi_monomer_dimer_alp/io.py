@@ -61,8 +61,6 @@ import zarr
 from skimage import exposure
 
 THETA_SET_SCHEMA_VERSION = 1
-_SCHEMA_KEYS = ("schema_version", "parameter_keys", "prior_low", "prior_high", "log_flag",
-                "condition", "timing_label", "generator", "package_version", "written_utc")
 _BOUND_TOL = 1e-9
 
 

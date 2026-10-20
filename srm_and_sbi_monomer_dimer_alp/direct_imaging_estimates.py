@@ -769,8 +769,8 @@ def spot_flux_curve(video_levels: np.ndarray, scope: dict, *,
     """Total background-subtracted flux inside spot apertures, frame by frame.
 
     The observable for photobleaching must be TOTAL fluorescence, which is linear in the
-    number of surviving dyes. A count of visible spots is not a substitute: a two-dye spot
-    stays visible when one of its dyes bleaches, so counting spots understates the loss and
+    number of surviving dyes. A count of fluorescent spots is not a substitute: a two-dye spot
+    stays fluorescent when one of its dyes bleaches, so counting spots understates the loss and
     does so in a way that depends on the labeling law.
 
     Why apertures rather than the whole frame. The frame sum is dominated by background: at

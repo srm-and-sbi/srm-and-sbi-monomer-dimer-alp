@@ -69,7 +69,7 @@ Deterministic tier (always):
                        and MET-INLB infers it; the removed symbols are absent; `rds_alias` carries
                        the condition token and refuses to resolve without one. Occupancies of the
                        underlying population: MET-INLB 0.0476 (EQUILIBRIUM at 0.25 nM with K_D
-                       5 nM), MET-FAB 0.0148 (DERIVED from the declared Fab/InlB visibility ratio
+                       5 nM), MET-FAB 0.0148 (DERIVED from the declared Fab/InlB fluorescence ratio
                        0.5 and the InlB anchor), visibilities 0.0238 / 0.0119, two-probe shares
                        0.0244 / 0.0074; MET-INLB carries the ligand classes and MET-FAB does not; a
                        setting with more or fewer than one occupancy source, with association but
@@ -125,9 +125,9 @@ Run tier (``--run``; tiny; after approval only):
                        association channel by construction) with monomers only (f = 0, inside the
                        prior), 10 s: the time-averaged mode occupancies over the second half agree
                        with `stationary_mode_law` within a prespecified tolerance.
-    R3 visible         Static labeling draws on each condition's OWN lineage through the shared
+    R3 fluorescent         Static labeling draws on each condition's OWN lineage through the shared
                        path (`resolve_labeling` + `label_subunits`) reproduce the retained-population
-                       visible fractions: monomers q = 1 - P0; dimers (1 - s_2) q + s_2 (1 - (1-q)^2)
+                       fluorescent fractions: monomers q = 1 - P0; dimers (1 - s_2) q + s_2 (1 - (1-q)^2)
                        under FAB, and under INLB q for B1 hosts and 1 - (1-q)^2 for B2 hosts, with
                        the probe classes recorded.
     R4 both conditions One short video per condition rendered from THAT condition's own
@@ -207,7 +207,7 @@ N_D12_DRAWS = 10_000          # D12: prior draws per condition, vectorized helpe
 TOL_ROUNDTRIP = 1e-9
 TOL_SUBUNITS = 1.5            # D4: |N_R - expectation| <= three roundings of half a subunit
 TOL_STATIONARY = 0.03         # R2: absolute tolerance on time-averaged mode occupancies
-TOL_VISIBLE = 0.02            # R3: absolute tolerance on visible fractions
+TOL_FLUORESCENT = 0.02            # R3: absolute tolerance on fluorescent fractions
 N_LABEL_DRAWS = 400           # R3: independent labelings
 
 # The retired composition row, as an AUDIT-LOCAL literal (D8 asserts its absence, D10 that a Theta_Set
@@ -757,12 +757,12 @@ def d8_conditions() -> dict:
     # Occupancies of the true population (2026-10-05): INLB = the equilibrium 0.25 / (0.25 + 5) = 0.0476;
     # FAB derived = 0.5 x (0.0476 x 0.5) / 0.806 = 0.0148. Ligand classes under INLB only.
     occ = {c: par.occupancy_of(c) for c in tokens}
-    vis = {c: par.visibility_of(c) for c in tokens}
+    vis = {c: par.fluorescent_fraction_of(c) for c in tokens}
     src = {c: par.occupancy_source_of(c) for c in tokens}
     s2 = {c: par.two_probe_share_of(c) for c in tokens}
     fab_setting, inlb_setting = RDS.condition_setting("FAB"), RDS.condition_setting("INLB")
-    fab_derived_ok = (src["FAB"] == "derived" and fab_setting.visibility_ratio == 0.5
-                      and fab_setting.visibility_ratio_to == "INLB" and not fab_setting.ligand_classes
+    fab_derived_ok = (src["FAB"] == "derived" and fab_setting.fluorescence_ratio == 0.5
+                      and fab_setting.fluorescence_ratio_to == "INLB" and not fab_setting.ligand_classes
                       and abs(occ["FAB"] - 0.5 * vis["INLB"] / RDS.dye_probability_of("FAB")) < 1e-12
                       and abs(occ["FAB"] - 0.0148) < 5e-5 and abs(vis["FAB"] - occ["FAB"] * RDS.dye_probability_of("FAB")) < 1e-12
                       and abs(s2["FAB"] - occ["FAB"] / (2 - occ["FAB"])) < 1e-12)
@@ -771,7 +771,7 @@ def d8_conditions() -> dict:
                         and abs(occ["INLB"] - 0.25 / 5.25) < 1e-12 and abs(vis["INLB"] - 0.5 * 0.25 / 5.25) < 1e-12)
     both_refused = neither_refused = False
     try:
-        par.ConditionSetting("X", 1.0, ligand_classes=True, occupancy=0.5, visibility_ratio=0.5, visibility_ratio_to="INLB")
+        par.ConditionSetting("X", 1.0, ligand_classes=True, occupancy=0.5, fluorescence_ratio=0.5, fluorescence_ratio_to="INLB")
     except ValueError:
         both_refused = True
     try:
@@ -809,7 +809,7 @@ def d8_conditions() -> dict:
                 fab_keys_equal_inlb_prefix=fab_prefix_ok, declared_rows_as_decided=declared_ok,
                 removed_symbols_absent=bool(removed_absent), disguised_zero_refused=epsilon_refused,
                 bare_rds_alias_refused=bare_refused, tier_aliases=aliases, detector_reads_same_tier=det_alias_ok,
-                occupancy={c: round(v, 5) for c, v in occ.items()}, visibility=vis, occupancy_source=src,
+                occupancy={c: round(v, 5) for c, v in occ.items()}, fluorescence=vis, occupancy_source=src,
                 two_probe_share={c: round(v, 5) for c, v in s2.items()},
                 ligand_classes={c: RDS.condition_setting(c).ligand_classes for c in tokens},
                 fab_occupancy_derived_ok=fab_derived_ok, inlb_occupancy_equilibrium_ok=inlb_declared_ok,
@@ -979,8 +979,8 @@ def r2_stationarity(workdir: str) -> dict:
                 ok=bool(np.max(np.abs(frac - pi)) <= TOL_STATIONARY))
 
 
-def r3_visible(runs: dict) -> dict:
-    """Visible fractions of the retained population on each condition's OWN lineage through the shared path."""
+def r3_fluorescent(runs: dict) -> dict:
+    """Fluorescent fractions of the retained population on each condition's OWN lineage through the shared path."""
     rng = np.random.default_rng(SEED + 3)
     out = {}
     col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
@@ -988,12 +988,12 @@ def r3_visible(runs: dict) -> dict:
         lineage, tray, species_of_rank = runs[condition]
         plan = lab.resolve_labeling(condition)
         mono_ranks = rds.monomer_ranks(tray)
-        q = plan.law.visible_probability
+        q = plan.law.fluorescent_probability
         rows = np.stack([lab.label_subunits(plan, lineage.host_index[0], lineage.host_rank[0], species_of_rank,
                                             mono_ranks, rng)[1] for _ in range(N_LABEL_DRAWS)])
         n_m, n_d = max(rows[:, col["monomers_0"]].sum(), 1), max(rows[:, col["dimers_0"]].sum(), 1)
-        mono_vis = rows[:, col["monomers_visible_0"]].sum() / n_m
-        dim_vis = rows[:, col["dimers_visible_0"]].sum() / n_d
+        mono_vis = rows[:, col["monomers_fluorescent_0"]].sum() / n_m
+        dim_vis = rows[:, col["dimers_fluorescent_0"]].sum() / n_d
         one_probe = rows[:, col["dimers_one_probe_0"]].sum() / n_d
         two_probe = rows[:, col["dimers_two_probe_0"]].sum() / n_d
         expect_mono = q
@@ -1003,13 +1003,13 @@ def r3_visible(runs: dict) -> dict:
         if plan.ligand_classes:
             classes_ok = bool(np.isclose(one_probe + two_probe, 1.0))      # B1 / B2 by species, every host classed
         else:
-            classes_ok = abs(two_probe - plan.two_probe_share) <= max(TOL_VISIBLE, 4 * np.sqrt(plan.two_probe_share / n_d))
+            classes_ok = abs(two_probe - plan.two_probe_share) <= max(TOL_FLUORESCENT, 4 * np.sqrt(plan.two_probe_share / n_d))
         out[condition] = dict(law=plan.law_name, probe_rule=plan.probe_rule, two_probe_share=plan.two_probe_share,
                               monomers_0=int(rows[0, col["monomers_0"]]), dimers_0=int(rows[0, col["dimers_0"]]),
                               one_probe_share_emp=float(one_probe), two_probe_share_emp=float(two_probe),
-                              visible_monomer_emp=float(mono_vis), visible_monomer=float(expect_mono),
-                              visible_dimer_emp=float(dim_vis), visible_dimer=float(expect_dim), recorded=recorded,
-                              ok=bool(abs(mono_vis - expect_mono) <= TOL_VISIBLE and abs(dim_vis - expect_dim) <= TOL_VISIBLE
+                              fluorescent_monomer_emp=float(mono_vis), fluorescent_monomer=float(expect_mono),
+                              fluorescent_dimer_emp=float(dim_vis), fluorescent_dimer=float(expect_dim), recorded=recorded,
+                              ok=bool(abs(mono_vis - expect_mono) <= TOL_FLUORESCENT and abs(dim_vis - expect_dim) <= TOL_FLUORESCENT
                                       and recorded and classes_ok))
     out["ok"] = all(v["ok"] for k, v in out.items() if k != "ok")
     return out
@@ -1035,7 +1035,7 @@ def r4_both_conditions(runs: dict) -> dict:
         frames = render_dli_video(poses, lineage.host_index[:20], dyes, imaging, seed=SEED)
         n_labeled = int((dyes >= 1).sum())
         col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
-        q = plan.law.visible_probability
+        q = plan.law.fluorescent_probability
         expected_labeled = q * (row[col["monomers_0"]] + row[col["dimers_one_probe_0"]] + 2 * row[col["dimers_two_probe_0"]])
         out[condition] = dict(frames=int(frames.shape[2]), n_subunits=int(lineage.n_subunits),
                               probe_rule=plan.probe_rule, n_labeled=n_labeled,
@@ -1361,7 +1361,7 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
              f"disguised zero refused: {d['d8']['disguised_zero_refused']}; bare rds_alias refused: "
              f"{d['d8']['bare_rds_alias_refused']}; tier aliases {d['d8']['tier_aliases']}; detector reads the same tier: "
              f"{d['d8']['detector_reads_same_tier']}; occupancies {d['d8']['occupancy']} ({d['d8']['occupancy_source']}), "
-             f"visibilities { {c: round(v, 5) for c, v in d['d8']['visibility'].items()} }, two-probe shares "
+             f"fluorescence { {c: round(v, 5) for c, v in d['d8']['fluorescence'].items()} }, two-probe shares "
              f"{d['d8']['two_probe_share']}, ligand classes {d['d8']['ligand_classes']}; FAB derived from the "
              f"declared ratio and the INLB anchor: {d['d8']['fab_occupancy_derived_ok']}; INLB equilibrium at 0.25 nM / K_D 5 nM: "
              f"{d['d8']['inlb_occupancy_equilibrium_ok']}; both/neither refused: {d['d8']['both_and_neither_refused']}; "
@@ -1426,10 +1426,10 @@ def write_report(det_out: dict, run_out: dict | None) -> None:
                  f"{r['r2']['max_abs_deviation']:.3f} (tol {TOL_STATIONARY}) |")
         for c in lab.LABELING_CONDITIONS:
             v = r["r3"][c]
-            L.append(f"| R3 visible fractions {c} ({v['probe_rule']} rule, two-probe share {v['two_probe_share']:.4f}) | "
+            L.append(f"| R3 fluorescent fractions {c} ({v['probe_rule']} rule, two-probe share {v['two_probe_share']:.4f}) | "
                      f"{passed(v['ok'])} | {v['monomers_0']} monomers + {v['dimers_0']} dimers at frame 0; monomer "
-                     f"{v['visible_monomer_emp']:.3f} vs {v['visible_monomer']:.3f}; dimer {v['visible_dimer_emp']:.3f} vs "
-                     f"{v['visible_dimer']:.3f} (by the realized class mix: one-probe {v['one_probe_share_emp']:.3f}, two-probe "
+                     f"{v['fluorescent_monomer_emp']:.3f} vs {v['fluorescent_monomer']:.3f}; dimer {v['fluorescent_dimer_emp']:.3f} vs "
+                     f"{v['fluorescent_dimer']:.3f} (by the realized class mix: one-probe {v['one_probe_share_emp']:.3f}, two-probe "
                      f"{v['two_probe_share_emp']:.3f}); the rule recorded in the labeling row: {v['recorded']} |")
         L.append(f"| R4 both conditions, each from its own trajectory, through the shared labeling path | {passed(r['r4']['ok'])} | "
                  + "; ".join(f"{c}: {r['r4'][c]['frames']} frames, {r['r4'][c]['n_labeled']} labeled subunits of "
@@ -1735,7 +1735,7 @@ def main() -> None:
                 if condition == "INLB":
                     r5, lineage, tray, species_of_rank = r5_c, lineage_c, tray_c, species_c
             r1["ok"] = all(v["ok"] for k, v in r1.items() if k != "ok")
-            r3 = r3_visible(runs)                                 # each condition's own lineage through the shared path
+            r3 = r3_fluorescent(runs)                                 # each condition's own lineage through the shared path
             r4 = r4_both_conditions(runs)
             r2 = r2_stationarity(workdir)
             r6 = r6_timing(workdir)

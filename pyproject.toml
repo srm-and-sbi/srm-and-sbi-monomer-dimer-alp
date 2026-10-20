@@ -4,16 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srm-and-sbi-monomer-dimer-alp"
-version = "0.1.40"
+version = "0.1.41"
 description = "Simulation-based inference of reaction-diffusion parameters for DIMER (two-particle dimerization) model"
 requires-python = ">=3.10"
-# Deliberately sparse: the runtime stack (torch, readdy, numpy, scipy, zarr, ...) is provided
-# by the conda-first environment (env_snapshots/README.md is the canonical install guide) so a
-# pip resolve can never overwrite a hardware-specific torch/ROCm build; install the package
-# with `pip install -e . --no-deps` into that environment. Only the pinned sbi (the one
-# pip-first dependency) and the py<3.11 TOML reader are declared.
+# The runtime stack is provided by the conda-first environment (environment.yml;
+# env_snapshots/README.md is the canonical install guide), so that a pip resolve never
+# overwrites a hardware-specific torch/ROCm build: install the package with
+# `pip install -e . --no-deps` into that environment. The list below therefore DOCUMENTS the
+# runtime packages the code imports; only sbi carries a pin, the one pip-first dependency,
+# and torch is installed per backend (see the install guide). readdy is a runtime dependency
+# too but comes from conda-forge only, so it is not listed where pip would try to resolve it.
 dependencies = [
     "sbi==0.26.1",
+    "torch",
+    "numpy",
+    "scipy",
+    "scikit-image",
+    "zarr",
+    "numcodecs",
+    "h5py",
+    "matplotlib",
+    "tifffile",
+    "psutil",
     'tomli; python_version < "3.11"',
 ]
 authors = [

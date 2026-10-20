@@ -27,7 +27,6 @@ Pure analysis: numpy, with scipy imported lazily. Imports nothing from
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import numpy as np
 

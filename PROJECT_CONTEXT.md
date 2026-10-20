@@ -18,7 +18,7 @@ labeling law, and carried by a condition slot in every product name), a detector
 calibration that marginalizes the full reactive biology prior, and the separated
 stoichiometry–mobility model of §2 (two molecular species under MET-FAB and three
 under MET-INLB, each in three mobility modes; the reaction channels generated from the model blocks and the condition's
-association setting — twenty-four under MET-INLB, eleven under MET-FAB; one
+association setting — eleven under MET-FAB, twenty-four under MET-INLB; one
 master table of twelve learnable rows resolved per condition — eleven inferred
 coordinates under MET-FAB, twelve under MET-INLB, aligned by key — led by the
 true receptor total `N_total`, the basal reference fraction `f` of dimers among
@@ -29,7 +29,7 @@ every learnable row together with the declared per-condition probe occupancies
 retained-population model the collaborators' answers of 2026-10-05 prompted
 (the generator simulates the probe-associated complexes only, MET-INLB dimers
 carry a ligand class (`B1`, `B2`), the occupancies are conversion constants
-(equilibrium at 0.25 nM for InlB; derived for Fab), the count row is the true
+(derived for Fab; equilibrium at 0.25 nM for InlB), the count row is the true
 receptor total `N_total` on one shared box), and the window-start composition
 (2026-10-15): the declared occupancy defines a reference probe-bound population
 from `N_total` and `f`, and under MET-INLB the allocation pairs already
@@ -176,9 +176,9 @@ is a practical resolution floor, not zero.
 **Twenty-four or eleven reaction channels**, generated from the two blocks and
 the run's condition by `simulation_rds_support.reaction_channels(theta, condition)`
 and registered verbatim by `build_system(theta, condition)` — never written by
-hand. MET-INLB has twenty-four; MET-FAB has eleven, because its association
-ratio is zero and no association channel is generated (*Association setting per
-condition*, below). Every channel conserves the retained subunit count:
+hand. MET-FAB has eleven, because its association ratio is zero and no
+association channel is generated (*Association setting per condition*, below);
+MET-INLB has twenty-four. Every channel conserves the retained subunit count:
 - **Association (six fusions; MET-INLB only):** `A_m + A_m' → B2_slower(m, m')`,
   one channel per unordered pair of monomer modes, all at the same microscopic
   rate `λ_on`; only InlB-bound monomers associate, and every simulated INLB
@@ -335,7 +335,7 @@ consumer reads, so no consumer assumes one scale for the whole table.
 | `rate_slow_fast` | `k_sf` | switching s → f, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
 | `rate_slow_immobile` | `k_si` | switching s → i, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
 | `rate_immobile_slow` | `k_is` | switching i → s, all molecular species (1/s) | log10 | [−1, 1] | 0.1–10 /s |
-| `relative_count_active_dimers_initial` | `R_active` | initial active-dimer allocation of the window-start composition, relative to the capacity `cap = A_ref // 2` of probe-bound monomer pairs of the reference: `c = round(R_active · cap)` pairs become additional two-InlB dimers before the recording starts; inferred under MET-INLB, declared 0 under MET-FAB (not a row of its table) | linear | [0, 1] | 0 to `cap` pairs |
+| `relative_count_active_dimers_initial` | `R_active` | initial active-dimer allocation of the window-start composition, relative to the capacity `cap = A_ref // 2` of probe-bound monomer pairs of the reference: `c = round(R_active · cap)` pairs become additional two-InlB dimers before the recording starts; declared 0 under MET-FAB (not a row of its table), inferred under MET-INLB | linear | [0, 1] | 0 to `cap` pairs |
 
 The fixed `capture_radius` row (10 nm, display-only; `build_system` derives the
 active reaction distance from `particle_diameter_nm`) is the Smoluchowski
@@ -384,7 +384,7 @@ complex, one probe or one dye.
    (declared).** Probe occupancy per subunit is the independent-site
    equilibrium `p = L / (L + K_D)` at the published 0.25 nM for both probes;
    with `K_D(InlB) ≈ 5 nM`, `p_INLB = 0.0476`. The Fab occupancy follows from
-   the declared Fab/InlB visibility ratio of one half, `p_FAB = 0.0148`. These
+   the declared Fab/InlB fluorescence ratio of one half, `p_FAB = 0.0148`. These
    values map the inferred receptor total `N_total` (item 14) and the basal
    reference fraction `f` (item 9) to the reference probe-bound population at
    initialization, expected represented count `p × N_total` under INLB and
@@ -453,7 +453,7 @@ complex, one probe or one dye.
    association, item 6), where the reference population is the starting
    population. Reference dimers are basal dimers with independent probe
    binding, giving the conditional one-/two-probe split `2 (1 − p) : p` in
-   both conditions (two-probe share 2.4 % under InlB, 0.7 % under Fab). The
+   both conditions (two-probe share 0.7 % under Fab, 2.4 % under InlB). The
    starting fraction `f_start = D_start / (M_start + D_start)`, with `M_start =
    M_ref − 2c` and `D_start = D_ref + c`, and the active share `c / D_start` of
    the starting dimers are derived quantities, computed per joint posterior
@@ -490,7 +490,7 @@ complex, one probe or one dye.
     MET-INLB, once association has changed the population, or under I-B.
 12. **Receptor association intensity (declared convention).** Receptor
     association uses the reference intensity `λ_ref = 6 D_A / r²` with
-    `R_ON = 1` under InlB and 0 under Fab. `R_ON` is a dimensionless
+    `R_ON = 0` under Fab and 1 under InlB. `R_ON` is a dimensionless
     normalization of a microscopic intensity, not a probability or a fraction
     of encounters, and `R_ON = 1` does not establish a diffusion-limited regime
     (`simulation_rds_support.association_reference_rate`). Ligand binding from
@@ -525,7 +525,7 @@ complex, one probe or one dye.
     ceiling, so the dimers split within the run) are checked before any tier
     is generated. Compatible `N_total` posteriors across the
     conditions are a consistency check, not independent validation, since
-    the Fab occupancy rests on the declared visibility ratio.
+    the Fab occupancy rests on the declared fluorescence ratio.
 
 **Implementation.** The code realizes every item: the condition's species and
 channels (`StoichiometryBlock.species_for`, `simulation_rds_support.reaction_channels`,
@@ -537,12 +537,12 @@ rounded expectations, then the window-start allocation from `R_active`
 `realize_initial_composition` for one draw, `population_from_theta` by key with
 the condition's declared allocation inserted; a binomial realization of the
 same thinning is a framework alternative); the probe rule at labeling
-(`labeling.assign_probes`: every retained monomer bound; `B1` / `B2` by species
-under MET-INLB; one- or two-Fab classes drawn at the declared two-probe share
-under MET-FAB) with one dye draw per bound probe
+(`labeling.assign_probes`: every retained monomer bound; one- or two-Fab classes
+drawn at the declared two-probe share under MET-FAB; `B1` / `B2` by species under
+MET-INLB) with one dye draw per bound probe
 (`labeling.draw_dye_counts_bound`); the occupancies as declared conversions
-(`ConditionSetting`: MET-INLB from the probe concentration and `K_D`, MET-FAB
-from the visibility ratio); the two linear fraction rows; and the condition's
+(`ConditionSetting`: MET-FAB from the fluorescence ratio, MET-INLB from the
+probe concentration and `K_D`); the two linear fraction rows; and the condition's
 declared allocation (`ConditionSetting.relative_count_active_dimers_initial`,
 which removes the row from the Fab table through `parameterization_of`). Checks
 accompany it (`tests/test_window_start_composition.py`,
@@ -553,9 +553,9 @@ represented count is conserved under both conditions and by the allocation; the
 placed counts equal the starting counts realized from `N_total`, `f`, `R_active`
 and the occupancies (a placement census with `c > 0`); the allocation never
 exceeds the capacity and leaves `B1` unchanged; and the timing and memory at
-the represented-population ceiling (R6: about 4,762 INLB receptors; FAB up to
-2,932 represented receptors at `f` = 1, its about 1,466 initial dimers split by
-dissociation at its ceiling within the run). The
+the represented-population ceiling (R6: FAB up to 2,932 represented
+receptors at `f` = 1, its about 1,466 initial dimers split by dissociation at its
+ceiling within the run; about 4,762 INLB receptors). The
 derived quantities follow from the realized counts: the starting fraction
 `f_start` and the active share `c / D_start`, reported beside `f` and
 `R_active`; nothing reconstructs underlying monomers as `A_start / p`. Any class
@@ -577,7 +577,7 @@ per row: the frozen reference ranges of the earlier model
 analysis of the deposited MET localization tables (Special_Analyses A9 —
 `srm-and-sbi/Special_Analyses/MET_NEXT_MODEL_DESIGN_PLAN/scripts/A9_spot_density_receptor_totals.py`
 with `results/A9_spot_density.md` and `results/A9_per_recording.csv`, outside
-this repository; the recipe of record for the count range and the Fab visibility
+this repository; the recipe of record for the count range and the Fab fluorescence
 ratio); the literature anchors of the model specification (its §9); and the
 resolution or classification thresholds of the tracking pipelines. Declared
 inputs are conventions, not measurements: each carries its source, is editable
@@ -588,7 +588,7 @@ where a collaborator answer is pending. Decided 2026-09-14.
 
 | key | symbol | range (estimator coordinate) | physical | source |
 |---|---|---|---|---|
-| `count_total` | `N_total` | [3.0, 5.0], log10 | 1,000–100,000 true receptor subunits in the simulated patch, probe-bound and unbound | one shared box (lead's decision, 2026-10-05): the A9 per-recording spot counts divided by the visibility `p × P(dye ≥ 1)` of the true population imply totals of about 1,400–25,800 (FAB) and 3,000–33,300 (INLB) before the localization undercount; headroom for the undercount; a declared ceiling, not an experimental maximum |
+| `count_total` | `N_total` | [3.0, 5.0], log10 | 1,000–100,000 true receptor subunits in the simulated patch, probe-bound and unbound | one shared box (lead's decision, 2026-10-05): the A9 per-recording spot counts divided by the fluorescent fraction `p × P(dye ≥ 1)` of the true population imply totals of about 1,400–25,800 (FAB) and 3,000–33,300 (INLB) before the localization undercount; headroom for the undercount; a declared ceiling, not an experimental maximum |
 | `fraction_basal_dimers_reference` | `f` | [0, 1], linear | basal reference fraction 0–100 % of the complexes of the underlying population | uniform over the whole fraction (lead's decision, 2026-10-15); the published basal estimates (Baldering 2021: 5 ± 1 % of clusters; Dietz 2013: 18 % of spots, an underestimate) inform the reading of the posterior, not the prior; an inference coordinate reported as a secondary quantity |
 | `rate_dissociation` | `κ_OFF` | [−3, 1], log10 | 0.001–10 per s | baseline [−1, 1]; floor widened for dimer persistence under MET-FAB |
 | `diffusivity_alp` | `D_A` | [−1.25, −0.25], log10 | 0.056–0.56 µm²/s | baseline unchanged; specification §9.3 anchors |
@@ -596,14 +596,14 @@ where a collaborator answer is pending. Decided 2026-09-14.
 | `relative_diffusivity_slow` | `R_s` | [−1, 0], log10 | 0.1–1 | new row; specification §9.3 anchors |
 | `relative_diffusivity_immobile` | `R_i` | [−3, −2], log10 | 0.001–0.01 | baseline [−2, −1] rejected; tracking-pipeline immobility thresholds |
 | `rate_fast_slow`, `rate_slow_fast`, `rate_slow_immobile`, `rate_immobile_slow` | `k_fs`, `k_sf`, `k_si`, `k_is` | [−1, 1] each, log10 | 0.1–10 per s | baseline switching band, kept for all four shared rates |
-| `relative_count_active_dimers_initial` | `R_active` | [0, 1], linear | 0 to `cap = A_ref // 2` probe-bound monomer pairs of the reference turned into two-InlB dimers at the window start | the window-start allocation (lead's decision, 2026-10-15): inferred under MET-INLB, declared 0 under MET-FAB and absent from its table; at zero capacity the row has no effect and a prior-like posterior is expected |
+| `relative_count_active_dimers_initial` | `R_active` | [0, 1], linear | 0 to `cap = A_ref // 2` probe-bound monomer pairs of the reference turned into two-InlB dimers at the window start | the window-start allocation (lead's decision, 2026-10-15): declared 0 under MET-FAB and absent from its table, inferred under MET-INLB; at zero capacity the row has no effect and a prior-like posterior is expected |
 
 *Receptor count.* A9 divides the spots per frame in the first 2 s of each of the
-120 deposited recordings by the visibility of a subunit of the TRUE population,
-`p × P(dye ≥ 1)` = 0.0238 (MET-INLB) and 0.0119 (MET-FAB). The implied
-`log10 N_total` has medians 4.17 (InlB) and 4.08 (Fab), 5–95 % ranges 3.80–4.43
-and 3.38–4.39: the same biological quantity in both conditions within the spread,
-which is why one box serves both. Localizations undercount the visible receptors
+120 deposited recordings by the fluorescent fraction of the TRUE population's subunits,
+`p × P(dye ≥ 1)` = 0.0119 (MET-FAB) and 0.0238 (MET-INLB). The implied
+`log10 N_total` has medians 4.08 (Fab) and 4.17 (InlB), 5–95 % ranges 3.38–4.39
+and 3.80–4.43: the same biological quantity in both conditions within the spread,
+which is why one box serves both. Localizations undercount the fluorescent receptors
 (bleached bound probes, missed detections, overlapping spots), so the implied
 totals are lower readings and the ceiling carries headroom above the largest
 implied value (4.52); the floor at 1,000 lies below every recording. `N_total`
@@ -615,7 +615,7 @@ ceiling), whose cohort keeps the unbound partners of one-Fab dimers while the
 initial Fab particles stay at the expected bound probes (about 1,477 at the
 ceiling for every `f`). Compatible `N_total`
 posteriors across the conditions are a consistency check, not independent
-validation, since the Fab occupancy rests on the declared visibility ratio. The
+validation, since the Fab occupancy rests on the declared fluorescence ratio. The
 prior sets where the training budget goes and, where the data are weak,
 contributes to the posterior width; a narrower or shaped count prior is a later
 decision.
@@ -722,7 +722,7 @@ videos is not established by the range and is part of the recovery validation. T
 43/29/28 InlB) imply stationary-law rate ratios between 0.3 and 1, inside the
 band.
 
-**Declared conversion inputs of the visibility layer (per condition, editable).**
+**Declared conversion inputs of the labeling layer (per condition, editable).**
 Occupancy is not a labeling coin: it defines the reference probe-bound
 population from the inferred `N_total` and `f` at the RDS stage and sets the
 probe classes of the reference dimers at labeling
@@ -731,10 +731,10 @@ items 4, 9 and 11).
 
 | input | MET-FAB | MET-INLB | source and status |
 |---|---|---|---|
-| probe occupancy `p` of the true population | 0.0148, **derived** = 0.5 × (0.0476 × 0.5) / 0.806 | 0.0476, **equilibrium** = 0.25 / (0.25 + 5) | InlB: the independent-site equilibrium at the published 0.25 nM (uPAINT, both probes in the imaging medium; Harwardt et al. 2017; confirmed by the collaborators for the tracking recordings on 2026-10-05, their 5 nM being fixed-cell imaging) with the in-vitro `K_D` ≈ 5 nM; a declared initialization, since the acquisition delay and the unknown rates are not measured. Fab: no published affinity; the code stores a declared Fab/InlB **visibility ratio** of 0.5 (`ConditionSetting.visibility_ratio`, anchored on INLB), a rounded convention over the measured Fab/InlB spot-density ratios (A9: 0.38–0.48), and derives `p_FAB = ratio × p_INLB × P_INLB(dye ≥ 1) / P_FAB(dye ≥ 1)`, so a revised anchor propagates |
+| probe occupancy `p` of the true population | 0.0148, **derived** = 0.5 × (0.0476 × 0.5) / 0.806 | 0.0476, **equilibrium** = 0.25 / (0.25 + 5) | InlB: the independent-site equilibrium at the published 0.25 nM (uPAINT, both probes in the imaging medium; Harwardt et al. 2017; confirmed by the collaborators for the tracking recordings on 2026-10-05, their 5 nM being fixed-cell imaging) with the in-vitro `K_D` ≈ 5 nM; a declared initialization, since the acquisition delay and the unknown rates are not measured. Fab: no published affinity; the code stores a declared Fab/InlB **fluorescence ratio** of 0.5 (`ConditionSetting.fluorescence_ratio`, anchored on INLB), a rounded convention over the measured Fab/InlB spot-density ratios (A9: 0.38–0.48), and derives `p_FAB = ratio × p_INLB × P_INLB(dye ≥ 1) / P_FAB(dye ≥ 1)`, so a revised anchor propagates |
 | dye probability per bound probe `P(dye ≥ 1)` | 0.806 = 1 − e^(−1.64) (Poisson, DOL 1.64) | 0.5 (Bernoulli, labeling probability) | the measured labeling laws |
-| visibility of a TRUE subunit `p × P(dye ≥ 1)` | 0.0119 | 0.0238 | the A9 reading: spots per frame / this value = implied `N_total` (`parameterization.visibility_of`) |
-| two-probe share `s₂ = p / (2 − p)` of the reference dimers | 0.0074 | 0.0244 | independent binding to the two subunits of a basal dimer (`parameterization.two_probe_share_of`): the declared share of the REFERENCE dimers. Under MET-INLB the `B2` share before the window-start allocation (the starting `B2` share, `(B2_ref + c) / (B1 + B2_ref + c)`, is recorded as counts, not as a share); under MET-FAB the two-Fab share drawn at labeling |
+| fluorescent fraction of the TRUE population `p × P(dye ≥ 1)` | 0.0119 | 0.0238 | the A9 reading: spots per frame / this value = implied `N_total` (`parameterization.fluorescent_fraction_of`) |
+| two-probe share `s₂ = p / (2 − p)` of the reference dimers | 0.0074 | 0.0244 | independent binding to the two subunits of a basal dimer (`parameterization.two_probe_share_of`): the declared share of the REFERENCE dimers. Under MET-FAB the two-Fab share drawn at labeling; under MET-INLB the `B2` share before the window-start allocation (the starting `B2` share, `(B2_ref + c) / (B1 + B2_ref + c)`, is recorded as counts, not as a share) |
 | probe probability of a RETAINED subunit | monomer 1; dimer subunit (1 + s₂)/2 = 0.504 | 1 (every retained InlB subunit is bound) | recorded per simulation in `occupancy_monomer` / `occupancy_dimer` of the `Labeling_Set`, beside the realized probe classes (`dimers_one_probe_0`, `dimers_two_probe_0`, `two_probe_share`) |
 
 The DLI stage applies this rule by default (`labeling.resolve_labeling`,
@@ -750,7 +750,7 @@ immobile mode is immobile by construction (the range of `R_i`). Association is a
 per-condition constant, `R_ON = 0` under MET-FAB and 1 under MET-INLB (decided
 2026-09-09), and MET-INLB carries the ligand classes `B1` / `B2` (2026-10-05).
 The basal reference fraction is uniform on [0, 1], and the window-start
-allocation is inferred under MET-INLB and declared 0 under MET-FAB
+allocation is declared 0 under MET-FAB and inferred under MET-INLB
 (2026-10-15). The inferred `N_total` and `f` describe the underlying population
 and are conditional on the declared occupancies that realize the reference
 probe-bound population; the data constrain the represented, fluorescent
@@ -760,7 +760,7 @@ differs from the reference by the allocation. Descriptive measurements of the
 detected population are distinct from their molecular interpretation.
 
 **What would change these.** A measured Fab affinity would replace the
-visibility-ratio convention; a measured occupancy within preformed InlB dimers
+fluorescence-ratio convention; a measured occupancy within preformed InlB dimers
 would decide between the reference assumption (independent binding) and the
 sensitivity scenario in which preformed dimers bind no InlB; either changes the
 conversion constants and the initial classes, not the prior table. A narrower or
@@ -787,8 +787,8 @@ is the continuum `M_ref = N_total (1 − f) / (1 + f)` monomers and `D_ref =
 N_total f / (1 + f)` dimers. With the condition's occupancy `p`, the reference
 probe-bound population is realized dimers and their classes first — `D_sim =
 round(p (2 − p) D_ref)` dimers carrying at least one probe, `B2_ref =
-min(round(p² D_ref), D_sim)` of them two-probe (`B2` under MET-INLB; the two-Fab
-share drawn at labeling under MET-FAB), `B1 = D_sim − B2_ref` — then the
+min(round(p² D_ref), D_sim)` of them two-probe (the two-Fab share drawn at
+labeling under MET-FAB; `B2` under MET-INLB), `B1 = D_sim − B2_ref` — then the
 monomers, `A_ref = round(p M_ref)`, every rounding half to even. The
 window-start allocation then forms, under ligand classes, `c = round(R_active ·
 cap)` of the `cap = A_ref // 2` available probe-bound monomer pairs: the placed
@@ -811,8 +811,8 @@ the counts: the starting fraction `f_start = D_start / (M_start + D_start)` with
 `M_start = M_ref − 2c` and `D_start = D_ref + c`; the active share `c / D_start`
 of the starting dimers (undefined, reported as NaN, when `D_start` = 0); and the
 placed fractions of the represented population (`B1 + B2_start` dimers among
-`A_start + B1 + B2_start` complexes; `(B1 + 2 B2_start) / N_R` of the
-represented receptors under MET-INLB, `2 D_sim / N_R` under MET-FAB), beside `f`
+`A_start + B1 + B2_start` complexes; `2 D_sim / N_R` of the represented
+receptors under MET-FAB, `(B1 + 2 B2_start) / N_R` under MET-INLB), beside `f`
 and `R_active`, which the parameters mean. The active share is never `A_start /
 p` or any other reconstruction of underlying monomers from the placed counts.
 Each particle's initial
@@ -885,8 +885,8 @@ round trip and the refusals. Trajectories or `Theta_Set`s generated by the earli
 model are rejected at the DLI stage by `rank_to_species` (unknown particle types
 `A`/`B`/`C`) — never overwritten or reinterpreted. A deterministic structure
 audit (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Model_Structure_Audit.py`,
-with its companion note) checks each condition's generated channels (twenty-four
-under MET-INLB, eleven under MET-FAB), the condition registry and its
+with its companion note) checks each condition's generated channels (eleven under
+MET-FAB, twenty-four under MET-INLB), the condition registry and its
 association ratios, ligand classes and occupancies, the transform round trips,
 the reference and starting compositions realized from the total, the fraction
 and the allocation over the boxes, the decided-range table itself (the ranges,
@@ -894,7 +894,7 @@ immobility by construction, the dissociation floor, the two linear fraction
 rows), and the probe rule by stoichiometric
 class without ReaDDy; its run tier (`--run`, small-scale generation checks: subunit
 conservation under each condition's network, stationary mode occupancies under
-the MET-FAB configuration, visible fractions of the retained population through
+the MET-FAB configuration, fluorescent fractions of the retained population through
 the shared labeling path, both-condition generation from each condition's own
 trajectory, the lateral boundary, timing and memory at the simulated-population
 ceiling) is gated behind explicit approval. Its companion, the prior-realization audit
@@ -904,10 +904,10 @@ with its companion note), reads generated products and writes only its report: t
 against the starting counts), its trajectories against the starting counts and
 the stationary mode law at frame 0, the
 `Labeling_Set` against the probe rule and the declared two-probe shares, and a
-descriptive comparison of the simulated visible counts against the deposited
+descriptive comparison of the simulated fluorescent counts against the deposited
 spot counts (Special_Analyses A9), and — with or without products — the
-theoretical visibility chain of the retained population realized through the
-DLI stage's own labeling path for both conditions, the FAB/INLB visibility ratio
+theoretical fluorescence chain of the retained population realized through the
+DLI stage's own labeling path for both conditions, the FAB/INLB fluorescence ratio
 of the true population against the declared one included; it runs after any
 tier generation or DLI pass.
 
@@ -973,7 +973,7 @@ reaction-diffusion nuisance it marginalizes — re-imaged through the same imagi
 and labeling model under the condition's labeling law, with the imaging drawn
 from the detector prior. The detector has no RDS stage of its own.
 The reactions are kept because the labeling model makes them observable: a
-dissociating one-dye dimer leaves one visible and one invisible daughter, a track
+dissociating one-dye dimer leaves one fluorescent and one dark daughter, a track
 disappearance that a detector trained on static composition could only explain as
 photobleaching.
 
@@ -1202,7 +1202,7 @@ number-and-brightness) — with no brightness multiplier anywhere. The laws are
 measured or preparation-level inputs, fixed and never inferred: from the video
 alone the labeling probability is nearly degenerate with the receptor counts.
 
-| condition | law per subunit | invisible monomers | invisible dimers |
+| condition | law per subunit | dark monomers | dark dimers |
 |---|---|---|---|
 | MET-INLB | Bernoulli, `q = 0.5` — one engineered attachment site; the labeling probability measured for this preparation (reported by the collaborating laboratory, 2026; not in the source publications) | 50% | 25% |
 | MET-FAB | Poisson at the measured ensemble mean `DOL = 1.64` (Harwardt et al. 2017) — the working preparation-level model, with matched-mean binomial and negative-binomial alternatives registered for sensitivity runs | 19.4% | 3.8% |
@@ -1628,6 +1628,19 @@ rather than a single monolithic support file. The modules and their roles:
   `state_dict`, rebuild spec, parameter schema) in one `.npz`, so it
   reconstructs under whatever torch version loads it; the sole persisted
   estimator format for both workflows.
+- **`artifact_schema.py`** — the numerical-product contract of the Evaluation and
+  Experiment stages: what a valid product looks like (the three point estimates per
+  observation, the manifest with its computation contract, the run identity and the code
+  records), the validation that refuses a product naming the observation, estimate and
+  stage (before any analysis when a product is read, fail-closed at publication when one
+  is written), the rejection of the obsolete schema, and the check that shards belong to
+  one computation before they are merged.
+- **`provenance.py`** — working-tree provenance for numerical products: the commit the tree
+  was based on, whether tracked files differed from it, and a deterministic SHA-256 over the
+  relevant implementation files as they are on disk, captured at startup and again at write
+  time with a `changed_during_run` flag, so a product whose code changed while the job ran
+  describes no single implementation and is refused at publication; the same hash keys the
+  `Nuisance_DLI` MAP-pool cache.
 - **`evaluation.py`** — the MAP-recovery core shared by the validation stages:
   the seed-then-optimize estimator, posterior-quantile summaries, and report
   tables.
@@ -1650,6 +1663,23 @@ rather than a single monolithic support file. The modules and their roles:
   runner reads two `TestLossDistribution` artifacts (per-video loss keyed by
   `(task, sim)`), runs the statistics, and reports; its two namespaced Analysis shims
   share it over one engine. No GPU.
+- **`point_estimate_validation.py`, `point_estimate_validation_runner.py`** — the
+  point-estimate validation program, phase 1: the marginal median as the reference (a
+  validation utility, never a stage). The kernel holds the definitions, the frozen
+  acceptance thresholds, the independent recomputation, the accuracy and stability
+  summaries, the gates and the validation-artifact format; the runner draws, for a fixed
+  checkpoint and a fixed list of synthetic EVAL observations, five repeats at the
+  production draw count and one larger reference run through the production summary,
+  stores every draw in a separate validation artifact, shards observations across GPUs
+  with a `--merge` step, and writes the report. Detector only: it refuses a biology
+  workflow.
+- **`map_benchmark.py`, `map_benchmark_runner.py`** — the MAP optimization benchmark (a
+  benchmark proposal, not adopted; a validation utility, never a stage): configurations A
+  to H over the unconstrained flow log-density — the best candidate, the production
+  optimizer as configured, and a per-seed chain loop under absolute or scale-aware steps
+  and several budgets — compared on two independent bounded candidate pools per recording
+  against an L-BFGS-polished reference optimum. The runner shards recordings across GPUs,
+  writes a benchmark artifact and merges the shards into the report. Detector only.
 - **`test_loss_distribution.py`** — the per-example best-epoch TEST-loss
   artifact: holds the held-out per-example loss keyed by `(task_index,
   sim_index)` with a self-describing manifest; written by the Inference stage
@@ -1725,9 +1755,37 @@ rather than a single monolithic support file. The modules and their roles:
   requires the Experiment stage's raw per-window draws
   (`--dump-posterior-samples`); the stored marginal quantiles cannot substitute,
   since a fraction of marginals is a different quantity rather than a coarser one.
+- **`horizon_audit.py`, `horizon_audit_runner.py`** — the horizon audit (an Analysis
+  utility; disabled): does the latent state that a later window of a continuous recording
+  inherits break the reset assumption of window-by-window estimation? The kernel compares,
+  per window position, an ensemble of independently initialized model-window simulations
+  with the consecutive windows of one long simulation at the same theta — parameter error,
+  interval coverage and the composition readout; the runner's phases `prepare`,
+  `generate`, `infer`, `analyze` and `selftest` split the work across machines under one
+  cohort digest, so an artifact of another cohort is refused. It stays disabled, and its
+  message names the two mismatches between its reference composition and the simulated
+  census (the underlying reference population, and the allocation under MET-INLB).
 - **`io.py`** — file I/O: transparent loading of `.zarr`/`.npy`/`.npz`, video
   and theta-set writing, and bit-depth conversion. All paths come from the
   configuration helpers, never hardcoded. The `Theta_Set` schema lives here too: `theta_set_schema()` builds it from a parameter table and the condition (required), `write_theta_set()` stores a theta set with it (`.zarr` attributes, or a JSON sidecar beside a `.npy` carrying the SHA-256 of the value file), built under `.partial` names and published so that the final name only ever holds a complete record paired with its own schema, `load_theta_set()` / `check_theta_set_schema()` refuse a theta set whose schema is absent or differs in keys, bounds, scales or condition, or whose plain-array values are not the ones its sidecar was written with (`ThetaSetSchemaError`, naming the stored package version and generator), `theta_set_status()` renders the verdict for dry runs, and `tier_record_paths()` / `tier_schema_scan()` classify every final-name record of a tier as compatible, mismatched or unknown for the RDS stage's mixed-schema guard, skipping a record removed or being replaced while the scan runs.
+- **`direct_imaging_estimates.py`** — the direct (non-neural) estimators of the imaging
+  parameters: pure measurement kernels that read a parameter off a closed-form property of
+  the forward model (the pixel mean and variance of the EMCCD chain, the pixel integral of
+  the PSF, the stationary OU brightness), validated against known truth on simulated
+  recordings under acceptance criteria stated before they run (`DETECTOR_WORKFLOW.md`, the
+  direct-estimator sections); the Analysis scripts supply the data and own the reports.
+- **`direct_acceptance.py`** — the frozen acceptance rules of the direct estimators, one
+  implementation shared by the three utilities: evidence adequacy of the run, operational
+  success, evidence adequacy for accuracy, and accuracy with uncertainty coverage, reported
+  side by side as verdicts that never absorb one another. A purpose guard holds a tier run
+  to the declared split before any recording is read, and a code-provenance guard makes a
+  run whose implementation changed while it executed invalid for acceptance.
+- **`information_budget.py`** — the information budget: approximate Cramér–Rao precision
+  benchmarks for each imaging parameter under a simplified observation model (a reduced
+  statistic of the video, a Gaussian likelihood, an approximate treatment of the temporal
+  correlation) from one recording of a given size, placed beside the direct estimators'
+  measured accuracy and the neural posterior's width to orient the work. A benchmark,
+  never an inference limit.
 - **`visualization_rds.py`, `visualization_dli.py`, `visualization_inference.py`,
   `visualization_calibration.py`** — stage-specific diagnostic and figure builders
   (matplotlib imported lazily so headless runs do not pay its import cost).
@@ -1777,7 +1835,7 @@ system.
 behavior of the generation stack.
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Model_Structure_Audit.py` is the deterministic structure
 audit of the stoichiometry–mobility model (§2): the channels generated per condition
-(twenty-four under MET-INLB, eleven under MET-FAB), the condition registry with its
+(eleven under MET-FAB, twenty-four under MET-INLB), the condition registry with its
 association ratios and declared occupancies, the `to_physical` / `to_flow` round trips,
 the reference and starting compositions from the fraction and the allocation, the
 decided-range table itself, and occupancy by molecular species, with an approval-gated `--run` tier of
@@ -1786,12 +1844,12 @@ small-scale generation checks; its companion `.md` documents the checks and the 
 generated products: it checks a condition's `Theta_Set` against the prior box and the
 composition rule, its trajectories against the realized composition and the stationary
 mode law at frame 0, and its `Labeling_Set` against the declared occupancies, and compares
-the simulated visible counts descriptively against the deposited spot counts
-(Special_Analyses A9), and corroborates the theoretical visibility chain (per-subunit
-visibility, visible fractions, both-labeled and dark-partner shares, emitters per subunit, the
-dye-count law among visible subunits, the FAB/INLB visibility ratio) through the DLI stage's
+the simulated fluorescent counts descriptively against the deposited spot counts
+(Special_Analyses A9), and corroborates the theoretical fluorescence chain (per-subunit
+fluorescence, fluorescent fractions, both-labeled and dark-partner shares, emitters per subunit, the
+dye-count law among fluorescent subunits, the FAB/INLB fluorescence ratio) through the DLI stage's
 own labeling functions on a synthetic lineage for both conditions; `--selftest` verifies the
-checks on in-memory draws without a tier, `--visibility` runs the visibility check alone.
+checks on in-memory draws without a tier, `--fluorescence` runs the fluorescence check alone.
 It runs after any tier generation or DLI pass; its companion `.md` documents the checks.
 
 `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Calibration.py` and its
@@ -1866,14 +1924,14 @@ shared runner, and produces a defined on-disk artifact. Module paths are relativ
 
 | Scientific concept / stage | Code (module → function/class) | On-disk artifact |
 | --- | --- | --- |
-| The separated stoichiometry–mobility model (§2): the two model blocks `StoichiometryBlock` / `MobilityBlock` and the derived particle types per condition (six under MET-FAB, nine under MET-INLB); the channels generated per condition (twenty-four under MET-INLB, eleven under MET-FAB); per-type diffusion; the association normalization and the per-condition association setting (`ConditionSetting` / `CONDITION_SETTINGS`); the window-start composition (the reference probe-bound population and the initial allocation) and stationary initial modes | `parameterization.py` → `PARAMETERS.simulation.rds` (blocks, `conditions`, `particle_types`, `association_ratio_of()`), `realize_population()` / `realize_initial_composition()`; `simulation_rds_support.py` → `reaction_channels(theta, condition)`, `diffusion_coefficients()`, `association_reference_rate()`, `stationary_mode_law()`, `build_system(theta, condition)` (registers exactly the condition's generated channels); the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
+| The separated stoichiometry–mobility model (§2): the two model blocks `StoichiometryBlock` / `MobilityBlock` and the derived particle types per condition (six under MET-FAB, nine under MET-INLB); the channels generated per condition (eleven under MET-FAB, twenty-four under MET-INLB); per-type diffusion; the association normalization and the per-condition association setting (`ConditionSetting` / `CONDITION_SETTINGS`); the window-start composition (the reference probe-bound population and the initial allocation) and stationary initial modes | `parameterization.py` → `PARAMETERS.simulation.rds` (blocks, `conditions`, `particle_types`, `association_ratio_of()`), `realize_population()` / `realize_initial_composition()`; `simulation_rds_support.py` → `reaction_channels(theta, condition)`, `diffusion_coefficients()`, `association_reference_rate()`, `stationary_mode_law()`, `build_system(theta, condition)` (registers exactly the condition's generated channels); the ReaDDy simulation is then assembled by `build_simulation()` | (in-memory ReaDDy system/simulation; trajectory written below) |
 | RDS trajectory recording (particle positions, particle type, time over the recording length) — one tier per condition (`--condition`; the sibling alias plus the condition token, no qualifier), shared by both workflows | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_RDS.py`, the only RDS entry point, run once per condition (drives `build_system()` → `build_simulation()`) | trajectory `.h5` (HDF5, ReaDDy convention); sampled theta set `.zarr` (via `io.py` → `save_theta_set()`) |
-| Trajectory extraction (per-frame poses for the audits; per-subunit host positions for the DLI stage, gathered without the dense pose tensor whose id axis grows with every reaction), the type-rank → monomer/dimer classification (`rank_to_species`; `rank_to_molecule` gives the molecular species) the visibility layer selects by, and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records, subunit counts read per particle type) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `extract_subunit_positions()`, `rank_to_species()`, `monomer_ranks()`, `extract_subunit_lineage()` | (the lineage table and the subunit positions passed to imaging) |
-| Static labeling stoichiometry: the condition's dye-count law, the once-per-recording draw composed with the condition's declared probe occupancy (`--occupancy` overrides for a sensitivity run), the applied occupancy recorded | `labeling.py` → `LABELING_LAWS`, `resolve_labeling_law()`, `draw_dye_counts()`, `labeling_summary()`; `parameterization.py` → `occupancy_of()`, `occupancy_source_of()`, `visibility_of()` | `Labeling_Set` `.zarr` per task (one `LABELING_SET_COLUMNS` row per simulation; thirteen columns, `occupancy_monomer` / `occupancy_dimer`, the probe classes and `two_probe_share` among them) |
+| Trajectory extraction (per-frame poses for the audits; per-subunit host positions for the DLI stage, gathered without the dense pose tensor whose id axis grows with every reaction), the type-rank → monomer/dimer classification (`rank_to_species`; `rank_to_molecule` gives the molecular species) the labeling layer selects by, and the subunit lineage (per-frame subunit-to-particle table replayed from the reaction records, subunit counts read per particle type) | `simulation_rds_support.py` → `extract_trajectory_poses()`, `collapse_species_axis()`, `extract_subunit_positions()`, `rank_to_species()`, `monomer_ranks()`, `extract_subunit_lineage()` | (the lineage table and the subunit positions passed to imaging) |
+| Static labeling stoichiometry: the condition's dye-count law, the once-per-recording draw composed with the condition's declared probe occupancy (`--occupancy` overrides for a sensitivity run), the applied occupancy recorded | `labeling.py` → `LABELING_LAWS`, `resolve_labeling_law()`, `draw_dye_counts()`, `labeling_summary()`; `parameterization.py` → `occupancy_of()`, `occupancy_source_of()`, `fluorescent_fraction_of()` | `Labeling_Set` `.zarr` per task (one `LABELING_SET_COLUMNS` row per simulation; thirteen columns, `occupancy_monomer` / `occupancy_dimer`, the probe classes and `two_probe_share` among them) |
 | Diffraction-limited imaging forward model: dyes as emitters following their subunit's host particle, Gaussian PSF, per-dye brightness photo-physics with photobleaching, Poisson + EMCCD readout noise | `simulation_dli_support.py` → `render_dli_video()` (dye-centric, source-agnostic renderer of the poses, the lineage, the dye counts, and an assembled 11-key imaging vector; shared by both DLI stages), with `build_dye_tracks()` (per-dye emitter tracks), `Gaussian` / `sample_psf_width()` (PSF), `compute_intensity()` + `add_pixel_counts()` (intensity accumulation, in 2 s frame blocks), `generate_brightness_photons()` (brightness photo-physics: stationary OU ln-brightness flicker + absorbing photobleaching), `EMCCD` / `add_noise()` / `generate_frames()` (detector noise) | (noised video array passed to writer below) |
 | DLI video output (chunked, bit-depth-converted) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Simulation_DLI.py` (per `--condition`; drives `extract_subunit_lineage()` + `extract_subunit_positions()` → `draw_dye_counts()` → `render_dli_video()`, with the imaging block marginalized from the condition's `Nuisance_DLI` + the SCOPE box) | `.zarr` video set, shape `(frame_count, height, width)` (via `io.py` → `convert_video_dtype()`, `save_video_set()`) |
 | Parameter prior and specification (the master table of twelve learnable rows resolved per condition — eleven under MET-FAB, twelve under MET-INLB — the per-condition settings — association ratio, occupancy, declared allocation — the per-row scale `LOG_FLAG`, units, labels; box-uniform prior in the estimator space) and the one conversion rule between estimator space and physical values | `parameterization.py` → `PARAMETERS` (a `Parameters` singleton), `parameterization_of(condition)` / `parameterization_raw_of(condition)` / `parameter_keys_of(condition)`, `build_prior(condition)`, `theta_lower_bound(condition)`, `theta_upper_bound(condition)`, `parameter_find(key, condition)`, `to_physical()` / `to_flow()` (table required), `fraction_flags()`, `prior_center()`; `ConditionSetting` / `CONDITION_SETTINGS` with `association_ratio_of()`, `occupancy_of()`, `declared_row_values()` | (configuration in code; sampled theta persisted in the RDS theta-set `.zarr`) |
-| Prior-realization audit of generated products (read-only): the tier's `Theta_Set` against the prior box and the composition rule, its trajectories against the realized composition and the stationary law at frame 0, the `Labeling_Set` against the declared occupancies, the simulated visible counts against the deposited spot counts (Special_Analyses A9), and the theoretical visibility chain corroborated through the DLI stage's own labeling functions for both conditions | `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py` (checks P1–P6; `--selftest` on in-memory draws; `--visibility` for the visibility check alone) | report `.md` + `prior_realization_summary.json` under the `Posit` tier, per condition, split, and recording length |
+| Prior-realization audit of generated products (read-only): the tier's `Theta_Set` against the prior box and the composition rule, its trajectories against the realized composition and the stationary law at frame 0, the `Labeling_Set` against the declared occupancies, the simulated fluorescent counts against the deposited spot counts (Special_Analyses A9), and the theoretical fluorescence chain corroborated through the DLI stage's own labeling functions for both conditions | `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py` (checks P1–P6; `--selftest` on in-memory draws; `--fluorescence` for the fluorescence check alone) | report `.md` + `prior_realization_summary.json` under the `Posit` tier, per condition, split, and recording length |
 | NPE + MAF estimator with 3D-CNN + temporal-transformer embedding | `inference_network.py` → `Complex3DCNN` (video encoder), `TemporalTransformer` (with `AttentionBlock`, `PositionalEncoding`); training wired in `inference_support.py` → `setup_training()`, `train_loop()` (with the resurrect branch) | (in-memory network; checkpoint + posterior written below) |
 | Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` (runs the RDS stage once per `--conditions` entry per split, then one DLI pass per `--workflows` entry over each condition's tier, with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing; refuses to regenerate a condition's existing tier and checks the biology's `Nuisance_DLI` artifacts up front); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
 | Posterior training run (gradient updates on TRAIN, selection on TEST) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py` (drives `build_datasets()` → `setup_training()` → `train_loop()`, then `artifacts.save_estimator()`) | version-portable estimator artifact (`Estimator.npz`, via `artifacts.py` → `save_estimator()`), loaded downstream as a `DirectPosterior`; network checkpoint at each new optimum |

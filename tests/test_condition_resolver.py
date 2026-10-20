@@ -100,9 +100,9 @@ def test_declared_rows_and_the_raw_view():
     assert len(raw_fab) == len(raw_inlb) == len(par.PARAMETERIZATION_RAW)
     # the condition-setting rules
     CS = par.ConditionSetting
-    _expect(ValueError, lambda: CS("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB"),
+    _expect(ValueError, lambda: CS("FAB", 0.0, fluorescence_ratio=0.5, fluorescence_ratio_to="INLB"),
             "requires ligand classes")                                        # inferred without ligand classes
-    _expect(ValueError, lambda: CS("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB",
+    _expect(ValueError, lambda: CS("FAB", 0.0, fluorescence_ratio=0.5, fluorescence_ratio_to="INLB",
                                    relative_count_active_dimers_initial=0.3), "requires ligand classes")
     _expect(ValueError, lambda: CS("INLB", 1.0, ligand_classes=True, dissociation_constant_nm=5.0,
                                    relative_count_active_dimers_initial=1.2), "[0, 1]")

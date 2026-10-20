@@ -128,11 +128,21 @@ The `SRM_AND_SBI_ENVY_V0` environment. Nothing else: no data, no estimator, no G
 ```
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
     Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Information_Budget.py \
-    --total-time-seconds 2.0 --n-emitters 154
+    --total-time-seconds 2.0
 ```
 
-`--n-emitters` is the visible spot count of one recording; the default is the MET-FAB
-operating point (about 1233 subunits at a visible fraction of 0.125). `--compare-seconds`
+`--n-emitters` is the count of fluorescent emitters of one recording. Its default comes from the
+model: the expected number of fluorescent complexes of the retained population at the condition's
+prior center under the production labeling rule, about 119 under MET-FAB (245 retained subunits in
+49 monomers and 98 dimers, 148 of them probe-bound, 0.806 fluorescent per bound probe), which lies
+inside the first-2 s spot counts of the sixty deposited MET-FAB recordings (median 143, quartiles 79
+and 218). `--dyes-per-spot` defaults to the mean dye count of a labeled subunit under the condition's
+law, 2.03 under MET-FAB. The dry run and the report state the operating point used. The relative
+noise of the whole-field curve is the kernel's constant, 0.028, derived at a density of 154 spots,
+the operating point of the earlier model; the bleaching table of `DETECTOR_WORKFLOW.md` §9.5 and the
+benchmark the fluorescence-loss estimator states beside its result are computed at it. At the current
+operating point the same derivation gives about 0.036, which would widen the bleaching bounds by
+about 1.3; that revision is a decision and is not made here. `--compare-seconds`
 tabulates the duration scaling, defaulting to the 2 s training clips and the 20 s
 experimental recordings. `--measured` takes a small JSON of measured direct and neural
 spreads and overlays them into the comparison table. `--dry-run` resolves the settings and

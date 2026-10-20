@@ -44,11 +44,11 @@ recording's detected spots per frame over its first 2 s and c_syn the same count
 reference total (the declared configuration FAB_DECLARED_RDS), both under the direct estimators' detection \
 (stored 8-bit levels, 4 sigma, fit half-width 14 px, SCOPE box center; report \
 SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Posterior_Predictive_Video_Spot_Count_REF). The ratios were \
-measured under the earlier simulated-population reading at N_R 1000 with visibility 0.125 per subunit \
+measured under the earlier simulated-population reading at N_R 1000 with fluorescence 0.125 per subunit \
 (unscaled counts c_exp, c_syn: cell 0 44.3, 80.2; 4 107.5, 69.8; 5 106.3, 86.4; 16 259.4, 74.6; \
 26 188.0, 57.7; 32 301.1, 82.7; 43 161.7, 64.2; 45 120.5, 80.5; 49 132.2, 64.6; 53 222.4, 69.5; scaled \
 N_R 550, 1500, 1200, 3477, 3258, 3641, 2500, 1500, 2000, 3200) and converted to the true-total reading \
-by the visible-density match 0.125 N_R = q p F N_total, with q = 0.806 the Fab dye probability, p = 0.0148 \
+by the fluorescent-density match 0.125 N_R = q p F N_total, with q = 0.806 the Fab dye probability, p = 0.0148 \
 the derived MET-FAB occupancy and F = 1 + 2 (1 - p) f_B / (1 + f_B) = 1.137 the retained-cohort factor at \
 the declared f_B = 7.5 % (factor 9.23); no cell reaches the prior ceiling of 100,000, so none is \
 capped. A detected count is lowered by crowding, and a single render's count carries its labeling draw, so \

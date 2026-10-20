@@ -88,6 +88,12 @@ __all__ = [
 # emitter signal of about 154 spots x 2.03 dyes x mu_pc x gamma x kappa_q ~ 2.8e6 ADU. The
 # value is SPECIFIC to that emitter density: a single-dye scene of 150 emitters measures
 # 0.058 instead, and any bound quoted for such a scene must use that figure.
+# The 154 spots are the operating point of the earlier model (1233 subunits at a fluorescent
+# fraction of 0.125). The retained population at the current MET-FAB prior center holds about
+# 119 fluorescent complexes (the budget utility's `operating_point`), where the same derivation
+# gives about 0.036. The value stays at 0.028 because the bleaching table of DETECTOR_WORKFLOW.md
+# sec. 9.5 and the benchmark the fluorescence-loss estimator states beside its result are computed
+# at it; moving it rescales those bounds by about 1.3 and is a decision to take with them.
 FIELD_RELATIVE_NOISE_MET_FAB = 0.028
 
 

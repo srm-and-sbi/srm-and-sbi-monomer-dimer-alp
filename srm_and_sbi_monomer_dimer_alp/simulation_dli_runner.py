@@ -15,8 +15,8 @@ model is a per-condition constant; the tier carries the sibling alias plus the c
 token and no workflow qualifier, and both workflows read it -- and the condition's static
 labeling law (``labeling``) that re-images it, so the DLI stage requires ``--condition`` in
 both workflows. Every subunit draws its dye count once per
-recording; only dyes render; the ``Labeling_Set`` records, per simulation, the true and
-visible initial composition the draw produced.
+recording; only dyes render; the ``Labeling_Set`` records, per simulation, the starting
+composition and its fluorescent part as the draw produced them.
 
 DLI genuinely diverges more than RDS: the imaging block's SOURCE and ROLE differ
 between the workflows, so the fork is larger and localized in labeled branches on
@@ -25,8 +25,9 @@ between the workflows, so the fork is larger and localized in labeled branches o
   - **biology** (``imaging_source="artifact"``): the six photophysics are a
     marginalized nuisance drawn per task from the persisted ``Nuisance_DLI``
     artifact (a required, schema-guarded input) and recorded as
-    ``Nuisance_DLI_Theta_Set``; the learnable RDS ``Theta_Set`` (the eleven
-    reaction-diffusion labels) is READ for the sim-0 diagnostics only.
+    ``Nuisance_DLI_Theta_Set``; the learnable RDS ``Theta_Set`` (the condition's
+    reaction-diffusion labels: eleven under MET-FAB, twelve under MET-INLB) is READ for
+    the sim-0 diagnostics only.
   - **detector** (``imaging_source="prior_box"``): the six imaging parameters are
     the inference target, drawn from the imaging prior box and WRITTEN as the
     primary ``Theta_Set`` (the training label); no ``Nuisance_DLI`` artifact.
@@ -34,8 +35,9 @@ between the workflows, so the fork is larger and localized in labeled branches o
 Everything else -- the renderer (already shared as ``render_dli_video``), the
 SCOPE draw + ``Nuisance_SCOPE_Theta_Set`` write, the video store, and the sim-0
 core diagnostics -- is shared. The sim-0 "Parameters of this video" table uses
-each workflow's TARGET spec + its per-sim label vector (biology: the 11-RDS
-table + the read RDS theta; detector: the six-imaging table + the imaging draw);
+each workflow's TARGET spec + its per-sim label vector (biology: the condition's
+RDS table, eleven or twelve rows, + the read RDS theta; detector: the six-imaging
+table + the imaging draw);
 this also fixes a latent ``NameError`` in the detector's ``--debug`` path, where
 the copied-from-biology table referenced an undefined ``theta`` / the wrong table.
 """
@@ -123,7 +125,7 @@ def _nuisance_scope_path(paths, task_alias, data_bank_root, timing_label, compre
 def _labeling_set_path(paths, task_alias, data_bank_root, timing_label, compress, split):
     """Labeling provenance file: the theta-set pattern with the object token ``Labeling_Set``
     (both workflows; a DLI product); one ``labeling.LABELING_SET_COLUMNS`` row per
-    simulation -- the true and visible initial composition the static dye draw produced."""
+    simulation -- the starting composition and its fluorescent part the static dye draw produced."""
     return paths.record_set_path("Labeling_Set", task_alias, data_bank_root,
                                  timing_label, compress, split)
 
@@ -275,7 +277,7 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  labeling law            : {law_name} = {law.describe()}   "
           f"(one dye count per bound probe, drawn once per recording; fixed, never inferred)")
     occ_pair = labeling_plan.occupancy_pair   # (monomer, dimer), rds_cfg.molecular_species_names order
-    a_mono, a_dim = (p * law.visible_probability for p in occ_pair)
+    a_mono, a_dim = (p * law.fluorescent_probability for p in occ_pair)
     if labeling_plan.probe_rule == "classes":
         classes = ("by species: B1 one probe, B2 two" if labeling_plan.ligand_classes
                    else f"drawn per basal dimer: two-probe share {labeling_plan.two_probe_share:.4f}, else one probe on one subunit")
@@ -287,8 +289,8 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         print(f"  probe rule              : OVERRIDE -- independent per-subunit occupancy coins {occupancy} "
               f"({occupancy_source}; by stoichiometric class {rds_cfg.molecular_species_names} = "
               f"{tuple(round(p, 4) for p in occ_pair)}); a sensitivity run, not the model")
-    print(f"  P(dye >= 1 | bound)     : {law.visible_probability:.3f}   (from the law)")
-    q = law.visible_probability
+    print(f"  P(dye >= 1 | bound)     : {law.fluorescent_probability:.3f}   (from the law)")
+    q = law.fluorescent_probability
     q_two = 1 - (1 - q) ** 2
     print("  initial fluorescence probabilities (before bleaching and detection; complexes present at initialization):")
     if labeling_plan.probe_rule == "classes":
@@ -578,8 +580,9 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         # provenance is the biology/detector fork; the five-block SCOPE record is shared.
         if artifact:
             # biology: the six photophysics from the Nuisance_DLI artifact (recorded as
-            # Nuisance_DLI_Theta_Set); READ the learnable 11-RDS Theta_Set for the sim-0
-            # diagnostics table (this stage does not re-write it; the RDS stage owns it).
+            # Nuisance_DLI_Theta_Set); READ the condition's RDS Theta_Set (eleven labels under
+            # MET-FAB, twelve under MET-INLB) for the sim-0 diagnostics table (this stage does
+            # not re-write it; the RDS stage owns it).
             rds_theta_set_path = paths.rds_theta_set_path(
                 task_alias, data_bank_root, timing_label, compress, split)
             print(f"  Reading theta set (RDS labels of {condition}; diagnostics only):  {rds_theta_set_path}")
@@ -790,10 +793,10 @@ def run_dli(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 )
                 # Prior bounds + sampled values that generated THIS video, so the
                 # parameters sit next to the rendered frame for direct checking. The
-                # spec + label vector are the workflow's TARGET: biology the 11-RDS
-                # labels read from the Theta_Set; detector the six imaging labels drawn
-                # here (det.DETECTOR_PARAMETERIZATION) -- which also fixes the detector's
-                # latent NameError (it previously referenced an undefined `theta`).
+                # spec + label vector are the workflow's TARGET: biology the condition's RDS
+                # labels (eleven or twelve) read from the Theta_Set; detector the six imaging
+                # labels drawn here (det.DETECTOR_PARAMETERIZATION) -- which also fixes the
+                # detector's latent NameError (it previously referenced an undefined `theta`).
                 diag_theta = rds_theta_set[sim, :] if artifact else imaging_draw[sim]
                 headers, prior_rows = prior_sampling_table(spec.diag_spec, diag_theta)
                 reporter.table(

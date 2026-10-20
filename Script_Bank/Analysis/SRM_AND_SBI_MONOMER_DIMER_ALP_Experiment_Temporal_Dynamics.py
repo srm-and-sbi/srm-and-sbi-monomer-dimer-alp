@@ -1,7 +1,8 @@
 """Analysis entry point (biology workflow): temporal dynamics of the inferred parameters.
 
-ROLE. The Experiment stage estimates the eleven reaction-diffusion parameters independently in every
-non-overlapping window of every experimental MET recording. Stacking those windows along time asks
+ROLE. The Experiment stage estimates the condition's reaction-diffusion parameters (eleven under
+MET-FAB, twelve under MET-INLB) independently in every non-overlapping window of every experimental
+MET recording. Stacking those windows along time asks
 a question the stage cannot: does an inferred value hold still across the recording? A parameter
 that is a constant property of the system should be flat. A trend is either real dynamics or an
 acquisition confound.

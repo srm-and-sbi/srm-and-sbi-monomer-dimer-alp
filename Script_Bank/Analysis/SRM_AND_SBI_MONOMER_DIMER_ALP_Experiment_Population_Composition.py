@@ -8,7 +8,7 @@ with B1 and B2 both dimers under MET-INLB; every molecular species occupies fast
 mobility modes, which are particle types rather than species and do not enter the composition). The absolute total is the worst-identified coordinate the model has,
 for an information-theoretic reason rather than a defect: counting few emitters in a
 diffraction-limited scene is a square-root-of-n problem, and the total trades off against the
-fraction because the same visible-spot count can be few dimers or many monomers. This analysis asks
+fraction because the same count of fluorescent complexes can be few dimers or many monomers. This analysis asks
 the question those same posteriors answer well -- in what PROPORTION are the receptors distributed
 across the two species (monomer fraction f_A, dimer-complex fraction f_B, receptors in dimers f_R)
 -- and reports it beside the measured error of that readout on held-out synthetic videos, so the

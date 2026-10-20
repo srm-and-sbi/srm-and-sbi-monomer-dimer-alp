@@ -11,7 +11,7 @@ from srm_and_sbi_monomer_dimer_alp import artifact_schema as S
 from srm_and_sbi_monomer_dimer_alp import provenance
 from srm_and_sbi_monomer_dimer_alp.experiment_support import merge_validated_shards
 
-from _product_fixtures import D, KEYS, product as _product, valid_manifest as _manifest
+from _product_fixtures import KEYS, product as _product, valid_manifest as _manifest
 
 
 def test_valid_products_pass_and_median_is_located_by_level():

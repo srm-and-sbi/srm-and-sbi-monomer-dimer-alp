@@ -262,26 +262,27 @@ them reads a true parameter:
 | `tracks_per_spot` | tracks kept, over the mean number of accepted fits per used frame |
 
 `tracks_per_spot` is not a measure of fragmentation. It rises when tracks break, but equally when
-emitters are visible for only part of the recording, bleach, or turn over: two emitters, each seen and
+emitters are fluorescent for only part of the recording, bleach, or turn over: two emitters, each seen and
 perfectly linked in a different half of a recording, give 2. It stays a candidate predictor, and whether
 it predicts the error of the estimate or of its range is for the development tasks to show.
 
 **The selftest accounts for its error against the truth.** Each selftest scene reproduces its true
 per-subunit widths from the renderer's own seeded draw and matches every accepted fit to the nearest
-visible subunit within 1.5 px. The `mu_r` error is then written, in log10 units, as the sum of five
+fluorescent subunit within 1.5 px. The `mu_r` error is then written, in log10 units, as the sum of five
 terms: the finite population the scene drew (`sample`), detection selection (the true widths of the
-subunits found against those of all visible subunits), duplication (a subunit whose detections formed
+subunits found against those of all fluorescent subunits), duplication (a subunit whose detections formed
 several tracks counts several times), fitting (fitted against true width within matched tracks) and a
 remainder (tail trim, unmatched tracks, the population step's own averaging). The table shows all five,
 so the displayed terms sum to the displayed total. It is diagnostic accounting, conditional on the
 nearest-subunit matching and on the order of the terms, not a uniquely established causal
-decomposition. The spread ratio compares the true spread of the subunits found with that of all visible
+decomposition. The spread ratio compares the true spread of the subunits found with that of all fluorescent
 ones; below one, the found subunits span a narrower range of true widths. `--selftest-grid brightness`
 puts `mu_pc` on the five edges of its prior quarters at three spreads, which is where the dim-subgroup
 bias lives, and `--selftest-labeling FAB` draws dye counts from the bare FAB dye-count law at probe
-occupancy 1 instead of one dye per subunit. A tier also applies the condition's probe occupancy (0.155
-for MET-FAB), which thins the visible subunits without changing a visible one's dye count; the selftest
-sets the density of visible spots through `--selftest-subunits` instead:
+occupancy 1 instead of one dye per subunit. In a tier the condition's declared occupancy (0.0148
+for MET-FAB) fixes, at the trajectory stage, how many subunits are simulated per true receptor, and every
+retained monomer carries a probe; the selftest sets the density of fluorescent subunits through
+`--selftest-subunits` instead:
 
 ```
 MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
@@ -313,7 +314,7 @@ a correction may have to address; the development tasks carry the calibration.
 - **Dye multiplicity is not modeled here.** Under `FAB_POISSON` a labeled subunit carries
   about two dyes, which share one width, so a single-subunit spot is unaffected. A dimer with
   both subunits labeled carries two *different* widths at one position, and its fitted width
-  falls between them; under the MET-FAB occupancy that is a small share of visible dimers.
+  falls between them; under the MET-FAB occupancy that is a small share of fluorescent dimers.
 - **Reads only.** No pipeline input is modified; the utility writes its report, arrays and
   figures to the Data_Bank `Posit` tier.
 

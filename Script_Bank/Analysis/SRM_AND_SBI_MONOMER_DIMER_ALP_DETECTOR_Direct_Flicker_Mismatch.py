@@ -15,7 +15,7 @@ to seven versions of the traces. Each version changes one thing against the one 
 
     dye_truth_full       every dye's true photon series over the whole recording: what the
                          single-dye model arm assumes, so its error is the method's own floor
-    spot_truth_full      every visible subunit's summed true photons over the whole recording:
+    spot_truth_full      every fluorescent subunit's summed true photons over the whole recording:
                          adds dye multiplicity (a spot is the sum of its dyes)
     spot_truth_span      that series over the span from the subunit's first to its last
                          detection, without gaps: adds the selection of spans
@@ -27,7 +27,7 @@ to seven versions of the traces. Each version changes one thing against the one 
                          grouping only, so the contrast with fitted_oracle isolates linking
     production           every accepted detection grouped by the production linker, the estimator
                          as it runs on a tier: adds the detections outside the matched set (fits with
-                         no visible subunit within the match radius, and second fits near a subunit
+                         no fluorescent subunit within the match radius, and second fits near a subunit
                          already matched in that frame)
 
 A contrast between adjacent levels, paired within scenes, suggests a contribution of that step under
@@ -37,9 +37,9 @@ accounting, not a causal decomposition. Every level records why it produced no e
 produced none, and every mean is reported with the number of scenes behind it.
 
 Dye counts follow the bare dye-count law of the chosen condition at probe occupancy 1 (for FAB about
-81 % of subunits carry a dye); a tier also applies the condition's probe occupancy (0.155 for MET-FAB),
-which thins the visible subunits without changing a visible one's dye count. Here the density of
-visible spots is set by ``--n-subunits`` instead.
+81 % of subunits carry a dye); in a tier the condition's declared occupancy (0.0148 for MET-FAB) fixes, at the
+trajectory stage, how many subunits are simulated per true receptor, and every retained monomer carries a
+probe. Here the density of fluorescent subunits is set by ``--n-subunits`` instead.
 
 The harness reads no EVAL task, so it consumes none of the development or reserved data of sec. 9.6;
 it tunes nothing and reaches no verdict. It is a diagnostic utility, never wired into the stage
@@ -102,7 +102,7 @@ LEVELS = ("dye_truth_full", "spot_truth_full", "spot_truth_span", "spot_truth_de
           "fitted_oracle", "fitted_linked", "production")
 LEVEL_NOTES = {
     "dye_truth_full": "each dye's true photons, whole recording (the model arm's own assumption)",
-    "spot_truth_full": "each visible subunit's summed true photons, whole recording",
+    "spot_truth_full": "each fluorescent subunit's summed true photons, whole recording",
     "spot_truth_span": "that series from first to last detection, no gaps",
     "spot_truth_detected": "that series at the detected frames only",
     "fitted_oracle": "fitted amplitudes of the matched detections, grouped by true identity",
@@ -200,13 +200,13 @@ def render_scene(lambda_rate: float, mu_pc: float, seed: int, *, n_subunits: int
     spot_photons = np.zeros((n_frames, n_subunits))
     np.add.at(spot_photons.T, dye_subunit, dye_photons.T)     # a spot is the sum of its dyes
     return dict(video=video, dye_photons=dye_photons, spot_photons=spot_photons,
-                true_xy=poses[:, :, :2] / px_nm, visible=dye_counts > 0, img=img)
+                true_xy=poses[:, :, :2] / px_nm, fluorescent=dye_counts > 0, img=img)
 
 
-def match_to_subunits(m: dict, true_xy: np.ndarray, visible: np.ndarray) -> np.ndarray:
-    """Code every accepted spot fit by the visible subunit it belongs to.
+def match_to_subunits(m: dict, true_xy: np.ndarray, fluorescent: np.ndarray) -> np.ndarray:
+    """Code every accepted spot fit by the fluorescent subunit it belongs to.
 
-    The code is the index of the nearest visible subunit of the fit's frame when it lies within
+    The code is the index of the nearest fluorescent subunit of the fit's frame when it lies within
     ``MATCH_RADIUS_PX``; ``UNMATCHED`` (-1) when none does; ``SECOND_FIT`` (-2) when a nearer fit of
     the same frame already took that subunit. A subunit thus keeps at most one fit per frame, so an
     oracle trace never holds two values in one frame, and the negative codes are the detections
@@ -214,7 +214,7 @@ def match_to_subunits(m: dict, true_xy: np.ndarray, visible: np.ndarray) -> np.n
     """
     frames = np.asarray(m["frame_index"])
     xs, ys = np.asarray(m["x"], dtype=float), np.asarray(m["y"], dtype=float)
-    vis_idx = np.nonzero(visible)[0]
+    vis_idx = np.nonzero(fluorescent)[0]
     matched = np.full(frames.size, UNMATCHED, dtype=np.int64)
     if vis_idx.size == 0:
         return matched
@@ -250,7 +250,7 @@ def level_traces(level: str, scene: dict, m: dict, tid: np.ndarray, matched: np.
     if level == "dye_truth_full":
         return [(all_frames, scene["dye_photons"][:, d]) for d in range(scene["dye_photons"].shape[1])]
     if level == "spot_truth_full":
-        return [(all_frames, scene["spot_photons"][:, s]) for s in np.nonzero(scene["visible"])[0]]
+        return [(all_frames, scene["spot_photons"][:, s]) for s in np.nonzero(scene["fluorescent"])[0]]
     if level == "production":
         traces, _ = die.spot_intensity_traces(m, tid, min_length=min_length)
         return traces
@@ -331,13 +331,13 @@ def run_scene(job) -> dict:
                                 half_px=half_px)
     tid = (die.link_spot_tracks(m["frame_index"], m["x"], m["y"], frame_stride=1)
            if m["sqrt2sigma"].size else np.zeros(0, dtype=np.int64))
-    matched = match_to_subunits(m, scene["true_xy"], scene["visible"])
+    matched = match_to_subunits(m, scene["true_xy"], scene["fluorescent"])
     rows = [estimate_level(level_traces(level, scene, m, tid, matched, min_length),
                            n_model_traces=n_model_traces, lambda_true=lam) for level in LEVELS]
-    n_vis = int(scene["visible"].sum())
+    n_vis = int(scene["fluorescent"].sum())
     found = np.unique(matched[matched >= 0]).size
     return dict(scene=i, lambda_rate=lam, mu_pc=mu_pc, replicate=rep, seed=seed,
-                levels=rows, n_visible=n_vis, detected_share=found / max(n_vis, 1),
+                levels=rows, n_fluorescent=n_vis, detected_share=found / max(n_vis, 1),
                 spot_fits=int(m["sqrt2sigma"].size), n_matched=int((matched >= 0).sum()),
                 n_unmatched=int((matched == UNMATCHED).sum()),
                 n_second_fit=int((matched == SECOND_FIT).sum()), seconds=time.time() - t0)
@@ -694,19 +694,19 @@ def main(argv=None):
              "noise, so a rise between spot_truth_detected and fitted_oracle accompanies the photometry "
              "step, and a change between spot_truth_span and spot_truth_detected accompanies the gaps. "
              "The pooled sums and pair counts behind every level are saved with the arrays.")
-    reporter.stat("median share of visible subunits detected",
+    reporter.stat("median share of fluorescent subunits detected",
                   float(np.median([r["detected_share"] for r in results])),
                   note="subunits with at least one accepted fit matched to them")
     reporter.stat("median detections outside the matched set per scene",
-                  f"{np.median([r['n_unmatched'] for r in results]):.0f} with no visible subunit within "
+                  f"{np.median([r['n_unmatched'] for r in results]):.0f} with no fluorescent subunit within "
                   f"{MATCH_RADIUS_PX} px; {np.median([r['n_second_fit'] for r in results]):.0f} second fits "
                   f"near a matched subunit",
                   note="what production reads beyond fitted_linked; the matched detections per scene "
                        f"have a median of {np.median([r['n_matched'] for r in results]):.0f}")
     reporter.stat("dye counts", f"{args.labeling} (bare law, probe occupancy 1)",
-                  note="a tier also applies the condition's probe occupancy, which thins the visible "
-                       "subunits without changing a visible one's dye count; here --n-subunits sets "
-                       "the density of visible spots")
+                  note="in a tier the condition's declared occupancy fixes, at the trajectory stage, how "
+                       "many subunits are simulated per true receptor, and every retained monomer carries "
+                       "a probe; here --n-subunits sets the density of fluorescent subunits")
     make_figure(lam, mu, err, common, reporter)
     make_shape_figure(c, reporter)
 
@@ -719,7 +719,7 @@ def main(argv=None):
                         reason=c["reason"], at_grid_edge=c["at_grid_edge"], refined=c["refined"],
                         n_traces=c["n_traces"], span_median=c["span"],
                         detected_share=np.array([r["detected_share"] for r in results]),
-                        n_visible=np.array([r["n_visible"] for r in results]),
+                        n_fluorescent=np.array([r["n_fluorescent"] for r in results]),
                         n_matched=np.array([r["n_matched"] for r in results]),
                         n_unmatched=np.array([r["n_unmatched"] for r in results]),
                         n_second_fit=np.array([r["n_second_fit"] for r in results]),

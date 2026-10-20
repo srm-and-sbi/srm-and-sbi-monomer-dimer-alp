@@ -1,7 +1,8 @@
 """Analysis entry point (biology workflow): posterior-predictive video against a real recording.
 
-ROLE. Take the eleven reaction-diffusion parameters INFERRED from one real MET recording, simulate a
-video with them at that recording's own length, and put the two side by side. This is the check no
+ROLE. Take the condition's reaction-diffusion parameters INFERRED from one real MET recording (eleven
+under MET-FAB, twelve under MET-INLB), simulate a video with them at that recording's own length, and
+put the two side by side. This is the check no
 statistic on held-out synthetic data can perform: it asks whether the posterior explains the real
 data with a configuration the forward model can actually render. If the synthetic frames do not look
 like the recording that produced the parameters, the estimates describe something the simulator

@@ -26,7 +26,6 @@ the alias-qualified paths, and the report-facing parameter descriptions.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import numpy as np
 import tifffile

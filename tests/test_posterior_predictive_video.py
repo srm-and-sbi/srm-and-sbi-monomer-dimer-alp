@@ -22,7 +22,7 @@ The receptor-total match
 responses, with no simulation:
 
 4. a linear detection response converges to the value the arithmetic predicts (the cell-0 case);
-5. no experimental detections, no visible host, no synthetic detection and a non-finite update each
+5. no experimental detections, no fluorescent host, no synthetic detection and a non-finite update each
    end in their own undefined status, with no count;
 6. a saturating detection response ends as "unresolved under detector saturation" (inside the prior
    box, and beyond it under the user's decision) instead of chasing an unattainable density;
@@ -184,7 +184,7 @@ def test_the_figure_names_the_synthetic_source():
     assert isinstance(norm, ast.Attribute) and norm.attr == "display_norm"
     assert (isinstance(pair, ast.Call) and _call_name(pair.func) == "tuple"
             and isinstance(pair.args[0], ast.Attribute) and pair.args[0].attr == "display_percentiles")
-    # n_subunits, n_dyes, n_labeled_subunits, monomers_0, monomers_visible_0, dimers_0, dimers_visible_0,
+    # n_subunits, n_dyes, n_labeled_subunits, monomers_0, monomers_fluorescent_0, dimers_0, dimers_fluorescent_0,
     # dimers_two_labeled_0, occupancy_monomer, occupancy_dimer, dimers_one_probe_0, dimers_two_probe_0,
     # two_probe_share (labeling.LABELING_SET_COLUMNS)
     row = np.array([1000, 261, 136, 860, 124, 70, 10, 2, 1.0, 0.5037, 68, 2, 0.00744])
@@ -214,8 +214,8 @@ def test_the_figure_names_the_synthetic_source():
     assert "1000 subunits = 860 monomers + 70 dimers (930 receptors)" in text
     assert "labeled: 136 subunits carrying 261 dyes" in text
     # Long provenance lines wrap inside the panel (no line exceeds the width); both halves are stated.
-    assert "visible: 124 of 860 monomers + 10 of 70 dimers (2 with both" in text
-    assert "subunits labeled) = 134 spots" in text
+    assert "fluorescent: 124 of 860 monomers + 10 of 70 dimers (2 with" in text
+    assert "both subunits labeled) = 134 spots" in text
     assert "display: norm full [min, max] = [150, 399] ADU" in text
     assert "outside it: experimental 0 below, 0 above; synthetic 0 below," in text
     # The brightness range of each row is explicit in a colorbar.
@@ -306,7 +306,7 @@ DECIDED = dict(KW, allow_outside_prior=True)             # the user's decision t
 
 
 def _linear(eta=0.67, calls=None):
-    """Detection proportional to the visible hosts, which equal their expectation; ``calls``
+    """Detection proportional to the fluorescent hosts, which equal their expectation; ``calls``
     collects the counts rendered."""
     def render(n_r, it):
         if calls is not None:
@@ -326,9 +326,9 @@ def test_linear_response_converges_to_the_predicted_count():
 def test_undefined_paths_carry_no_count():
     assert cm.iterate_count(0.0, V, _linear(), **KW)["status"] == "undefined_no_experimental_detections"
     assert cm.iterate_count(float("nan"), V, _linear(), **KW)["status"] == "undefined_no_experimental_detections"
-    assert cm.iterate_count(44.0, 0.0, _linear(), **KW)["status"] == "undefined_no_visibility"
+    assert cm.iterate_count(44.0, 0.0, _linear(), **KW)["status"] == "undefined_no_fluorescence"
     out = cm.iterate_count(44.0, V, lambda n, it: (0, 0.0), **KW)
-    assert out["status"] == "undefined_no_visible_hosts" and out["matched_count_total"] is None
+    assert out["status"] == "undefined_no_fluorescent_hosts" and out["matched_count_total"] is None
     out = cm.iterate_count(44.0, V, lambda n, it: (70, 0.0), **KW)
     assert out["status"] == "undefined_no_synthetic_detections" and out["matched_count_total"] is None
     out = cm.iterate_count(44.0, V, lambda n, it: (70, float("inf")), **KW)
@@ -714,13 +714,13 @@ def test_the_figure_is_drawn_from_the_clip_alone():
                  resolve_labeling("FAB", "FAB_BINOMIAL", "0.1422"), resolve_labeling("FAB", "poisson:1.64123")):
         line = ppv.labeling_description(json.loads(json.dumps(plan.record())))
         assert line.startswith(f"{plan.condition} {plan.law_name} = {ppv._law_text(plan.record()['law'])}, ")
-        assert f"({plan.occupancy_source}); visible per " in line
+        assert f"({plan.occupancy_source}); fluorescent per " in line
         # At most three decimal places; the law's name is an identifier, printed as stored.
         assert not re.search(r"\d\.\d{4,}", line.replace(plan.law_name, "")), line
     assert "Poisson(mean=1.641)" in ppv.labeling_description(resolve_labeling("FAB", "poisson:1.64123").record())
     assert (ppv.labeling_description(resolve_labeling("FAB").record())
             == "FAB FAB_POISSON = Poisson(mean=1.64), retained population: probe classes drawn, two-probe share 0.007, "
-               "occupancy 0.015 (derived); visible per retained subunit A 0.806, B 0.406")
+               "occupancy 0.015 (derived); fluorescent per retained subunit A 0.806, B 0.406")
     assert "occupancy coins A=0.5, B=1 (override)" in ppv.labeling_description(
         json.loads(json.dumps(resolve_labeling("INLB", None, "A=0.5,B=1.0").record())))
     exp, syn = _partly_overlapping_clips()
@@ -744,7 +744,7 @@ def test_the_figure_is_drawn_from_the_clip_alone():
     x = ppv.comparison_figure_inputs(_fixture_fields(exp, syn, labeling_record=arm_record), bio_cfg)
     assert x["motion_desc"] == "the source render's trajectory (reused, not re-simulated)"
     assert x["labeling_desc"].startswith("FAB FAB_BINOMIAL = Binomial(sites=4, mean=1.64), retained population: ")
-    assert "(derived; the source's labeled subunits kept); visible per retained subunit A 0.806, B 0.406" in x["labeling_desc"]
+    assert "(derived; the source's labeled subunits kept); fluorescent per retained subunit A 0.806, B 0.406" in x["labeling_desc"]
     # A MAP biology render names its selection.
     x = ppv.comparison_figure_inputs(_fixture_fields(exp, syn, rds_source="map", map_theta=[1.0], map_source="cell-sgm",
                                                      synth_label="SYNTH (MAP reaction-diffusion)"), bio_cfg)
@@ -889,8 +889,8 @@ def test_an_inlb_fixture_states_twelve_values_by_key_and_a_permuted_fixture_is_r
         calls.append((condition, np.asarray(rds_vector, dtype=float).copy()))
         c = bio.population_from_theta(np.asarray(rds_vector, dtype=float), condition).item(())
         row = dict(n_subunits=c.n_subunits, n_dyes=c.n_subunits, n_labeled_subunits=c.n_subunits,
-                   monomers_0=c.n_monomers, monomers_visible_0=c.n_monomers, dimers_0=c.n_dimers,
-                   dimers_visible_0=c.n_dimers, dimers_two_labeled_0=c.n_dimers_two_probe,
+                   monomers_0=c.n_monomers, monomers_fluorescent_0=c.n_monomers, dimers_0=c.n_dimers,
+                   dimers_fluorescent_0=c.n_dimers, dimers_two_labeled_0=c.n_dimers_two_probe,
                    occupancy_monomer=1.0, occupancy_dimer=1.0, dimers_one_probe_0=c.n_dimers_one_probe,
                    dimers_two_probe_0=c.n_dimers_two_probe, two_probe_share=float(plan.two_probe_share))
         rng = np.random.default_rng(1)
@@ -1052,7 +1052,7 @@ def test_a_fraction_outside_the_box_is_refused_at_load_and_never_reaches_simulat
         assert not (Path(tmp_dir) / "out").exists(), "the refusal comes before any output folder"
 
 
-def test_count_match_visibility_equals_the_helper_and_the_fluorescence_function():
+def test_count_match_fluorescence_equals_the_helper_and_the_fluorescence_function():
     from srm_and_sbi_monomer_dimer_alp.labeling import expected_fluorescent_complexes
     plan = resolve_labeling("FAB")
     n_total = 1e7
@@ -1060,9 +1060,9 @@ def test_count_match_visibility_equals_the_helper_and_the_fluorescence_function(
         pop = bio.realize_population(count_total=n_total, fraction_basal_dimers_reference=f,
                                      relative_count_active_dimers_initial=0.0, condition="FAB")
         expected = float(expected_fluorescent_complexes(pop, plan)) / n_total
-        v = cm.visible_hosts_per_subunit(plan, f)
+        v = cm.fluorescent_hosts_per_subunit(plan, f)
         assert np.isclose(v, expected, rtol=2e-4), (f, v, expected)
-    assert np.isclose(cm.visible_hosts_per_subunit(plan, 0.075), 0.011894875, atol=2e-7)
+    assert np.isclose(cm.fluorescent_hosts_per_subunit(plan, 0.075), 0.011894875, atol=2e-7)
     assert np.isclose(V, 0.011894875)
 
 
@@ -1328,7 +1328,7 @@ def test_the_spot_count_report_states_each_recordings_receptor_total():
         cells = {}
         for cell, n_r in totals.items():
             window = {"experimental": {"mean": 100.0}, "R (FAB_POISSON)": {"mean": 90.0}}
-            cells[str(cell)] = {"count_total_declared": n_r, "visible_spots_0": {"R (FAB_POISSON)": 150},
+            cells[str(cell)] = {"count_total_declared": n_r, "fluorescent_complexes_0": {"R (FAB_POISSON)": 150},
                                 "eta_opening": {"R (FAB_POISSON)": 0.6},
                                 "windows": {"opening 100 frames": window, "closing 100 frames": window}}
         return {"package_version": "test", "kind": "MET-FAB", "source_label": "R", "arm_labels": [],

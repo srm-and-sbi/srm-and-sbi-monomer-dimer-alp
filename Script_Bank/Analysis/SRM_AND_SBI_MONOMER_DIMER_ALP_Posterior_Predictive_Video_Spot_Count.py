@@ -15,7 +15,7 @@ Labels are matched exactly as the engine and the labeling arm name their files.
 A count is a DETECTED count: the isolated spots the direct estimators accept in a frame. At high density
 the overlap and the isolation radius lower it, so the ratio synthetic / experimental is read as a density
 comparison under one rule, not as a census of emitters. Beside the counts, each synthetic clip reports the
-visible spots it started with (its labeling record, frame 0) and the detected-per-visible ratio ``eta`` of
+fluorescent complexes it started with (its labeling record, frame 0) and the detected-per-fluorescent ratio ``eta`` of
 the opening window, the quantity the count match iterates on.
 
 Pure render consumer: no simulation, no render, nothing adopted. It verifies that the clips of a
@@ -142,22 +142,22 @@ def write_report(results: dict, report: Path) -> None:
             e = w[EXPERIMENTAL]["mean"]
             add(f"| {cell} | {e:.1f} | " + " | ".join(fmt_ratio(w[c]["mean"], e) for c in column_names) + " |")
         add("")
-    add("## The renders' receptor totals, visible spots at frame 0 and detected-per-visible ratio (opening window)")
+    add("## The renders' receptor totals, fluorescent complexes at frame 0 and detected-per-fluorescent ratio (opening window)")
     add("")
     add((f"Every render declares the receptor total N = {totals[0]:.0f}. " if len(totals) == 1 else
          "The receptor total N is declared per recording (column N); a recording's arms share its render's "
          "trajectory, so they share its N. ")
         + "N counts the receptor subunits of the underlying population; the represented receptors N_R follow "
           "from it through the condition's occupancy. "
-        + "Visible spots are the labeled monomers plus the dimers with at least one labeled subunit at frame 0 (the "
-        "labeling record). `eta` = detected per frame / visible spots, the count match's ratio.")
+        + "Fluorescent complexes are the labeled monomers plus the dimers with at least one labeled subunit at frame 0 (the "
+        "labeling record). `eta` = detected per frame / fluorescent complexes, the count match's ratio.")
     add("")
-    add("| cell | N | " + " | ".join(f"{c} visible" for c in column_names) + " | "
+    add("| cell | N | " + " | ".join(f"{c} fluorescent" for c in column_names) + " | "
         + " | ".join(f"{c} eta" for c in column_names) + " |")
     add("|---|---|" + "---|" * (2 * len(column_names)))
     for cell, block in cells.items():
         add(f"| {cell} | {float(block['count_total_declared']):.0f} | "
-            + " | ".join(f"{block['visible_spots_0'][c]}" for c in column_names) + " | "
+            + " | ".join(f"{block['fluorescent_complexes_0'][c]}" for c in column_names) + " | "
             + " | ".join("-" if block["eta_opening"][c] is None else f"{block['eta_opening'][c]:.2f}" for c in column_names) + " |")
     add("")
     report.write_text("\n".join(L))
@@ -231,7 +231,7 @@ def main(argv=None):
         def count_total(d):
             return float(dict(zip([str(k) for k in d["rds_keys"]], [float(v) for v in d["rds_provenance"]]))["count_total"])
         block = {"experimental_tif": str(first["experimental_tif"]), "seed": int(first["seed"]), "n_frames": n_frames,
-                 "count_total_declared": count_total(first), "visible_spots_0": {}, "windows": {w: {} for w in wins}}
+                 "count_total_declared": count_total(first), "fluorescent_complexes_0": {}, "windows": {w: {} for w in wins}}
         for name, (path, d) in clips.items():
             if not np.array_equal(d["experimental"], experimental):
                 raise SystemExit(f"cell {cell}: {name} references different experimental frames")
@@ -244,7 +244,7 @@ def main(argv=None):
             elif not np.allclose(vec, imaging_vector, rtol=0, atol=1e-9):
                 raise SystemExit(f"cell {cell}: {name} was rendered with a different imaging vector {vec} != {imaging_vector}")
             row = dict(zip([str(k) for k in d["labeling_columns"]], [float(v) for v in d["labeling_row"]]))
-            block["visible_spots_0"][name] = int(round(row["monomers_visible_0"] + row["dimers_visible_0"]))
+            block["fluorescent_complexes_0"][name] = int(round(row["monomers_fluorescent_0"] + row["dimers_fluorescent_0"]))
             for window, (start, stop) in wins.items():
                 jobs.append((cell, name, window, path, "synth", start, stop))
         for window, (start, stop) in wins.items():
@@ -271,7 +271,7 @@ def main(argv=None):
     opening = next(iter(next(iter(cells.values()))["windows"]))
     for block in cells.values():
         block["eta_opening"] = {name: block["windows"][opening][name]["mean"] / v if v > 0 else None
-                                for name, v in block["visible_spots_0"].items()}
+                                for name, v in block["fluorescent_complexes_0"].items()}
     results = {"package_version": _PACKAGE_VERSION, "kind": args.kind, "source_label": args.source_label,
                "arm_labels": args.arm_label,
                "columns": column_names, "opening_frames": args.opening_frames, "closing_frames": args.closing_frames,

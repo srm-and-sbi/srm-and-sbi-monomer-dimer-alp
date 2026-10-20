@@ -42,8 +42,9 @@ can legitimately do better.
 Usage (from the repo root):
     MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \\
         Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Information_Budget.py \\
-        --total-time-seconds 2.0 --n-emitters 154
+        --total-time-seconds 2.0
 
+    ... --n-emitters 143            # another operating point (the default is the model's, see operating_point)
     ... --measured measured.json   # overlay direct/neural numbers into the comparison table
     ... --dry-run                  # resolve settings and print what it would compute
 
@@ -70,7 +71,7 @@ from srm_and_sbi_monomer_dimer_alp import information_budget as ib  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import labeling as lab  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter  # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.parameterization import (  # noqa: E402
-    PARAMETERS, RunTiming,
+    PARAMETERS, RunTiming, parameterization_of, population_from_theta, prior_center,
 )
 
 assert os.path.abspath(ib.__file__).startswith(REPO_ROOT), (
@@ -80,11 +81,36 @@ assert os.path.abspath(ib.__file__).startswith(REPO_ROOT), (
 
 STAGE = "Information_Budget"
 
-# Operating point of a MET-FAB recording, from the labeling audit and the dye-multiplicity
-# stratification: about 1233 subunits per recording, a visible fraction of 0.125, and a mean
-# of 2.03 dyes on a labeled subunit under FAB_POISSON.
-DEFAULT_N_EMITTERS = 154
-DEFAULT_DYES_PER_SPOT = 2.03
+
+
+def operating_point(condition: str) -> dict:
+    """The operating point of one recording under ``condition``, from the model: the retained
+    population at the condition's prior center (``parameterization.population_from_theta``), its
+    expected number of fluorescent complexes under the production labeling rule
+    (``labeling.expected_fluorescent_complexes``), and the mean dye count of a labeled subunit,
+    E[dye | dye >= 1], under the condition's law.
+
+    Under MET-FAB the prior center (receptor total 10^4, basal reference fraction 0.5) retains
+    245 subunits in 49 monomers and 98 dimers, 148 of them probe-bound; at 0.806 fluorescent per
+    bound probe that is about 119 fluorescent complexes, inside the first-2 s spot counts of the
+    sixty deposited MET-FAB recordings (median 143, quartiles 79 and 218: the A9 reference the
+    prior-realization audit reads). The mean dye count of a labeled subunit under FAB_POISSON is
+    1.64 / 0.806 = 2.03.
+    """
+    theta = np.array([prior_center(row) for row in parameterization_of(condition)], dtype=float)
+    population = population_from_theta(theta, condition)
+    plan = lab.resolve_labeling(condition)
+    q = float(plan.law.fluorescent_probability)
+    n_monomers = int(np.squeeze(population.n_monomers))
+    n_dimers = int(np.squeeze(population.n_dimers))
+    n_subunits = int(np.squeeze(population.n_subunits))
+    n_bound = float(n_subunits) if plan.ligand_classes else n_monomers + n_dimers * (1.0 + float(plan.two_probe_share))
+    n_fluorescent = float(np.squeeze(lab.expected_fluorescent_complexes(population, plan)))
+    return dict(condition=condition, n_emitters=int(round(n_fluorescent)), n_fluorescent=n_fluorescent,
+                dyes_per_spot=float(plan.law.mean / q), fluorescent_per_bound_probe=q, law=plan.law_name,
+                n_subunits=n_subunits, n_monomers=n_monomers, n_dimers=n_dimers, n_probe_bound=n_bound)
+
+
 # Relative noise of the whole-field fluorescence curve, from the kernel so the budget
 # and the estimator cannot quote different values for the same quantity.
 DEFAULT_RELATIVE_NOISE = ib.FIELD_RELATIVE_NOISE_MET_FAB
@@ -188,10 +214,12 @@ def main(argv=None):
                     help="recording length the budget is computed for.")
     ap.add_argument("--compare-seconds", type=float, nargs="*", default=[2.0, 20.0],
                     help="additional recording lengths to tabulate, for the duration scaling.")
-    ap.add_argument("--n-emitters", type=int, default=DEFAULT_N_EMITTERS,
-                    help="visible emitters (spots) per recording.")
-    ap.add_argument("--dyes-per-spot", type=float, default=DEFAULT_DYES_PER_SPOT,
-                    help="mean dyes on a labeled subunit under the condition's labeling law.")
+    ap.add_argument("--n-emitters", type=int, default=None,
+                    help="fluorescent emitters (spots) per recording; default: the expected fluorescent "
+                         "complexes of the retained population at the condition's prior center.")
+    ap.add_argument("--dyes-per-spot", type=float, default=None,
+                    help="mean dyes on a labeled subunit; default: E[dye | dye >= 1] under the condition's "
+                         "labeling law.")
     ap.add_argument("--relative-noise", type=float, default=DEFAULT_RELATIVE_NOISE,
                     help="relative noise of the total-fluorescence curve, per frame.")
     ap.add_argument("--measured", default=None,
@@ -199,6 +227,11 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args(argv)
+    op = operating_point(args.condition)
+    if args.n_emitters is None:
+        args.n_emitters = op["n_emitters"]
+    if args.dyes_per_spot is None:
+        args.dyes_per_spot = op["dyes_per_spot"]
 
     data_bank_root = PARAMETERS.machine.data_bank_root
     dt = PARAMETERS.simulation.timing.frame_time_seconds
@@ -215,7 +248,12 @@ def main(argv=None):
         print(f"  out dir         : {out_dir}")
         print(f"  frames          : {timing.frame_count} ({args.total_time_seconds} s at "
               f"{int(round(1 / dt))} fps)")
-        print(f"  emitters        : {args.n_emitters}   dyes/spot {args.dyes_per_spot}")
+        print(f"  emitters        : {args.n_emitters}   dyes/spot {args.dyes_per_spot:.3g}")
+        print(f"  operating point : {op['n_monomers']} monomers + {op['n_dimers']} dimers of the retained "
+              f"population ({op['n_subunits']} subunits) at the {args.condition} prior center, "
+              f"{op['n_probe_bound']:.0f} probe-bound, {op['fluorescent_per_bound_probe']:.3f} fluorescent per "
+              f"bound probe -> {op['n_fluorescent']:.1f} fluorescent complexes; {op['dyes_per_spot']:.2f} dyes "
+              f"on a labeled subunit ({op['law']})")
         print(f"  relative noise  : {args.relative_noise}")
         print(f"  compare lengths : {args.compare_seconds} s")
         print(f"  measured overlay: {args.measured or '(none)'}")
@@ -233,7 +271,9 @@ def main(argv=None):
     box = budget["box"]
 
     reporter.stat("frames", timing.frame_count, note="frames in the recording the budget assumes")
-    reporter.stat("visible emitters", args.n_emitters, note="spots available to any estimator")
+    reporter.stat("fluorescent emitters", args.n_emitters,
+                  note=f"spots available to any estimator; the model's operating point is {op['n_fluorescent']:.1f} "
+                       f"fluorescent complexes of the retained population at the {args.condition} prior center")
     reporter.stat("photons per spot per frame", budget["spot_photons"],
                   note="median brightness times the mean dyes on a labeled subunit")
     reporter.stat("per-spot sd(ln sigma), one frame", budget["per_spot_log_width"],
@@ -403,7 +443,8 @@ def main(argv=None):
                         n_emitters=budget["n_emitters"], n_frames=budget["n_frames"])
     with open(os.path.join(out_dir, "summary.json"), "w") as fh:
         json.dump(dict(
-            n_frames=timing.frame_count, n_emitters=args.n_emitters,
+            n_frames=timing.frame_count, n_emitters=args.n_emitters, dyes_per_spot=args.dyes_per_spot,
+            relative_noise=args.relative_noise, operating_point=op,
             spot_photons=budget["spot_photons"],
             per_spot_log_width=budget["per_spot_log_width"],
             mu_r_bound_dex=w["center"]["sd_log_scale_dex"],

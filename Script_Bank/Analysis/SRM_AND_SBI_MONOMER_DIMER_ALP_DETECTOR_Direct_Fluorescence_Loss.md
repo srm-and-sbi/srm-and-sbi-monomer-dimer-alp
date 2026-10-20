@@ -59,8 +59,8 @@ and the estimator recovers `prob_photo_bleach` from that decay in two steps.
   curves. And the offset must be free: the background estimate carries a small residual, and
   forcing the curve through zero converts that residual straight into slope.
 
-**Total fluorescence, not a spot count.** A count of visible spots is not a substitute: a
-two-dye spot stays visible when one of its dyes bleaches, so counting spots understates the
+**Total fluorescence, not a spot count.** A count of fluorescent spots is not a substitute: a
+two-dye spot stays fluorescent when one of its dyes bleaches, so counting spots understates the
 loss and does so in a way that depends on the labeling law. Total flux is linear in the number
 of surviving dyes, which is what the parameter controls. `DETECTOR_WORKFLOW.md` §9.4 makes the
 same point.
@@ -316,7 +316,7 @@ dissociation the lean positions equal the dense gather value for value at every 
 rendered frames are identical under a fixed seed, and the runner's stored videos and labeling records
 equal the dense path's for both workflows. On real trajectories pulled to the PC the same holds: the
 three 2 s EVAL recordings of task 0 and a 20 s recording of task 9 (459 subunits) read identically through
-both readers and render identical frames; the released 0.1.30 and this version write byte-identical video,
+both readers and render identical frames; the dense path of the preceding release and the lean path write byte-identical video,
 theta, SCOPE, nuisance and labeling stores for both workflows on the 2 s recordings under one seed; and on
 the largest scene (task 9, simulation 5: 3,011 subunits, 491,645 particle ids, the 65.9 GiB dense tensor)
 the lean read peaks at 0.9 GiB and the complete detector runner at 3.8 GiB for one recording in 60 s, where
@@ -385,7 +385,7 @@ here, and the reserved tasks 10 to 19 stay unread.
 **Planned experimental measurement (agreed 2026-09-25; each step separately approved).** The working
 imaging vector's bleaching row (`DETECTOR_WORKFLOW.md` §7.6) is to be anchored on a measurement made on
 the raw recordings rather than on either neural estimator, as a bounded measurement task and not an
-estimator-development programme. (1) Observable: background-subtracted total fluorescence over time in a
+estimator-development program. (1) Observable: background-subtracted total fluorescence over time in a
 fixed region of each recording, with no per-frame normalization, reported as the early-to-late fractional
 loss between averaging-window centers and as this estimator's fitted effective loss parameter with its fit
 diagnostics; the full curve is shown, no initial transient is assumed or discarded beforehand, and any

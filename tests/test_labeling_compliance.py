@@ -159,7 +159,7 @@ def test_declared_occupancy_is_the_default_and_overrides_are_recorded():
         assert plan.occupancy_source == par.occupancy_source_of(condition) != "override"
         assert plan.two_probe_share == par.two_probe_share_of(condition)
         assert plan.occupancy_pair[0] == 1.0                       # every retained monomer carries a probe
-        assert np.isclose(plan.visible_per_subunit[0], plan.law.visible_probability)
+        assert np.isclose(plan.fluorescent_per_subunit[0], plan.law.fluorescent_probability)
     fab, inlb = lab.resolve_labeling("FAB"), lab.resolve_labeling("INLB")
     assert fab.occupancy_source == "derived" and inlb.occupancy_source == "equilibrium"
     assert np.isclose(inlb.occupancy, 0.25 / 5.25) and np.isclose(fab.occupancy, 0.0148, atol=5e-5)
@@ -244,16 +244,16 @@ def test_task0_sim0_labeling_stream_coincides_with_the_bare_seed_stream():
 
 
 def test_probe_classes_follow_the_retained_population_rule():
-    """Every retained monomer carries a probe (visible with the law's probability); under FAB the
+    """Every retained monomer carries a probe (fluorescent with the law's probability); under FAB the
     basal dimers split into one- and two-Fab classes at the declared two-probe share, a one-Fab
     dimer keeping exactly one bound subunit; under INLB a B1 host is one bound subunit and a B2
     host two, and every retained subunit is bound."""
     tray = _TrajectoryStub()
-    # FAB: 20000 monomers -> visible share = P(dye >= 1) of the law, not thinned by an occupancy coin
+    # FAB: 20000 monomers -> fluorescent share = P(dye >= 1) of the law, not thinned by an occupancy coin
     plan = lab.resolve_labeling("FAB")
     lineage = _lineage(20000, 0, np.random.default_rng(3), "FAB")
     dyes, row = lab.label_trajectory(plan, tray, lineage, lab.labeling_rng(0))
-    assert abs((dyes >= 1).mean() - plan.law.visible_probability) < 0.01
+    assert abs((dyes >= 1).mean() - plan.law.fluorescent_probability) < 0.01
     col = dict(zip(lab.LABELING_SET_COLUMNS, row))
     assert col["occupancy_monomer"] == plan.occupancy_pair[0] == 1.0
     # FAB: 20000 basal dimers -> two-Fab share s_2, one-Fab dimers with exactly one bound subunit
@@ -281,7 +281,7 @@ def test_probe_classes_follow_the_retained_population_rule():
     over = lab.resolve_labeling("INLB", None, "0.4")
     dyes, row = lab.label_trajectory(over, tray, lineage, lab.labeling_rng(3))
     col = dict(zip(lab.LABELING_SET_COLUMNS, row))
-    assert np.isnan(col["two_probe_share"]) and abs((dyes >= 1).mean() - 0.4 * over.law.visible_probability) < 0.05
+    assert np.isnan(col["two_probe_share"]) and abs((dyes >= 1).mean() - 0.4 * over.law.fluorescent_probability) < 0.05
 
 
 def test_allocated_and_degenerate_lineages_label_under_the_probe_rule():
@@ -320,7 +320,7 @@ def test_allocated_and_degenerate_lineages_label_under_the_probe_rule():
             col = dict(zip(lab.LABELING_SET_COLUMNS, row))
             assert (col["monomers_0"], col["dimers_0"]) == (n_monomers, n_dimers), (condition, n_monomers, n_dimers)
             assert dyes.shape == (lineage.n_subunits,) and col["n_subunits"] == lineage.n_subunits
-            assert col["monomers_visible_0"] <= n_monomers and col["dimers_visible_0"] <= n_dimers
+            assert col["monomers_fluorescent_0"] <= n_monomers and col["dimers_fluorescent_0"] <= n_dimers
             if n_dimers == 0:
                 assert col["dimers_one_probe_0"] == 0 and col["dimers_two_probe_0"] == 0
             else:
@@ -332,16 +332,10 @@ def test_allocated_and_degenerate_lineages_label_under_the_probe_rule():
 # Where `draw_dye_counts` may be called directly, and why.
 ALLOWED_DIRECT_DRAWS = {
     "srm_and_sbi_monomer_dimer_alp/labeling.py": "the shared path itself (label_subunits)",
-    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Labeling_Audit.py":
-        "Level 3 tests the bare law at occupancy 1 by design; Level 3b uses the shared path",
     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_PSF_Width.py":
         "synthetic self-test scenes at the bare law, occupancy 1, stated in the script and its note",
     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Flicker_Mismatch.py":
         "the flicker harness scenes at the bare law, occupancy 1, stated in the script and its note",
-    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Model_Structure_Audit.py":
-        "re-derives the declared composition from the primitives (R3, R4) at the declared occupancy",
-    "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Prior_Realization_Audit.py":
-        "re-derives the visibility chain from the primitives (P6) at the declared occupancy",
 }
 RUNNERS = ("srm_and_sbi_monomer_dimer_alp/simulation_dli_runner.py",
            "srm_and_sbi_monomer_dimer_alp/posterior_predictive_video_runner.py",

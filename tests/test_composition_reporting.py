@@ -172,7 +172,7 @@ def test_per_draw_summary_differs_from_the_summary_at_the_coordinate_medians():
 def test_expected_fluorescent_complexes_matches_hand_values():
     # MET-FAB: A q + B [(1 - s2) q + s2 (1 - (1 - q)^2)] on the placed counts
     fab = resolve_labeling("FAB")
-    q, s2 = fab.law.visible_probability, fab.two_probe_share
+    q, s2 = fab.law.fluorescent_probability, fab.two_probe_share
     pop = types.SimpleNamespace(n_monomers=np.array([860, 0, 100]), n_dimers=np.array([70, 20, 0]),
                                 n_dimers_one_probe=None, n_dimers_two_probe=None)
     expect = pop.n_monomers * q + pop.n_dimers * ((1 - s2) * q + s2 * (1 - (1 - q) ** 2))
@@ -180,7 +180,7 @@ def test_expected_fluorescent_complexes_matches_hand_values():
     assert np.isclose(expected_fluorescent_complexes(pop, fab)[0], 860 * q + 70 * ((1 - s2) * q + s2 * (1 - (1 - q) ** 2)))
     # MET-INLB: A q + B1 q + B2 (1 - (1 - q)^2); q = 0.5 -> 0.5 A + 0.5 B1 + 0.75 B2
     inlb = resolve_labeling("INLB")
-    assert np.isclose(inlb.law.visible_probability, 0.5)
+    assert np.isclose(inlb.law.fluorescent_probability, 0.5)
     pop = types.SimpleNamespace(n_monomers=np.array([200, 0]), n_dimers_one_probe=np.array([100, 40]),
                                 n_dimers_two_probe=np.array([40, 0]), n_dimers=np.array([140, 40]))
     assert np.allclose(expected_fluorescent_complexes(pop, inlb), [0.5 * 200 + 0.5 * 100 + 0.75 * 40, 20.0])

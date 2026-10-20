@@ -5,6 +5,114 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.41 - 2026-10-20
+
+The cleanup after the sanity check of the window-start composition: the glossary's *fluorescent* replaces *visible*
+across the codebase, stored names included; the documentation names every module and every test file; stale
+statements of the model's values are corrected. No model, generator, estimator or product format changes beyond the
+renamed names below.
+
+### Changed
+
+- **Fluorescent, never visible** (`DOCUMENT.md` §0 of the collaborator presentation: a fluorescent complex carries at
+  least one emitting dye; *visible* suggests detection). The word is renamed wherever it meant that, in prose,
+  identifiers and stored names:
+  - `labeling.py`: `LabelingLaw.fluorescent_probability` / `fluorescent_fraction`,
+    `LabelingPlan.fluorescent_per_subunit` and its `record()` key, the `Labeling_Set` columns
+    `monomers_fluorescent_0` and `dimers_fluorescent_0`.
+  - `parameterization.py`: `ConditionSetting.fluorescence_ratio` / `fluorescence_ratio_to`,
+    `SimulationRDS.fluorescent_fraction_of` and the module-level `fluorescent_fraction_of`; the labeling layer is
+    named as such.
+  - The posterior-predictive count match and spot count: `fluorescent_hosts_per_subunit`, the record keys
+    `fluorescent_hosts_0`, `expected_fluorescent_hosts` and `fluorescent_complexes_0`, the statuses
+    `undefined_no_fluorescence` and `undefined_no_fluorescent_hosts`.
+  - The prior-realization audit: `--fluorescence` replaces `--visibility` (P6 alone), its mode folder and keys follow;
+    the structure audit's R3 is the fluorescent fractions and its D8 record carries `fluorescence`; the labeling audit
+    and the direct-estimator harnesses rename their fields (`fluorescent_*`, `dark_daughter_*`).
+  - Readers of these names are updated together; products written before this release are superseded already
+    (0.1.40, *Data*) and no reader expects the old columns.
+  - Left as they are: *visible* in its plain sense (a GPU visible to a process, a decay visible above the residual
+    scatter, a feature plainly visible in a plot).
+- **Fab before InlB.** Every enumeration that named MET-INLB before MET-FAB in `PROJECT_CONTEXT.md`,
+  `DETECTOR_WORKFLOW.md`, `VALIDATION.md` and the audit, composition and video notes is reordered; a derivation that
+  starts from the InlB anchor keeps its order.
+- **Tests.** `tests/test_sgm_reference.py` defined one test after its `__main__` block, which the globals loop never
+  reached; it is moved above the block and runs (5 of 5).
+- **Package metadata.** `pyproject.toml` lists the runtime packages the code imports (torch, numpy, scipy,
+  scikit-image, zarr, numcodecs, h5py, matplotlib, tifffile, psutil) beside the pinned sbi, as documentation of the
+  runtime: the install stays `pip install -e . --no-deps` into the conda-first environment, and readdy, which pip
+  cannot provide, stays with `environment.yml`.
+- **Lint.** Unused imports removed in two package modules, five runners and kernels, four analysis scripts and two
+  test files; the unused `_SCHEMA_KEYS` constant of `io.py` removed.
+- **Labeling audit: levels 3 and 3b removed.** Both expected the independent-coin arithmetic of two-subunit dimers
+  (fluorescent dimers 1 − (1 − a)², both-labeled share a / (2 − a), the two-thirds one-dye share), which the probe
+  classes of the retained-population model (0.1.37) replaced; on the audit's own lineage at the MET-INLB prior center,
+  whose B1 hosts carry one retained subunit, they report FAIL against a correct labeling path (replayed on a synthetic
+  lineage of that composition: fluorescent dimers 0.534 against an expected 0.750 under MET-INLB and 0.806 against
+  0.647 under MET-FAB, where the model's class-mix values are 0.534 and 0.807). The chain they covered is carried by
+  the structure audit's R3 on each condition's own lineage and by the prior-realization audit's P4 and P6. The audit
+  keeps its laws, lineage and render levels, now 1–3. The compliance test's direct-draw allowance names only the
+  files that call the primitive (the two direct-estimator harnesses and the labeling module), and the `labeling.py`
+  remark no longer names the audit's draw level.
+
+### Fixed
+
+- Stale statements of the Fab occupancy (0.155, the value before the retained-population model) in the
+  posterior-predictive video runner's and the horizon audit's `--occupancy` help, in the posterior-predictive-video
+  note (with the derived values under the alternative Fab laws: 0.0148 Poisson, 0.0135 four-site binomial), in the
+  labeling-audit note, and in the PSF-width and flicker-mismatch utilities and notes, where the sentence also
+  described a tier as thinning subunits by occupancy coins; a tier realizes the probe-bound population at the
+  trajectory stage (0.0148 under MET-FAB, 0.0476 under MET-INLB).
+- `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Direct_Fluorescence_Loss.md`: a self-referential
+  version label and a British spelling.
+- Docstrings and comments that still described one eleven-row table shared by both conditions or the retired
+  composition row: the RDS and DLI runners, the Inference width guard, the MAP optimizer's console note, the
+  `Nuisance_DLI` module, and the temporal-dynamics, posterior-predictive-video and sample-geometric-median
+  companions.
+- The labeling audit's level 2 built its per-type subunit counts for the particles-observable cross-check from the
+  all-condition type list and raised `KeyError` on the MET-INLB trajectory (the MET-FAB type `B_f` is absent there);
+  it now keeps the types the trajectory registers, as the structure audit's R1 does.
+- The information-budget utility's default operating point was the earlier model's: 154 emitters from 1233 subunits
+  at a fluorescent fraction of 0.125, cited to the labeling audit. The defaults now come from the package: the expected
+  fluorescent complexes of the retained population at the condition's prior center under the production labeling rule
+  (119 under MET-FAB: 245 retained subunits, 148 probe-bound, 0.806 fluorescent per bound probe, inside the deposited
+  recordings' first-2 s spot counts, median 143) and the mean dye count of a labeled subunit under the condition's law
+  (2.03 under MET-FAB, unchanged); the dry run, the report and the summary state the operating point. At 119 emitters
+  the population bounds of the report move by about 14 % (`sigma_r` 0.0136 to 0.0155, `lambda_rate` 0.0287 to
+  0.0327 dex); the bleaching table of `DETECTOR_WORKFLOW.md` §9.5 does not depend on the count. The kernel's
+  relative-noise constant stays 0.028, and its derivation now says it corresponds to 154 spots (about 0.036 at the
+  current operating point); revising it rescales the §9.5 bleaching bounds by about 1.3 and is left as a decision.
+
+### Documentation
+
+- `PROJECT_CONTEXT.md`, module layout: entries for the eleven modules it did not name (`artifact_schema.py`,
+  `provenance.py`, `point_estimate_validation.py` and its runner, `map_benchmark.py` and its runner,
+  `horizon_audit.py` and its runner, `direct_imaging_estimates.py`, `direct_acceptance.py`,
+  `information_budget.py`); every package module is now in the layout.
+- `VALIDATION.md` §3.6, a test inventory: every test file with its number of tests and what it checks.
+- `README.md`: the status paragraph no longer carries a release number.
+- The posterior-predictive-video note documents `assemble_side_by_side.py`, the brightness-stationarity audit's
+  three-panel helper.
+
+### Verification
+
+- **Full suite**, each `tests/*.py` run directly: 276 PASS over 33 files, every file exiting 0 (275 at 0.1.40 plus the
+  SGM test that now runs). `tests/test_posterior_predictive_video.py` asserts the two wrapped halves of the figure's
+  fluorescent-count line as the panel's 64-character wrap now breaks them.
+- **Audits on the renamed code**, written to a scratch data bank so the reports of 2026-10-17 stay as they are: the
+  structure audit's deterministic tier D1–D12 PASS; the prior-realization audit `--selftest` (both conditions) and
+  `--fluorescence` PASS; the labeling audit (levels 1–3, its first run under the retained-population model) PASS:
+  the four laws within 0.6 % of their moments, the MET-INLB lineage at the prior center placing 79 A + 302 B1 + 48 B2
+  as the helper does (477 subunits over 1,707 particle ids, 1,283 reaction records), and the four render checks.
+  The information budget runs at the computed MET-FAB operating point (119 emitters, 2.03 dyes per spot) into a
+  scratch folder, every self-check PASS.
+- **Dry runs** of the ten Prime entry points for MET-FAB and MET-INLB: 20 of 20 exit 0. Import sweep: 53 package
+  modules and 55 `Script_Bank` files load; the notebooks' imports resolve; no unused import remains in any Python
+  file; every documented command line passes flags its parser accepts, and every file reference in the markdown
+  resolves apart from this changelog's history of removed files and the data products the guides name.
+- **Residual grep**: *visible* survives only in its plain sense (listed above) and in the changelog's history.
+- **Not run:** any generation, training, rendering or HPC job.
+
 ## 0.1.40 - 2026-10-17
 
 The window-start composition. The composition coordinate becomes the basal reference fraction `f` of dimers among

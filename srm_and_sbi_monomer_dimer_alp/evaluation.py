@@ -540,7 +540,7 @@ def optimize_elite(flow, train_device: torch.device, vista_device: torch.device,
     if show:
         print(f"  [optim] {stop_msg}", flush=True)
         # Estimator-space coordinates only: this function has no parameter table, and the
-        # per-row scale (a linear initial dimer fraction beside log rows) forbids a blanket
+        # per-row scale (the linear fraction rows beside log rows) forbids a blanket
         # 10**theta; callers print physical values through parameterization.to_physical.
         print(f"          optimal theta [estimator space] {_theta_repr(optimal_np)}", flush=True)
     if log_fn is not None:

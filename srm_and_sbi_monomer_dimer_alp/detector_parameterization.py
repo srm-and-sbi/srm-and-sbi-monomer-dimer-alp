@@ -141,7 +141,7 @@ _DETECTOR_RAW_NESTED: dict[str, list[dict]] = {
         {'KEY': 'fraction_basal_dimers_reference', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Fraction', 'LABEL': r'$f_{B}^{ref}$',
          'NOTE': 'Basal reference fraction f of dimers among the complexes of the underlying population (a LINEAR row uniform on [0, 1] in the biology table), from which the reference probe-bound population is realized. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
         {'KEY': 'rate_dissociation', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Count Per Second', 'LABEL': r'$\kappa_{OFF}$',
-         'NOTE': 'Dimer unbinding rate kappa_OFF (B_m -> A_m + A_m, every mode), 1/s. Under the labeling model a dissociating one-dye dimer leaves one visible and one invisible daughter -- a signature the detector must see during calibration. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
+         'NOTE': 'Dimer unbinding rate kappa_OFF (B_m -> A_m + A_m, every mode), 1/s. Under the labeling model a dissociating one-dye dimer leaves one fluorescent and one dark daughter -- a signature the detector must see during calibration. RDS nuisance supplied by the per-condition trajectory tier (the biology prior; decided ranges in parameterization.py).'},
     ],
     'mobility': [
         {'KEY': 'diffusivity_alp', 'VALUE': NUISANCE_SENTINEL, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Square Micrometer Per Second', 'LABEL': r'$D_{A}$',

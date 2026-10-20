@@ -45,7 +45,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.linalg import expm
 from scipy.signal import fftconvolve
-from scipy.stats import kstest, linregress, lognorm, norm
+from scipy.stats import kstest, linregress, lognorm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))

@@ -48,30 +48,30 @@ Checks:
                        declared s_2 = p/(2-p) and the INLB classes exhaustive; ``two_probe_share`` is
                        the declared share of the REFERENCE dimers (the share Fab labeling draws with;
                        under INLB the starting B2 share also carries the allocation and is read from
-                       the counts); the pooled visible fractions against q = P(dye >= 1) for monomers
-                       and the class mix for dimers; the two-labeled share of visible dimers against
+                       the counts); the pooled fluorescent fractions against q = P(dye >= 1) for monomers
+                       and the class mix for dimers; the two-labeled share of fluorescent dimers against
                        the two-probe dimers' q^2; the emitters per subunit against E[dye] x the bound
                        share.
-    P5 predictive      Visible hosts at frame 0 (monomers_visible_0 + dimers_visible_0) per simulation
+    P5 predictive      Fluorescent hosts at frame 0 (monomers_fluorescent_0 + dimers_fluorescent_0) per simulation
                        against the per-recording first-2 s spot counts of the 60 deposited recordings
                        of the condition (Special_Analyses A9): quantiles side by side and the share of
                        recordings whose spot count lies inside the simulated range. DESCRIPTIVE: the
                        simulated count is before bleaching, detection, and field-of-view effects, so
                        it is judged only for gross mismatch (the empirical median inside the simulated
                        5-95% band).
-    P6 visibility      The theoretical visibility chain of the RETAINED population corroborated through
+    P6 fluorescence      The theoretical fluorescence chain of the RETAINED population corroborated through
                        the DLI stage's OWN labeling path (resolve_labeling, label_subunits:
                        assign_probes, draw_dye_counts_bound, labeling_summary) on a synthetic frame-0
                        lineage of 10^5 monomers and 10^5 dimers per condition (B1 / B2 at the declared
-                       two-probe share under INLB; B hosts classed at labeling under FAB): visible
-                       monomers q, visible one-probe dimers q, visible two-probe dimers 1 - (1-q)^2,
-                       both-probes-fluorescent share among visible two-probe dimers q/(2-q) (both
+                       two-probe share under INLB; B hosts classed at labeling under FAB): fluorescent
+                       monomers q, fluorescent one-probe dimers q, fluorescent two-probe dimers 1 - (1-q)^2,
+                       both-probes-fluorescent share among fluorescent two-probe dimers q/(2-q) (both
                        probes carry at least one dye; a two-dye share only under the one-dye-per-probe
                        InlB law; the JSON key keeps its name), the FAB two-probe share
-                       s_2, emitters per bound probe E[dye], and the dye-count law among visible
+                       s_2, emitters per bound probe E[dye], and the dye-count law among fluorescent
                        subunits (zero-truncated); each within four standard errors. The FAB/INLB
-                       visibility ratio of the TRUE population, p q, is checked against the DECLARED
-                       visibility ratio (the derivation of the Fab occupancy) and shown beside the
+                       fluorescence ratio of the TRUE population, p q, is checked against the DECLARED
+                       fluorescence ratio (the derivation of the Fab occupancy) and shown beside the
                        deposited spot-count ratios (A9). Theory, code path, and -- when a
                        Labeling_Set is present -- products appear side by side in the report.
 
@@ -84,7 +84,7 @@ Usage (from the repo root; MACHINE_PROFILE set):
                         # the DLI stage's path from the starting counts; verifies the checks
                         # themselves (P1, P2, P4, P5, P6) without any tier on disk, and that some
                         # MET-INLB draws carry an allocation (c > 0) and no MET-FAB draw does
-    ... --visibility    # P6 only, both conditions: theory vs code path (no tier needed)
+    ... --fluorescence    # P6 only, both conditions: theory vs code path (no tier needed)
     ... --campaign-version <package version> --expected-tasks 200 --task-simulations 1000 \\
         --campaign-window <iso start>..<iso end>
                         # P7 campaign membership, run after the render pass: every expected task
@@ -122,9 +122,9 @@ SEED = 20260914
 P2_SIGMAS = 3.0               # P2: |median of a linear row - 0.5| <= P2_SIGMAS standard errors of a uniform's sample median
 P2_MIN_DRAWS = 20             # P2: below this the symmetry verdict is not formed (reported only)
 P2_ROUNDING_BOUND = 1.5       # P2: |N_R - expectation| <= three roundings of half a subunit
-TOL_VISIBLE_FLOOR = 0.02      # P4: absolute tolerance floor on pooled fractions
+TOL_FLUORESCENT_FLOOR = 0.02      # P4: absolute tolerance floor on pooled fractions
 TOL_P6_FLOOR = 0.002          # P6: absolute tolerance floor on Monte Carlo fractions (n = 3e5 subunits)
-TOL_RATIO = 0.05              # P6: |realized FAB/INLB visibility ratio - declared| (products and code path)
+TOL_RATIO = 0.05              # P6: |realized FAB/INLB fluorescence ratio - declared| (products and code path)
 N_P6_HOSTS = 100_000          # P6: monomers AND dimers per condition on the synthetic lineage
 TOL_MODE = 0.03               # P3: absolute tolerance on pooled frame-0 mode occupancies
 KS_ALPHA = 1e-3               # P1: a row is flagged when its KS p-value falls below this
@@ -264,7 +264,7 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
     col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
     L = np.asarray(labeling_rows, dtype=float)
     plan = lab.resolve_labeling(condition)
-    law, q = plan.law, plan.law.visible_probability
+    law, q = plan.law, plan.law.fluorescent_probability
     occ_m, occ_d = L[:, col["occupancy_monomer"]], L[:, col["occupancy_dimer"]]
     recorded = bool(np.isfinite(occ_m).all() and np.isfinite(occ_d).all())
     matches_rule = bool(recorded and np.allclose(occ_m, plan.occupancy_pair[0]) and np.allclose(occ_d, plan.occupancy_pair[1]))
@@ -286,7 +286,7 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
             class_share_ok = classes_split_dimers
         else:
             s2 = plan.two_probe_share
-            class_share_ok = classes_split_dimers and abs(two / n_d - s2) <= max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(s2 * (1 - s2) / n_d))
+            class_share_ok = classes_split_dimers and abs(two / n_d - s2) <= max(TOL_FLUORESCENT_FLOOR, 3 * np.sqrt(s2 * (1 - s2) / n_d))
         share_ok = bool(np.all(np.isclose(share_recorded, plan.two_probe_share)))
     else:                                               # an override's coins: the per-class visibilities
         a_m = (np.nanmean(occ_m) if recorded else 1.0) * q
@@ -298,15 +298,15 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
     sub_vis = L[:, col["n_labeled_subunits"]].sum() / n_sub
     emit = L[:, col["n_dyes"]].sum() / n_sub
     sd_emit = np.sqrt(max((exp_emit / max(law.mean, 1e-12)) * (law.variance + law.mean ** 2) - exp_emit ** 2, 0.0))
-    tol_sub = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(exp_sub * (1 - exp_sub) / n_sub))
-    tol_emit = max(TOL_VISIBLE_FLOOR, 3 * sd_emit / np.sqrt(n_sub))
-    mono = L[:, col["monomers_visible_0"]].sum() / n_m
-    dim = L[:, col["dimers_visible_0"]].sum() / n_d
-    n_vis_d = max(L[:, col["dimers_visible_0"]].sum(), 1)
+    tol_sub = max(TOL_FLUORESCENT_FLOOR, 3 * np.sqrt(exp_sub * (1 - exp_sub) / n_sub))
+    tol_emit = max(TOL_FLUORESCENT_FLOOR, 3 * sd_emit / np.sqrt(n_sub))
+    mono = L[:, col["monomers_fluorescent_0"]].sum() / n_m
+    dim = L[:, col["dimers_fluorescent_0"]].sum() / n_d
+    n_vis_d = max(L[:, col["dimers_fluorescent_0"]].sum(), 1)
     two_lab = L[:, col["dimers_two_labeled_0"]].sum() / n_vis_d
-    tol_m = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(exp_mono * (1 - exp_mono) / n_m))
-    tol_d = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(exp_dim * (1 - exp_dim) / n_d))
-    tol_two = max(TOL_VISIBLE_FLOOR, 3 * np.sqrt(max(exp_two * (1 - exp_two), 0.0) / n_vis_d))
+    tol_m = max(TOL_FLUORESCENT_FLOOR, 3 * np.sqrt(exp_mono * (1 - exp_mono) / n_m))
+    tol_d = max(TOL_FLUORESCENT_FLOOR, 3 * np.sqrt(exp_dim * (1 - exp_dim) / n_d))
+    tol_two = max(TOL_FLUORESCENT_FLOOR, 3 * np.sqrt(max(exp_two * (1 - exp_two), 0.0) / n_vis_d))
     subunits_ok = classes_ok = None
     n_with_allocation = None
     if theta_physical is not None:
@@ -333,9 +333,9 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
                 probe_classes_recorded=classes_recorded, one_probe_dimers=float(one), two_probe_dimers=float(two),
                 two_probe_share_realized=float(two / n_d) if classes_recorded else None, class_share_ok=bool(class_share_ok),
                 two_probe_share_recorded_ok=bool(share_ok),
-                visible_per_subunit=(float(sub_vis), float(exp_sub), float(tol_sub)),
-                visible_monomer=(float(mono), float(exp_mono), float(tol_m)),
-                visible_dimer=(float(dim), float(exp_dim), float(tol_d)),
+                fluorescent_per_subunit=(float(sub_vis), float(exp_sub), float(tol_sub)),
+                fluorescent_monomer=(float(mono), float(exp_mono), float(tol_m)),
+                fluorescent_dimer=(float(dim), float(exp_dim), float(tol_d)),
                 both_labeled_share=(float(two_lab), float(exp_two), float(tol_two)),
                 emitters_per_subunit=(float(emit), float(exp_emit), float(tol_emit)),
                 n_subunits_equals_realized_N_R=subunits_ok, frame0_counts_equal_starting_counts=classes_ok,
@@ -347,7 +347,7 @@ def p4_labeling(labeling_rows: np.ndarray, condition: str, theta_physical: np.nd
 
 
 # ----------------------------------------------------------------------------------------------
-# P6: the theoretical visibility chain, corroborated through the DLI stage's own functions
+# P6: the theoretical fluorescence chain, corroborated through the DLI stage's own functions
 # ----------------------------------------------------------------------------------------------
 
 def dye_law_pmf(law: lab.LabelingLaw, k: np.ndarray) -> np.ndarray:
@@ -364,19 +364,19 @@ def dye_law_pmf(law: lab.LabelingLaw, k: np.ndarray) -> np.ndarray:
     return stats.nbinom(r, p).pmf(k)
 
 
-def visibility_theory(condition: str) -> dict:
-    """Closed-form visibility quantities of the RETAINED population from the condition's settings and dye law."""
+def fluorescence_theory(condition: str) -> dict:
+    """Closed-form fluorescence quantities of the RETAINED population from the condition's settings and dye law."""
     plan = lab.resolve_labeling(condition)
-    law, q = plan.law, plan.law.visible_probability
+    law, q = plan.law, plan.law.fluorescent_probability
     p, s2 = float(plan.occupancy), float(plan.two_probe_share)
     p1, p2 = (dye_law_pmf(law, np.array([1, 2])) / q).tolist()
     return dict(occupancy=p, occupancy_source=plan.occupancy_source, two_probe_share=s2, ligand_classes=plan.ligand_classes,
                 dye_law=law.describe(), p_dye_ge1=float(q),
-                visible_per_true_subunit=float(p * q),                      # the A9 reading: spots / (p q) = N_total
-                visible_monomer=float(q), visible_one_probe_dimer=float(q),
-                visible_two_probe_dimer=float(1 - (1 - q) ** 2), two_dye_share_among_visible_two_probe=float(q / (2 - q)),
-                emitters_per_bound_probe=float(law.mean), emitters_per_visible_subunit=float(law.mean / q),
-                dyes_among_visible_1_2_3plus=(float(p1), float(p2), float(1 - p1 - p2)))
+                fluorescent_per_true_subunit=float(p * q),                      # the A9 reading: spots / (p q) = N_total
+                fluorescent_monomer=float(q), fluorescent_one_probe_dimer=float(q),
+                fluorescent_two_probe_dimer=float(1 - (1 - q) ** 2), two_dye_share_among_fluorescent_two_probe=float(q / (2 - q)),
+                emitters_per_bound_probe=float(law.mean), emitters_per_fluorescent_subunit=float(law.mean / q),
+                dyes_among_fluorescent_1_2_3plus=(float(p1), float(p2), float(1 - p1 - p2)))
 
 
 def synthetic_lineage(condition: str, n_monomers: int, n_dimers: int, n_two_probe: int | None = None) -> tuple:
@@ -410,8 +410,8 @@ def labeled_lineage(condition: str, n_monomers: int, n_dimers: int, rng: np.rand
     return dye, row, bound, host_index_0, host_rank_0
 
 
-def p6_visibility(condition: str, n_hosts: int = N_P6_HOSTS, seed: int = SEED) -> dict:
-    th = visibility_theory(condition)
+def p6_fluorescence(condition: str, n_hosts: int = N_P6_HOSTS, seed: int = SEED) -> dict:
+    th = fluorescence_theory(condition)
     plan = lab.resolve_labeling(condition)
     rng = np.random.default_rng([seed, 6])
     dye, row, _, host_index_0, host_rank_0 = labeled_lineage(condition, n_hosts, n_hosts, rng)
@@ -433,20 +433,20 @@ def p6_visibility(condition: str, n_hosts: int = N_P6_HOSTS, seed: int = SEED) -
         vis_two = float(np.mean(labeled_per_host[two_hosts] >= 1)) if two_hosts.size else float("nan")
         two_dye = float(np.mean(labeled_per_host[two_hosts] >= 2) / max(np.mean(labeled_per_host[two_hosts] >= 1), 1e-12)) if two_hosts.size else float("nan")
         n_one, n_two = int(one_hosts.size), int(two_hosts.size)
-        realized = dict(visible_monomer=row[col["monomers_visible_0"]] / n_hosts,
-                        visible_one_probe_dimer=vis_one, visible_two_probe_dimer=vis_two,
-                        two_dye_share_among_visible_two_probe=two_dye)
-        denom = dict(visible_monomer=n_hosts, visible_one_probe_dimer=max(n_one, 1), visible_two_probe_dimer=max(n_two, 1),
-                     two_dye_share_among_visible_two_probe=max(int(np.sum(labeled_per_host[two_hosts] >= 1)), 1))
+        realized = dict(fluorescent_monomer=row[col["monomers_fluorescent_0"]] / n_hosts,
+                        fluorescent_one_probe_dimer=vis_one, fluorescent_two_probe_dimer=vis_two,
+                        two_dye_share_among_fluorescent_two_probe=two_dye)
+        denom = dict(fluorescent_monomer=n_hosts, fluorescent_one_probe_dimer=max(n_one, 1), fluorescent_two_probe_dimer=max(n_two, 1),
+                     two_dye_share_among_fluorescent_two_probe=max(int(np.sum(labeled_per_host[two_hosts] >= 1)), 1))
     else:
         q = th["p_dye_ge1"]
-        realized = dict(visible_monomer=row[col["monomers_visible_0"]] / n_hosts)
-        denom = dict(visible_monomer=n_hosts)
-        # the FAB dimer visibility against the realized class mix, and the two-probe share against s_2
+        realized = dict(fluorescent_monomer=row[col["monomers_fluorescent_0"]] / n_hosts)
+        denom = dict(fluorescent_monomer=n_hosts)
+        # the FAB dimer fluorescence against the realized class mix, and the two-probe share against s_2
         exp_dim_mix = (one_probe * q + two_probe * (1 - (1 - q) ** 2)) / n_hosts
-        realized["visible_dimer_class_mix"] = row[col["dimers_visible_0"]] / n_hosts
-        th = dict(th, visible_dimer_class_mix=float(exp_dim_mix))
-        denom["visible_dimer_class_mix"] = n_hosts
+        realized["fluorescent_dimer_class_mix"] = row[col["dimers_fluorescent_0"]] / n_hosts
+        th = dict(th, fluorescent_dimer_class_mix=float(exp_dim_mix))
+        denom["fluorescent_dimer_class_mix"] = n_hosts
         realized["two_probe_share_realized"] = two_probe / n_hosts
         th = dict(th, two_probe_share_realized=th["two_probe_share"])
         denom["two_probe_share_realized"] = n_hosts
@@ -455,8 +455,8 @@ def p6_visibility(condition: str, n_hosts: int = N_P6_HOSTS, seed: int = SEED) -
     n_vis = max(int(row[col["n_labeled_subunits"]]), 1)
     vis = dye[dye >= 1]
     realized.update(emitters_per_bound_probe=row[col["n_dyes"]] / max(n_bound, 1),
-                    emitters_per_visible_subunit=row[col["n_dyes"]] / n_vis,
-                    dyes_among_visible_1_2_3plus=(float(np.mean(vis == 1)), float(np.mean(vis == 2)), float(np.mean(vis >= 3))))
+                    emitters_per_fluorescent_subunit=row[col["n_dyes"]] / n_vis,
+                    dyes_among_fluorescent_1_2_3plus=(float(np.mean(vis == 1)), float(np.mean(vis == 2)), float(np.mean(vis >= 3))))
     comparisons, ok = {}, True
     for k, n in denom.items():
         e, r = th[k], realized[k]
@@ -464,12 +464,12 @@ def p6_visibility(condition: str, n_hosts: int = N_P6_HOSTS, seed: int = SEED) -
         comparisons[k] = (float(r), float(e), float(tol)); ok &= (np.isnan(r) and n <= 1) or abs(r - e) <= tol
     law = plan.law
     for k, n, sd in (("emitters_per_bound_probe", max(n_bound, 1), np.sqrt(law.variance)),
-                     ("emitters_per_visible_subunit", n_vis, np.sqrt(max(law.variance + law.mean ** 2 - law.mean ** 2 / th["p_dye_ge1"], 0)))):
+                     ("emitters_per_fluorescent_subunit", n_vis, np.sqrt(max(law.variance + law.mean ** 2 - law.mean ** 2 / th["p_dye_ge1"], 0)))):
         e, r = th[k], realized[k]
         tol = max(TOL_P6_FLOOR, 4 * sd / np.sqrt(n))
         comparisons[k] = (float(r), float(e), float(tol)); ok &= abs(r - e) <= tol
-    for i, name in enumerate(("dyes_among_visible_1", "dyes_among_visible_2", "dyes_among_visible_3plus")):
-        e, r = th["dyes_among_visible_1_2_3plus"][i], realized["dyes_among_visible_1_2_3plus"][i]
+    for i, name in enumerate(("dyes_among_fluorescent_1", "dyes_among_fluorescent_2", "dyes_among_fluorescent_3plus")):
+        e, r = th["dyes_among_fluorescent_1_2_3plus"][i], realized["dyes_among_fluorescent_1_2_3plus"][i]
         tol = max(TOL_P6_FLOOR, 4 * np.sqrt(max(e * (1 - e), 0.0) / n_vis))
         comparisons[name] = (float(r), float(e), float(tol)); ok &= abs(r - e) <= tol
     # the rule the code path applied must be the model's, and recorded as such
@@ -481,16 +481,16 @@ def p6_visibility(condition: str, n_hosts: int = N_P6_HOSTS, seed: int = SEED) -
                 comparisons=comparisons, occupancy_recorded_equals_declared=occ_ok, ok=bool(ok and occ_ok))
 
 
-def declared_visibility_ratio() -> tuple:
+def declared_fluorescence_ratio() -> tuple:
     """(numerator condition, anchor condition, declared ratio) from the condition settings."""
     for s in par.CONDITION_SETTINGS:
-        if s.visibility_ratio is not None:
-            return s.token, s.visibility_ratio_to, float(s.visibility_ratio)
+        if s.fluorescence_ratio is not None:
+            return s.token, s.fluorescence_ratio_to, float(s.fluorescence_ratio)
     return None
 
 
 def a9_spot_ratio() -> dict:
-    """Deposited Fab/InlB spot-count ratios (descriptive companion to the visibility ratio)."""
+    """Deposited Fab/InlB spot-count ratios (descriptive companion to the fluorescence ratio)."""
     if not os.path.exists(A9_CSV):
         return dict(source="A9 fallback (2026-09-14)", first2s_median=143 / 348, whole_recording_mean=0.48,
                     per_area_first2s_means=0.43, per_area_first2s_medians=0.38)
@@ -505,9 +505,9 @@ def a9_spot_ratio() -> dict:
                                                / (inlb["spots_first2s"] / inlb["area_um2"]).median()))
 
 
-def visibility_ratio_check(per_condition: dict, key: str) -> dict:
-    """FAB/INLB per-subunit visibility ratio (from ``per_condition[cond][key]``) against the declared one."""
-    num, anchor, declared = declared_visibility_ratio()
+def fluorescence_ratio_check(per_condition: dict, key: str) -> dict:
+    """FAB/INLB per-subunit fluorescence ratio (from ``per_condition[cond][key]``) against the declared one."""
+    num, anchor, declared = declared_fluorescence_ratio()
     if num not in per_condition or anchor not in per_condition:
         return None
     r = per_condition[num][key] / per_condition[anchor][key]
@@ -533,14 +533,14 @@ def a9_reference(condition: str) -> dict:
 def p5_predictive(labeling_rows: np.ndarray, condition: str) -> dict:
     col = {c: i for i, c in enumerate(lab.LABELING_SET_COLUMNS)}
     L = np.asarray(labeling_rows, dtype=float)
-    visible = L[:, col["monomers_visible_0"]] + L[:, col["dimers_visible_0"]]
-    sim = quantiles(visible)
+    fluorescent = L[:, col["monomers_fluorescent_0"]] + L[:, col["dimers_fluorescent_0"]]
+    sim = quantiles(fluorescent)
     ref = a9_reference(condition)
     inside = None
     if "values" in ref:
         v = np.asarray(ref["values"]); inside = float(np.mean((v >= sim["min"]) & (v <= sim["max"])))
     gross_ok = sim["q05"] <= ref["median"] <= sim["q95"]
-    return dict(simulated_visible_hosts_frame0=sim, deposited_first2s_spots=
+    return dict(simulated_fluorescent_hosts_frame0=sim, deposited_first2s_spots=
                 {k: ref[k] for k in ("n", "min", "q25", "median", "q75", "max", "source") if k in ref},
                 share_of_recordings_inside_simulated_range=inside,
                 empirical_median_inside_simulated_5_95=bool(gross_ok), ok=bool(gross_ok))
@@ -863,16 +863,16 @@ def write_report(out_dir, header: dict, res: dict) -> str:
                  f"{p4['frame0_counts_equal_starting_counts']} ({p4['simulations_with_allocation']} simulations with c > 0); "
                  f"recorded: {p4['occupancy_recorded']}, matches the rule: {p4['occupancy_matches_declared']}, "
                  f"override: {p4['occupancy_override']}; probe classes recorded: {p4['probe_classes_recorded']} "
-                 f"(two-probe share realized {p4['two_probe_share_realized']}, ok {p4['class_share_ok']}); visible per subunit "
-                 f"{p4['visible_per_subunit'][0]:.4f} vs {p4['visible_per_subunit'][1]:.4f} (tol {p4['visible_per_subunit'][2]:.4f}); "
-                 f"visible monomers {p4['visible_monomer'][0]:.3f} vs {p4['visible_monomer'][1]:.3f}; visible dimers "
-                 f"{p4['visible_dimer'][0]:.3f} vs {p4['visible_dimer'][1]:.3f}; two-labeled share {p4['both_labeled_share'][0]:.3f} vs "
+                 f"(two-probe share realized {p4['two_probe_share_realized']}, ok {p4['class_share_ok']}); fluorescent per subunit "
+                 f"{p4['fluorescent_per_subunit'][0]:.4f} vs {p4['fluorescent_per_subunit'][1]:.4f} (tol {p4['fluorescent_per_subunit'][2]:.4f}); "
+                 f"fluorescent monomers {p4['fluorescent_monomer'][0]:.3f} vs {p4['fluorescent_monomer'][1]:.3f}; fluorescent dimers "
+                 f"{p4['fluorescent_dimer'][0]:.3f} vs {p4['fluorescent_dimer'][1]:.3f}; two-labeled share {p4['both_labeled_share'][0]:.3f} vs "
                  f"{p4['both_labeled_share'][1]:.3f}; emitters per subunit {p4['emitters_per_subunit'][0]:.4f} vs "
                  f"{p4['emitters_per_subunit'][1]:.4f}; n_subunits = realized N_R (represented receptors): "
                  f"{p4['n_subunits_equals_realized_N_R']} |")
         p5 = res["p5"]
-        s, r = p5["simulated_visible_hosts_frame0"], p5["deposited_first2s_spots"]
-        L.append(f"| P5 predictive visible counts | {passed(p5['ok'])} (descriptive) | simulated visible hosts at frame 0: "
+        s, r = p5["simulated_fluorescent_hosts_frame0"], p5["deposited_first2s_spots"]
+        L.append(f"| P5 predictive fluorescent counts | {passed(p5['ok'])} (descriptive) | simulated fluorescent hosts at frame 0: "
                  f"min {s['min']:.0f}, q25 {s['q25']:.0f}, median {s['median']:.0f}, q75 {s['q75']:.0f}, max {s['max']:.0f}; "
                  f"deposited first-2 s spots ({r['n']} recordings): min {r['min']:.0f}, q25 {r['q25']:.0f}, median {r['median']:.0f}, "
                  f"q75 {r['q75']:.0f}, max {r['max']:.0f}; share of recordings inside the simulated range: "
@@ -891,23 +891,23 @@ def write_report(out_dir, header: dict, res: dict) -> str:
                  f"window {p7['window'][0]} .. {p7['window'][1]}; failing tasks {p7['n_tasks_failing']}: {fails} |")
     if res.get("p6") is not None:
         p6 = res["p6"]
-        L.append(f"| P6 visibility (code path) | {passed(p6['ok'])} | {p6['n_monomers']} monomers + {p6['n_dimers']} dimers of the retained "
+        L.append(f"| P6 fluorescence (code path) | {passed(p6['ok'])} | {p6['n_monomers']} monomers + {p6['n_dimers']} dimers of the retained "
                  f"population labeled through resolve_labeling / label_subunits (assign_probes, draw_dye_counts_bound, labeling_summary); "
                  f"occupancy {p6['theory']['occupancy']:.4f} ({p6['theory']['occupancy_source']}), two-probe share "
                  f"{p6['theory']['two_probe_share']:.4f}, {p6['theory']['dye_law']}; the record carries the rule: "
                  f"{p6['occupancy_recorded_equals_declared']}; all quantities within tolerance: {p6['ok']} (table below) |")
     if res.get("ratio") is not None:
         rt = res["ratio"]; dep = rt["deposited_spot_ratios"]
-        L.append(f"| P6 visibility ratio {rt['numerator']}/{rt['anchor']} (true population, p q) | {passed(rt['ok'])} | "
+        L.append(f"| P6 fluorescence ratio {rt['numerator']}/{rt['anchor']} (true population, p q) | {passed(rt['ok'])} | "
                  f"{rt['realized']:.3f} vs declared {rt['declared']:.3f} (tol {rt['tolerance']}); deposited spot-count ratios (descriptive): "
                  f"{', '.join(f'{k} {v:.2f}' for k, v in dep.items() if k != 'source')} |")
     if res.get("p6") is not None:
         p6, p4 = res["p6"], res.get("p4")
-        L += ["", "Visibility chain: theory from the declared settings, the DLI code path on the synthetic lineage, and "
+        L += ["", "Fluorescence chain: theory from the declared settings, the DLI code path on the synthetic lineage, and "
               "(when present) the generated products. Tolerances: four standard errors (code path), max(0.02, three "
               "standard errors) (products).", "",
               "| quantity | theory | code path (realized, tol) | products (realized, tol) |", "|---|---|---|---|"]
-        prod_keys = dict(visible_monomer="visible_monomer", visible_dimer_class_mix="visible_dimer")
+        prod_keys = dict(fluorescent_monomer="fluorescent_monomer", fluorescent_dimer_class_mix="fluorescent_dimer")
         for k, (r, e, tol) in p6["comparisons"].items():
             prod = "" if (p4 is None or k not in prod_keys) else f"{p4[prod_keys[k]][0]:.4f} ({p4[prod_keys[k]][2]:.4f})"
             L.append(f"| {k} | {e:.4f} | {r:.4f} ({tol:.4f}) | {prod} |")
@@ -934,7 +934,7 @@ def main() -> None:
     ap.add_argument("--tasks", default="all", help="'all' or a comma-separated list of task indices")
     ap.add_argument("--trajectories", type=int, default=0, help="number of trajectory files to open for P3 (0 = skip)")
     ap.add_argument("--selftest", action="store_true", help="synthetic in-memory products; no tier needed")
-    ap.add_argument("--visibility", action="store_true", help="P6 only, both conditions: theory vs the DLI code path; no tier needed")
+    ap.add_argument("--fluorescence", action="store_true", help="P6 only, both conditions: theory vs the DLI code path; no tier needed")
     ap.add_argument("--out-dir", default=None, help="selftest only: where to write the report (default: repo scratch is NOT used; "
                                                   "the Posit dir of the biology alias)")
     ap.add_argument("--campaign-version", default=None,
@@ -948,11 +948,11 @@ def main() -> None:
             and args.campaign_version is None:
         ap.error("--campaign-version is required with --expected-tasks / --task-simulations / --campaign-window")
 
-    if args.selftest or args.visibility:
-        mode = "selftest" if args.selftest else "visibility"
+    if args.selftest or args.fluorescence:
+        mode = "selftest" if args.selftest else "fluorescence"
         results = {}
         for condition in lab.LABELING_CONDITIONS:
-            res = dict(p6=p6_visibility(condition))
+            res = dict(p6=p6_fluorescence(condition))
             if args.selftest:
                 prod = synthetic_products(condition)
                 res.update(p1=p1_prior_box(prod["theta"], condition), p2=p2_composition(prod["theta"], condition),
@@ -961,15 +961,15 @@ def main() -> None:
             results[condition] = res
             for k, v in res.items():
                 print(f"  [{passed(v['ok'])}] {condition} {k}")
-        ratio = visibility_ratio_check({c: dict(v=r["p6"]["theory"]["visible_per_true_subunit"]) for c, r in results.items()}, "v")
-        print(f"  [{passed(ratio['ok'])}] visibility ratio {ratio['numerator']}/{ratio['anchor']} of the true population (p q): "
+        ratio = fluorescence_ratio_check({c: dict(v=r["p6"]["theory"]["fluorescent_per_true_subunit"]) for c, r in results.items()}, "v")
+        print(f"  [{passed(ratio['ok'])}] fluorescence ratio {ratio['numerator']}/{ratio['anchor']} of the true population (p q): "
               f"{ratio['realized']:.3f} vs declared {ratio['declared']:.3f}")
         out_dir = args.out_dir or str(PARAMETERS.machine.data_bank_root / PARAMETERS.paths.posit_subdir
                                       / f"{PARAMETERS.paths.project_alias}_Prior_Realization_Audit_{mode.upper()}")
         for condition, res in results.items():
             res = dict(res, ratio=ratio)
             header = dict(mode=("selftest (synthetic products from the prior, labeled through the DLI code path at the declared occupancy)"
-                                if args.selftest else "visibility (theory vs the DLI code path; no products)"), condition=condition)
+                                if args.selftest else "fluorescence (theory vs the DLI code path; no products)"), condition=condition)
             if "p1" in res:
                 header["n"] = int(res["p1"]["n_draws"])
             print("report:", write_report(os.path.join(out_dir, condition), header, res))
@@ -990,10 +990,10 @@ def main() -> None:
         res["p7"] = p7_campaign(prod["provenance"], condition=prod["condition"], timing_label=prod["timing"].label,
                                 workflow=args.workflow, version=args.campaign_version, expected_tasks=args.expected_tasks,
                                 task_simulations=args.task_simulations, window=parse_campaign_window(args.campaign_window))
-    res["p6"] = p6_visibility(prod["condition"])
-    # the FAB/INLB visibility ratio of the TRUE population (p q), the derivation of the Fab occupancy; the retained
-    # records carry only the retained population's visibility, so the check is on the declared settings
-    res["ratio"] = visibility_ratio_check({c: dict(v=visibility_theory(c)["visible_per_true_subunit"])
+    res["p6"] = p6_fluorescence(prod["condition"])
+    # the FAB/INLB fluorescence ratio of the TRUE population (p q), the derivation of the Fab occupancy; the retained
+    # records carry only the retained population's fluorescence, so the check is on the declared settings
+    res["ratio"] = fluorescence_ratio_check({c: dict(v=fluorescence_theory(c)["fluorescent_per_true_subunit"])
                                            for c in lab.LABELING_CONDITIONS}, "v")
     for k, v in res.items():
         print(f"  [{passed(v['ok']) if v.get('ok') is not None else 'n/a'}] {k}")

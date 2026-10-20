@@ -14,7 +14,6 @@ the recorded implementation hashes itself rather than trusting the flag.
 """
 import importlib.util
 import os
-import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -653,7 +652,6 @@ def test_provenance_validation_checks_the_recorded_hashes_not_only_the_flag():
 
 
 if __name__ == "__main__":
-    import io, contextlib
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn(); print(f"PASS {name}")

@@ -54,12 +54,6 @@ def test_production_scaling_is_the_prior_width_in_estimator_coordinates():
     assert np.allclose(widths, [0.30, 0.75, 0.75, 0.75, 1.50, 1.00])
 
 
-if __name__ == "__main__":
-    for name, fn in list(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn(); print(f"PASS {name}")
-
-
 def test_the_selection_follows_the_geometry_not_the_row_order():
     # A cloud with a unique medoid selects the same vector under any row order, in the per-observation
     # SGM and in the collection-level kernel's exact path; with tied minima (the four corners of a
@@ -82,3 +76,8 @@ def test_the_selection_follows_the_geometry_not_the_row_order():
         assert sample_geometric_median(square[order])[1] == 0
         assert kernel(square[order], np.ones(2))[0] == 0
 
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            fn(); print(f"PASS {name}")

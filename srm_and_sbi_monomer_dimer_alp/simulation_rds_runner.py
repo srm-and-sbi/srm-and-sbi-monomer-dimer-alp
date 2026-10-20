@@ -10,9 +10,10 @@ build the biology ``WorkflowConfig``, parse args, and call ``run_rds``.
 One tier per CONDITION, shared by both workflows. The association ratio of the model is a
 declared per-condition constant (``parameterization.ConditionSetting``: MET-FAB 0, no
 association channels; MET-INLB 1, the reference convention), so the trajectories of the two
-conditions differ and ``--condition`` is required here. The eleven reaction-diffusion
-parameters -- the same table for both conditions -- are drawn from the biology prior once
-per simulation and persisted as the ``Theta_Set``; the trajectories and that ``Theta_Set``
+conditions differ and ``--condition`` is required here. The condition's reaction-diffusion
+parameters -- its own table: eleven coordinates under MET-FAB, twelve under MET-INLB, where
+the window-start allocation is inferred -- are drawn from the biology prior once per
+simulation and persisted as the ``Theta_Set``; the trajectories and that ``Theta_Set``
 carry the sibling alias plus the condition token (``Paths.rds_alias``) and no workflow
 qualifier, because both workflows re-image the same trajectories at the DLI stage under
 the condition's labeling law. To the biology workflow the ``Theta_Set`` is the learnable
@@ -32,7 +33,6 @@ from datetime import datetime, timezone
 
 import numpy as np
 import readdy
-import zarr
 
 from srm_and_sbi_monomer_dimer_alp.diagnostics import (
     DiagnosticReporter,

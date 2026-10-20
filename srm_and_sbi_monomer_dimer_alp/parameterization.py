@@ -32,7 +32,7 @@ Public interface:
     THETA_STANDARDIZATION       -- the biology flow's theta standardization ("independent")
     association_ratio_of(cond)  -- the declared association ratio R_ON of a condition (FAB 0, INLB 1)
     occupancy_of(cond)          -- the declared (INLB) or derived (FAB) probe occupancy per subunit
-    visibility_of(cond)         -- occupancy x P(dye >= 1) under the condition's labeling law
+    fluorescent_fraction_of(cond)         -- occupancy x P(dye >= 1) under the condition's labeling law
 
 Model blocks (the declarative records the reaction-diffusion generator is built from):
     StoichiometryBlock          -- molecular species A (1 subunit) and B (2), the dissociation
@@ -41,9 +41,9 @@ Model blocks (the declarative records the reaction-diffusion generator is built 
                                    switching chain and its rate keys, the inheritance rule
     ConditionSetting            -- the per-condition settings: the association ratio R_ON
                                    (0 = no association channels; a declared constant, never
-                                   inferred) and the probe OCCUPANCY of the visibility layer
+                                   inferred) and the probe OCCUPANCY of the labeling layer
                                    (declared for MET-INLB; derived for MET-FAB from a declared
-                                   Fab/InlB visibility ratio and the InlB anchor)
+                                   Fab/InlB fluorescence ratio and the InlB anchor)
     PARAMETERS.simulation.rds   -- carries the blocks and the condition settings and derives
                                    the PARTICLE TYPES (species x mode), their subunit counts
                                    and the maps type -> species / mode
@@ -772,7 +772,7 @@ class RunTiming:
 #
 # Three layers, separately declared, interacting at named points (the model specification's
 # state-ownership table): the STOICHIOMETRY block owns association and dissociation, the
-# MOBILITY block owns the diffusion modes and the switching between them, and the VISIBILITY
+# MOBILITY block owns the diffusion modes and the switching between them, and the LABELING
 # block (labeling.py) owns occupancy and dye counts. The reaction-diffusion stage simulates
 # PARTICLE TYPES = molecular species x mobility modes; six computational types represent two
 # molecular species. Every operation the network needs -- type-specific diffusion, unimolecular
@@ -1047,13 +1047,13 @@ class ConditionSetting:
     bound-to-unbound ratio as balanced; Harwardt et al. 2017): p = L / (L + K_D), with the
     in-vitro K_D of InlB321, about 5 nM (``dissociation_constant_nm``), giving p_INLB = 0.0476
     (``occupancy_source_of`` = ``equilibrium``). The Fab has no published affinity, so its
-    occupancy is DERIVED from a declared Fab/InlB VISIBILITY RATIO (``visibility_ratio`` = 0.5,
+    occupancy is DERIVED from a declared Fab/InlB FLUORESCENCE RATIO (``fluorescence_ratio`` = 0.5,
     a rounded convention over the measured Fab/InlB spot-density ratios of the deposited
     recordings, 0.38-0.48 depending on the window; Special_Analyses A9) and the anchor condition
-    (``visibility_ratio_to`` = INLB): p_FAB = ratio x a_INLB / P_FAB(dye >= 1) =
+    (``fluorescence_ratio_to`` = INLB): p_FAB = ratio x a_INLB / P_FAB(dye >= 1) =
     0.5 x 0.0238 / 0.806 = 0.0148, so a revised anchor propagates. A literal ``occupancy`` may
     be declared instead for a sensitivity scenario. Exactly one of ``dissociation_constant_nm``,
-    ``visibility_ratio`` and ``occupancy`` is set per condition. The equilibrium reading is a
+    ``fluorescence_ratio`` and ``occupancy`` is set per condition. The equilibrium reading is a
     declared initialization, not a measurement: the acquisition delay and the unknown rates
     are recorded as its caveats, and fixed attachment within a recording is its own assumption.
 
@@ -1072,8 +1072,8 @@ class ConditionSetting:
     probe_concentration_nm: float = 0.25
     dissociation_constant_nm: Optional[float] = None
     occupancy: Optional[float] = None
-    visibility_ratio: Optional[float] = None
-    visibility_ratio_to: Optional[str] = None
+    fluorescence_ratio: Optional[float] = None
+    fluorescence_ratio_to: Optional[str] = None
     relative_count_active_dimers_initial: Optional[float] = None
 
     def __post_init__(self):
@@ -1095,11 +1095,11 @@ class ConditionSetting:
         if not (np.isfinite(self.probe_concentration_nm) and float(self.probe_concentration_nm) > 0.0):
             raise ValueError(f"ConditionSetting {token}: probe_concentration_nm must be finite and > 0 "
                              f"(got {self.probe_concentration_nm!r}).")
-        sources = [self.dissociation_constant_nm is not None, self.visibility_ratio is not None,
+        sources = [self.dissociation_constant_nm is not None, self.fluorescence_ratio is not None,
                    self.occupancy is not None]
         if sum(sources) != 1:
             raise ValueError(f"ConditionSetting {token}: declare EXACTLY ONE of dissociation_constant_nm "
-                             f"(equilibrium occupancy), visibility_ratio (derived from an anchor "
+                             f"(equilibrium occupancy), fluorescence_ratio (derived from an anchor "
                              f"condition) or occupancy (a literal probability).")
         if self.dissociation_constant_nm is not None and not (
                 np.isfinite(self.dissociation_constant_nm) and float(self.dissociation_constant_nm) > 0.0):
@@ -1107,15 +1107,15 @@ class ConditionSetting:
                              f"(got {self.dissociation_constant_nm!r}).")
         if self.occupancy is not None and not (np.isfinite(self.occupancy) and 0.0 < float(self.occupancy) <= 1.0):
             raise ValueError(f"ConditionSetting {token}: occupancy must lie in (0, 1] (got {self.occupancy!r}).")
-        if self.visibility_ratio is not None:
-            if not (np.isfinite(self.visibility_ratio) and float(self.visibility_ratio) > 0.0):
-                raise ValueError(f"ConditionSetting {token}: visibility_ratio must be finite and > 0 "
-                                 f"(got {self.visibility_ratio!r}).")
-            if not self.visibility_ratio_to or self.visibility_ratio_to == token:
+        if self.fluorescence_ratio is not None:
+            if not (np.isfinite(self.fluorescence_ratio) and float(self.fluorescence_ratio) > 0.0):
+                raise ValueError(f"ConditionSetting {token}: fluorescence_ratio must be finite and > 0 "
+                                 f"(got {self.fluorescence_ratio!r}).")
+            if not self.fluorescence_ratio_to or self.fluorescence_ratio_to == token:
                 raise ValueError(f"ConditionSetting {token}: a derived occupancy names a DIFFERENT anchor "
-                                 f"condition in visibility_ratio_to (got {self.visibility_ratio_to!r}).")
-        elif self.visibility_ratio_to is not None:
-            raise ValueError(f"ConditionSetting {token}: visibility_ratio_to is set without a visibility_ratio.")
+                                 f"condition in fluorescence_ratio_to (got {self.fluorescence_ratio_to!r}).")
+        elif self.fluorescence_ratio_to is not None:
+            raise ValueError(f"ConditionSetting {token}: fluorescence_ratio_to is set without a fluorescence_ratio.")
         allocation = self.relative_count_active_dimers_initial
         if allocation is not None and not (np.isfinite(allocation) and 0.0 <= float(allocation) <= 1.0):
             raise ValueError(f"ConditionSetting {token}: a declared relative_count_active_dimers_initial lies in "
@@ -1144,11 +1144,11 @@ class ConditionSetting:
 # The declared per-condition settings (see ConditionSetting for the decisions and their sources).
 CONDITION_SETTINGS: tuple = (
     # MET-FAB: no association channels; the retained basal dimers (at least one Fab) may dissociate
-    # and both daughters stay retained. Occupancy DERIVED from the declared Fab/InlB visibility
+    # and both daughters stay retained. Occupancy DERIVED from the declared Fab/InlB fluorescence
     # ratio 0.5 and the InlB anchor (-> 0.0148 under the baseline laws); used at initialization only.
     # The window-start allocation is DECLARED 0 (no active dimers form before the window), so the
     # reference population is the starting population and the Fab table has eleven coordinates.
-    ConditionSetting("FAB", 0.0, visibility_ratio=0.5, visibility_ratio_to="INLB",
+    ConditionSetting("FAB", 0.0, fluorescence_ratio=0.5, fluorescence_ratio_to="INLB",
                      relative_count_active_dimers_initial=0.0),
     # MET-INLB: lambda_on = lambda_ref, the reference convention; ligand classes B1 / B2. Occupancy =
     # the independent-site equilibrium at 0.25 nM with K_D 5 nM (-> 0.0476); initialization only.
@@ -1164,7 +1164,7 @@ class SimulationRDS:
     The particle types are DERIVED here (species x modes, species-major, modes fastest
     first), as are their subunit counts and the maps back to species and mode; nothing
     downstream lists them by hand. ``conditions`` declares the per-condition association
-    ratio (``association_ratio_of``) and probe occupancy (``occupancy_of``, ``visibility_of``);
+    ratio (``association_ratio_of``) and probe occupancy (``occupancy_of``, ``fluorescent_fraction_of``);
     the reaction network of a run is generated from the blocks AND the run's condition, and
     the DLI stage labels the tier under the condition's occupancy unless overridden.
     """
@@ -1194,7 +1194,7 @@ class SimulationRDS:
         """P(dye >= 1) for one BOUND probe under the condition's baseline labeling law
         (INLB Bernoulli 0.5 -> 0.5; FAB Poisson 1.64 -> 1 - exp(-1.64) = 0.806)."""
         from .labeling import resolve_labeling_law      # local import: labeling imports only experiment_support
-        return float(resolve_labeling_law(condition)[1].visible_probability)
+        return float(resolve_labeling_law(condition)[1].fluorescent_probability)
 
     def _own_occupancy(self, setting: ConditionSetting) -> Optional[float]:
         """The occupancy a setting fixes by itself (equilibrium or literal); None when derived."""
@@ -1206,24 +1206,24 @@ class SimulationRDS:
 
     def occupancy_of(self, condition: str) -> float:
         """Probe occupancy per subunit of the TRUE population under ``condition``: the equilibrium
-        value L / (L + K_D) (INLB), a literal, or the derived one p = visibility_ratio x
-        visibility(anchor) / P(dye >= 1 | condition) (FAB). It converts the inferred N_total to the
+        value L / (L + K_D) (INLB), a literal, or the derived one p = fluorescence_ratio x
+        fluorescence(anchor) / P(dye >= 1 | condition) (FAB). It converts the inferred N_total to the
         retained population and sets the probe classes of the initial dimers; the derivation is
         one step deep by construction (an anchor must fix its own occupancy)."""
         setting = self.condition_setting(condition)
         own = self._own_occupancy(setting)
         if own is not None:
             return own
-        anchor = self.condition_setting(setting.visibility_ratio_to)
+        anchor = self.condition_setting(setting.fluorescence_ratio_to)
         anchor_occupancy = self._own_occupancy(anchor)
         if anchor_occupancy is None:
             raise ValueError(f"ConditionSetting {condition}: anchor {anchor.token} must fix its own "
                              f"occupancy (derivations are one step deep).")
-        anchor_visibility = anchor_occupancy * self.dye_probability_of(anchor.token)
-        return float(setting.visibility_ratio) * anchor_visibility / self.dye_probability_of(condition)
+        anchor_fluorescence = anchor_occupancy * self.dye_probability_of(anchor.token)
+        return float(setting.fluorescence_ratio) * anchor_fluorescence / self.dye_probability_of(condition)
 
-    def visibility_of(self, condition: str) -> float:
-        """Probability that a subunit of the TRUE population is visible: occupancy x P(dye >= 1).
+    def fluorescent_fraction_of(self, condition: str) -> float:
+        """Probability that a subunit of the TRUE population is fluorescent: occupancy x P(dye >= 1).
         The per-recording spot counts of the deposited recordings divided by this value are the
         implied N_total (Special_Analyses A9, re-read for the retained-population model)."""
         return self.occupancy_of(condition) * self.dye_probability_of(condition)
@@ -1748,7 +1748,7 @@ _PARAMETERIZATION_RAW_NESTED: dict[str, list[dict]] = {
     # conditional on the declared occupancies that realize the simulated (retained) population.
     'stoichiometry': [  # StoichiometryBlock: true receptor total, basal reference fraction of dimers, dissociation (the association ratio is a per-condition CONSTANT, not a row; the initial active-dimer allocation is the 'initialization' row below)
         {'KEY': 'count_total', 'VALUE': 10**4.0, 'PRIOR_RANGE': COUNT_TOTAL_BOX, 'LOG_FLAG': True, 'LOG_BASE': 10, 'UNIT': 'Count', 'DERIVED_UNIT': None, 'LABEL': r'$N_{\mathrm{total}}$', 'NOTE': 'Learnable Parameter',
-         'DOC': 'N_total, the receptor-subunit total of the underlying population in the simulated patch, probe-bound and unbound receptors included; one prior for both conditions, log10 on [3.0, 5.0] (1,000-100,000 subunits), decided 2026-10-05. It is NOT the number of simulated particles: the generator realizes the REFERENCE probe-bound population from it through the condition\'s occupancy p (realize_population), then applies the initial allocation of the window-start composition. Sizing at N_total = 100,000, bookkeeping rather than a population change: under MET-FAB the initial particles stay at the expected bound probes (about 1,477; 1,472 at a basal fraction of 0.25, 1,466 at 1) for every basal fraction, while the represented receptors N_R rise from 1,477 (basal fraction 0) through 2,058 (0.25) to 2,932 (1), because more probe-free partners are represented inside dimers; particles can approach N_R only after dissociation, so the upper figure is a memory and timing consideration for the worst case. Under MET-INLB N_R stays about 4,762 for every basal fraction and allocation (the allocation conserves it). The two conditions share this quantity because they share the cell line and the probe concentration; their simulated populations differ through the occupancies. The deposited recordings (A9: spots per frame in the first 2 s, divided by the visibility p x P(dye >= 1)) imply totals of about 1,400-25,800 (FAB) and 3,000-33,300 (INLB), computed without missed detections and overlap, so the ceiling carries headroom for the undercount; it is a declared modeling choice, not an experimental maximum. Compatible N_total posteriors across the conditions are a consistency check, not independent validation (the Fab occupancy rests on the declared visibility ratio). In-field count and represented count are distinct quantities.'},
+         'DOC': 'N_total, the receptor-subunit total of the underlying population in the simulated patch, probe-bound and unbound receptors included; one prior for both conditions, log10 on [3.0, 5.0] (1,000-100,000 subunits), decided 2026-10-05. It is NOT the number of simulated particles: the generator realizes the REFERENCE probe-bound population from it through the condition\'s occupancy p (realize_population), then applies the initial allocation of the window-start composition. Sizing at N_total = 100,000, bookkeeping rather than a population change: under MET-FAB the initial particles stay at the expected bound probes (about 1,477; 1,472 at a basal fraction of 0.25, 1,466 at 1) for every basal fraction, while the represented receptors N_R rise from 1,477 (basal fraction 0) through 2,058 (0.25) to 2,932 (1), because more probe-free partners are represented inside dimers; particles can approach N_R only after dissociation, so the upper figure is a memory and timing consideration for the worst case. Under MET-INLB N_R stays about 4,762 for every basal fraction and allocation (the allocation conserves it). The two conditions share this quantity because they share the cell line and the probe concentration; their simulated populations differ through the occupancies. The deposited recordings (A9: spots per frame in the first 2 s, divided by the fluorescent fraction p x P(dye >= 1)) imply totals of about 1,400-25,800 (FAB) and 3,000-33,300 (INLB), computed without missed detections and overlap, so the ceiling carries headroom for the undercount; it is a declared modeling choice, not an experimental maximum. Compatible N_total posteriors across the conditions are a consistency check, not independent validation (the Fab occupancy rests on the declared fluorescence ratio). In-field count and represented count are distinct quantities.'},
         {'KEY': 'fraction_basal_dimers_reference', 'VALUE': 0.5, 'PRIOR_RANGE': FRACTION_BOX, 'LOG_FLAG': False, 'LOG_BASE': None, 'UNIT': 'Fraction', 'DERIVED_UNIT': 'Count', 'LABEL': r'$f_{B}^{ref}$', 'NOTE': 'Learnable Parameter',
          'DOC': 'Basal reference fraction f of the underlying population, the fraction of its complexes that are dimers before any initial allocation: M_ref = N_total (1 - f) / (1 + f) monomers and D_ref = N_total f / (1 + f) dimers, so that M_ref + 2 D_ref = N_total. A LINEAR row, uniform on [0, 1] (decided 2026-10-15; the earlier log10 dimer-to-monomer ratio on the 5-25 % basal band is retired): the basal measurements (5 +/- 1 % of clusters dimeric, Baldering et al. 2021; 18 % of fitted spots assigned to a dimer component in fixed cells, stated as an underestimate, Dietz et al. 2013) inform the reading of the posterior, not the prior. Under MET-FAB the reference population IS the starting population (the allocation is declared 0), so f is the fraction of dimers present at the recording start, not one formed. Under MET-INLB the reference population is the state from which the initial allocation (relative_count_active_dimers_initial) pairs probe-bound monomers into two-InlB dimers, so the starting fraction f_start = (D_ref + c) / (M_ref + D_ref - c) differs from f; both are reported. The row is an inference coordinate whose calibrated, prior-like posterior is acceptable; a narrow prior is not evidence of recovery.'},
         {'KEY': 'capture_radius', 'VALUE': 10, 'PRIOR_RANGE': None, 'LOG_FLAG': None, 'LOG_BASE': None, 'UNIT': 'Nanometer', 'DERIVED_UNIT': None, 'LABEL': r'$\rho_{CAP}$', 'NOTE': 'Known Parameter'},
@@ -2386,8 +2386,8 @@ def _validate_model_blocks() -> None:
         p = rds.occupancy_of(t)
         if not (np.isfinite(p) and 0.0 < p <= 1.0):
             raise ValueError(f"SimulationRDS.conditions: occupancy of {t} resolves to {p!r}, not a probability.")
-        anchor = rds.condition_setting(t).visibility_ratio_to
-        if anchor is not None and rds.condition_setting(anchor).visibility_ratio is not None:
+        anchor = rds.condition_setting(t).fluorescence_ratio_to
+        if anchor is not None and rds.condition_setting(anchor).fluorescence_ratio is not None:
             raise ValueError(f"SimulationRDS.conditions: {t} derives its occupancy from an anchor that is itself derived.")
     if abs(rds.occupancy_of("FAB") - 0.0148) > 5e-5 or abs(rds.occupancy_of("INLB") - 0.25 / 5.25) > 1e-12:
         raise ValueError(f"SimulationRDS.conditions: occupancies resolve to FAB {rds.occupancy_of('FAB'):.5f} / "
@@ -2441,7 +2441,7 @@ def association_ratio_of(condition: str) -> float:
 def occupancy_of(condition: str) -> float:
     """Probe occupancy per subunit of the TRUE population under ``condition``
     (``SimulationRDS.occupancy_of``): INLB 0.0476, the equilibrium at 0.25 nM with K_D 5 nM;
-    FAB 0.0148, derived from the declared Fab/InlB visibility ratio and the InlB anchor. It
+    FAB 0.0148, derived from the declared Fab/InlB fluorescence ratio and the InlB anchor. It
     converts the inferred N_total to the retained population and sets the initial probe classes."""
     return PARAMETERS.simulation.rds.occupancy_of(condition)
 
@@ -2452,10 +2452,10 @@ def occupancy_source_of(condition: str) -> str:
     return PARAMETERS.simulation.rds.occupancy_source_of(condition)
 
 
-def visibility_of(condition: str) -> float:
-    """Probability that a subunit of the TRUE population is visible under ``condition``:
+def fluorescent_fraction_of(condition: str) -> float:
+    """Probability that a subunit of the TRUE population is fluorescent under ``condition``:
     occupancy x P(dye >= 1) (INLB 0.0238, FAB 0.0119 under the baseline labeling laws)."""
-    return PARAMETERS.simulation.rds.visibility_of(condition)
+    return PARAMETERS.simulation.rds.fluorescent_fraction_of(condition)
 
 
 def two_probe_share_of(condition: str) -> float:

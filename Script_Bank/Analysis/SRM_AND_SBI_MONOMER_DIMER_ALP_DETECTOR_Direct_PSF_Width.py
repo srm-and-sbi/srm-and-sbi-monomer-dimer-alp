@@ -174,7 +174,7 @@ def recording_observables(m: dict, scope: dict, *, track_lengths, n_tracks: int)
                             `psf_width_population` returns them)
       tracks_per_spot       tracks kept (``n_tracks``) over the mean number of accepted fits per used
                             frame. Not a measure of fragmentation: it rises when tracks break, but
-                            equally when emitters are visible for only part of the recording, bleach
+                            equally when emitters are fluorescent for only part of the recording, bleach
                             or turn over -- two emitters each seen, perfectly linked, in a different
                             half of a recording give 2.
     """
@@ -461,12 +461,12 @@ def selftest_scenes(grid: str) -> list:
     raise ValueError(f"unknown selftest grid {grid!r}; use one of {SELFTEST_GRIDS}")
 
 
-def truth_decomposition(m: dict, track_id, true_sqrt2sigma, true_xy, visible, mu_r_true: float,
+def truth_decomposition(m: dict, track_id, true_sqrt2sigma, true_xy, fluorescent, mu_r_true: float,
                         mu_r_estimate: float, *, min_track_length: int,
                         max_relative_se: float = 0.5) -> dict:
     """Account for one selftest scene's ``mu_r`` error against the truth, term by term.
 
-    Each accepted spot fit is matched to the nearest visible subunit in its frame (within
+    Each accepted spot fit is matched to the nearest fluorescent subunit in its frame (within
     ``MATCH_RADIUS_PX``), and each track kept by the population step (same relative-error filter,
     same length floor) to the subunit most of its fits matched. The five terms below sum to the
     total by construction, because ``other`` is the remainder. It is diagnostic accounting,
@@ -474,24 +474,24 @@ def truth_decomposition(m: dict, track_id, true_sqrt2sigma, true_xy, visible, mu
     established causal decomposition: another matching rule or another order would split the same
     total differently. In log10 units:
 
-      sample       mean true log width of all visible subunits, minus log10 of the true mu_r:
+      sample       mean true log width of all fluorescent subunits, minus log10 of the true mu_r:
                    the finite population the scene happened to draw
       selection    mean true log width of the subunits the kept tracks found, minus that of all
-                   visible subunits: which subunits detection and the length floor let through
+                   fluorescent subunits: which subunits detection and the length floor let through
       duplication  mean true log width over tracks, minus that over the distinct subunits found:
                    a subunit split into several tracks counts several times
       fitting      mean over matched tracks of the fitted minus the true log width
       other        the remainder of the total error: the tail trim, unmatched tracks, and the
                    difference between these track means and the population step's own
 
-    ``detected_share`` is the fraction of visible subunits found, ``tracks_per_subunit`` how many
+    ``detected_share`` is the fraction of fluorescent subunits found, ``tracks_per_subunit`` how many
     kept tracks each found subunit produced, and ``spread_ratio`` the standard deviation of the
-    true log widths of the found subunits over that of all visible ones (below one, selection
+    true log widths of the found subunits over that of all fluorescent ones (below one, selection
     compresses the spread that ``sigma_r`` measures).
     """
     nan = float("nan")
     true_lw = np.log10(np.asarray(true_sqrt2sigma, dtype=float))
-    vis_idx = np.nonzero(np.asarray(visible, dtype=bool))[0]
+    vis_idx = np.nonzero(np.asarray(fluorescent, dtype=bool))[0]
     frames = np.asarray(m["frame_index"])
     xs, ys = np.asarray(m["x"], dtype=float), np.asarray(m["y"], dtype=float)
     matched = np.full(frames.size, -1, dtype=np.int64)
@@ -546,7 +546,7 @@ def truth_decomposition(m: dict, track_id, true_sqrt2sigma, true_xy, visible, mu
                 detected_share=float(found.size / vis_idx.size) if vis_idx.size else nan,
                 tracks_per_subunit=float(has.sum() / found.size) if found.size else nan,
                 unmatched_track_share=float((~has).mean()) if track_sub.size else nan,
-                spread_ratio=spread_ratio, n_visible=int(vis_idx.size),
+                spread_ratio=spread_ratio, n_fluorescent=int(vis_idx.size),
                 n_found=int(found.size), n_tracks=int(track_sub.size))
 
 
@@ -586,9 +586,10 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
     parameter at its prior center except the ones the grid moves (`selftest_scenes`) and with
     bleaching off. ``labeling="single"`` gives every subunit one dye, which isolates the
     estimator from the labeling law; ``"FAB"`` draws dye counts from the bare FAB dye-count law at
-    probe occupancy 1 (about 81 % of subunits carry a dye). A tier also applies the condition's
-    probe occupancy (0.155 for MET-FAB), which thins the visible subunits without changing a
-    visible one's dye count; here the density of visible spots is set by ``n_subunits`` instead.
+    probe occupancy 1 (about 81 % of subunits carry a dye). In a tier the condition's declared
+    occupancy (0.0148 for MET-FAB) fixes, at the trajectory stage, how many subunits are simulated per
+    true receptor, and every retained monomer carries a probe; here the density of fluorescent subunits
+    is set by ``n_subunits`` instead.
     Every scene is also decomposed against its truth (`truth_decomposition`): the widths are
     reproduced from the renderer's own seeded draw and the positions are the scene's.
     """
@@ -627,7 +628,7 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
         thetas.append([img[k] for k in det.DETECTOR_FIND])
         vec = np.array([img[k] for k in det.DETECTOR_IMAGING_KEYS])
         poses, host = scene(seed)
-        # The bare law at probe occupancy 1 BY DESIGN: a diagnostic scene whose visible density is set
+        # The bare law at probe occupancy 1 BY DESIGN: a diagnostic scene whose fluorescent density is set
         # by n_subunits, not a production-matched render (production labels through
         # labeling.label_trajectory at the condition's declared occupancy).
         dye_counts = (np.ones(n_subunits, dtype=np.int64) if law is None
@@ -654,7 +655,7 @@ def run_selftest(reporter: DiagnosticReporter, *, n_subunits: int, n_frames: int
               f"(total {dec['total']:+.4f} dex = " + " + ".join(
                   f"{k} {dec[k]:+.4f}" for k in DECOMPOSITION_TERMS)
               + f"), sigma_r {img['sigma_r']:.3f} -> {r['sigma_r']:.4f}; "
-              f"found {dec['detected_share']:.0%} of {dec['n_visible']} visible, "
+              f"found {dec['detected_share']:.0%} of {dec['n_fluorescent']} fluorescent, "
               f"{dec['tracks_per_subunit']:.2f} tracks each", flush=True)
 
     return dict(truth=np.asarray(truths, dtype=float), estimate=np.asarray(ests, dtype=float),
@@ -942,14 +943,14 @@ def main(argv=None):
             "mu_r error accounted against the truth (log10 units)", headers, rows,
             note="total = sample + selection + duplication + fitting + other. sample: the finite "
                  "population the scene drew (part of the total, not a property of the estimator); "
-                 "selection: the found subunits' true widths against all visible subunits'; "
+                 "selection: the found subunits' true widths against all fluorescent subunits'; "
                  "duplication: a subunit whose detections formed several tracks counts several "
                  "times; fitting: fitted against true width within matched tracks; other: the "
                  "remainder (tail trim, unmatched tracks, the population step's own averaging). "
                  "Diagnostic accounting conditional on nearest-subunit matching within "
                  f"{MATCH_RADIUS_PX} px and on this order of terms, not a uniquely established causal "
                  "decomposition. A spread ratio below one means the found subunits span a narrower "
-                 "range of true widths than all visible ones.")
+                 "range of true widths than all fluorescent ones.")
     else:
         truth_rows, jobs = [], []
         for (t, vpath), (_, tpath), (_, spath) in zip(video_paths, theta_paths, scope_paths):

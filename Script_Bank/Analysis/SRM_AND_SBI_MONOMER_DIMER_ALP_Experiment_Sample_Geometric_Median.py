@@ -2,10 +2,11 @@
 
 ROLE. Reduce the Experiment stage's cloud of MAP estimates -- one per analyzed window of real MET
 single-particle-tracking recording -- to a single representative parameter vector, without inventing
-a configuration no recording supported. The eleven reaction-diffusion parameters are correlated: the
-receptor total and the initial dimer fraction constrain one another through the visible-spot count,
-and the dimer fraction trades off against the dissociation rate that depletes it (association is a
-per-condition constant, not inferred). Summarizing such a cloud by taking each dimension's
+a configuration no recording supported. The condition's reaction-diffusion parameters (eleven under
+MET-FAB, twelve under MET-INLB) are correlated: the receptor total and the basal reference fraction
+constrain one another through the count of fluorescent complexes, and the fraction trades off against the
+dissociation rate that depletes it (association is a per-condition constant, not inferred).
+Summarizing such a cloud by taking each dimension's
 median independently composes a vector whose coordinates never co-occurred, and which for a
 multimodal cloud lands in the low-density valley between the modes. This analysis instead reports the
 Sample Geometric Median (SGM): the actual member minimizing the summed normalized distance to the

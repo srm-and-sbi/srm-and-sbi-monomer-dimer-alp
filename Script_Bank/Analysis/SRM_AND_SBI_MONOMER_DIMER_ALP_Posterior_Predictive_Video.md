@@ -31,7 +31,8 @@ the tail-structure analysis (`SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Stru
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Redraw_Figure.py` | draws a clip's comparison figure again from the clip alone, under the display window chosen (default `percentile` at `0 99.99`); simulates nothing; replaces an existing figure only under `--replace` (section *Outputs*) | another display window, or a figure change, for existing clips |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Labeling_Arm.py` | test tool: re-renders a persisted declared-configuration biology render (`..._Declared_RDS_..._<SOURCE_LABEL>`) under another labeling law on the same trajectory, imaging vector, seed and labeled subunits (only the dye counts of the labeled subunits are redrawn, conditioned on at least one dye), to `<source stem>_<ARM>_{Synthetic_Video.npz,Comparison.png}`; never overwrites, simulates nothing, adopts nothing | a controlled labeling comparison (section *Bright-tail structure and labeling arms*) |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Structure.py` | compares, per recording, the experimental frames with the production-law render and its labeling arms on the bright tail: quantiles, per-frame maximum, hot pixels above a threshold and their spatial and temporal structure, over the opening window and the whole clip; verifies one shared imaging vector; writes a report, JSON and survival figures to `<alias>_<timing>_Posterior_Predictive_Video_Tail_Structure_<SOURCE_LABEL>/`, one folder per source label (a rerun under the same label regenerates it) | reading the bright tail of a check |
-| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Spot_Count.py` | counts, per recording, the spots the direct estimators' detection accepts per frame on the experimental frames and on the render under `--source-label` and the arms named with `--arm-label`, over the opening and the closing window, under the count match's rule (reused from that script); reports each render's visible spots at frame 0 and its detected-per-visible ratio; no render, nothing matched; writes a report and JSON to `<alias>_<timing>_Posterior_Predictive_Video_Spot_Count_<SOURCE_LABEL>/`, one folder per source label, never overwriting the counts (`--rewrite-report` rebuilds only the report from them) | the recordings' spot counts that scale the density-adjusted receptor totals, and the density of any set of renders |
+| `assemble_side_by_side.py` | audit helper of the brightness-stationarity audit (an older name without the alias prefix): loads two posterior-predictive renders of one recording from the `Posit` tier, the render under the retired grid brightness chain and a fixed-model render selected by `--fixed-label` (default `OU_FIX`), for the condition and cell of `--kind` / `--cell`, and writes into the audit's `Posit` folder a lossless three-panel side-by-side video (experimental, grid render, fixed render; one shared display window) and a figure with the frames at 0, 10 and 20 s, the complete pixel-intensity distribution and the quantile table; the interactive viewer is `notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Stationarity_Audit_Video.ipynb` | reading the brightness audit |
+| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Spot_Count.py` | counts, per recording, the spots the direct estimators' detection accepts per frame on the experimental frames and on the render under `--source-label` and the arms named with `--arm-label`, over the opening and the closing window, under the count match's rule (reused from that script); reports each render's fluorescent complexes at frame 0 and its detected-per-fluorescent ratio; no render, nothing matched; writes a report and JSON to `<alias>_<timing>_Posterior_Predictive_Video_Spot_Count_<SOURCE_LABEL>/`, one folder per source label, never overwriting the counts (`--rewrite-report` rebuilds only the report from them) | the recordings' spot counts that scale the density-adjusted receptor totals, and the density of any set of renders |
 | `tests/test_posterior_predictive_video.py` | regression tests (no simulation) of the engine's output refusal and figure labels, the display windows and their default in the engine, the notebook and the player, the figure drawn from the clip, the figure redraw, the player's headless copy, every path of the count match, the labeling arm, the tail structure and the spot count | after a change to the engine, the notebook or a companion |
 
 The order of a check at a declared configuration: confirm the configuration with the user; render each clip
@@ -54,8 +55,8 @@ produced it — labeling a fixed block "INFERRED" (or an inferred one "NUISANCE"
 reader's conclusion about what any visible mismatch implies. Both workflows build the same reactive
 system; only the source of its reaction-diffusion parameters differs (the condition's: eleven under MET-FAB, twelve under
 MET-INLB, whose window-start allocation is inferred). The recording's condition (`--kind`) selects
-the reaction network the scene is simulated with (the condition's declared association setting: on under
-MET-INLB, off under MET-FAB), the condition-specific estimator namespace, the condition's calibrated `Nuisance_DLI` on the biology
+the reaction network the scene is simulated with (the condition's declared association setting: off under
+MET-FAB, on under MET-INLB), the condition-specific estimator namespace, the condition's calibrated `Nuisance_DLI` on the biology
 path, and the static labeling law the render uses (`--labeling-law` overrides it for a sensitivity
 render).
 
@@ -68,8 +69,10 @@ variation unrelated to the question.
 Every render labels its trajectory exactly as the training videos were labeled. The labeling goes through
 the one path the DLI stage of both workflows and the horizon audit share (`labeling.resolve_labeling`,
 `labeling.label_trajectory`): the condition's law (MET-FAB Poisson(1.64), MET-INLB Bernoulli(0.5)) and its
-declared (MET-INLB 0.5) or derived (MET-FAB 0.155) probe occupancy, applied by each subunit's initial
-molecular species, so about 12.5 % of MET-FAB subunits and 25 % of MET-INLB subunits carry a dye.
+derived (MET-FAB 0.0148) or equilibrium (MET-INLB 0.0476) probe occupancy, which realizes the reference
+probe-bound population at the trajectory stage and sets the Fab probe classes at labeling, so a fluorescent
+fraction `p × P(dye ≥ 1)` of 0.0119 (MET-FAB) and 0.0238 (MET-INLB) of the true population's subunits
+carries a dye.
 `--labeling-law` and `--occupancy` override them for a sensitivity render with the DLI stage's grammar and
 are recorded as overrides. The reaction-diffusion system, the timing, the geometry (the whole 256 x 256 px
 field, open lateral boundary), the trajectory handling, the renderer and the eleven-key imaging order are
@@ -452,7 +455,7 @@ it; none simulates a trajectory, and none adopts anything:
   accepts per frame (the count match's rule, reused from that script so that there is one rule) on the
   experimental frames and on the render under `--source-label` and the arms named with `--arm-label`,
   over the opening and the
-  closing window, and reports each render's visible spots at frame 0 and its detected-per-visible ratio.
+  closing window, and reports each render's fluorescent complexes at frame 0 and its detected-per-fluorescent ratio.
   A detected count is lowered by overlap and by the isolation radius at high density, so the ratio
   synthetic / experimental compares densities under one rule; it is not a census of emitters. No render is
   made and nothing is matched; report and JSON go to
@@ -475,8 +478,8 @@ MACHINE_PROFILE=<profile> PYTHONPATH=$PWD python \
 
 A better match of an arm supports its law as a candidate observation-model change; it does not establish
 the labeling of the preparation. Adopting a law is a separate decision: the production labeling in
-`labeling.py`, the derived occupancy (the declared visible fraction fixes it: 0.155 under the Poisson law,
-0.142 under the four-site binomial), the training data of both workflows and the imaging calibration all
+`labeling.py`, the derived occupancy (the declared fluorescence ratio and the InlB anchor fix it: 0.0148 under the
+Poisson law, 0.0135 under the four-site binomial), the training data of both workflows and the imaging calibration all
 follow from it.
 
 ## Reference

@@ -32,7 +32,7 @@ Outputs (the ``{timing_label}`` token, e.g. ``5S_50FPS``, is rendered from
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Nuisance_SCOPE_Theta_Set_TASK_{n}_{split}.zarr
         -- the five SCOPE camera parameters drawn from their a-priori box (physical)
     <data_bank>/<theta_subdir>/<project_alias>_{timing_label}_Labeling_Set_TASK_{n}_{split}.zarr
-        -- the per-simulation labeling record (true and visible initial composition)
+        -- the per-simulation labeling record (starting composition and its fluorescent part)
     (``<project_alias>`` here carries the qualifier AND the condition:
     ``SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_...``)
 

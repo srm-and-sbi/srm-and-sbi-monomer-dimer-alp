@@ -70,10 +70,10 @@ Experimental reference (per condition; drawn as a colored band value +/- SD + a 
 =============================================================================
 LABEL / MODEL MISMATCH  (why D, and only D, transfers)
 =============================================================================
-The posterior was trained on always-visible permanent-label emitters; the control
+The posterior was trained on always-fluorescent permanent-label emitters; the control
 recordings use an exchangeable, blinking SiR-S5 HaloTag probe. The diffusion
 coefficient is a per-track property read from the displacement statistics of a
-molecule while it is visible, so it is robust to how many molecules are lit at once
+molecule while it is fluorescent, so it is robust to how many molecules are lit at once
 and survives the mismatch. The stoichiometry and the rates (N, f, the allocation R_active
 under MET-INLB, kappa_OFF, the switching rates k_*) instead depend on the number of
 co-fluorescent emitters and on
@@ -701,7 +701,7 @@ def _write_report(fig_dir, meta, results):
     L.append("")
     L.append("## Caveats")
     L.append("")
-    L.append("- **Label / model mismatch.** The posterior was trained on always-visible "
+    L.append("- **Label / model mismatch.** The posterior was trained on always-fluorescent "
              "permanent-label emitters; these controls use an exchangeable, blinking "
              "SiR-S5 HaloTag probe. Diffusion (D) is a per-track property and transfers; "
              "the stoichiometry and the rates (N, f, the allocation R_active under MET-INLB, "
@@ -721,7 +721,7 @@ def _write_report(fig_dir, meta, results):
              "toward 0 or 1, D_mix approaches d_A or d_B. Read it within the [d_B, d_A] "
              "bracket, not as a resolved mixture, unless f_start is informative.")
     L.append("- **Blinking / photobleaching** drives a downward drift of the receptor "
-             "total (fewer visible emitters in later windows) — a real non-stationarity "
+             "total (fewer fluorescent emitters in later windows) — a real non-stationarity "
              "in a confounded parameter, not receptor loss.")
     L.append("- **First-pass posteriors** (interrupted training) — absolute values will "
              "sharpen with the production posteriors; re-run this analysis on those.")

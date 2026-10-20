@@ -52,8 +52,9 @@ governed by `pool_mode`. Only `box`/`box_user` are constrained to the prior box,
 
 Distinction from the RDS nuisance. The reaction-diffusion biology marginalized during
 detector calibration is never drawn or built anywhere: the detector re-images the condition's
-RDS trajectory tier, whose eleven-parameter `Theta_Set` (the biology's own labels) is the
-record of that nuisance. The two share the marginalization *role* but not the artifact:
+RDS trajectory tier, whose `Theta_Set` (the biology's own labels: eleven under MET-FAB, twelve
+under MET-INLB) is the record of that nuisance. The two share the marginalization *role* but
+not the artifact:
 the `Nuisance_DLI` is a persisted calibration result, so it — and only it — is the object
 defined here.
 

@@ -1615,7 +1615,7 @@ def build_parser(description):
     p.add_argument("--occupancy", type=str, default=None,
                    help="override the condition's probe occupancy for a sensitivity audit, exactly as "
                         "at the DLI stage: one value, or per initial MOLECULAR species 'A=0.5,B=1.0'. "
-                        "Default: the condition's declared (MET-INLB 0.5) or derived (MET-FAB 0.155) "
+                        "Default: the condition's equilibrium (MET-INLB 0.0476) or derived (MET-FAB 0.0148) "
                         "value; recorded in every generated file.")
     p.add_argument("--continuous-seconds", type=float, default=20.0,
                    help="continuous-simulation length (default 20, matching the experimental "

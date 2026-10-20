@@ -32,7 +32,7 @@ Everything below is arithmetic on these two draws, never an extra assumption:
 
 The laws are fixed measured (or preparation-level) inputs and are never inferred: from the
 video alone the labeling probability is nearly degenerate with the receptor counts
-(``N_visible ~ q_eff * N_R``). Sensitivity to the law is exercised by re-imaging the same
+(``N_fluorescent ~ q_eff * N_R``). Sensitivity to the law is exercised by re-imaging the same
 trajectories under an alternative registered law, never by fitting it.
 
 Condition laws for the MET recordings of Harwardt et al. (2017; BioStudies S-BSST712):
@@ -67,15 +67,15 @@ dimers before the recording starts) and sets the one-/two-Fab split of the Fab d
 (``two_probe_share_of``, the share of the reference dimers). The values live on the condition
 settings of ``parameterization.py`` (``ConditionSetting``; MET-INLB 0.0476, the independent-site
 equilibrium at the published 0.25 nM with K_D 5 nM; MET-FAB 0.0148, derived from a declared
-Fab/InlB visibility ratio of 0.5 and the InlB anchor). Every renderer of simulated trajectories
+Fab/InlB fluorescence ratio of 0.5 and the InlB anchor). Every renderer of simulated trajectories
 -- the DLI stage of both workflows, the posterior-predictive video and the horizon audit --
 resolves the run's labeling through ``resolve_labeling`` and labels each trajectory through
 ``label_trajectory``, so no renderer can apply a law, a probe rule or a species mapping other
 than the training data's. ``--occupancy`` is an explicit SENSITIVITY OVERRIDE that replaces the
 probe classes by independent per-subunit occupancy coins (``probe_rule = "coins"``), recorded as
 such; it is never the default. Only the diagnostics that test the bare law on purpose (the
-labeling audit's law and draw levels, the direct estimators' synthetic scenes) call
-``draw_dye_counts`` directly, and each states its occupancy.
+direct estimators' synthetic scenes) call ``draw_dye_counts`` directly, and each states its
+occupancy.
 
 Probe kinetics (an assumption, stated). A probe stays attached for the recording and its dye
 count is static, so the observation layer removes a dye only by photobleaching and never adds
@@ -157,7 +157,7 @@ class LabelingLaw:
 
     @property
     def probability_zero(self) -> float:
-        """``P(kappa = 0)``: the per-subunit invisibility probability."""
+        """``P(kappa = 0)``: the per-subunit dark probability."""
         if self.family == "bernoulli":
             return 1.0 - self.mean
         if self.family == "poisson":
@@ -168,11 +168,11 @@ class LabelingLaw:
         return float(p ** r)
 
     @property
-    def visible_probability(self) -> float:
-        """``P(kappa >= 1)`` for one subunit (the visible fraction of monomers)."""
+    def fluorescent_probability(self) -> float:
+        """``P(kappa >= 1)`` for one subunit (the fluorescent fraction of monomers)."""
         return 1.0 - self.probability_zero
 
-    def visible_fraction(self, n_subunits: int) -> float:
+    def fluorescent_fraction(self, n_subunits: int) -> float:
         """Probability that a particle of ``n_subunits`` subunits carries at least one dye."""
         return 1.0 - self.probability_zero ** n_subunits
 
@@ -380,9 +380,9 @@ LABELING_SET_COLUMNS: Tuple[str, ...] = (
     "n_dyes",                # emitters rendered (sum of kappa)
     "n_labeled_subunits",    # subunits with kappa >= 1
     "monomers_0",            # monomer particles at frame 0 (the starting count A_start)
-    "monomers_visible_0",    # ... of which labeled
+    "monomers_fluorescent_0",    # ... of which fluorescent (at least one dye)
     "dimers_0",              # dimer particles (any class, any mobility mode) at frame 0 (the starting count)
-    "dimers_visible_0",      # ... with at least one labeled subunit
+    "dimers_fluorescent_0",      # ... with at least one fluorescent subunit
     "dimers_two_labeled_0",  # ... with two labeled subunits
     "occupancy_monomer",     # probability that a represented monomer subunit carries a probe (1 under the model; the coin under an override)
     "occupancy_dimer",       # ... that a represented dimer subunit does ((1 + s_2) / 2 under FAB, 1 under INLB; the coin under an override)
@@ -489,20 +489,20 @@ class LabelingPlan:
     occupancy_pair: Tuple[float, ...]
 
     @property
-    def visible_per_subunit(self) -> Tuple[float, ...]:
-        """Probability that a RETAINED subunit of each class is visible: bound probability x P(kappa >= 1)."""
-        return tuple(p * self.law.visible_probability for p in self.occupancy_pair)
+    def fluorescent_per_subunit(self) -> Tuple[float, ...]:
+        """Probability that a RETAINED subunit of each class is fluorescent: bound probability x P(kappa >= 1)."""
+        return tuple(p * self.law.fluorescent_probability for p in self.occupancy_pair)
 
     def describe(self) -> str:
-        a = ", ".join(f"{s} {v:.4f}" for s, v in zip(self.species_names, self.visible_per_subunit))
+        a = ", ".join(f"{s} {v:.4f}" for s, v in zip(self.species_names, self.fluorescent_per_subunit))
         if self.probe_rule == "classes":
             rule = (f"probe classes by species (B1 one, B2 two)" if self.ligand_classes
                     else f"probe classes drawn, two-probe share {self.two_probe_share:.4f}")
             return (f"{self.condition} {self.law_name} = {self.law.describe()}, retained population: "
                     f"{rule}, occupancy {self.occupancy:.4f} ({self.occupancy_source}); "
-                    f"visible per retained subunit {a}")
+                    f"fluorescent per retained subunit {a}")
         return (f"{self.condition} {self.law_name} = {self.law.describe()}, occupancy coins "
-                f"{self.occupancy} ({self.occupancy_source}); visible per subunit {a}")
+                f"{self.occupancy} ({self.occupancy_source}); fluorescent per subunit {a}")
 
     def record(self) -> dict:
         """JSON-ready provenance of the plan, for the files a render writes."""
@@ -515,7 +515,7 @@ class LabelingPlan:
                 "two_probe_share": (None if self.two_probe_share is None else float(self.two_probe_share)),
                 "occupancy": occupancy, "occupancy_source": self.occupancy_source,
                 "occupancy_by_species": dict(zip(self.species_names, self.occupancy_pair)),
-                "visible_per_subunit": dict(zip(self.species_names, self.visible_per_subunit))}
+                "fluorescent_per_subunit": dict(zip(self.species_names, self.fluorescent_per_subunit))}
 
 
 def expected_fluorescent_complexes(population, plan: LabelingPlan):
@@ -531,7 +531,7 @@ def expected_fluorescent_complexes(population, plan: LabelingPlan):
     if plan.probe_rule != "classes":
         raise ValueError("expected_fluorescent_complexes is defined for the model's probe rule "
                          "('classes'); the --occupancy override draws independent coins instead.")
-    q = float(plan.law.visible_probability)
+    q = float(plan.law.fluorescent_probability)
     q_two = 1.0 - (1.0 - q) ** 2
     monomers = np.asarray(population.n_monomers, dtype=float)
     if plan.ligand_classes:

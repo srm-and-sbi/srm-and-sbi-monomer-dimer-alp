@@ -53,7 +53,6 @@ import numpy as np
 
 from . import __version__ as _PACKAGE_VERSION
 from . import artifact_schema as schema
-from matplotlib.figure import Figure
 
 from . import detector_parameterization as det
 from . import parameterization as bio
@@ -497,13 +496,13 @@ def imaging_provenance(imaging_physical):
 def initial_receptor_lines(labeling_row):
     """The receptors one render actually started with (frame 0), from its labeling row: the
     subunit total split into monomers and dimers, the labeled subunits and their dyes, and the
-    visible monomers and dimers."""
+    fluorescent monomers and dimers."""
     r = {k: int(round(v)) for k, v in zip(LABELING_SET_COLUMNS, np.asarray(labeling_row, dtype=float).ravel())}
     mono, dim = r["monomers_0"], r["dimers_0"]
-    vis_m, vis_d = r["monomers_visible_0"], r["dimers_visible_0"]
+    vis_m, vis_d = r["monomers_fluorescent_0"], r["dimers_fluorescent_0"]
     return [f"  {r['n_subunits']} subunits = {mono} monomers + {dim} dimers ({mono + dim} receptors)",
             f"  labeled: {r['n_labeled_subunits']} subunits carrying {r['n_dyes']} dyes",
-            f"  visible: {vis_m} of {mono} monomers + {vis_d} of {dim} dimers "
+            f"  fluorescent: {vis_m} of {mono} monomers + {vis_d} of {dim} dimers "
             f"({r['dimers_two_labeled_0']} with both subunits labeled) = {vis_m + vis_d} spots"]
 
 
@@ -589,16 +588,16 @@ def labeling_description(record):
     occupancy = record["occupancy"]
     occupancy = (", ".join(f"{s}={compact_number(v)}" for s, v in occupancy.items())
                  if isinstance(occupancy, dict) else compact_number(occupancy))
-    a = ", ".join(f"{s} {compact_number(v)}" for s, v in record["visible_per_subunit"].items())
+    a = ", ".join(f"{s} {compact_number(v)}" for s, v in record["fluorescent_per_subunit"].items())
     kept = "; the source's labeled subunits kept" if record.get("arm") else ""
     if record.get("probe_rule", "coins") == "classes":
         rule = ("probe classes by species (B1 one, B2 two)" if record.get("ligand_classes")
                 else f"probe classes drawn, two-probe share {float(record['two_probe_share']):.3f}")
         return (f"{record['condition']} {record['law_name']} = {_law_text(record['law'])}, retained population: "
                 f"{rule}, occupancy {occupancy} ({record['occupancy_source']}{kept}); "
-                f"visible per retained subunit {a}")
+                f"fluorescent per retained subunit {a}")
     return (f"{record['condition']} {record['law_name']} = {_law_text(record['law'])}, occupancy coins "
-            f"{occupancy} ({record['occupancy_source']}{kept}); visible per subunit {a}")
+            f"{occupancy} ({record['occupancy_source']}{kept}); fluorescent per subunit {a}")
 
 
 def _law_text(law):
@@ -1065,8 +1064,8 @@ def run_posterior_predictive_video(cfg, args):
     lab = dict(zip(LABELING_SET_COLUMNS, labeling_row))
     print(f"Labeling: {plan.describe()} -> {int(lab['n_dyes'])} dyes on "
           f"{int(lab['n_labeled_subunits'])} of {int(lab['n_subunits'])} subunits; frame 0: "
-          f"{int(lab['monomers_visible_0'])}/{int(lab['monomers_0'])} monomers and "
-          f"{int(lab['dimers_visible_0'])}/{int(lab['dimers_0'])} dimers fluorescent "
+          f"{int(lab['monomers_fluorescent_0'])}/{int(lab['monomers_0'])} monomers and "
+          f"{int(lab['dimers_fluorescent_0'])}/{int(lab['dimers_0'])} dimers fluorescent "
           f"({int(lab['dimers_two_labeled_0'])} with both subunits labeled).")
     if (int(lab["monomers_0"]), int(lab["dimers_0"])) != (composition.n_monomers, composition.n_dimers):
         raise RuntimeError(f"frame 0 holds {int(lab['monomers_0'])} monomers + {int(lab['dimers_0'])} "
@@ -1206,8 +1205,8 @@ def build_parser(description):
     p.add_argument("--occupancy", type=str, default=None,
                    help="override the condition's probe occupancy for a sensitivity render, exactly as "
                         "at the DLI stage: one value, or per initial MOLECULAR species 'A=0.5,B=1.0' "
-                        "(monomer A, dimer B). Default: the condition's declared (MET-INLB 0.5) or "
-                        "derived (MET-FAB 0.155) value; the value used is recorded in the clip.")
+                        "(monomer A, dimer B). Default: the condition's equilibrium (MET-INLB 0.0476) or "
+                        "derived (MET-FAB 0.0148) value; the value used is recorded in the clip.")
     p.add_argument("--display-norm", default=DISPLAY_NORM_DEFAULT, choices=DISPLAY_NORMS,
                    help="color window of the comparison figure's image panels: ONE window shared by the "
                         "experimental and synthetic panel and fixed over all frames. 'percentile' (default; "

@@ -24,9 +24,10 @@ these contributes the bias. This harness compares them under known truth.
 
 Every scene is rendered through the production renderer with known imaging values. Subunits diffuse
 at 0.05 µm²/s, and bleaching is off by default. Dye counts follow the bare FAB dye-count law at probe
-occupancy 1 by default: about 81 % of subunits carry a dye. A production tier also applies the
-condition's probe occupancy (0.155 for MET-FAB), which thins the visible subunits without changing a
-visible one's dye count; here the density of visible spots is set by `--n-subunits` instead. The
+occupancy 1 by default: about 81 % of subunits carry a dye. In a production tier the
+condition's declared occupancy (0.0148 for MET-FAB) fixes, at the trajectory stage, how many subunits are
+simulated per true receptor, and every retained monomer carries a probe; here the density of fluorescent
+subunits is set by `--n-subunits` instead. The
 renderer draws every dye's brightness with a seeded call, and calling it again with the same arguments
 and seed returns the very photons the video was rendered from. So the true photon series of every dye,
 and of every spot, is known without an instrumented renderer. The production measurement then runs on
@@ -39,16 +40,16 @@ before it:
 | level | traces | changes |
 |---|---|---|
 | `dye_truth_full` | every dye's true photons over the whole recording | nothing: the model arm's own assumption, so its error is the method's floor |
-| `spot_truth_full` | every visible subunit's summed true photons, whole recording | dye multiplicity |
+| `spot_truth_full` | every fluorescent subunit's summed true photons, whole recording | dye multiplicity |
 | `spot_truth_span` | that series from the subunit's first to its last detection, without gaps | the selection of spans |
 | `spot_truth_detected` | that series at the detected frames only | detection gaps: the censoring of dim frames |
 | `fitted_oracle` | the fitted amplitudes of the matched detections, grouped by true identity | photometry noise |
 | `fitted_linked` | the same matched detections, grouped by the production linker | linking only |
 | `production` | every accepted detection, grouped by the production linker: the estimator as it runs on a tier | the detections outside the matched set |
 
-A detection is matched to the nearest visible subunit of its frame within 1.5 px. Within one frame a
+A detection is matched to the nearest fluorescent subunit of its frame within 1.5 px. Within one frame a
 subunit keeps one detection at most, the nearest, so a trace never holds two values in one frame. The
-detections outside the matched set are the fits with no visible subunit within 1.5 px and the second
+detections outside the matched set are the fits with no fluorescent subunit within 1.5 px and the second
 fits near a subunit already matched in that frame. `fitted_oracle` and `fitted_linked` read exactly the
 same detections, so their contrast isolates the grouping; `production` then adds the detections outside
 the matched set, and its contrast with `fitted_linked` isolates their inclusion. Every level that uses
@@ -138,7 +139,7 @@ Run on rcl01 in 1.9 minutes of wall time; output `..._2S_50FPS_Direct_Flicker_Mi
 with `report.md`, the arrays, `summary.json`, `provenance.json` (implementation hash identical at startup
 and at write) and `stdout.log`. All 24 scenes produced an estimate at every level; no scene was refused for
 too few traces or too few pairs; one or two estimates per truth level fell on a grid edge, none at the
-fitted levels. A scene holds a median of 13,302 matched detections against 496 with no visible subunit
+fitted levels. A scene holds a median of 13,302 matched detections against 496 with no fluorescent subunit
 within 1.5 px and no second fits near a matched subunit.
 
 | step | what changes | mean (dex) | median (dex) |

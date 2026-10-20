@@ -39,12 +39,12 @@ reuse.
 
 The robust read-out here is the diffusion **scale**, not the monomer-versus-dimer
 identity. The control recordings use an exchangeable, blinking SiR-S5 HaloTag label,
-whereas the posterior was trained on always-visible permanent-label emitters; the
+whereas the posterior was trained on always-fluorescent permanent-label emitters; the
 blinking corrupts the brightness cue the posterior relies on to separate a monomer (one
 dye) from a dimer (two dyes), and the true monomer/dimer diffusion gap is small. The
 per-species split (D_A, D_B, per-class counts) is therefore not a trustworthy
 oligomeric decomposition on these controls; the diffusion coefficient is a per-track
-property read from displacement statistics while a molecule is visible, so it is
+property read from displacement statistics while a molecule is fluorescent, so it is
 insensitive to how many emitters are lit at once and transfers across the mismatch. The
 quantitative diffusion-scale interpretation — the count-weighted mobile mixture
 diffusivity D_mix_mobile and its comparison against the measured mobile-fraction
@@ -200,9 +200,9 @@ coefficients, and the per-window temporal behavior — see
   videos in the Evaluation stage; that recovery quality is a property of the posterior
   and carries over here, but nothing about the real controls is a validated recovery.
 - **Label / model mismatch.** The controls use an exchangeable, blinking SiR-S5 label,
-  unlike the always-visible permanent-label training regime. The diffusion scale
+  unlike the always-fluorescent permanent-label training regime. The diffusion scale
   transfers across the mismatch; the per-class counts and kinetic rates depend on the
-  number of co-visible emitters and on track continuity, both corrupted by blinking, and
+  number of co-fluorescent emitters and on track continuity, both corrupted by blinking, and
   are not read quantitatively.
 - **Not the trained mechanism.** CD86 and CTLA-4 are constitutive monomer / dimer
   controls, not the dynamic dimerization mechanism the posterior encodes. They bracket
@@ -222,8 +222,8 @@ coefficients, and the per-window temporal behavior — see
 - **Relative parameters** (R_B, R_s, R_i) are reported as the dimensionless ratios the
   model samples; the association ratio is not a parameter (it is a declared per-condition
   constant of the generator), so no figure is emitted for it. The window-start
-  allocation R_active is a learnable row under a MET-INLB estimator only; under MET-FAB
-  it is the declared 0 and has no figure.
+  allocation R_active is the declared 0 under MET-FAB and has no figure; it is a
+  learnable row under a MET-INLB estimator only.
 
 ## Reference
 

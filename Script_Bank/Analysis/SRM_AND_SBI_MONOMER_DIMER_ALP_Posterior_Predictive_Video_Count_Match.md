@@ -60,8 +60,8 @@ other status keeps its diagnostics, carries no count, and makes the run exit wit
 | status | meaning |
 |---|---|
 | `undefined_no_experimental_detections` | the recording's opening window has no accepted spot |
-| `undefined_no_visibility` | the declared labeling and composition give no fluorescent host |
-| `undefined_no_visible_hosts` | a render has no fluorescent host at frame 0, so `eta` is undefined |
+| `undefined_no_fluorescence` | the declared labeling and composition give no fluorescent host |
+| `undefined_no_fluorescent_hosts` | a render has no fluorescent host at frame 0, so `eta` is undefined |
 | `undefined_no_synthetic_detections` | a render has no accepted spot |
 | `undefined_nonfinite_update` | the proposal is not a finite positive count |
 | `unresolved_saturation` | count matching unresolved under detector saturation: across a step of at least 25 % the detected count responds with an elasticity below `--min-elasticity` (0.3) while a larger count is proposed; no value is reported |

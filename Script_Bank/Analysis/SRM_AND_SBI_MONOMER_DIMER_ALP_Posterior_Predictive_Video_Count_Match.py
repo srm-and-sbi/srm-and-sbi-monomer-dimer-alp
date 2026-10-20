@@ -9,7 +9,7 @@ density-matched render when one is wanted.
 ROLE. A posterior-predictive render at a declared reaction-diffusion configuration
 (``--declared-rds``) needs a receptor total ``N_total``, and the recordings do not state one. The value
 chosen here is a RENDERING SETTING that approximates the recording's opening spot density, not a
-validated biological estimate. Dividing a spot count by the per-subunit visibility would ignore the
+validated biological estimate. Dividing a spot count by the per-subunit fluorescence would ignore the
 dimers, the finite field, the missed detections and the counting saturation, so the approximation is
 made through the forward model itself: short clips are rendered by the production chain
 (``posterior_predictive_video_runner.simulate_and_render``: the RDS stage's system, the DLI stage's
@@ -24,13 +24,13 @@ which carries the detection losses, the overlaps, the bleaching within the windo
 the field at that density. With the declared basal reference fraction ``f`` and, under MET-INLB, the
 declared allocation ``R_active``, the expected number of fluorescent hosts is ``N_total * v``, where
 ``v`` is the expected fluorescence of the starting population per receptor subunit of the underlying
-population (``visible_hosts_per_subunit``: the reference population, then the allocation, then
+population (``fluorescent_hosts_per_subunit``: the reference population, then the allocation, then
 ``labeling.expected_fluorescent_complexes``). Each iteration renders at the current ``N_total``,
 measures ``eta``, and proposes ``N_total = c_exp / (eta * v)``; a step is limited to a factor of two.
 Every render -- the first, each update and the check renders -- first passes one count test
 (``count_problem``): no render exceeds ``--max-count``, and none lies outside the prior box of ``N_total``
 (the training support) unless ``--allow-outside-prior`` records the user's decision to render there.
-Normalizing by the realized initial visibility reduces the labeling-count
+Normalizing by the realized initial fluorescence reduces the labeling-count
 variability of a single render; the remaining simulation variability, and the dependence of
 ``eta`` on density, arrangement, overlap, dye multiplicity and motion, are not removed
 (``E[eta V]`` is not ``E[eta] E[V]`` in general). The tolerance (default 3 %) is an ITERATION
@@ -41,8 +41,8 @@ FAILURE PATHS, all explicit, recorded and returned as a non-zero exit status (th
 kept; only an accepted status carries a count):
 
     undefined_no_experimental_detections   the recording's opening window has no accepted spot
-    undefined_no_visibility                 the plan and composition give no visible host
-    undefined_no_visible_hosts              a render has no visible host at frame 0 (eta undefined)
+    undefined_no_fluorescence                 the plan and composition give no fluorescent host
+    undefined_no_fluorescent_hosts              a render has no fluorescent host at frame 0 (eta undefined)
     undefined_no_synthetic_detections       a render has no accepted spot (eta = 0)
     undefined_nonfinite_update              the proposal is not a finite positive count
     unresolved_saturation                   the detected count no longer responds to N_total (its
@@ -143,8 +143,8 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
 
     Args:
         c_exp: the recording's detected spots per frame over the match window.
-        v: expected visible hosts per receptor subunit at frame 0.
-        render_count: ``(n_r, iteration) -> (visible_hosts_0, detected_per_frame)`` for one render.
+        v: expected fluorescent hosts per receptor subunit at frame 0.
+        render_count: ``(n_r, iteration) -> (fluorescent_hosts_0, detected_per_frame)`` for one render.
         initial, tolerance, max_iterations, max_count, min_elasticity: see the parser.
         prior_box: ``(low, high)`` of ``N_total`` in physical units (the training support).
         allow_outside_prior: the user's decision to render outside ``prior_box`` (default: no).
@@ -167,24 +167,24 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
         return result("undefined_no_experimental_detections",
                       f"the recording's match window has {c_exp!r} detected spots per frame")
     if not np.isfinite(v) or v <= 0:
-        return result("undefined_no_visibility", f"expected visible hosts per subunit is {v!r}")
+        return result("undefined_no_fluorescence", f"expected fluorescent hosts per subunit is {v!r}")
     n = float(initial)
     for it in range(int(max_iterations)):
         problem = count_problem(n, **limits, what="the initial N_total" if it == 0 else "the next N_total")
         if problem:                                   # checked before the render, never after it
             return result(*problem)
         n_rendered = int(round(n))
-        visible, c_syn = render_count(n_rendered, it)
-        rec = dict(iteration=it, count_total=n_rendered, visible_hosts_0=int(visible),
-                   expected_visible_hosts=n_rendered * v, detected_per_frame=float(c_syn))
+        fluorescent, c_syn = render_count(n_rendered, it)
+        rec = dict(iteration=it, count_total=n_rendered, fluorescent_hosts_0=int(fluorescent),
+                   expected_fluorescent_hosts=n_rendered * v, detected_per_frame=float(c_syn))
         iterations.append(rec)
-        if visible <= 0:
-            return result("undefined_no_visible_hosts",
-                          f"the render at N_total {n_rendered} has no visible host at frame 0")
+        if fluorescent <= 0:
+            return result("undefined_no_fluorescent_hosts",
+                          f"the render at N_total {n_rendered} has no fluorescent host at frame 0")
         if not np.isfinite(c_syn) or c_syn <= 0:
             return result("undefined_no_synthetic_detections",
                           f"the render at N_total {n_rendered} has {c_syn!r} detected spots per frame")
-        eta = c_syn / visible
+        eta = c_syn / fluorescent
         proposal = c_exp / (eta * v)
         rec.update(eta=eta, proposed_count_total=proposal)
         if not np.isfinite(proposal) or proposal <= 0:
@@ -224,7 +224,7 @@ def iterate_count(c_exp, v, render_count, *, initial, tolerance, max_iterations,
                                    f"{int(max_iterations)} iterations")
 
 
-def visible_hosts_per_subunit(plan, fraction_basal: float, relative_active: float = 0.0) -> float:
+def fluorescent_hosts_per_subunit(plan, fraction_basal: float, relative_active: float = 0.0) -> float:
     """Expected fluorescent hosts at frame 0 per receptor subunit of the underlying population (per
     unit of N_total), for the basal reference fraction ``f`` and, under MET-INLB, the allocation
     ``R_active`` (MET-FAB declares it 0; any other value is refused there).
@@ -239,7 +239,7 @@ def visible_hosts_per_subunit(plan, fraction_basal: float, relative_active: floa
     the starting population's expected fluorescence is ``labeling.expected_fluorescent_complexes`` (a
     monomer and a one-probe dimer fluorescent with the law's ``q``, a two-probe dimer with
     ``1 - (1 - q)^2``; MET-FAB dimers classed at labeling with the declared share ``s_2 = p / (2 - p)``).
-    Under the ``--occupancy`` override the per-class coin visibilities ``plan.visible_per_subunit``
+    Under the ``--occupancy`` override the per-class coin visibilities ``plan.fluorescent_per_subunit``
     act on each represented subunit instead (approximate: the coins act on the represented cohort):
     a monomer and a MET-INLB ``B1`` host with one represented subunit, a Fab dimer and a ``B2`` host
     with two. A fraction outside [0, 1] (or a nonzero MET-FAB allocation) is refused, never clipped.
@@ -250,7 +250,7 @@ def visible_hosts_per_subunit(plan, fraction_basal: float, relative_active: floa
     f, r_active = float(fraction_basal), float(relative_active)
     if not bool(population_valid(count_total=1.0, fraction_basal_dimers_reference=f,
                                  relative_count_active_dimers_initial=r_active, condition=plan.condition)):
-        raise ValueError(f"visible_hosts_per_subunit [{plan.condition}]: the basal reference fraction {f!r} and the "
+        raise ValueError(f"fluorescent_hosts_per_subunit [{plan.condition}]: the basal reference fraction {f!r} and the "
                          f"allocation {r_active!r} must be finite in [0, 1], the allocation equal to the "
                          f"condition's declared value where it declares one; nothing is clipped.")
     p = float(occupancy_of(plan.condition))
@@ -262,7 +262,7 @@ def visible_hosts_per_subunit(plan, fraction_basal: float, relative_active: floa
                             n_dimers=b1 + b2_ref + c)
     if plan.probe_rule == "classes":
         return float(expected_fluorescent_complexes(start, plan))
-    a_mono, a_dim = plan.visible_per_subunit
+    a_mono, a_dim = plan.fluorescent_per_subunit
     two_subunits = 1.0 - (1.0 - a_dim) ** 2
     if plan.ligand_classes:
         return float(start.n_monomers * a_mono + start.n_dimers_one_probe * a_dim
@@ -368,7 +368,7 @@ def match_one(args, ctx, cell: int) -> dict:
     base_vector, base_record = ppv.load_declared_rds(args.declared_rds, kind, cell,
                                                      overrides={"count_total": args.initial_count})
     declared = theta_by_key(base_vector, kind)          # by key; MET-FAB's allocation is its declared 0
-    v = visible_hosts_per_subunit(plan, declared[sto.basal_fraction_key], declared[sto.active_allocation_key])
+    v = fluorescent_hosts_per_subunit(plan, declared[sto.basal_fraction_key], declared[sto.active_allocation_key])
     limits = ctx["limits"]
     prior_box = limits["prior_box"]
 
@@ -380,11 +380,11 @@ def match_one(args, ctx, cell: int) -> dict:
             clip = ppv.simulate_and_render(kind, vec, imaging["vector"], plan, n_match,
                                            Path(work) / f"cell_{cell}_{tag}.h5", seed=seed)
             row = dict(zip(lab.LABELING_SET_COLUMNS, clip["labeling_row"]))
-            visible = row["monomers_visible_0"] + row["dimers_visible_0"]
+            fluorescent = row["monomers_fluorescent_0"] + row["dimers_fluorescent_0"]
             c_syn = float(detected_per_frame(convert_video_dtype(clip["synth"], bits_from=16, bits_to=8)).mean())
-            print(f"[cell {cell}] render {tag}: N_total {n_r} -> visible {int(visible)} (expected {n_r * v:.0f}), "
+            print(f"[cell {cell}] render {tag}: N_total {n_r} -> fluorescent {int(fluorescent)} (expected {n_r * v:.0f}), "
                   f"detected {c_syn:.2f}/frame ({time.time() - t1:.0f} s)", flush=True)
-            return visible, c_syn
+            return fluorescent, c_syn
 
         render = guarded_render(render_one, **limits)          # the iteration's and the check renders'
         out = iterate_count(c_exp, v, render, initial=args.initial_count, tolerance=args.tolerance,
@@ -393,10 +393,10 @@ def match_one(args, ctx, cell: int) -> dict:
         checks = []
         if out["status"] in STATUS_ACCEPTED:
             for k in range(args.check_renders):
-                visible, c_syn = render(out["matched_count_total"], 100 + k)
-                checks.append(dict(seed_offset=100 + k, visible_hosts_0=int(visible),
+                fluorescent, c_syn = render(out["matched_count_total"], 100 + k)
+                checks.append(dict(seed_offset=100 + k, fluorescent_hosts_0=int(fluorescent),
                                    detected_per_frame=c_syn,
-                                   eta=(c_syn / visible) if visible > 0 else None))
+                                   eta=(c_syn / fluorescent) if fluorescent > 0 else None))
 
     resolved_n = out["matched_count_total"] if out["matched_count_total"] is not None else out["last_count_total"]
     resolved = None
@@ -415,7 +415,7 @@ def match_one(args, ctx, cell: int) -> dict:
         detection=dict(rule="direct_imaging_estimates.measure_spot_widths on stored 8-bit levels",
                        n_sigma=N_SIGMA, half_px=HALF_PX, scope="SCOPE box center"),
         experimental_detected_per_frame=c_exp,
-        labeling=plan.record(), visible_hosts_per_subunit=v,
+        labeling=plan.record(), fluorescent_hosts_per_subunit=v,
         imaging=dict(description=imaging["description"], identity=imaging["identity"],
                      vector=imaging["vector"].tolist(), keys=det.DETECTOR_IMAGING_KEYS),
         declared_rds=dict(path=base_record["path"], sha256=base_record["sha256"],
@@ -449,17 +449,17 @@ def _write_md(path, r, tif, plan, imaging, record):
              f"{r['experimental_detected_per_frame']:.2f} detected spots per frame (4 sigma, half-width 14 px, "
              f"SCOPE box center, 8-bit levels)",
              f"- labeling: {plan.describe()}; expected fluorescent hosts per receptor subunit "
-             f"{r['visible_hosts_per_subunit']:.4f}",
+             f"{r['fluorescent_hosts_per_subunit']:.4f}",
              f"- imaging: {imaging['description']}",
              f"- declared configuration: `{Path(record['path']).name}` (sha256 {record['sha256'][:12]}), "
              f"scenario {record['scenario']['name']}", "",
-             "| iteration | N_total rendered | visible hosts (frame 0) | expected | detected per frame | eta | proposed N_total |",
+             "| iteration | N_total rendered | fluorescent hosts (frame 0) | expected | detected per frame | eta | proposed N_total |",
              "|---|---|---|---|---|---|---|"]
     for it in r["iterations"]:
         eta = it.get("eta")
         prop = it.get("proposed_count_total")
-        lines.append(f"| {it['iteration']} | {it['count_total']} | {it['visible_hosts_0']} | "
-                     f"{it['expected_visible_hosts']:.0f} | {it['detected_per_frame']:.2f} | "
+        lines.append(f"| {it['iteration']} | {it['count_total']} | {it['fluorescent_hosts_0']} | "
+                     f"{it['expected_fluorescent_hosts']:.0f} | {it['detected_per_frame']:.2f} | "
                      f"{'-' if eta is None else f'{eta:.3f}'} | {'-' if prop is None else f'{prop:.0f}'} |")
     if r["check_renders"]:
         dets = [c["detected_per_frame"] for c in r["check_renders"]]
