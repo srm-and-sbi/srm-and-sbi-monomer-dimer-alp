@@ -175,6 +175,11 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --global-batch       : {args.global_batch}   (None = one optimizer step per batch)")
     print(f"  --learning-rate      : {args.learning_rate}   "
           f"(effective: {effective_lr:.2e})")
+    effective_patience = (PARAMETERS.inference.training.scheduler_patience
+                          if args.scheduler_patience is None else int(args.scheduler_patience))
+    print(f"  --scheduler-patience : {args.scheduler_patience}   (effective: {effective_patience}; "
+          f"configured production value {PARAMETERS.inference.training.scheduler_patience}"
+          f"{'; TRIAL OVERRIDE' if args.scheduler_patience is not None else ''})")
     print(f"  --tasks              : {args.tasks}        (TRAIN-namespace tasks; gradient data)")
     print(f"  --test-tasks         : {args.test_tasks}        (TEST-namespace tasks; model selection, 0 = none)")
     print(f"  --num-workers        : {args.num_workers}        (DataLoader worker budget override; None = profile/auto)")
@@ -282,7 +287,9 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print("\nTraining & network summary:")
     print(f"  optimizer : AdamW   "
           f"scheduler: ReduceLROnPlateau (factor={training_cfg.scheduler_factor}, "
-          f"patience={training_cfg.scheduler_patience})")
+          f"patience={effective_patience})"
+          + (f"   [TRIAL: --scheduler-patience {args.scheduler_patience} overrides the configured "
+             f"{training_cfg.scheduler_patience}]" if args.scheduler_patience is not None else ""))
     print(f"  embedding : Complex3DCNN(n_conv={network_cfg.n_conv_layers}, "
           f"n_attn={network_cfg.n_attn_layers}, "
           f"start_ch={network_cfg.start_channels}, "
@@ -435,6 +442,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         test_loss_distribution=use_tld,
         paths=paths,
         parameterization=spec.draw_spec,
+        scheduler_patience=args.scheduler_patience,
     )
 
     if reporter.enabled:
@@ -495,6 +503,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "train_videos": len(training_setup["train_loader"].dataset),
             "test_videos": len(training_setup["val_loader"].dataset),
             "epochs_planned": args.epochs,
+            "scheduler_patience": effective_patience,
+            "scheduler_patience_override": args.scheduler_patience,
             "torch_version": torch.__version__,
         }
 
@@ -511,6 +521,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 "epochs": args.epochs,
                 "batch_size": args.batch_size, "global_batch": args.global_batch,
                 "world_size": training_setup["topo"].world_size,
+                "scheduler_patience": effective_patience,
+                "scheduler_patience_override": args.scheduler_patience,
             }
             estimator_path.parent.mkdir(parents=True, exist_ok=True)
             artifacts.save_estimator(
@@ -574,6 +586,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         resurrect_state_path=resurrect_state_path,
         resume_meta=resume_meta,
         accumulation_steps=accumulation_steps,
+        scheduler_patience=args.scheduler_patience,
     )
 
     if reporter.enabled:
@@ -610,6 +623,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "epochs": args.epochs,
             "batch_size": args.batch_size, "global_batch": args.global_batch,
             "world_size": topo.world_size,
+            "scheduler_patience": effective_patience,
+            "scheduler_patience_override": args.scheduler_patience,
         }
         estimator_path.parent.mkdir(parents=True, exist_ok=True)
         artifacts.save_estimator(
@@ -735,6 +750,15 @@ def build_inference_parser() -> argparse.ArgumentParser:
         help="Master RNG seed (PyTorch + numpy + Python random). Default None "
              "-> non-deterministic (consistent with generation); pass an int for a "
              "reproducible run.",
+    )
+    parser.add_argument(
+        "--scheduler-patience", type=int, default=None,
+        help="TRIAL setting: epochs without a qualifying TEST improvement tolerated before the "
+             "LR is halved (ReduceLROnPlateau patience), applied to the initial scheduler and to "
+             "every warm-restart rebuild. Default None = the configured production value "
+             f"({PARAMETERS.inference.training.scheduler_patience}); a value is printed in the "
+             "run configuration and recorded in the estimator's metadata, so a trial never "
+             "passes for a production run.",
     )
     parser.add_argument(
         "--network-preset", default="baseline", choices=sorted(NETWORK_PRESETS),

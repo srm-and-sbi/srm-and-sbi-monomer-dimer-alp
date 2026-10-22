@@ -451,7 +451,8 @@ def build_datasets(train_tasks: int,
     return train_dataset, test_dataset
 
 
-def build_optimizer_scheduler(estimator: nn.Module, learning_rate: float):
+def build_optimizer_scheduler(estimator: nn.Module, learning_rate: float,
+                              scheduler_patience: Optional[int] = None):
     """Build the AdamW optimizer + ReduceLROnPlateau scheduler for training.
 
     Single source of truth for the optimizer/scheduler pair, shared by
@@ -461,17 +462,26 @@ def build_optimizer_scheduler(estimator: nn.Module, learning_rate: float):
     Args:
         estimator: The underlying estimator whose parameters are optimized.
         learning_rate: The initial (peak) learning rate.
+        scheduler_patience: Epochs without a qualifying TEST improvement tolerated before
+            the LR is halved (ReduceLROnPlateau ``patience``). None (the production
+            default) reads ``PARAMETERS.inference.training.scheduler_patience``; a value is
+            a recorded trial setting (``--scheduler-patience``), applied to the initial pair
+            and to every warm-restart rebuild alike.
 
     Returns:
         (optimizer, scheduler).
     """
     training_cfg = PARAMETERS.inference.training
+    patience = (training_cfg.scheduler_patience if scheduler_patience is None
+                else int(scheduler_patience))
+    if patience < 0:
+        raise ValueError(f"scheduler_patience must be a non-negative epoch count, got {patience}.")
     optimizer = optim.AdamW(list(estimator.parameters()), lr=learning_rate)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer,
         mode="min",
         factor=training_cfg.scheduler_factor,
-        patience=training_cfg.scheduler_patience,
+        patience=patience,
         threshold=training_cfg.learning_rate_minimum * training_cfg.scheduler_tolerance_factor,
         threshold_mode="abs",
         min_lr=training_cfg.learning_rate_minimum,
@@ -586,8 +596,12 @@ def setup_training(estimator: nn.Module,
                    test_tasks: int = 0,
                    test_loss_distribution: bool = False,
                    paths=None,
-                   parameterization=None) -> dict:
+                   parameterization=None,
+                   scheduler_patience: Optional[int] = None) -> dict:
     """Bundle DataLoaders + optimizer + scheduler + device into a dict for `train_loop`.
+
+    ``scheduler_patience`` (None = the configured production value) is forwarded to
+    `build_optimizer_scheduler`; the caller hands the same value to `train_loop`.
 
     ``parameterization`` is the workflow's learnable table (``workflow.parameter_table``),
     whose per-row scale maps the stored physical theta to the estimator's space.
@@ -745,7 +759,8 @@ def setup_training(estimator: nn.Module,
     # Optimizer + scheduler on the underlying estimator's parameters (DDP wraps the
     # same tensors and all-reduces their gradients in backward); built here, after the
     # SyncBatchNorm conversion, so they see the converted parameters.
-    optimizer, scheduler = build_optimizer_scheduler(estimator, learning_rate)
+    optimizer, scheduler = build_optimizer_scheduler(estimator, learning_rate,
+                                                     scheduler_patience=scheduler_patience)
 
     return {
         "estimator": estimator,
@@ -959,7 +974,8 @@ def train_loop(estimator: nn.Module,
                on_new_best: Optional[Callable] = None,
                resurrect_state_path: Optional[Path] = None,
                resume_meta: Optional[dict] = None,
-               accumulation_steps: int = 1) -> tuple:
+               accumulation_steps: int = 1,
+               scheduler_patience: Optional[int] = None) -> tuple:
     """Run the training loop with optimum-checkpoint tracking, optional RESURRECT, and in-run warm restarts.
 
     Args:
@@ -1172,7 +1188,10 @@ def train_loop(estimator: nn.Module,
         epoch_start = time.time()
         global_epoch = start_epoch + epoch   # 0-indexed global epoch, continuous across requeues
         if train_sampler is not None:
-            train_sampler.set_epoch(epoch)   # reshuffle this rank's shard each epoch
+            # The GLOBAL epoch seeds the shard's shuffle, so a continuation leg draws fresh
+            # orders instead of repeating leg 1's sequence (the job-local counter restarts at 0).
+            train_sampler.set_epoch(global_epoch)
+        lr_used = optimizer.param_groups[0]["lr"]   # the LR in force during this epoch
         # ---- Training pass ------------------------------------------------
         model.train()
         batch_train_losses = []
@@ -1211,9 +1230,11 @@ def train_loop(estimator: nn.Module,
                       f"running train_loss={float(np.mean(batch_train_losses)):.5f}",
                       flush=True)
 
+        train_secs = time.time() - epoch_start   # the training pass, data loading included
         # ---- Losses (TRAIN + TEST both sharded across ranks, then all-reduced) ----
         epoch_train = _reduce_mean(float(np.mean(batch_train_losses)))
         tld_shard = None
+        test_start = time.time()
         if has_val:
             # TEST loss in eval mode. Distributed -> each rank measures its shard
             # of the (DistributedSampler-sharded) TEST set and the per-rank means
@@ -1232,6 +1253,7 @@ def train_loop(estimator: nn.Module,
                     compute_validation_loss(estimator, val_loader, device, verbose=False))
         else:
             epoch_test = float("nan")
+        test_secs = time.time() - test_start       # the TEST pass (zero without a TEST set)
         # Replay loss = eval-mode TRAIN loss (augmentation off), opt-in; each rank
         # measures its shard of the dedicated augmentation-off loader, then averaged
         # across ranks.
@@ -1264,29 +1286,6 @@ def train_loop(estimator: nn.Module,
         elif is_main:
             torch.save(estimator.state_dict(), str(checkpoint_path))
 
-        epoch_secs = time.time() - epoch_start
-        elapsed = time.time() - loop_start
-        eta = (elapsed / (epoch + 1)) * (epochs - epoch - 1)   # mean epoch time x remaining
-        if is_main:
-            replay_str = f"{epoch_replay:.5f}" if replay_loss else "off"
-            epoch_tag = (f"Epoch {epoch + 1}|{epochs} (global {global_epoch + 1})"
-                         if start_epoch else f"Epoch {epoch + 1}|{epochs}")
-            # Peak device memory of THIS rank since the start of the run (allocated by
-            # tensors / reserved by the caching allocator), in GiB: the record of a
-            # configuration's memory use that a capacity comparison needs.
-            mem_str = ""
-            if torch.cuda.is_available() and device.type == "cuda":
-                mem_str = (f"    peak_mem={torch.cuda.max_memory_allocated(device) / 2 ** 30:.1f}"
-                           f"/{torch.cuda.max_memory_reserved(device) / 2 ** 30:.1f}GiB")
-            print(
-                f"{epoch_tag}    "
-                f"train={epoch_train:.5f}    test={epoch_test:.5f}    "
-                f"replay={replay_str}    lr={scheduler.get_last_lr()[0]:.2e}    "
-                f"epoch={epoch_secs:.1f}s    elapsed={time.strftime('%H:%M:%S', time.gmtime(elapsed))}    "
-                f"ETA={time.strftime('%H:%M:%S', time.gmtime(eta))}{mem_str}",
-                flush=True,
-            )
-
         # ---- Warm restart trigger (in-run resurrect at the LR floor) --------
         if warm_restart_dwell > 0:
             # Count epochs sitting at the floor WITHOUT a new best; a new best (or an
@@ -1312,13 +1311,43 @@ def train_loop(estimator: nn.Module,
                         dist.barrier()
                     estimator.load_state_dict(
                         torch.load(str(checkpoint_path), map_location="cpu", weights_only=True))
-                optimizer, scheduler = build_optimizer_scheduler(estimator, warm_restart_peak)
+                optimizer, scheduler = build_optimizer_scheduler(
+                    estimator, warm_restart_peak, scheduler_patience=scheduler_patience)
                 epochs_at_min_lr = 0
                 if is_main:
-                    print(f"WARM RESTART: LR held at the floor for {warm_restart_dwell} "
-                          f"epoch(s) without improving; reloaded best (test loss "
-                          f"{optimum_loss_test:.5f}) and restarted LR at {warm_restart_peak:.2e}.",
-                          flush=True)
+                    print(f"WARM RESTART: after global epoch {global_epoch + 1}: LR held at the "
+                          f"floor for {warm_restart_dwell} epoch(s) without improving; reloaded "
+                          f"best (test loss {optimum_loss_test:.5f}) and restarted LR at "
+                          f"{warm_restart_peak:.2e}.", flush=True)
+
+        # ---- Epoch line (rank 0) ----------------------------------------------
+        # Printed AFTER the scheduler step and any warm restart, so its two LR fields are
+        # unambiguous: lr_used = the LR in force during this epoch; lr_next = the LR the
+        # next epoch starts with (after the scheduler and a restart, if one fired).
+        epoch_secs = time.time() - epoch_start
+        elapsed = time.time() - loop_start
+        eta = (elapsed / (epoch + 1)) * (epochs - epoch - 1)   # mean epoch time x remaining
+        if is_main:
+            replay_str = f"{epoch_replay:.5f}" if replay_loss else "off"
+            epoch_tag = (f"Epoch {epoch + 1}|{epochs} (global {global_epoch + 1})"
+                         if start_epoch else f"Epoch {epoch + 1}|{epochs}")
+            # Peak device memory of THIS rank since the start of the run (allocated by
+            # tensors / reserved by the caching allocator), in GiB: the record of a
+            # configuration's memory use that a capacity comparison needs.
+            mem_str = ""
+            if torch.cuda.is_available() and device.type == "cuda":
+                mem_str = (f"    peak_mem={torch.cuda.max_memory_allocated(device) / 2 ** 30:.1f}"
+                           f"/{torch.cuda.max_memory_reserved(device) / 2 ** 30:.1f}GiB")
+            print(
+                f"{epoch_tag}    "
+                f"train={epoch_train:.5f}    test={epoch_test:.5f}    "
+                f"replay={replay_str}    lr_used={lr_used:.2e}    "
+                f"lr_next={optimizer.param_groups[0]['lr']:.2e}    "
+                f"epoch={epoch_secs:.1f}s    train_s={train_secs:.1f}    test_s={test_secs:.1f}    "
+                f"elapsed={time.strftime('%H:%M:%S', time.gmtime(elapsed))}    "
+                f"ETA={time.strftime('%H:%M:%S', time.gmtime(eta))}{mem_str}",
+                flush=True,
+            )
 
         # ---- Resurrect-state (full training state; rank 0; every epoch; atomic) ----
         # Written at the END of the epoch, so if a warm restart fired above it captures

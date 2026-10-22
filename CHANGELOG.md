@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.43 - 2026-10-22
+
+A continuation leg now draws fresh shuffle orders, the epoch line states the learning rate it used and the one it
+hands on, and the schedule's patience can be set for a recorded trial without touching the production value.
+
+- **Sampler seeded by the global epoch.** `train_loop` called `train_sampler.set_epoch` with the job-local epoch, so a
+  `--resurrect` continuation repeated the first leg's shuffle sequence; it now passes the global epoch (continuous
+  across legs). A bookkeeping correction: the completed estimators stand.
+- **Unambiguous learning-rate logging.** The epoch line is printed after the scheduler step and any warm restart and
+  carries `lr_used` (the rate in force during the epoch) and `lr_next` (the rate the next epoch starts with) in place
+  of the single post-scheduler `lr`, plus the phase times `train_s` and `test_s`; the `WARM RESTART` message names the
+  global epoch it follows. The training-log readout reads `lr_next`, and still `lr` from earlier logs.
+- **`--scheduler-patience` (trial knob).** `build_optimizer_scheduler`, `setup_training` and `train_loop` take an
+  optional patience that applies to the initial scheduler and to every warm-restart rebuild; `None` keeps
+  `PARAMETERS.inference.training.scheduler_patience` (1, unchanged). A value is printed in the run configuration and
+  the training summary and recorded in the estimator's metadata (`scheduler_patience`, `scheduler_patience_override`),
+  so a trial never passes for a production run.
+- `tests/test_resume_sampler_epoch.py` (4): the resumed sampler epochs `[50, 51]` against the sampler's own orders,
+  a fresh run's `[0, 1, 2]`, the patience override and its refusal of negative values, the epoch-line fields and
+  their readout. `VALIDATION.md` §3.6: 286 tests over 35 files.
+
 ## 0.1.42 - 2026-10-20
 
 The information budget's operating point and the field noise it implies are computed from the model on every run.

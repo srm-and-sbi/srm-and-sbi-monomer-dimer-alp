@@ -58,7 +58,9 @@ HEADER_RE = re.compile(r"=== Inference \| (?P<fields>.*)$")
 FIELD_RE = re.compile(r"(\w+)=(\S+)")
 EPOCH_RE = re.compile(r"Epoch (?P<leg>\d+)\|(?P<planned>\d+)(?: \(global (?P<glob>\d+)\))?"
                       r"\s+train=(?P<train>-?[\d.]+)\s+test=(?P<test>-?[\d.]+)")
-LR_RE = re.compile(r"lr=(?P<lr>[\d.]+e[+-]?\d+|[\d.]+)")
+LR_RE = re.compile(r"(?:lr_next|lr)=(?P<lr>[\d.]+e[+-]?\d+|[\d.]+)")
+"""The post-scheduler LR of the epoch line: ``lr_next=`` (after the scheduler and any warm restart) or, in
+logs written before the epoch line carried ``lr_used``/``lr_next``, the single ``lr=`` field."""
 SECONDS_RE = re.compile(r"epoch=(?P<s>[\d.]+)s")
 ELAPSED_RE = re.compile(r"elapsed=(?P<e>\d+:\d+:\d+)")
 MEM_RE = re.compile(r"peak_mem=(?P<a>[\d.]+)/(?P<r>[\d.]+)GiB")

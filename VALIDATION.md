@@ -1229,6 +1229,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_raw_decline_cross_check.py` | 2 | the raw-domain decline cross-check on synthetic records built to known relations |
 | `tests/test_rds_dry_run_per_condition.py` | 4 | the trajectory stage per condition: the dry run, a stubbed run writing stores of the condition's width, the mixed-schema guard, the orchestrator's tier status |
 | `tests/test_render_frame_blocking.py` | 5 | the renderer's 2 s frame-block integration of the PSF: its output must not change |
+| `tests/test_resume_sampler_epoch.py` | 4 | continuation bookkeeping and the schedule's trial knob: a hot-restarted leg seeds the sampler with the global epochs, a fresh run from zero, `--scheduler-patience` reaches the scheduler (None = the configured value), the epoch line's `lr_used` / `lr_next` / phase times and their readout |
 | `tests/test_retained_population.py` | 7 | the simulated-population model: species inventory, channels, initialization, lineage, labeling, and the absence of the removed names |
 | `tests/test_selection_user.py` | 8 | the `selection_user` Nuisance_DLI: one explicitly chosen, fixed imaging vector selected by its own tag |
 | `tests/test_sgm_reference.py` | 5 | sample-geometric-median correctness on small, hand-checkable clouds |
@@ -1238,7 +1239,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_training_log_readout.py` | 5 | the training-log readout on synthetic Inference logs: settings, epochs, best TEST loss, warm restarts, chains and configurations |
 | `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
 
-Total: 282 tests over 34 files.
+Total: 286 tests over 35 files.
 
 ## 4. Troubleshooting
 
