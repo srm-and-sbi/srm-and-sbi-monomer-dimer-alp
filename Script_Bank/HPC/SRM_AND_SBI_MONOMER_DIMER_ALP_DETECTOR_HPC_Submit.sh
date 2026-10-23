@@ -28,10 +28,13 @@
 #                   (`simulation SIM_STAGE=rds CONDITION=<FAB|INLB>`; one tier per condition,
 #                   shared by both workflows) -- the detector has no RDS stage; CONDITION =
 #                   FAB|INLB, the labeling law, is always required)
-#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH GLOBAL_BATCH NUM_WORKERS LR HEARTBEAT RESURRECT
+#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH GLOBAL_BATCH NUM_WORKERS LR HEARTBEAT RESURRECT SCHEDULER_PATIENCE INIT_FROM_TAG
 #                   (RESURRECT=1 continues training from the existing checkpoint;
 #                   LR = per-run starting/peak learning rate, unset = the stage
-#                   script's default peak)
+#                   script's default peak; SCHEDULER_PATIENCE = the plateau patience,
+#                   unset = the configured production value; INIT_FROM_TAG = start a
+#                   new weights-initialized phase from that product tag's estimator,
+#                   with ARTIFACT_TAG naming the phase, never with RESURRECT)
 #     evaluation  : CONDITION EVAL_TASKS POOL_MODE TOTAL_TIME
 #     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME
 #
@@ -170,7 +173,7 @@ case "$STAGE" in
   inference)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Inference.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR${cond_slot}_${timing_label}${tag_slot}_Inference"
-    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add GLOBAL_BATCH; _add NUM_WORKERS; _add LR; _add HEARTBEAT; _add RESURRECT; _add NETWORK_PRESET; _add ARTIFACT_TAG
+    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add GLOBAL_BATCH; _add NUM_WORKERS; _add LR; _add HEARTBEAT; _add RESURRECT; _add SCHEDULER_PATIENCE; _add INIT_FROM_TAG; _add NETWORK_PRESET; _add ARTIFACT_TAG
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node

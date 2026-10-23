@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.44 - 2026-10-23
+
+A training phase can start from a finished run's estimator with a fresh optimizer and schedule, as an explicit,
+checked and recorded operation, and the HPC wrappers forward the schedule's patience.
+
+- **`--initialize-from-tag TAG` (Inference).** Starts a new phase from the best-on-TEST estimator artifact of product
+  `TAG` in the run's condition and timing namespace, the artifact the Evaluation reads. The source is checked against
+  the run (workflow, condition, timing label, parameter keys, prior bounds, embedding and flow arguments, theta width,
+  video shape; `artifacts.initialization_mismatches`), the standardization the run fits from the first two TRAIN
+  task-0 rows must reproduce the stored one, and the weights and every buffer are loaded into the compiled training
+  network (`artifacts.read_estimator_artifact`, `artifacts.load_artifact_weights`) and compared bitwise. The optimizer,
+  the learning rate (`--learning-rate`), the patience (`--scheduler-patience`), the plateau tally and the warm-restart
+  sawtooth start fresh, and TEST selection starts afresh within the phase. Before the first update the run checks that
+  it reproduces the source's per-example losses as the Evaluation's loader rebuilds it (within 0.05 nats;
+  `inference_support.source_loss_agreement`) and measures the source's TEST loss under the launch as the phase's
+  reference (`inference_support.mean_test_loss`). The global epoch count continues from the source's resume file
+  (`inference_support.peek_resume_state`; `train_loop(start_epoch=...)`), so the sampler draws fresh orders. The
+  source's tag, file and weights checksums, best TEST loss and epochs, the phase's first global epoch, settings,
+  agreement and reference are recorded as `initialization` in the estimator's metadata, the test-loss distribution
+  and the resume file. Refused before any compute with `--resurrect`, without `--artifact-tag` or with the source's
+  tag, without a TEST set, when the source estimator is missing, or when the new tag already has products; `--dry-run`
+  lists the refusals. An interrupted phase is resumed with `--resurrect` alone and keeps its own schedule.
+- **The patience is part of the resume file.** `resume_meta` records the effective `scheduler_patience`;
+  `load_resume_state` refuses a hot restart under a different patience (a warm-restart rebuild would otherwise take
+  the run's value while the restored scheduler kept the stored one). Resume files written before this release carry
+  no patience and resume as before.
+- **HPC forwarding.** Both Inference wrappers forward `SCHEDULER_PATIENCE` (`--scheduler-patience`) and
+  `INIT_FROM_TAG` (`--initialize-from-tag`), and both `Submit.sh` dispatchers pass them through. The HPC README no
+  longer suggests `LR` for a hot `RESURRECT=1` continuation, which keeps its stored rate.
+- `tests/test_weights_initialized_phase.py` (6). `VALIDATION.md` §2.4a (the weights-initialized phase) and §3.6:
+  292 tests over 36 files.
+
 ## 0.1.43 - 2026-10-22
 
 A continuation leg now draws fresh shuffle orders, the epoch line states the learning rate it used and the one it

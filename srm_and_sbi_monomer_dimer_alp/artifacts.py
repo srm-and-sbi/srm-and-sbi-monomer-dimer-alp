@@ -274,3 +274,125 @@ def estimator_weights_sha256(path) -> str:
     the flow. This is the checkpoint identity an Evaluation / Experiment product manifest stores."""
     with np.load(path, allow_pickle=False) as data:
         return str(json.loads(str(data["manifest"]))["weights_sha256"])
+
+
+# ---- Weights-initialized training phase (Inference --initialize-from-tag) ----------------------
+# A new training phase can start from a stored estimator: the artifact's weights and every stored
+# buffer are loaded into the freshly built training network, while the optimizer, the learning-rate
+# schedule and its counters start fresh. The helpers below read the artifact without rebuilding it,
+# list every way it differs from the run it would initialize, compare the standardization the run
+# fits with the stored one, and load the weights into a network whose embedding is compiled.
+
+def read_estimator_artifact(path):
+    """The stored parts of a `save_estimator` artifact, without rebuilding the network.
+
+    Returns ``(state_dict, manifest, prior_low, prior_high)``: the compile-stripped state_dict
+    (checksum-verified against the manifest, loaded ``weights_only``), the manifest dict, and the
+    prior bounds as lists. Raises ``ValueError`` on a checksum mismatch.
+    """
+    with np.load(path, allow_pickle=False) as data:
+        manifest = json.loads(str(data["manifest"]))
+        weights = data["weights"]
+        prior_low = data["prior_low"].tolist()
+        prior_high = data["prior_high"].tolist()
+    if hashlib.sha256(weights.tobytes()).hexdigest() != manifest["weights_sha256"]:
+        raise ValueError(f"weights checksum mismatch loading estimator artifact {path}")
+    state_dict = torch.load(io.BytesIO(weights.tobytes()), weights_only=True)
+    return state_dict, manifest, prior_low, prior_high
+
+
+def _as_stored(value):
+    """``value`` in the form a manifest stores it (a JSON round trip: tuples become lists)."""
+    return json.loads(json.dumps(value))
+
+
+def initialization_mismatches(manifest, prior_low, prior_high, *, workflow, condition, timing_label,
+                              parameter_keys, lower_bound, upper_bound, embedding_args, maf_args,
+                              theta_dim, video_shape) -> list:
+    """Every way a source artifact differs from the training run it would initialize.
+
+    Compared: the workflow, condition and timing label recorded in the artifact's metadata; the
+    ordered parameter keys; the prior bounds (exactly, to 1e-12); and the rebuild specification --
+    the embedding arguments (the console-only ``verbose`` excepted), the flow arguments, the theta
+    width and the video shape, each in the form the manifest stores. Returns a list of readable
+    differences; an empty list means the artifact can initialize the run.
+    """
+    problems = []
+    meta = manifest.get("metadata") or {}
+    for key, want in (("workflow", workflow), ("condition", condition), ("timing_label", timing_label)):
+        if meta.get(key) != want:
+            problems.append(f"{key}: source {meta.get(key)!r}, run {want!r}")
+    if list(manifest.get("parameter_keys") or []) != list(parameter_keys):
+        problems.append(f"parameter keys: source {manifest.get('parameter_keys')}, run {list(parameter_keys)}")
+    for name, stored, want in (("prior lower bounds", prior_low, lower_bound),
+                               ("prior upper bounds", prior_high, upper_bound)):
+        stored_arr = np.asarray(stored, dtype=float)
+        want_arr = np.asarray(want, dtype=float)
+        if stored_arr.shape != want_arr.shape or not np.allclose(stored_arr, want_arr, rtol=0.0, atol=1e-12):
+            problems.append(f"{name}: source {stored_arr.tolist()}, run {want_arr.tolist()}")
+    spec = manifest.get("rebuild_spec") or {}
+    stored_embedding = {k: v for k, v in (spec.get("embedding_args") or {}).items() if k != "verbose"}
+    run_embedding = {k: v for k, v in _as_stored(dict(embedding_args)).items() if k != "verbose"}
+    if stored_embedding != run_embedding:
+        keys = sorted(set(stored_embedding) | set(run_embedding))
+        diff = {k: (stored_embedding.get(k), run_embedding.get(k)) for k in keys
+                if stored_embedding.get(k) != run_embedding.get(k)}
+        problems.append(f"embedding arguments (source, run): {diff}")
+    if (spec.get("maf_args") or {}) != _as_stored(dict(maf_args)):
+        problems.append(f"flow arguments: source {spec.get('maf_args')}, run {_as_stored(dict(maf_args))}")
+    if spec.get("theta_dim") != int(theta_dim):
+        problems.append(f"theta width: source {spec.get('theta_dim')}, run {int(theta_dim)}")
+    if spec.get("video_shape") != _as_stored(list(video_shape)):
+        problems.append(f"video shape: source {spec.get('video_shape')}, run {list(video_shape)}")
+    return problems
+
+
+def standardization_buffers(state_dict: dict) -> dict:
+    """The standardization buffers of a compile-stripped state_dict: the theta shift and scale of
+    the flow's first transform and, when the videos are standardized, the mean and std of the
+    embedding's leading standardizing layer. Both are fitted once, when the network is built."""
+    out = dict(_standardization_buffers(state_dict))
+    out.update({key: value for key, value in state_dict.items()
+                if key.endswith(("_embedding_net.0._mean", "_embedding_net.0._std"))})
+    return out
+
+
+def standardization_relative_differences(fitted: dict, stored: dict) -> dict:
+    """Largest relative difference, buffer by buffer, between the standardization a run fitted and
+    the one an artifact stores (both compile-stripped state_dicts). A buffer present in only one of
+    them is reported as ``inf``."""
+    a, b = standardization_buffers(fitted), standardization_buffers(stored)
+    out = {}
+    for key in sorted(set(a) | set(b)):
+        if key not in a or key not in b or tuple(a[key].shape) != tuple(b[key].shape):
+            out[key] = float("inf")
+            continue
+        x = a[key].detach().double().cpu()
+        y = b[key].detach().double().cpu()
+        out[key] = float(((x - y).abs() / y.abs().clamp_min(1e-12)).max())
+    return out
+
+
+def load_artifact_weights(estimator, state_dict: dict) -> None:
+    """Load an artifact's compile-stripped ``state_dict`` into a training ``estimator`` whose
+    embedding may be ``torch.compile``d (its own keys then carry the ``_orig_mod.`` prefix).
+
+    Every key of the estimator, stripped, must name a stored tensor of the same shape and dtype,
+    and no stored tensor may be left over; the load is then strict. Restores the weights and every
+    buffer -- the theta and video standardization, the batch-norm running statistics, the flow's
+    masks and permutations. Raises ``ValueError`` naming the first mismatches otherwise.
+    """
+    own = estimator.state_dict()
+    stripped_of = {key: key.replace(_COMPILE_PREFIX, "") for key in own}
+    wanted = set(stripped_of.values())
+    missing = sorted(wanted - set(state_dict))
+    unexpected = sorted(set(state_dict) - wanted)
+    if missing or unexpected:
+        raise ValueError(f"the stored state_dict does not match the network: {len(missing)} key(s) missing "
+                         f"(first: {missing[:3]}), {len(unexpected)} unexpected (first: {unexpected[:3]}).")
+    bad = [key for key, stored in stripped_of.items()
+           if tuple(own[key].shape) != tuple(state_dict[stored].shape) or own[key].dtype != state_dict[stored].dtype]
+    if bad:
+        raise ValueError(f"the stored state_dict does not match the network in shape or dtype at "
+                         f"{len(bad)} key(s) (first: {bad[:3]}).")
+    estimator.load_state_dict({key: state_dict[stored] for key, stored in stripped_of.items()}, strict=True)

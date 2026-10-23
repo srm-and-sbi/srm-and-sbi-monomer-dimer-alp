@@ -557,7 +557,11 @@ def load_resume_state(path: Path, estimator: nn.Module, optimizer: optim.Optimiz
     ``timing_label`` must match the current run, else the restore is refused with a
     located error -- a stale or mismatched file fails loudly (naming the fix) instead
     of silently loading. The model ``load_state_dict`` is strict, so an architecture
-    mismatch is caught independently.
+    mismatch is caught independently. A state that records its ``scheduler_patience``
+    (written since the patience became a run setting) is refused under a different
+    effective patience: the restored scheduler keeps the stored value, but a warm-restart
+    rebuild would take the run's, so a resumed phase must be launched with the patience
+    it was trained with.
     """
     state = torch.load(str(path), map_location="cpu", weights_only=False)
     stored = state.get("resume_meta") or {}
@@ -575,6 +579,13 @@ def load_resume_state(path: Path, estimator: nn.Module, optimizer: optim.Optimiz
             raise ResumeStateMismatch(
                 f"Resurrect-state timing mismatch at {path}: state '{old_tl}' != run "
                 f"'{new_tl}'. Refusing to hot-restart; delete the file to start cold.")
+        old_patience = stored.get("scheduler_patience")
+        new_patience = resume_meta.get("scheduler_patience")
+        if old_patience is not None and new_patience is not None and int(old_patience) != int(new_patience):
+            raise ResumeStateMismatch(
+                f"Resurrect-state patience mismatch at {path}: the state was trained with "
+                f"scheduler patience {old_patience}, this run would use {new_patience}. Resume it "
+                f"with --scheduler-patience {old_patience}.")
     estimator.load_state_dict(state["model"])   # strict: architecture guard
     # optimizer/scheduler restored in place. Optimizer.load_state_dict casts the AdamW
     # moments to each param's device automatically (the params are already on-device)
@@ -583,6 +594,49 @@ def load_resume_state(path: Path, estimator: nn.Module, optimizer: optim.Optimiz
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
     return state
+
+
+def peek_resume_state(path: Path) -> dict:
+    """The bookkeeping of a resurrect-state without restoring it: ``epoch`` (the 0-indexed global
+    epoch it was written after), ``lr`` and ``resume_meta``. Used to continue the global epoch
+    count of a weights-initialized phase and to recover a resumed phase's provenance."""
+    state = torch.load(str(path), map_location="cpu", weights_only=False)
+    return {"epoch": int(state["epoch"]), "lr": float(state.get("lr", float("nan"))),
+            "resume_meta": dict(state.get("resume_meta") or {})}
+
+
+def mean_test_loss(estimator: nn.Module, loader: DataLoader, device: torch.device, topo) -> float:
+    """The TEST loss of ``estimator`` exactly as the training loop measures it each epoch: eval
+    mode, each rank over its shard, the per-rank means averaged across ranks (the identity on a
+    single worker). Every rank must call it."""
+    value = compute_validation_loss(estimator, loader, device, verbose=False)
+    if not topo.is_distributed:
+        return value
+    import torch.distributed as dist
+    t = torch.tensor([value], device=device, dtype=torch.float64)
+    dist.all_reduce(t, op=dist.ReduceOp.SUM)
+    return float((t / topo.world_size).item())
+
+
+def source_loss_agreement(estimator: nn.Module, reference: nn.Module, dataset, device: torch.device,
+                          n_examples: int) -> tuple:
+    """Per-example losses (negative log densities) of ``estimator`` and ``reference`` on the first
+    ``n_examples`` items of ``dataset``, both in eval mode and without gradients; the estimator's
+    training mode is restored afterwards. Returns ``(max_abs_difference, estimator_losses,
+    reference_losses)``. Items are ``(video, theta)`` or ``(task, sim, video, theta)``."""
+    items = [dataset[i] for i in range(min(int(n_examples), len(dataset)))]
+    if not items:
+        raise ValueError("source_loss_agreement needs at least one example.")
+    videos = torch.stack([item[-2] for item in items]).to(device)
+    thetas = torch.stack([item[-1] for item in items]).to(device)
+    was_training = estimator.training
+    estimator.eval()
+    reference.eval()
+    with torch.no_grad():
+        ours = estimator.loss(thetas, condition=videos).detach().double().cpu()
+        theirs = reference.loss(thetas, condition=videos).detach().double().cpu()
+    estimator.train(was_training)
+    return float((ours - theirs).abs().max()), ours.numpy(), theirs.numpy()
 
 
 def setup_training(estimator: nn.Module,
@@ -975,7 +1029,8 @@ def train_loop(estimator: nn.Module,
                resurrect_state_path: Optional[Path] = None,
                resume_meta: Optional[dict] = None,
                accumulation_steps: int = 1,
-               scheduler_patience: Optional[int] = None) -> tuple:
+               scheduler_patience: Optional[int] = None,
+               start_epoch: int = 0) -> tuple:
     """Run the training loop with optimum-checkpoint tracking, optional RESURRECT, and in-run warm restarts.
 
     Args:
@@ -1020,6 +1075,13 @@ def train_loop(estimator: nn.Module,
             multiple of the count ends with a smaller final group, stepped with the same
             scaling (a slightly smaller last update). Resolved by the entry point from
             `--global-batch` (`resolve_accumulation_steps`).
+        scheduler_patience: The ReduceLROnPlateau patience applied to every warm-restart
+            rebuild (None = the configured production value); the caller built the initial
+            scheduler with the same value.
+        start_epoch: Global epoch offset of a run that is not hot-restarted: 0 for a fresh
+            run; a weights-initialized phase passes the number of epochs its source trained,
+            so the global epoch count (the sampler's shuffle seed, the epoch line, the
+            resurrect-state) continues. A hot restart takes the offset from the state.
 
     Epochs are per invocation: `epochs` is how many epochs THIS call runs, always
     starting a fresh 0..epochs-1 loop; on a hot restart the global epoch counter (for
@@ -1096,7 +1158,12 @@ def train_loop(estimator: nn.Module,
     epochs_at_min_lr = 0                                  # consecutive floor epochs without a new best
 
     optimum_loss_test = float("inf")
-    start_epoch = 0   # global epoch offset; nonzero only on a hot restart
+    # Global epoch offset: 0 for a fresh run; a weights-initialized phase passes the count of
+    # epochs its source trained, so the sampler draws fresh orders; a hot restart takes it from
+    # the resurrect-state below.
+    start_epoch = int(start_epoch)
+    if start_epoch < 0:
+        raise ValueError(f"start_epoch must be a non-negative epoch count, got {start_epoch}.")
     if resurrect:
         state = None
         if resurrect_state_path is not None and resurrect_state_path.exists():

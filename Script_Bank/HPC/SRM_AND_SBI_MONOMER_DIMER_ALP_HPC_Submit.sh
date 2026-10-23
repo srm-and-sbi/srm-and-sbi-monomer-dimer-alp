@@ -33,10 +33,13 @@
 #                   (SKIN_FACTOR = ReaDDy neighbor-list skin as a multiple of the
 #                   particle diameter; RDS-only, performance not physics; unset =
 #                   the code default 10x = 100 nm)
-#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH GLOBAL_BATCH LR HEARTBEAT RESURRECT
+#     inference   : CONDITION TRAIN_TASKS TEST_TASKS EPOCHS TOTAL_TIME BATCH GLOBAL_BATCH LR HEARTBEAT RESURRECT SCHEDULER_PATIENCE INIT_FROM_TAG
 #                   (RESURRECT=1 continues training from the existing checkpoint;
 #                   LR = per-run starting/peak learning rate, unset = the stage
-#                   script's default peak)
+#                   script's default peak; SCHEDULER_PATIENCE = the plateau patience,
+#                   unset = the configured production value; INIT_FROM_TAG = start a
+#                   new weights-initialized phase from that product tag's estimator,
+#                   with ARTIFACT_TAG naming the phase, never with RESURRECT)
 #     evaluation  : CONDITION EVAL_TASKS POOL_MODE TOTAL_TIME
 #     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME
 #
@@ -175,7 +178,7 @@ case "$STAGE" in
   inference)
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Inference.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}${tag_slot}_Inference"
-    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add GLOBAL_BATCH; _add LR; _add HEARTBEAT; _add RESURRECT; _add NETWORK_PRESET; _add ARTIFACT_TAG
+    _add CONDITION; _add TRAIN_TASKS; _add TEST_TASKS; _add EPOCHS; _add TOTAL_TIME; _add BATCH; _add GLOBAL_BATCH; _add LR; _add HEARTBEAT; _add RESURRECT; _add SCHEDULER_PATIENCE; _add INIT_FROM_TAG; _add NETWORK_PRESET; _add ARTIFACT_TAG
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node DDP; --gres is per node -> world_size = NODES * GPUs-per-node

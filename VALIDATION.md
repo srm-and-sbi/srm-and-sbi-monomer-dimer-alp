@@ -407,6 +407,35 @@ learning rate; then run this `--resurrect` command — the printed global epoch 
 where §2.3 left off and the learning rate continues from the saved schedule rather than
 jumping back to the peak.
 
+### 2.4a Weights-initialized phase (a new phase from a stored estimator)
+
+```bash
+# <SOURCE> = the tag of a finished run whose estimator starts the phase; <PHASE> = the new phase's tag ([A-Z0-9]+)
+python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Inference.py --condition INLB --total-time-seconds 2.0 \
+  --tasks 2 --test-tasks 1 --epochs 2 --batch-size 4 --global-batch 128 --network-preset <the source's preset> \
+  --initialize-from-tag <SOURCE> --artifact-tag <PHASE> --learning-rate 3.2e-4 --scheduler-patience 3
+```
+
+**Expected**: the run reads the source's estimator artifact (the one the Evaluation
+reads), checks it against this run — workflow, condition, timing label, parameter
+keys, prior bounds, the embedding and flow arguments — and checks that the
+standardization it fitted from the first two TRAIN task-0 rows reproduces the stored
+one; then it loads the weights and every buffer and prints an `INITIALIZE: loaded ...`
+line with the source's checksums, its recorded best TEST loss and epochs, and the
+global epoch the phase starts at (the source's epoch count plus one, read from its
+resume file). Before the first update a second `INITIALIZE:` line reports that the
+initialized network reproduces the source's per-example losses, as the Evaluation's
+loader rebuilds it, on the first TEST videos (to well under 0.05 nats), and the
+source's TEST loss under this launch: the phase's reference. The epoch lines then read
+`Epoch 1|2 (global <n>)` with `lr_used=3.20e-04` in the first epoch, and selection on
+TEST starts afresh within the phase; the source's products are untouched. The run is
+refused before any compute when combined with `--resurrect`, without `--artifact-tag`
+or with the source's tag, without a TEST set, when the source estimator is missing,
+or when the new tag already has products; `--dry-run` lists the same refusals. An
+interrupted phase is resumed with `--resurrect` alone (and the same
+`--scheduler-patience`, which the resume file records and enforces): it hot-restarts
+the phase's own schedule instead of raising the learning rate again.
+
 ### 2.4b Evaluate and Experiment (biology)
 
 The two remaining stages complete the biology smoke's `generate → infer → evaluate →
@@ -1237,9 +1266,10 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_temporal_dynamics_drift.py` | 3 | the within-recording drift kernel of the temporal dynamics |
 | `tests/test_theta_standardization.py` | 4 | the theta standardization of the flow: what `build_maf` fixes from `batch_x`, the biology's `independent` choice, the detector's `structured` default, the artifact round trip |
 | `tests/test_training_log_readout.py` | 5 | the training-log readout on synthetic Inference logs: settings, epochs, best TEST loss, warm restarts, chains and configurations |
+| `tests/test_weights_initialized_phase.py` | 6 | the weights-initialized phase: an artifact restores every weight and buffer of a compiled-layout network and its losses; field-by-field refusal of a mismatched artifact; a fresh optimizer, rate, patience and counters with the global epoch continued; a resumed phase keeps its schedule and refuses another patience; the runner's refusals; the HPC forwarding |
 | `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
 
-Total: 286 tests over 35 files.
+Total: 292 tests over 36 files.
 
 ## 4. Troubleshooting
 

@@ -390,8 +390,24 @@ batch × ~1 GiB at 500 frames, so batch 32 OOMs a GPU with ~64 GB of VRAM at lon
 **Starting learning rate: `LR`.** Both Inference wrappers (biology and detector)
 forward a non-empty `LR` to the entry point as `--learning-rate`, the run's
 starting (peak) learning rate; left unset, the entry point's default peak applies
-(`learning_rate_minimum × max_factor` = 1.28e-03). Useful when continuing a
-wall-stopped run (`RESURRECT=1`) at a chosen rate.
+(`learning_rate_minimum × max_factor` = 1.28e-03). A `RESURRECT=1` hot restart keeps
+the rate its resume file stores; `LR` applies to a fresh run, to a cold restart (no
+resume file), and to a weights-initialized phase.
+
+**Plateau patience: `SCHEDULER_PATIENCE`.** Forwarded as `--scheduler-patience`;
+unset keeps the configured production value. A value is recorded in the estimator's
+metadata and in the resume file, and a `RESURRECT=1` continuation must pass the same
+value (it is refused otherwise).
+
+**A new phase from a stored estimator: `INIT_FROM_TAG`.** `INIT_FROM_TAG=<source tag>`
+with `ARTIFACT_TAG=<phase tag>`, `LR` and, if wanted, `SCHEDULER_PATIENCE` starts a
+new training phase from the source's estimator artifact: its weights and buffers, a
+fresh optimizer and schedule, TEST selection within the phase, the global epoch count
+continued, and the source's TEST loss measured once as the phase's reference
+(VALIDATION.md §2.4a). The source's products are untouched. If the phase stops at the
+wall, continue it with `RESURRECT=1` and the same `ARTIFACT_TAG` and
+`SCHEDULER_PATIENCE`, without `INIT_FROM_TAG`, which is refused once the phase has
+products.
 
 **Stragglers and the merge guard.** The sharded stages (Evaluation, Experiment, the
 `Posterior_Calibration` and DETECTOR `Nuisance_DLI` wrappers, §6) are embarrassingly

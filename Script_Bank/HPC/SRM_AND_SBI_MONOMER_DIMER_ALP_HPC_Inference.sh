@@ -20,6 +20,12 @@
 #     the default peak, learning_rate_minimum*max_factor = 1.28e-03),
 #   RESURRECT (set 1 to load the existing checkpoint and continue training from it
 #     -- continue a run stopped by the wall, or add epochs; unset = fresh run),
+#   SCHEDULER_PATIENCE (ReduceLROnPlateau patience, forwarded as --scheduler-patience; unset =
+#     the configured production value; a value is recorded in the estimator's metadata),
+#   INIT_FROM_TAG (start a NEW weights-initialized phase from the estimator of that product tag,
+#     forwarded as --initialize-from-tag: its weights and buffers, a fresh optimizer at LR and a
+#     fresh schedule; needs ARTIFACT_TAG naming the phase; never with RESURRECT -- an interrupted
+#     phase is resumed with RESURRECT=1 alone, which keeps the phase's own schedule),
 #   NETWORK_PRESET (baseline|capacity256|kernel7|earlyconv|statspool|capacity256_kernel7_stats|capacity256_earlyconv_stats|capacity256_kernel7_earlyconv_stats; parameterization.NETWORK_PRESETS, forwarded as
 #     --network-preset; unset = baseline, the configured architecture),
 #   ARTIFACT_TAG (SCREAMING_SNAKE token, e.g. CAP256; appended to the timing label of every
@@ -107,6 +113,8 @@ BATCH="${BATCH:-}"   # empty -> script default (PARAMETERS batch_size, 32)
 HEARTBEAT="${HEARTBEAT:-}"   # empty -> ~4 within-epoch progress lines/epoch; else a line every N batches
 LR="${LR:-}"   # per-run starting (peak) LR; empty -> Prime default (learning_rate_minimum*max_factor = 1.28e-03)
 RESURRECT="${RESURRECT:-}"   # set 1 to load the existing checkpoint and continue; unset/0 -> fresh run
+SCHEDULER_PATIENCE="${SCHEDULER_PATIENCE:-}"   # empty -> the configured production patience; else a recorded per-run value
+INIT_FROM_TAG="${INIT_FROM_TAG:-}"   # empty -> no initialization; else the source product tag of a weights-initialized phase
 
 BATCH_ARG=()
 [ -n "$BATCH" ] && BATCH_ARG=(--batch-size "$BATCH")
@@ -119,6 +127,10 @@ LR_ARG=()
 [ -n "$LR" ] && LR_ARG=(--learning-rate "$LR")   # forward the starting-LR override; unset -> default peak
 RESURRECT_ARG=()
 [ "$RESURRECT" = 1 ] && RESURRECT_ARG=(--resurrect)   # only the value 1 resumes; unset/0/other = fresh
+PATIENCE_ARG=()
+[ -n "$SCHEDULER_PATIENCE" ] && PATIENCE_ARG=(--scheduler-patience "$SCHEDULER_PATIENCE")
+INIT_ARG=()
+[ -n "$INIT_FROM_TAG" ] && INIT_ARG=(--initialize-from-tag "$INIT_FROM_TAG")
 NETWORK_PRESET="${NETWORK_PRESET:-}"   # empty -> baseline; else a parameterization.NETWORK_PRESETS name (capacity256)
 PRESET_ARG=()
 [ -n "$NETWORK_PRESET" ] && PRESET_ARG=(--network-preset "$NETWORK_PRESET")
@@ -137,9 +149,9 @@ INFER_PY="$REPO/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py"
 case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
 
 INFER_ARGS=( --condition "$CONDITION" --tasks "$TRAIN_TASKS" --test-tasks "$TEST_TASKS" --epochs "$EPOCHS"
-             --total-time-seconds "$TOTAL_TIME" "${BATCH_ARG[@]}" "${GLOBAL_BATCH_ARG[@]}" "${HEARTBEAT_ARG[@]}" "${RESURRECT_ARG[@]}" "${LR_ARG[@]}" "${PRESET_ARG[@]}" "${TAG_ARG[@]}" )
+             --total-time-seconds "$TOTAL_TIME" "${BATCH_ARG[@]}" "${GLOBAL_BATCH_ARG[@]}" "${HEARTBEAT_ARG[@]}" "${RESURRECT_ARG[@]}" "${LR_ARG[@]}" "${PATIENCE_ARG[@]}" "${INIT_ARG[@]}" "${PRESET_ARG[@]}" "${TAG_ARG[@]}" )
 
-echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} global_batch=${GLOBAL_BATCH:-none} resurrect=${RESURRECT:-0} preset=${NETWORK_PRESET:-baseline} tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Inference | train_tasks=${TRAIN_TASKS} test_tasks=${TEST_TASKS} epochs=${EPOCHS} time=${TOTAL_TIME}s batch=${BATCH:-default} global_batch=${GLOBAL_BATCH:-none} resurrect=${RESURRECT:-0} patience=${SCHEDULER_PATIENCE:-default} init_from=${INIT_FROM_TAG:-none} preset=${NETWORK_PRESET:-baseline} tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # Training keeps torchrun: DistributedDataParallel needs its rendezvous, and its ranks finish
 # together (every step is synchronized), so torchrun's fixed 300 s exit barrier -- which no

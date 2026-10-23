@@ -134,6 +134,14 @@ tune the behavior:
   saved optimum checkpoint and continue training from those weights, so a run that
   hits the partition wall before its target epochs is continued by relaunching with
   `RESURRECT=1`. The first job runs fresh.
+- **`SCHEDULER_PATIENCE=N`** (Inference HPC knob → `--scheduler-patience`) — the
+  plateau patience of the learning-rate schedule; unset keeps the configured
+  production value, and a value is recorded in the estimator's metadata.
+- **`INIT_FROM_TAG=<tag>`** (Inference HPC knob → `--initialize-from-tag`) — start a
+  new training phase from a finished run's estimator: its weights and buffers, a
+  fresh optimizer at `LR`, a fresh schedule, products under the phase's own
+  `ARTIFACT_TAG`. An interrupted phase is resumed with `RESURRECT=1` alone
+  (VALIDATION.md §2.4a).
 - **`SRM_AND_SBI_GPUS`** (env var) — cap the GPUs used; default is all allocated.
   Set it to `1` to force the single-GPU path even on a multi-GPU allocation.
 - **`SRM_AND_SBI_NO_SYNC_BN=1`** (env var) — under data-parallel training, skip

@@ -29,6 +29,7 @@ guard). Living in one engine, both workflows carry them and cannot drift again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 import random
 import shutil
@@ -54,9 +55,12 @@ from srm_and_sbi_monomer_dimer_alp.inference_support import (
     build_datasets,
     cleanup_distributed,
     init_distributed,
+    mean_test_loss,
+    peek_resume_state,
     resolve_topology,
     setup_training,
     resolve_accumulation_steps,
+    source_loss_agreement,
     theta_standardization_batch,
     train_loop,
 )
@@ -66,6 +70,17 @@ from srm_and_sbi_monomer_dimer_alp.utils import log_memory_state
 from srm_and_sbi_monomer_dimer_alp.workflow import (
     WorkflowConfig, parameter_keys, parameter_table, parameter_table_raw, prior_bounds,
 )
+
+
+# Weights-initialized phase (--initialize-from-tag). The standardization a run fits from the first
+# two TRAIN task-0 rows must reproduce the source's (rotation and flip augmentation leave the pooled
+# statistics unchanged up to summation order), else the run reads different TRAIN data than the
+# source was trained on. Before the first update the initialized network must reproduce the source
+# artifact's per-example losses, as the Evaluation's loader rebuilds it, to this many nats: the
+# compiled training network and the eager rebuild differ only in rounding, while a wrong load
+# differs by whole nats.
+STANDARDIZATION_RELATIVE_TOLERANCE = 1e-4
+INITIALIZATION_AGREEMENT_TOLERANCE = 0.05
 
 
 @dataclass(frozen=True)
@@ -185,6 +200,9 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --num-workers        : {args.num_workers}        (DataLoader worker budget override; None = profile/auto)")
     print(f"  --seed               : {args.seed}")
     print(f"  --resurrect          : {args.resurrect}")
+    init_tag = getattr(args, "initialize_from_tag", None)
+    print(f"  --initialize-from-tag: {init_tag}"
+          + ("   (new phase: source weights + buffers, fresh optimizer, schedule and counters)" if init_tag else ""))
     print(f"  --network-preset     : {preset_name}   -> embedding start_channels={network_cfg.start_channels} "
           f"(feature dim {network_cfg.start_channels * 2 ** (network_cfg.n_conv_layers - 1)}), "
           f"MAF hidden={flow_cfg.hidden_features} transforms={flow_cfg.num_transforms} "
@@ -222,6 +240,47 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  writes ckpt     : {checkpoint_path}")
     print(f"  writes resume   : {resurrect_state_path}   (full-state hot restart; every epoch)")
     print(f"  writes estimator: {estimator_path}   (version-portable)")
+
+    # ---- Weights-initialized phase: the refusals, checked before any compute -----------------
+    # --initialize-from-tag starts a NEW phase from a stored estimator. It needs its own product
+    # tag (the source stays untouched), a TEST set (selection within the phase and the reference
+    # TEST loss), and an empty target: once the phase has written products, an interruption is
+    # resumed with --resurrect alone, which keeps the phase's own schedule instead of re-raising
+    # the learning rate.
+    init_paths, init_problems = None, []
+    if init_tag:
+        if args.resurrect:
+            init_problems.append("--initialize-from-tag starts a new phase and cannot be combined with "
+                                 "--resurrect; resume an interrupted phase with --resurrect alone.")
+        if not args.artifact_tag:
+            init_problems.append("--initialize-from-tag needs --artifact-tag naming the new phase's products.")
+        elif args.artifact_tag == init_tag:
+            init_problems.append("--artifact-tag must differ from --initialize-from-tag; the source products "
+                                 "stay untouched.")
+        if args.test_tasks <= 0:
+            init_problems.append("--initialize-from-tag needs --test-tasks > 0 (selection within the phase and "
+                                 "its reference TEST loss).")
+        source_label = paths.product_label(timing_label, init_tag)
+        init_paths = {"estimator": paths.estimator_path(data_bank_root, source_label),
+                      "test_loss_distribution": paths.test_loss_distribution_path(data_bank_root, source_label),
+                      "resurrect_state": paths.resurrect_state_path(data_bank_root, source_label)}
+        if not init_paths["estimator"].exists():
+            init_problems.append(f"source estimator missing: {init_paths['estimator']}")
+        existing = [str(q) for q in (checkpoint_path, resurrect_state_path, estimator_path, tld_path) if q.exists()]
+        if existing and args.artifact_tag != init_tag:
+            init_problems.append("the new phase already has products (" + "; ".join(existing) + "): resume it "
+                                 "with --resurrect alone, or choose another --artifact-tag.")
+        print("\nWeights-initialized phase:")
+        print(f"  source estimator : {init_paths['estimator']}   "
+              f"[{'OK' if init_paths['estimator'].exists() else 'MISSING'}]")
+        print(f"  source epochs    : {init_paths['resurrect_state']}   "
+              f"[{'OK' if init_paths['resurrect_state'].exists() else 'absent: the global epoch count restarts at 0'}]")
+        print(f"  source best epoch: {init_paths['test_loss_distribution']}   "
+              f"[{'OK' if init_paths['test_loss_distribution'].exists() else 'absent: not recorded'}]")
+        for problem in init_problems:
+            print(f"  REFUSED: {problem}")
+        if init_problems and not args.dry_run:
+            raise ValueError("--initialize-from-tag refused:\n  " + "\n  ".join(init_problems))
 
     # ---- Dry-run preview --------------------------------------------------
     # Validate configuration and report the resolved inputs, then exit before any
@@ -262,9 +321,12 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         else:
             print("\n[DRY RUN] TEST namespace: skipped (--test-tasks 0)")
         print()
+        if init_problems:
+            print(f"[DRY RUN] the weights-initialized phase would be REFUSED ({len(init_problems)} problem(s) "
+                  f"listed above).")
         if missing:
             print(f"[DRY RUN] configuration validated; {missing} input(s) MISSING.")
-        else:
+        elif not init_problems:
             print("[DRY RUN] configuration validated; all inputs present.")
         print("[DRY RUN] no inference performed.")
         print(f"{div}\n")
@@ -307,6 +369,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     if args.resurrect:
         print(f"  RESURRECT : hot-restart from {resurrect_state_path} if present, "
               f"else cold-load {checkpoint_path}")
+    if init_tag:
+        print(f"  INITIALIZE: new phase from {init_paths['estimator'].name} -- weights and buffers loaded, "
+              f"fresh AdamW at {effective_lr:.2e}, patience {effective_patience}, fresh plateau and "
+              f"warm-restart counters, TEST selection within the phase")
 
     if args.verbose:
         print("\nDetailed training hyperparameters:")
@@ -424,6 +490,71 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     theta_dim = spec.theta_dim
     video_shape = (timing.frame_count, geom.root_size_px, geom.root_size_px)
 
+    # ---- Weights-initialized phase: load the source into the freshly built network ----------
+    # Every rank reads the source artifact, checks it against this run, compares the
+    # standardization it just fitted with the stored one, and loads the weights and every buffer;
+    # the optimizer and scheduler that setup_training builds next are fresh.
+    initialization = None
+    phase_start_epoch = 0
+    if init_tag:
+        source_state_dict, source_manifest, source_low, source_high = artifacts.read_estimator_artifact(
+            init_paths["estimator"])
+        problems = artifacts.initialization_mismatches(
+            source_manifest, source_low, source_high, workflow=cfg.tag, condition=spec.condition,
+            timing_label=timing_label, parameter_keys=spec.parameter_keys, lower_bound=spec.lower_bound,
+            upper_bound=spec.upper_bound, embedding_args=embedding_args, maf_args=maf_args,
+            theta_dim=theta_dim, video_shape=video_shape)
+        if problems:
+            raise ValueError(f"source estimator {init_paths['estimator']} does not match this run:\n  "
+                             + "\n  ".join(problems))
+        artifacts.assert_standardization_consistent(source_state_dict, dict(maf_args), theta_dim,
+                                                    source=f"source estimator {init_paths['estimator']}")
+        fitted = artifacts.strip_compile_prefix(posterior_estimator.state_dict())
+        standardization_diff = artifacts.standardization_relative_differences(fitted, source_state_dict)
+        worst_standardization = max(standardization_diff.values()) if standardization_diff else 0.0
+        if not worst_standardization <= STANDARDIZATION_RELATIVE_TOLERANCE:
+            raise ValueError(
+                f"the standardization this run fitted from TRAIN task 0 differs from the source's "
+                f"(largest relative difference {worst_standardization:.3g} > "
+                f"{STANDARDIZATION_RELATIVE_TOLERANCE}; per buffer {standardization_diff}): this run reads "
+                f"different TRAIN data than {init_paths['estimator'].name} was trained on.")
+        artifacts.load_artifact_weights(posterior_estimator, source_state_dict)
+        loaded = artifacts.strip_compile_prefix(posterior_estimator.state_dict())
+        if not all(torch.equal(loaded[key].detach().cpu(), value) for key, value in source_state_dict.items()):
+            raise RuntimeError("the initialized network's state differs from the source artifact after loading.")
+        source_epochs = None
+        if init_paths["resurrect_state"].exists():
+            source_epochs = peek_resume_state(init_paths["resurrect_state"])["epoch"] + 1
+        phase_start_epoch = int(source_epochs or 0)
+        source_best_epoch = None
+        if init_paths["test_loss_distribution"].exists():
+            source_best_epoch = TestLossDistribution.load(init_paths["test_loss_distribution"]).manifest.get("epoch")
+        with open(init_paths["estimator"], "rb") as handle:
+            source_file_sha256 = hashlib.sha256(handle.read()).hexdigest()
+        source_meta = source_manifest.get("metadata") or {}
+        initialization = {
+            "mode": "weights_initialized",
+            "source_artifact_tag": init_tag,
+            "source_estimator": init_paths["estimator"].name,
+            "source_estimator_file_sha256": source_file_sha256,
+            "source_weights_sha256": source_manifest["weights_sha256"],
+            "source_best_test_loss": source_meta.get("best_test_loss"),
+            "source_best_epoch_in_its_job": source_best_epoch,
+            "source_job_epochs": source_meta.get("epochs"),
+            "source_global_epochs": source_epochs,
+            "phase_first_global_epoch": phase_start_epoch + 1,
+            "learning_rate": float(effective_lr),
+            "scheduler_patience": int(effective_patience),
+            "standardization_max_relative_difference": float(worst_standardization),
+        }
+        if topo.is_main:
+            print(f"INITIALIZE: loaded {len(source_state_dict)} tensors from {init_paths['estimator'].name} "
+                  f"(weights sha256 {source_manifest['weights_sha256'][:12]}..., file sha256 "
+                  f"{source_file_sha256[:12]}...; recorded best TEST loss {source_meta.get('best_test_loss')}, "
+                  f"best epoch {source_best_epoch} of its {source_meta.get('epochs')}-epoch job, "
+                  f"{source_epochs} global epochs); standardization reproduced to {worst_standardization:.1e}; "
+                  f"the phase starts at global epoch {phase_start_epoch + 1}.", flush=True)
+
     # ---- Training pipeline -----------------------------------------------
     # The per-example test-loss distribution is recorded only when a TEST set is
     # present (it summarizes the per-epoch model-selection signal).
@@ -444,6 +575,46 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         parameterization=spec.draw_spec,
         scheduler_patience=args.scheduler_patience,
     )
+
+    if initialization is not None:
+        # Before the first update: the initialized network must reproduce the source artifact's
+        # per-example losses as the Evaluation's loader rebuilds it, and the source's TEST loss
+        # under this launch is measured once -- the phase's reference (selection within the phase
+        # still starts afresh).
+        device_t = training_setup["device"]
+        reference_net = artifacts.load_estimator(init_paths["estimator"], device=str(device_t)).posterior_estimator
+        n_check = training_setup["val_loader"].batch_size or 2
+        agreement, ours, theirs = source_loss_agreement(
+            training_setup["estimator"], reference_net, training_setup["val_loader"].dataset, device_t, n_check)
+        del reference_net
+        if torch.cuda.is_available() and device_t.type == "cuda":
+            torch.cuda.empty_cache()
+        if not agreement <= INITIALIZATION_AGREEMENT_TOLERANCE:
+            raise RuntimeError(
+                f"the initialized network does not reproduce the source estimator: largest per-example loss "
+                f"difference {agreement:.4g} nats > {INITIALIZATION_AGREEMENT_TOLERANCE} on the first "
+                f"{len(ours)} TEST videos (initialized {ours.tolist()}, source {theirs.tolist()}).")
+        reference_test = mean_test_loss(training_setup["estimator"], training_setup["val_loader"], device_t,
+                                        training_setup["topo"])
+        initialization.update(
+            source_agreement_examples=int(len(ours)),
+            source_agreement_max_abs_loss_difference=float(agreement),
+            reference_test_loss=float(reference_test))
+        if training_setup["topo"].is_main:
+            print(f"INITIALIZE: the initialized network reproduces the source's losses on {len(ours)} TEST "
+                  f"videos to {agreement:.2e} nats; reference TEST loss of the source under this launch = "
+                  f"{reference_test:.5f} (recorded at its best epoch: {initialization['source_best_test_loss']}).",
+                  flush=True)
+    elif args.resurrect and resurrect_state_path.exists():
+        # A resumed weights-initialized phase carries its provenance in the resurrect-state.
+        try:
+            initialization = peek_resume_state(resurrect_state_path)["resume_meta"].get("initialization")
+        except Exception:   # unreadable: train_loop falls back to the cold path and reports it
+            initialization = None
+        if initialization and training_setup["topo"].is_main:
+            print(f"RESURRECT: continuing the weights-initialized phase started from "
+                  f"{initialization.get('source_estimator')} (its own schedule; the learning rate is not "
+                  f"raised again).", flush=True)
 
     if reporter.enabled:
         train_size = len(training_setup["train_loader"].dataset)
@@ -507,6 +678,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "scheduler_patience_override": args.scheduler_patience,
             "torch_version": torch.__version__,
         }
+        if initialization is not None:
+            tld_manifest["initialization"] = dict(initialization)
 
         def commit_new_best(best_epoch, best_test_loss, gathered):
             task, sim, loss, theta = gathered
@@ -524,6 +697,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
                 "scheduler_patience": effective_patience,
                 "scheduler_patience_override": args.scheduler_patience,
             }
+            if initialization is not None:
+                best_metadata["initialization"] = dict(initialization)
             estimator_path.parent.mkdir(parents=True, exist_ok=True)
             artifacts.save_estimator(
                 training_setup["estimator"],
@@ -554,7 +729,10 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     # Schema stamp for the resurrect-state guard: a hot restart refuses a file whose
     # parameter_keys / timing_label do not match this run (see load_resume_state).
     resume_meta = {"timing_label": product_label,
-                   "parameter_keys": list(spec.parameter_keys)}
+                   "parameter_keys": list(spec.parameter_keys),
+                   "scheduler_patience": int(effective_patience)}
+    if initialization is not None:
+        resume_meta["initialization"] = dict(initialization)
 
     # Gradient accumulation realizing --global-batch (1 = one step per batch). Resolved against
     # the launch's rank count, so the same --global-batch gives the same optimization on any geometry.
@@ -587,6 +765,7 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         resume_meta=resume_meta,
         accumulation_steps=accumulation_steps,
         scheduler_patience=args.scheduler_patience,
+        start_epoch=phase_start_epoch,
     )
 
     if reporter.enabled:
@@ -626,6 +805,8 @@ def run_inference(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             "scheduler_patience": effective_patience,
             "scheduler_patience_override": args.scheduler_patience,
         }
+        if initialization is not None:
+            finish_metadata["initialization"] = dict(initialization)
         estimator_path.parent.mkdir(parents=True, exist_ok=True)
         artifacts.save_estimator(
             training_setup["estimator"],
@@ -784,6 +965,21 @@ def build_inference_parser() -> argparse.ArgumentParser:
              "requeues; if absent (first run under this feature, or deleted), fall back "
              "to loading the best optimum-ANN checkpoint weights into a fresh optimizer "
              "at the peak LR. Each --resurrect run continues improving on the previous best.",
+    )
+    parser.add_argument(
+        "--initialize-from-tag", default=None, metavar="TAG",
+        help="Start a NEW training phase from the best-on-TEST estimator of the product TAG in this "
+             "run's condition and timing namespace (its Estimator artifact, the one the Evaluation "
+             "reads). After checks of workflow, condition, timing, parameter keys, prior bounds, "
+             "architecture and standardization, the weights and every stored buffer are loaded; the "
+             "optimizer, the learning-rate schedule (--learning-rate, --scheduler-patience) and the "
+             "plateau and warm-restart counters start fresh, and TEST selection starts afresh within "
+             "the phase. Before the first update the run checks that it reproduces the source's "
+             "per-example losses and measures the source's TEST loss as the phase's reference; the "
+             "global epoch count continues from the source's. Needs --artifact-tag (a different tag: "
+             "the source products stay untouched) and --test-tasks > 0. Refused with --resurrect and "
+             "when the new tag already has products: an interrupted phase is resumed with --resurrect "
+             "alone, which keeps the phase's own schedule.",
     )
     parser.add_argument(
         "--replay-loss", action="store_true",

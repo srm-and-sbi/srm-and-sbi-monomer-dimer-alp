@@ -1019,7 +1019,10 @@ downstream stage loads (`Posit/…_Estimator.npz`, `Labor/…_Optimum_ANN.pth`),
 re-run on the same duration overwrites them. During training the loop also writes a transient full-state
 resume file beside the checkpoint (`Labor/…_Resurrect_State_ANN.pth`) every epoch, from
 which a `--resurrect` requeue hot-restarts; it is overwritten continuously and is not a
-downstream deliverable. So that superseded models stay identifiable and recoverable,
+downstream deliverable. A new training phase can also start from a finished run's
+estimator artifact (`--initialize-from-tag`): its weights and buffers initialize the
+network, while the optimizer, the learning-rate schedule and its counters start fresh
+under the phase's own product tag. So that superseded models stay identifiable and recoverable,
 every finished run also writes a provenance-named backup of both — encoding the
 train/test set sizes, epochs, and test loss. See the HPC operations runbook
 (*Artifact backups*) for the naming and restore conventions.
