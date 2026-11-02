@@ -407,7 +407,9 @@ continued, and the source's TEST loss measured once as the phase's reference
 (VALIDATION.md §2.4a). The source's products are untouched. If the phase stops at the
 wall, continue it with `RESURRECT=1` and the same `ARTIFACT_TAG` and
 `SCHEDULER_PATIENCE`, without `INIT_FROM_TAG`, which is refused once the phase has
-products.
+products. When such a phase is worth trying, and how its result is assessed, is set
+out in PROJECT_CONTEXT.md §4, *Inference*, item 5 (*Optional protocol for stalled
+training*).
 
 **Stragglers and the merge guard.** The sharded stages (Evaluation, Experiment, the
 `Posterior_Calibration` and DETECTOR `Nuisance_DLI` wrappers, §6) are embarrassingly

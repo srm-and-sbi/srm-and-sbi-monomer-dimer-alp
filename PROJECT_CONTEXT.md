@@ -1401,7 +1401,22 @@ optional `--resurrect` flag to continue from an existing checkpoint)
    `--resurrect` requeue rather than resetting. Governed by `warm_restart_dwell`
    (epochs of stalled floor before a restart; `0` disables it); composes with
    `--resurrect`.
-5. **Output:** Posterior samples are obtained by passing a real experimental
+5. **Optional protocol for stalled training (manual):** When training has plateaued
+   at a low learning rate, consider one budget-capped training phase initialized from
+   the best existing checkpoint (`--initialize-from-tag`), with a fresh optimizer and
+   scheduler, a moderately increased learning rate (`--learning-rate`), and sufficient
+   scheduler patience (`--scheduler-patience`). Preserve the original artifact and
+   record the new phase separately: the phase runs under its own `--artifact-tag`,
+   leaves the source's products untouched, and records its source in the estimator's
+   provenance. In the detector workflow's InlB training, a learning rate of `3.2e-4`
+   and patience 3 improved the best TEST loss from −8.83 to −10.77 over 50 additional
+   epochs; these settings are a successful example, not a universal prescription.
+   Continue selecting checkpoints on TEST. Assess adoption through parameter-specific
+   recovery against the source estimator on the same held-out Evaluation videos,
+   checking for improvements and regressions, together with Posterior_Calibration.
+   This protocol addresses possible optimization limitations; it does not guarantee
+   improvement or resolve information limitations in the recordings.
+6. **Output:** Posterior samples are obtained by passing a real experimental
    video (or a synthetic holdout) through the trained network.
 
 **Output:**

@@ -906,7 +906,7 @@ correctness. The vector is retained as the provisional Fab imaging scenario decl
 named above remains `capacity256`, and the comparison record
 `..._FAB_2S_50FPS_Experiment_Comparison_BASELINE_CAP256_CAP256KERNEL7EARLYCONVSTATSGB128` holds the numbers.
 
-**Provisional Fab imaging treatment (declared 2026-10-12).** No Fab nuisance treatment is approved for production
+**Provisional Fab imaging treatment (declared 2026-10-12; historical, superseded by the `SEL` decision record below).** No Fab nuisance treatment was approved for production
 under the current model: the `REF` artifact exists, and its existence is not its approval for current-model
 inference. The adopted detector estimator (§9.9) was trained and tested on detector datasets generated with the
 simulation model before the retained-population revision, and the checks of the current model in §9.9 are
@@ -925,6 +925,117 @@ diagnostics are deferred. The treatment is revisited if the sensitivity checks, 
 threaten a reaction-diffusion conclusion. The half-width criterion is a screening flag, not the sole basis for
 that decision. Neither the vector, earlier estimates nor the adopted estimator's values are numerical targets that
 later inference must reproduce, and none of them is ground truth. The InlB condition is treated separately.
+
+**The Fab and InlB `Nuisance_DLI` decision record (2026-10-27).** This record settles the imaging treatment of
+both conditions for the biology workflow from the evidence collected through the regeneration campaign (§9.10)
+and supersedes the provisional treatment above: `REF` and its variants are retired as the production scenario, and
+the two vectors declared here are built as `selection_user` artifacts (§7.2) under their own tags. The source
+hierarchy above is unchanged. The neural reference of each condition is its adopted detector estimator, Fab
+`C128V42A` and InlB `C128V42AP3LR32`, applied to that condition's sixty recordings in ten 2 s windows each
+(records `..._FAB_2S_50FPS_C128V42A_MAP_Experiment` and `..._INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment`): the
+reference value of a parameter is the median over the 600 per-window posterior medians, transformed to physical
+units, with the MAP and SGM aggregates read beside it; the three agree within 0.03 dex on every parameter except
+bleaching and, under InlB, the flicker rate, where the disagreement is itself a sign of weak constraint. Every
+value is placed in one of the following categories, which state what supports it and nothing more: *neural estimate
+supported by synthetic recovery* means the estimator recovers the parameter on the held-out synthetic videos of its
+condition (mean absolute error at most 0.08 dex, correlation at least 0.90, §9.10) and the assembled vector lies
+inside the tested imaging domain, so the value is an estimate under the model with a demonstrated synthetic
+accuracy and no demonstrated experimental one; *neural estimate retained as a working value* means the same
+synthetic recovery is demonstrated within the training domain while the experimental use here accompanies an
+extrapolated coordinate of the same vector; *empirically anchored* means a declared simulator value tied to a
+measurement on the recordings outside the estimator through a documented mapping; *declared* means a working
+assumption chosen for the simulation, with the reason and the alternative recorded. The categories concern the
+imaging selections; both adopted estimators retain equal status.
+Unrounded values are the selected point estimates retained as produced, which does not establish their precision;
+a rounded value marks a poorly constrained parameter. Units: `mu_r` in pixels (√2·σ of the Gaussian PSF),
+`sigma_r` and `sigma_pc` dimensionless log-normal shapes, `mu_pc` in photons per active dye and frame before the
+camera, `prob_photo_bleach` a probability over the fixed 100-frame reference interval, `lambda_rate` per second.
+
+*Fab (MET-FAB), tag `SEL`.*
+
+| parameter | neural reference (median; MAP / SGM) | cross-checks | selected value | category and rationale |
+|---|---|---|---|---|
+| `mu_r` | 1.734 px (1.737 / 1.738); 7 % of windows above the 2.0 px edge; falls 0.03 dex along a recording | direct PSF-width estimator 1.585 (median over the same 600 windows, record `..._2S_50FPS_Direct_PSF_Width_Experiment`); localization per-detection width 1.36 (§6.7, a different quantity) | **1.734** | *neural estimate supported by synthetic recovery* (MAE 0.011 dex, *r* 0.98). The neural value replaces the direct estimate selected before, under the hierarchy: the adopted estimator recovers the parameter on the current model's videos and nothing on the recordings favors the direct estimator, which disagrees by 0.04 dex with no ground truth to decide; 1.585 becomes the narrower-PSF sensitivity scenario |
+| `sigma_r` | 0.177 (0.178 / 0.176); falls 0.15 dex along a recording in 92 % of recordings | direct PSF-width estimator 0.21; fit-corrected localization reference about 0.15 | **0.177** | *neural estimate supported by synthetic recovery* (MAE 0.034, *r* 0.98; the earlier neural reference did not recover this coordinate, the adopted one does). The within-recording decline is not represented by a fixed value and stays a stated limitation |
+| `mu_pc` | 105 photons (105.3 / 104.8); 8 to 14 % of windows below the 100-photon edge; falls 0.03 dex along a recording | none independent on the recordings; localization per-detection brightness 386 is a spot-level sum, not a per-dye value (§6.7 caveat 3) | **105** | *neural estimate supported by synthetic recovery* (MAE 0.028, *r* 0.98). Near the lower edge of the prior; a per-dye window median under the labeling and camera assumptions |
+| `sigma_pc` | 0.5848 (0.5779 / 0.5861) | fit-corrected localization reference about 0.5 | **0.5848** | *neural estimate supported by synthetic recovery* (MAE 0.079, *r* 0.90, the weakest of the four) |
+| `prob_photo_bleach` | 0.093 (0.148 / 0.090): not evidence, the estimator does not recover the parameter (*r* 0.06, MAE comparable to a constant guess, §9.10) | raw-domain field decline of the same recordings over 20 s (record `..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW`): whole-recording single rate 0.054 to 0.057 per interval, late-phase rate 0.034 to 0.036; swift `p_bleach` 0.010 per frame (Rahm et al. 2021), a track-termination reference | **0.05** (unchanged) | *empirically anchored*: a declared per-dye bleaching probability, anchored to the measured whole-recording fluorescence decline. The analysis measures the field-fluorescence decline, not per-dye bleaching; selecting 0.05 as the simulator's per-dye probability requires the mapping and assumptions documented in the row above, where the reading and its limitations are recorded (selected on 2026-10-01 from the overlay of the single-rate declines on the measured curves). The neural value plays no part |
+| `lambda_rate` | 8.096 s⁻¹ (8.204 / 7.884); window spread 0.07 dex; rises 0.06 dex along a recording | localization-autocorrelation anchor about 5 (§6.5; correlation time 0.20 s against 0.12 s at 8) | **8** | *declared*, rounded from the neural reference: partially recovered (MAE 0.217 dex, *r* 0.49), so the neural value is the default source and its digits are not retained; the anchor sits 0.21 dex below, comparable in magnitude to the synthetic mean absolute error, and nothing on the recordings decides between them. Replaces the nominal 5 chosen before, which was a departure from a weaker neural reference |
+
+*InlB (MET-INLB), tag `SEL`.* Nothing is transferred from Fab (§4.1, item 13); where a value is declared equal to
+Fab's, it is a modeling assumption about the dye and the acquisition, recorded as such.
+
+| parameter | neural reference (median; MAP / SGM) | cross-checks | selected value | category and rationale |
+|---|---|---|---|---|
+| `mu_r` | 2.256 px (2.256 / 2.253); above the 2.0 px edge in 94 % of windows and in 57 of 60 recordings; falls 0.02 dex along a recording | localization per-detection width 1.47 against 1.36 for Fab, inside the prior (§6.7 caveat 3): the same direction, a different quantity | **2.256**, acknowledged outside the prior box | *declared* extrapolation: the estimator recovers `mu_r` on synthetic videos inside the box (MAE 0.009, *r* 0.99) and returns, on the recordings, values beyond its training range, which does not independently establish the physical width (§9.10). The neural value is retained under the hierarchy because the recordings are read as wider than any in-box value and no in-box value is better supported; the spec lists the key under `allow_outside_prior`, which flags the extrapolation and certifies nothing. The in-domain scenario at the prior ceiling, 10^0.3 = 1.9952623 px, is the sensitivity variant |
+| `sigma_r` | 0.4029 (0.4015 / 0.403); no within-recording trend (+0.01 dex, not significant) | localization reference 0.42 as fitted (§6.2; the fit correction of §6.7 caveat 1 is documented for Fab only) | **0.4029** | *neural estimate retained as a working value* (MAE 0.029, *r* 0.98 within the training domain); the assembled vector lies outside the tested joint domain through `mu_r`; wider than Fab's 0.177 |
+| `mu_pc` | 152.9 photons (156 / 148.1); window spread 0.29 dex; 18 to 20 % of windows below the 100-photon edge; falls 0.20 dex along a recording, over 0.3 dex in 35 to 38 % of recordings | localization per-detection brightness 690 against 386 for Fab (ratio 1.8, a spot-level sum); the per-dye ratio to Fab here is 1.46 | **152.9** | *neural estimate retained as a working value* (MAE 0.024, *r* 0.99 within the training domain); its experimental use accompanies the extrapolated PSF-width estimate; markedly less stable across windows than Fab's, a window median across a strong within-recording decline |
+| `sigma_pc` | 0.8588 (0.8238 / 0.857); 5 to 6 % of windows above the 1.0 edge | localization reference 0.55 as fitted (§6.2) | **0.8588** | *neural estimate retained as a working value* (MAE 0.074, *r* 0.92 within the training domain), the same conditioning as `mu_pc` |
+| `prob_photo_bleach` | 0.100 (0.120 / 0.095): not evidence (*r* 0.02, §9.10) | no longer-recording analysis of the InlB recordings exists; swift `p_bleach` 0.014 per frame against 0.010 for Fab (Rahm et al. 2021), a track-termination reference pointing to faster loss | **0.05** | *declared*: an explicit shared-rate assumption, the same dye, illumination, camera settings and reference interval as Fab, so the Fab anchored value is adopted as the practical baseline in the absence of an InlB decline analysis; the faster-loss scenario 0.10 is a declared sensitivity scenario (neither the swift track-termination rates nor the uninformative neural median establishes a change in per-dye bleaching). An InlB decline analysis would supply an independent empirical constraint, not a direct measurement of the simulator parameter; it is deferred and not required before proceeding |
+| `lambda_rate` | 2.283 s⁻¹ (2.664 / 2.376); window spread 0.36 dex; rises 0.09 dex along a recording | no InlB anchor; Fab's reference 8 | **2** | *declared*, the rounded neural-based working choice: partially recovered (MAE 0.206, *r* 0.53), unstable across windows and conditioned on the extrapolated `mu_r`. The unrounded neural medians differ by a factor of about 3.5 between the conditions (2.28 against 8.10) and the selected values by a factor of four (2 against 8); the model attributes the difference to the recordings and the record does not explain it. Fab's value, 8, is the shared-rate sensitivity scenario: the same dye makes the comparison useful, and does not establish that both conditions must share one inferred effective flicker rate |
+
+*Sensitivity scenarios.* One coordinate at a time, the other five at the `SEL` values, each under its own tag,
+read with the warning rule of the provisional treatment above (a reaction-diffusion posterior median that moves
+by more than half the 90 % width of the `SEL` posterior is flagged, shifts reported beside widths). Fab:
+`SEL_PB03` (bleaching 0.03, the late-phase rate), `SEL_PB10` (0.10, faster loss), `SEL_MU_R` (`mu_r` 1.585, the
+direct estimator). InlB: `SEL_MU_R` (`mu_r` 1.9952623 px, the exact prior ceiling, inside the box), `SEL_PB10` (bleaching 0.10), `SEL_LAMBDA`
+(`lambda_rate` 8). They are selected scenarios, not an uncertainty distribution, and they do not marginalize the
+imaging uncertainty; the camera block remains the sampled SCOPE nuisance (§9.3). The scenario names above are
+the record's labels; a nuisance tag is a SCREAMING_SNAKE token without underscores (`[A-Z0-9]+`,
+`detector_nuisance_dli.nuisance_label`), so each scenario's spec and artifact carry the tag in the mapping
+below, and the dispatcher knob `NUISANCE_TAG` and `--nuisance-tag` take the tag, never the label.
+
+| scenario label | condition | artifact tag | coordinate changed from `SEL` |
+|---|---|---|---|
+| `SEL_PB03` | Fab | `SELPB03` | `prob_photo_bleach` 0.03 |
+| `SEL_PB10` | Fab | `SELPB10` | `prob_photo_bleach` 0.10 |
+| `SEL_MU_R` | Fab | `SELMUR` | `mu_r` 1.585 px |
+| `SEL_MU_R` | InlB | `SELMUR` | `mu_r` 1.9952623 px (10^0.3) |
+| `SEL_PB10` | InlB | `SELPB10` | `prob_photo_bleach` 0.10 |
+| `SEL_LAMBDA` | InlB | `SELLAMBDA` | `lambda_rate` 8 s⁻¹ |
+
+*What the treatment is.* Two user-selected fixed vectors with a documented source and category per coordinate,
+conditional on the adopted estimators and the generator of §9.10; no calibrated joint uncertainty; the biology
+inference of each condition is conditional on its vector. The Fab vector rests on neural estimates supported by
+synthetic recovery except bleaching (empirically anchored) and flicker (declared); the InlB vector rests on an
+acknowledged extrapolation of the PSF width, on three neural estimates retained as working values whose
+experimental use accompanies it, and on two declared values. The within-recording
+declines of width, brightness and signal, the InlB brightness instability and the InlB flicker discrepancy stay in
+this record as limitations the biological conclusions carry (§8).
+
+*Built state (2026-11-02).* The two reference artifacts were built on the PC from the filled specs
+(`--build`, CPU only, after a passing `--build --dry-run` of each) and validated through the production loader
+(`detector_nuisance_dli.require_nuisance_dli` with the tag): the six keys in the DLI stage's order, the stored
+vector reproducing the two tables exactly after the log10 conversion, repeated draws returning the one fixed
+vector, the selection record carrying every source and limitation and, for InlB, the `mu_r` acknowledgement;
+the InlB artifact records `pool_mode = unrestricted`, which marks the acknowledged out-of-box coordinate and
+governs no sampling. The biology DLI stage's dry run (`--nuisance-tag SEL`) resolves each condition's own
+artifact, keeps the condition's label schema (eleven rows under Fab, twelve under InlB), draws the six imaging
+values from the artifact and the five camera values from the SCOPE box, and records the artifact's identity in
+the `Nuisance_DLI_Theta_Set` it would write. Checksums (SHA-256) of the persisted objects in the PC `Posit`
+tier:
+
+| file | SHA-256 |
+|---|---|
+| `..._DETECTOR_FAB_2S_50FPS_SEL_Nuisance_DLI_Spec.toml` | `5877c912fa52c454f19d95f7eb00d54fe3abcbade3c213a1433290efbec7b39e` |
+| `..._DETECTOR_FAB_2S_50FPS_SEL_Nuisance_DLI.npz` | `fe9cb5bae47eb0fc88cc70c195d6b46dd7804e4d006bf973c33028846a9159ad` |
+| `..._DETECTOR_INLB_2S_50FPS_SEL_Nuisance_DLI_Spec.toml` | `7b67b7e75668c52134e24a62bad6f07c5751fc9fab919403655660b831d1ab46` |
+| `..._DETECTOR_INLB_2S_50FPS_SEL_Nuisance_DLI.npz` | `2b2d98f99e4fd0c5c3734280cb613582df3bdbaa387e4f953ec71b7592ceac6f` |
+
+*Order of the remaining steps.* Before any production generation, a predictive assessment of both vectors:
+renders through the production renderer (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md`)
+under `--nuisance-tag SEL`, each condition's declared reaction-diffusion configuration (the camera pinned to
+the MET acquisition values, as that check does), representative recordings spanning brightness and density,
+and several stochastic realizations per recording; the videos and the quantitative summaries (PSF width,
+brightness, background, spot density and their change over the recording) are reviewed together, and a
+reproducible discrepancy is judged against the stochastic variation and the limitations recorded above. This
+check uses declared reaction-diffusion settings; the posterior predictive check with complete joint draws
+follows once biology posterior samples exist. The reference treatment is then settled, retained when the
+assessment supports it or revised one coordinate at a time with the earlier results preserved; the six
+sensitivity artifacts are built afterwards, one coordinate each, and the biology generation of both
+conditions follows under these tags, Fab first, the sensitivity runs after the reference runs. Imaging
+development stays closed unless a sensitivity scenario or other material evidence threatens a
+reaction-diffusion conclusion (§9.10).
 
 **Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
 full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the
@@ -967,7 +1078,9 @@ brightness, width and bleaching, and the between-recording coupling of brightnes
 record as stated limitations; whether they are physical effects that a time-invariant imaging model lacks or
 features of the measurement is not established (§8).
 
-**Construction and consumers.** The vector is constructed as a `Nuisance_DLI` under the `selection_user`
+**Construction and consumers (historical; the `REF` vector).** Superseded by the `SEL` decision record above, which
+governs the artifacts built for production; the mechanism described here is the one the `SEL` artifacts use. The
+vector was constructed as a `Nuisance_DLI` under the `selection_user`
 choice of §7.2 (`--emit-selection-user` writes the spec skeleton, `--build` mints the artifact, both CPU only):
 six named physical values with a source and a limitation each, validated on their keys and physical domains,
 converted to the log10 storage convention, stored as one vector that every biology simulation receives
@@ -981,7 +1094,9 @@ unless the spec acknowledges it explicitly with a recorded justification; the ac
 extrapolation beyond the tested imaging domain and does not certify it, physical validity is enforced, and
 nothing is clipped. The present values are all inside the box.
 
-**Order of the remaining steps.** The `REF` artifact is built from the selected column (its source record
+**Order of the remaining steps (historical; the `REF` vector).** Superseded by the order of steps in the `SEL`
+decision record above; kept as the record of the sequence followed before the regeneration campaign. The `REF`
+artifact was built from the selected column (its source record
 rebuilt without the withdrawn render justification, the original kept). A small set of corrected
 posterior-predictive renders is then made under a reaction-diffusion configuration the user has confirmed, their
 pixel histograms compared and the clips viewed beside the recordings at 50 fps; parameters change, and the
@@ -2757,3 +2872,147 @@ retrained from the adopted configuration, with the audits (P0–P7 and the struc
 re-measured at the Fab high-load case, `f` = 1 with dissociation at its ceiling, before sizing) on the new tiers; JUPITER is synced to the revision
 after the two Fab second legs finish, because the sync replaces the tree a running stage reads. The campaign
 records and numbers above stay as those of their release.
+
+**Outcome and working configuration (2026-10-27, the lead).** The campaign ran to completion under the
+window-start composition, for both conditions, Fab first and InlB in step with it: the same dataset sizes, the same
+training configuration, the same three assessment and application stages under identical submission lines except
+for the condition and the artifact tag. This block records what was run and what was measured. It keeps four
+things apart: the execution of the stages, the synthetic recovery on held-out videos, the posterior calibration,
+and the interpretation of the experimental estimates. A completed stage is a record, not a validation.
+
+**Datasets and estimators (provenance).** Both 2 s tiers and both detector dataset sets were generated on JUWELS on
+2026-10-21 under release 0.1.42 (the window-start composition of §4.1, item 9): per condition 200 TRAIN, 50 TEST
+and 25 EVAL tasks of 1000 simulations (200,000 / 50,000 / 25,000 videos), the trajectory-tier audit and the
+detector audit with the campaign-membership item passing on every split under campaign version 0.1.42; TRAIN and
+TEST were staged to JUPITER and verified store by store before training, EVAL on the lead's word of 2026-10-22.
+Two identical chains per condition were trained from the adopted configuration (preset
+`capacity256_kernel7_earlyconv_stats`, 16 nodes × 4 GH200, 64 ranks at batch 2, global batch 128, two legs of 50
+epochs, the second a hot restart), each keeping its best checkpoint on TEST: Fab `C128V42A` −9.778 (global epoch
+86) and `C128V42B` −8.268; InlB `C128V42A` −8.831 (global epoch 97) and `C128V42B` −6.977. Chain A was selected in
+both conditions on its TEST loss (the lead, 2026-10-22); the B chains received no Evaluation. The InlB chain A was
+still improving at the learning-rate floor when its 100 epochs ended, and its first Evaluation (job 2452903) showed
+a weak PSF-width spread (table below), so one budget-capped phase was run from its best checkpoint under the
+protocol of `PROJECT_CONTEXT.md` §4 (*Inference*, item 5): tag `C128V42AP3LR32`, weights initialized from the
+`C128V42A` estimator (source file SHA-256 `c0bd58c1…`, source weights `41faf58e…`, source TEST loss −8.8308,
+startup agreement 3.8 × 10⁻⁴ nats on the recorded per-video losses), a fresh optimizer and scheduler, learning rate
+3.2 × 10⁻⁴, scheduler patience 3, 50 epochs (global epochs 101 to 150) on the same TRAIN and TEST sets, 16 nodes,
+5 h 05 min under the 6 h quota limit (job 2471410). Its TEST loss fell to −5.04 at the first phase epoch, passed
+the source's −8.83 from the tenth, and reached its best, −10.775, at phase epoch 49; the learning rate held nine
+epochs and was halved at epochs 10, 25, 34, 43 and 48 to the floor, with no warm restart. Fab received no such
+phase: its chain had plateaued (no new best over global epochs 91 to 100, last-twenty TEST standard deviation 0.055
+nats), and this is the one asymmetry between the conditions' training histories. The estimators of record are Fab
+`C128V42A` (weights SHA-256 `01a2d0c1…`, estimator file `598e3b0c…`) and InlB `C128V42AP3LR32` (weights
+`178e7dd9…`, estimator file `98b22fdc…`); the continued estimator records its source in its own manifest, and the
+source's products are untouched. An adopted estimator has one status whatever its training history: the two
+estimators of record stand on the same footing in every stage that follows, and the continuation is a fact of
+provenance, not a qualification of the InlB estimator. Every Evaluation, Posterior_Calibration and Experiment product below carries the
+checkpoint SHA-256 it was made from and the hashes of the stage code, which are identical across the six products
+(for example `evaluation.py` `ba96c1c9…`), so the two conditions' records were made by one code.
+
+**Completed stages (execution record).** All jobs on JUPITER `booster`, all exited 0 with every check passing and
+every shard merged; the products sit on the JUPITER project root and in the PC data bank with identical SHA-256.
+
+| stage (recipe) | Fab, `C128V42A` | InlB, `C128V42AP3LR32` |
+|---|---|---|
+| Evaluation (25 EVAL tasks, 25,000 videos, bounded pool, 10,000 summary draws; 32 nodes) | 2452850, 2026-10-22, 38 min, 3/3 checks, 128/128 shards | 2529338, 2026-10-27, 38 min, 3/3 checks, 128/128 shards (the source estimator's own: 2452903, 2026-10-23) |
+| Posterior_Calibration (25,000 videos, 1000 draws each, SBC + coverage + TARP + L-C2ST; 16 nodes) | 2471345, 2026-10-23, 1 h 54 min, 64/64 shards | 2529024, 2026-10-27, 1 h 56 min, 64/64 shards |
+| Experiment (60 recordings × ten 2 s windows, unrestricted pool; 4 nodes) | 2471236, 2026-10-23, 9 min, 2/2 checks, 600 estimates | 2529463, 2026-10-27, 10 min, 2/2 checks, 600 estimates |
+
+The eight training legs charged about 188,000 core-hours and exhausted the project's JUPITER allocation on
+2026-10-22; the continuation phase and the six stage jobs (about 32,000 core-hours together) ran under the
+low-priority, 6 h-capped quality of service that followed. The embedding probe of §8 and the Experiment-comparison
+and raw-decline companions named in the assessment plan above were not run for these estimators.
+
+**Matched Evaluation (synthetic recovery).** The three estimators are compared on the same 25,000 held-out EVAL
+videos of their condition, MAP estimate, estimator coordinates; MAE is the mean absolute error in dex and *r* the
+correlation between inferred and true values.
+
+| parameter | Fab `C128V42A` MAE / *r* | InlB `C128V42A` (source) MAE / *r* | InlB `C128V42AP3LR32` MAE / *r* |
+|---|---|---|---|
+| `mu_r` | 0.011 / 0.98 | 0.029 / 0.90 | 0.009 / 0.99 |
+| `sigma_r` | 0.034 / 0.98 | 0.207 / 0.26 | 0.029 / 0.98 |
+| `mu_pc` | 0.028 / 0.98 | 0.025 / 0.99 | 0.024 / 0.99 |
+| `sigma_pc` | 0.079 / 0.90 | 0.074 / 0.91 | 0.074 / 0.92 |
+| `prob_photo_bleach` | 0.389 / 0.06 | 0.383 / 0.01 | 0.381 / 0.02 |
+| `lambda_rate` | 0.217 / 0.49 | 0.203 / 0.53 | 0.206 / 0.53 |
+
+The posterior-median and SGM results support the same parameter-specific conclusions as the MAP results (InlB
+`sigma_r` MAE 0.167 → 0.029 for the median and 0.168 → 0.030 for the SGM), so the improvement is not an artifact of
+one point estimate. For InlB `sigma_r` the MAP's median signed error moved
+from −0.115 to +0.001 dex and the 90 % coverage of the posterior from 85 % to 91 %; no row of the continued
+estimator is worse than its source by more than 0.003 dex. The reading is parameter-specific: the continuation
+recovered the PSF-width location and spread, preserved the brightness location and spread, and left bleaching and
+flicker where they were. Under both conditions the bleaching MAE is comparable to that of a constant guess at the
+prior's center and its correlation with the truth is near zero: the adopted estimators do not recover the per-dye
+bleaching probability reliably from these 2 s EVAL videos; the flicker rate is partially informative (*r* about 0.5, MAE about 0.2 dex against the
+1 dex prior). The TEST-loss gain of the phase (−8.83 → −10.77 nats) is recorded as a training outcome and is not
+itself read as recovery; the table is.
+
+**Posterior calibration.** On the same 25,000 videos with 1000 draws each. Aggregate standardized-residual
+summaries meet the configured tolerances under both conditions, while rank, coverage and local diagnostics retain
+discrepancies. The residual is the difference between the truth and the posterior median divided by the posterior
+standard deviation: its mean over every parameter is within ±0.12 (Fab) and ±0.10 (InlB), and its standard
+deviation within 0.96 to 1.07 (Fab) and 0.87 to 1.06 (InlB). The discrepancies: the rank-uniformity deviation is flagged for
+`mu_r` (0.093) and `sigma_r` (0.061) under Fab and for `mu_r` (0.084) and `mu_pc` (0.066) under InlB; the expected
+coverage curve's largest gap is 0.17 (Fab) and 0.20 (InlB), both at nominal 0.30, with the 50 % region covering
+63 % and 68 % of truths and the 90 % region 90 % and 92 %; the TARP area-to-curve is −0.016 and −0.019; the local
+classifier rejects calibration at 89 % (Fab) and 97.5 % (InlB) of the tested observations; the worst
+one- and two-dimensional marginal deviations are at most 0.02. The reports' own summary line, which groups all six
+parameters under one label, is not adopted here: the aggregate standardized-residual summaries pass, the rank,
+coverage and local diagnostics do not, and the two statements are kept apart. Point accuracy, which the recovery table measures, and the
+trustworthiness of the credible intervals, which these tests measure, are assessed separately; a gap between the
+MAP and the posterior median is by itself neither.
+
+**Experimental application (interpretation).** Pooled medians over the 600 windows, MAP estimate unless stated,
+physical units, with the share of windows whose estimate lies outside the prior box of §6.2 (the MAP optimization
+is unconstrained and the pool unrestricted, so such values occur and are flow optima, not posterior modes under the
+prior). Fab: `mu_r` 1.74 px (7 % of windows above the 2.0 px edge), `sigma_r` 0.18, `mu_pc` 105 photons (8 to 14 %
+of windows below the 100-photon edge, by point estimate), `sigma_pc` 0.58, bleaching 0.15 by MAP and 0.09 by
+posterior median, `lambda_rate` 8.2 s⁻¹ with a window spread of 0.06 dex; within recordings `sigma_r` falls by
+0.15 dex from the first to the last window in 92 % of recordings, bleaching rises by 0.09 to 0.13 dex and
+`lambda_rate` by 0.05 dex. InlB: `mu_r` 2.26 px, above the 2.0 px edge in 94 % of windows and in 57 of the 60
+recordings by their per-recording median (the three point estimates agree within 0.002 dex), `sigma_r` 0.40,
+`mu_pc` 156 photons with a window spread of 0.28 dex (18 % of windows below the 100-photon edge) falling by
+0.20 dex within recordings (over 0.3 dex in 35 % of them), `sigma_pc` 0.82 (5 % of windows above the 1.0 edge),
+bleaching 0.12 by MAP and 0.10 by posterior median, `lambda_rate` 2.7 s⁻¹ by MAP and 2.3 by median with a window
+spread of 0.34 dex; the Fab `sigma_r` decline has no InlB counterpart (+0.01 dex, not significant). The finding that
+governs the InlB treatment: the learned flow returns PSF-width estimates beyond its training range. By the reading
+rules of §9.9 a confident extrapolation beyond the box is untested, so this does not independently establish the
+physical PSF width of the InlB recordings; what is established is that the InlB recordings differ from the Fab ones
+in a direction the detector reads as a wider PSF, consistent in sign with the per-detection widths of the public
+localizations (1.47 against 1.36, §6.7 caveat 3), which measure a different quantity and lie inside the prior. The
+InlB brightness and flicker estimates are conditioned on that out-of-range width and are markedly less stable
+across windows than Fab's; they are read as estimates under the working model, not as measured properties.
+Fitted-parameter drift along a recording is a property of the estimates and is not read as a physical change.
+
+**Decisions of 2026-10-27 (the lead).** (1) `C128V42AP3LR32` is adopted as the reference InlB detector estimator,
+with the same standing as the Fab estimator; Fab remains on chain A, `C128V42A`. Adoption recognizes the improved estimator without treating every parameter or
+uncertainty statement as equally well established: bleaching remains poorly recovered, flicker partially
+informative, and the calibration retains discrepancies despite small aggregate offsets. (2) The InlB PSF-width prior
+is kept unchanged. No prior widening, no detector-dataset regeneration and no further detector training are
+undertaken in this round, and no JUWELS campaign is requested for that purpose before the shutdown of 2026-11-01.
+The out-of-prior InlB estimates are documented as a limitation of the working imaging treatment. (3) The Fab and
+InlB `Nuisance_DLI` decisions proceed under §7.6 on the evidence available, distinguishing the well-recovered spatial
+and brightness parameters from the weakly recovered temporal ones and drawing on the longer-recording and
+independent analyses where appropriate; the selected values and their assumptions are recorded there. (4) The
+bounded Experiment comparison remains an optional, time-limited check that does not delay the biology workflow; its
+reading distinguishes bounded posterior draws from the MAP optimization, which is unconstrained in the existing
+implementation. (5) The priority is the reaction-diffusion system: receptor abundance, the starting monomer–dimer
+composition, mobility and reaction kinetics. Imaging development reopens when a specific discrepancy could
+materially change a biological conclusion.
+
+**Assumptions carried into the imaging treatment.** The imaging vectors are conditional on the estimator and the
+generator of this campaign. The InlB PSF-width value is an extrapolation of the flow beyond its prior, and the
+InlB brightness and flicker values are conditioned on it. The 2 s bleaching estimates of either condition are not
+informative on their own and the bleaching value rests on the longer-recording constraint (§7.6). The flicker rate
+is partially informative. Credible intervals are not taken at face value where the rank, coverage and local diagnostics retain discrepancies.
+Agreement between an experimental estimate and a selected vector is compatibility, not accuracy. Fab and InlB are
+inferred on their own recordings, and neither condition's values supply a target for the other.
+
+**Remaining limitations.** The per-dye bleaching probability is not recovered from 2 s windows under either
+condition. The flicker rate is recovered to about 0.2 dex. The posteriors meet the aggregate standardized-residual
+tolerances and retain rank, coverage and local discrepancies, more strongly under InlB. The adopted InlB estimator
+returns PSF-width estimates beyond its training range. If imaging development is reopened, the investigations
+available are an out-of-range synthetic check, a widened prior with regeneration and retraining, and the embedding
+probe of §8 on these estimators; none is a prerequisite of the biology workflow. The B chains were not evaluated, so the
+spread between identical chains is known on TEST only.

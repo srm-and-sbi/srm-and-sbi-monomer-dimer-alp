@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Documentation checkpoint; no code change.
+
+- **DETECTOR_WORKFLOW.md §7.6, the Fab and InlB `Nuisance_DLI` decision record (2026-10-27).** The imaging
+  treatment of both conditions for the biology workflow: `REF` retired as the production scenario; one
+  `selection_user` vector per condition under the tag `SEL` (Fab 1.734 / 0.177 / 105 / 0.5848 / 0.05 / 8, InlB
+  2.256 acknowledged outside the prior box / 0.4029 / 152.9 / 0.8588 / 0.05 / 2), each value placed in one of four
+  support categories with its cross-checks and limitations; six one-coordinate sensitivity scenarios with the
+  mapping from the record's labels to the valid artifact tags (`SELPB03`, `SELPB10`, `SELMUR`, `SELLAMBDA`); the
+  built state of 2026-11-02 (both reference artifacts built on the PC, validated through the production loader,
+  SHA-256 of the specs and artifacts) and the order of the remaining steps, a predictive assessment of both
+  vectors at declared reaction-diffusion settings before the sensitivity artifacts and the biology generation.
+- **DETECTOR_WORKFLOW.md §9.10, outcome and working configuration (2026-10-27).** The regeneration campaign's
+  completed stages under 0.1.42 for both conditions, the adopted estimators (Fab `C128V42A`, InlB
+  `C128V42AP3LR32`), the measured recovery, calibration and Experiment outcomes, and the documented limitation of
+  the InlB PSF-width estimates outside the imaging prior.
+- **PROJECT_CONTEXT.md §4, Inference item 5 (`Optional protocol for stalled training`)**, with the pointer from
+  `Script_Bank/HPC/README.md`: when a weights-initialized phase with a fresh optimizer is worth trying and how
+  its result is assessed.
+
 ## 0.1.44 - 2026-10-23
 
 A training phase can start from a finished run's estimator with a fresh optimizer and schedule, as an explicit,
