@@ -32,7 +32,16 @@ before this scheme carries no labels; ``--migrate-pool-labels`` (CPU) adds them 
 borrowing the aligned labels from the Detector Experiment product (``map_estimate``, read through the
 artifact schema), after verifying the ordering.
 
-The five choices and their meaning are documented in the spec template and in the companion note
+  --emit-representatives-template --candidate-archive <aggregation_candidates.npz> : CPU; read the Experiment
+                    stage's candidate archive (the section "Experimental aggregation and nuisance candidates"
+                    of its report), print the comparison of its collections, and write the spec skeleton of an
+                    ``empirical_representatives`` Nuisance_DLI (every available component commented out). The
+                    user names the components, their weights (summing to 1), the statistic and the rationale;
+                    --build (CPU, no neural sampling) then stores the selected complete vectors with their
+                    probabilities and writes the final weighted marginal and joint figures through the same
+                    plotting functions the Experiment report uses.
+
+The choices and their meaning are documented in the spec template and in the companion note
 SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md; the artifact machinery is in detector_nuisance_dli.py.
 
 Reads  <data_bank>/<experiment_subdir>/Experiment_<KIND>_Cell_<n>_<span>S_RAW.tif   (real recordings)
@@ -54,6 +63,7 @@ import argparse
 import json
 import shutil
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -72,6 +82,7 @@ from srm_and_sbi_monomer_dimer_alp.experiment_support import (
     shard_by_rank,
 )
 from srm_and_sbi_monomer_dimer_alp import detector_nuisance_dli as ndli
+from srm_and_sbi_monomer_dimer_alp import experiment_aggregation as agg
 from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
@@ -436,6 +447,101 @@ def _build_sgm_percentiles(args, R, block, spec_dict, art):
           f"    {art}\nAnalysis (report + 1-D marginals plot):\n    {report_dir}")
 
 
+def _load_archive_for_spec(block, spec):
+    """The candidate archive a representatives spec names (absolute, or relative to the spec's directory)."""
+    arc = Path(str(block["candidate_archive"]))
+    if not arc.is_absolute():
+        arc = (Path(spec).parent / arc).resolve()
+    if not arc.exists():
+        raise FileNotFoundError(f"candidate archive not found: {arc}")
+    return agg.load_candidate_archive(arc)
+
+
+def _reference_physical(R, tag="SEL"):
+    """The fixed reference vector of this condition (physical, ``{key: value}``) when its artifact exists; comparison only."""
+    ap = ndli.artifact_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"], nuisance_tag=tag)
+    if not ap.exists():
+        return None, None
+    nu = ndli.NuisanceDLI.load(ap)
+    if nu.fixed_vector_log10 is None or list(nu.parameter_keys) != list(R["imaging_keys"]):
+        return None, None
+    vec = np.asarray(nu.fixed_vector_log10, float)
+    return {k: float(10 ** v) for k, v in zip(R["imaging_keys"], vec)}, {"name": tag, "log10": vec, "artifact": str(ap)}
+
+
+def _target(args, R):
+    """The identity of the Nuisance DLI under construction: the run's condition and timing (the archive it reads
+    must record the same target; a cross-condition Experiment application is never a native nuisance source)."""
+    return {"project_alias": R["paths"].project_alias, "condition": str(args.condition), "timing_label": str(R["timing_label"]),
+            "n_frames": int(R["timing"].frame_count)}
+
+
+def _build_representatives(args, R, block, spec_dict, art, spec):
+    """CPU-only empirical_representatives build: the selected complete vectors of the Experiment candidate archive
+    with their recorded probabilities (weight / member count per component; exact duplicates consolidated), any
+    explicit override applied and shown, flushed as the weighted artifact with its report and figures."""
+    archive = _load_archive_for_spec(block, spec)
+    target = _target(args, R)
+    bound = ndli.check_archive_target(archive, target)        # refused BEFORE any file is written (dry-run and build alike)
+    if args.dry_run:
+        vec, pr, rec = ndli.representatives_from_spec(spec_dict, archive, det.DETECTOR_PARAMETERIZATION, R["plo"], R["phi"],
+                                                      spec_path=spec, target=target)
+        print(f"[DRY RUN] --build empirical_representatives (CPU; no neural sampling): archive {archive['path']} "
+              f"(sha256 {archive['sha256'][:12]}…, product {archive['manifest'].get('product_label')}; target binding "
+              f"{bound.get('condition')} {bound.get('timing_label')} = this run's {target['condition']} {target['timing_label']}).")
+        for c in rec["components"]:
+            print(f"    component {c['index']}: {c['condition']} / {c['window_set']} / {c['grouping']} / {c['statistic']}: "
+                  f"weight {c['weight']:.4f} over {c['n_members']} member(s) -> {c['member_probability']:.6f} each")
+        print(f"    {rec['n_member_rows']} member rows -> {rec['n_unique_rows']} unique vectors ({len(rec['consolidated'])} consolidated); "
+              f"overrides {list(rec['overrides']) or 'none'}; outside-prior mass {rec['outside_prior_mass']:.4f}")
+        print(f"    would write:\n    {art}  (+ report + weighted marginal/joint figures)")
+        return
+    nu = ndli.build_nuisance_dli(spec_dict, R["imaging_keys"], R["plo"], R["phi"], table=det.DETECTOR_PARAMETERIZATION,
+                                 archive=archive, spec_path=spec, target=target)
+    nu.flush(str(art))
+    report_dir = _write_nuisance_report(nu, R, art, archive=archive)
+    print(f"Built Nuisance_DLI (empirical_representatives, {nu.samples.shape[0]} weighted vector(s), "
+          f"{len(nu.selection['components'])} component(s), pool_mode={nu.pool_mode}) and saved to:\n    {art}\n"
+          f"Analysis (report + figures):\n    {report_dir}")
+
+
+def _emit_representatives_template(args, R):
+    """CPU: read the Experiment candidate archive, print its comparison, write the representatives spec skeleton."""
+    if not args.candidate_archive:
+        raise SystemExit("--emit-representatives-template needs --candidate-archive <aggregation_candidates.npz> "
+                         "(written by the Experiment stage beside its report).")
+    archive = agg.load_candidate_archive(args.candidate_archive)
+    a, m = archive["arrays"], archive["manifest"]
+    keys = archive["keys"]
+    target = _target(args, R)
+    bound = ndli.check_archive_target(archive, target, where="template emission")   # refused before anything is written
+    print(f"Candidate archive: {archive['path']} (sha256 {archive['sha256'][:12]}…)\n  product {m.get('product_label')}; "
+          f"conditions {m.get('condition_labels')}; window sets {m.get('window_sets')}\n  target binding {bound} = this run\n"
+          f"  coverage {m.get('coverage')}" + (f"\n  NOTE {m.get('coverage_note')}" if m.get("coverage_note") else ""))
+    ref, _ = _reference_physical(R)
+    print("  components (median of the SGM representatives by the inverse empirical CDF, the Experiment report's and the "
+          "comparison export's convention; physical units; n = representatives):")
+    header = f"    {'condition':9s} {'window set':10s} {'grouping':20s} {'n':>4s} " + " ".join(f"{k:>12s}" for k in keys)
+    print(header)
+    for row in agg.archive_summary_rows(archive, det.DETECTOR_PARAMETERIZATION, statistic="sgm"):
+        med = row["quantiles_physical"][:, row["levels"].index(0.5)]
+        print(f"    {row['kind']:9s} {row['window_set']:10s} {row['construction']:20s} {row['n']:4d} " + " ".join(f"{v:12.5g}" for v in med))
+    if ref:
+        print(f"    {'reference':9s} {'SEL':10s} {'(comparison only)':20s} {1:4d} " + " ".join(f"{ref[k]:12.5g}" for k in keys))
+    spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"], nuisance_tag=args.nuisance_tag)
+    if spec.exists():
+        raise SystemExit(f"Spec exists already; refusing to overwrite it:\n    {spec}\nEdit it, or pass another --nuisance-tag.")
+    if args.dry_run:
+        print(f"[DRY RUN] --emit-representatives-template would write the spec skeleton:\n    {spec}")
+        return
+    ndli.emit_representatives_template(spec, archive, reference=ref, target=target,
+                                       provenance={"timing_label": R["timing_label"], "condition": args.condition,
+                                                   "nuisance_tag": args.nuisance_tag, "choice": "empirical_representatives",
+                                                   "candidate_archive": archive["path"], "candidate_archive_sha256": archive["sha256"]})
+    print(f"Emitted empirical_representatives spec skeleton:\n    {spec}\nNEXT: uncomment and weight the components (weights "
+          "summing to 1), state the rationale, then run --build with the same --nuisance-tag.")
+
+
 def _build(args, R):
     spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"],
                           nuisance_tag=args.nuisance_tag)
@@ -461,6 +567,9 @@ def _build(args, R):
 
     if choice == "sgm_percentiles":
         _build_sgm_percentiles(args, R, block, spec_dict, art)
+        return
+    if choice == "empirical_representatives":
+        _build_representatives(args, R, block, spec_dict, art, spec)
         return
 
     if args.dry_run:
@@ -521,9 +630,12 @@ def _figure_nuisance_marginals(draws, keys, prior_low, prior_high):
     return fig
 
 
-def _write_nuisance_report(nu, R, art, n_draws=10000):
+def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
     """Persist a report.md + a 1-D marginals figure beside the built artifact (the record a
-    person reads to judge, and choose between, nuisance constructions)."""
+    person reads to judge, and choose between, nuisance constructions). A weighted
+    ``empirical_representatives`` artifact adds its components, probabilities, consolidation and
+    overrides, the weighted-CDF marginal summary, and the final weighted marginal and joint figures
+    drawn with the Experiment report's plotting functions (``archive`` supplies the components)."""
     report_dir = art.with_name(art.stem + "_Analysis")
     reporter = DiagnosticReporter(
         stage="Nuisance_DLI", enabled=True, dump=True, dump_dir=report_dir,
@@ -558,7 +670,7 @@ def _write_nuisance_report(nu, R, art, n_draws=10000):
          ["parameters", str(len(nu.parameter_keys))],
          ["marginal draws", str(n_draws)]],
         note="How the calibrated imaging is represented for production marginalization.")
-    if nu.selection is not None:
+    if nu.posterior_sample_pool_choice == "selection_user" and nu.selection is not None:
         sel = nu.selection
         reporter.table(
             "selection_user: the fixed vector, its sources and limitations",
@@ -589,8 +701,62 @@ def _write_nuisance_report(nu, R, art, n_draws=10000):
         _figure_nuisance_marginals(draws, nu.parameter_keys, plo, phi),
         caption="1-D marginal of each imaging parameter under the built nuisance (sampled from the "
                 "artifact); red dashes mark the imaging prior box.")
+    if nu.posterior_sample_pool_choice in ndli._WEIGHTED:
+        _report_representatives(reporter, nu, R, archive)
     reporter.write_report()
     return report_dir
+
+
+def _report_representatives(reporter, nu, R, archive):
+    """The weighted artifact's record: components and probabilities, consolidation, overrides, the weighted-CDF
+    marginal summary (physical units), and the final weighted marginal and joint figures beside the components."""
+    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import figure_joint_corner, figure_marginal_cdfs
+    sel = nu.selection; keys = list(nu.parameter_keys); table = det.DETECTOR_PARAMETERIZATION
+    reporter.check("representative_probabilities_normalized", abs(float(nu.probabilities.sum()) - 1.0) <= ndli.WEIGHT_NORMALIZATION_TOLERANCE,
+                   f"{nu.samples.shape[0]} vectors; total probability {nu.probabilities.sum():.9f}",
+                   note="the stored per-vector probabilities sum to one; every member of component k carries weight_k / n_k.")
+    reporter.table("empirical_representatives: components",
+                   ["component", "source Experiment", "condition", "window set", "grouping", "statistic", "weight", "members", "probability per member"],
+                   [[c["index"], c["source_experiment"], c["condition"], c["window_set"], c["grouping"], c["statistic"], f"{c['weight']:.6f}",
+                     c["n_members"], f"{c['member_probability']:.6f}"] for c in sel["components"]],
+                   note=f"rationale: {sel['rationale']} | archive {sel['archive']['path']} (sha256 {sel['archive']['sha256'][:12]}…)"
+                        + (f" | NOTE {sel['archive']['coverage_note']}" if sel["archive"].get("coverage_note") else "")
+                        + f" | {sel['n_member_rows']} member rows -> {sel['n_unique_rows']} unique vectors; "
+                        + ("the rows are retained joint draws (SGMs)" if sel["is_sampled_rows"] else
+                           "the rows are NOT all original joint draws (a median statistic or an override is involved)"))
+    if sel["consolidated"]:
+        reporter.table("empirical_representatives: consolidated duplicates (probabilities added, memberships kept)",
+                       ["unique row", "memberships (component, member)", "probability"],
+                       [[c["row"], ", ".join(f"({m['component']}, {m['member']})" for m in c["memberships"]), f"{c['probability']:.6f}"]
+                        for c in sel["consolidated"]], note="identical vectors selected by several components are stored once with the sum of their probabilities.")
+    if sel["overrides"]:
+        reporter.table("empirical_representatives: explicit parameter overrides (applied to every vector; shown, never silent)",
+                       ["parameter", "value (physical)", "stored (log10)", "replaced range (log10)", "reason"],
+                       [[k, f"{o['value_physical']:.6g}", f"{o['value_stored']:+.4f}", f"[{o['replaced_range_stored'][0]:+.4f}, {o['replaced_range_stored'][1]:+.4f}]", o["reason"]]
+                        for k, o in sel["overrides"].items()], note="a transformed vector is no longer the original joint draw.")
+    rows = []
+    for j, k in enumerate(keys):
+        q = [agg.weighted_quantile(nu.samples[:, j], nu.probabilities, p) for p in (0.05, 0.25, 0.5, 0.75, 0.95)]
+        qp = [float(10 ** v) for v in q]
+        rows.append([k, f"{qp[2]:.5g}", f"{qp[1]:.5g} – {qp[3]:.5g}", f"{qp[0]:.5g} – {qp[4]:.5g}", f"{100 * sel['outside_prior_by_key'][k]:.1f} %"])
+    reporter.table("empirical_representatives: weighted marginal summary (physical units; inverse weighted CDF)",
+                   ["parameter", "median", "IQR", "central 90 % range", "outside-prior mass"], rows,
+                   note="empirical dispersion of the selected representatives under their probabilities, not a credible interval; "
+                        f"total outside-prior mass {100 * sel['outside_prior_mass']:.1f} %.")
+    series = []
+    if archive is not None:
+        for c in sel["components"]:
+            comp = agg.archive_component(archive, kind=c["condition"], window_set=c["window_set"], construction=c["grouping"], statistic=c["statistic"])
+            series.append({"name": f"component {c['index']}: {c['window_set']}/{c['grouping']}/{c['statistic']}", "role": c["grouping"], "vectors": comp["vectors"]})
+    series.append({"name": "selected mixture (recorded probabilities)", "role": "mixture", "vectors": nu.samples, "weights": nu.probabilities})
+    ref_p, ref = _reference_physical(R)
+    if ref is not None:
+        series.append({"name": ref["name"], "role": "reference", "vectors": ref["log10"][None, :]})
+    reporter.save_figure("representatives_marginals", figure_marginal_cdfs(series, table, title="Selected representative distribution: weighted marginal CDFs",
+                                                                           subtitle="components at equal member weight; the mixture at its recorded probabilities; a one-member series is a reference line"),
+                         caption="Weighted empirical CDFs of the selected mixture beside its components (each normalized to unit mass) and the reference, physical units.")
+    reporter.save_figure("representatives_joint", figure_joint_corner(series, table, title="Selected representative distribution: joint projections"),
+                         caption="Pairwise projections of the selected vectors (marker size follows the recorded probability) beside the components and the reference.")
 
 
 def _migrate_pool_labels(args, R):
@@ -714,6 +880,9 @@ def main(args):
     if args.emit_selection_user:
         _emit_selection_user(args, R)
         return
+    if args.emit_representatives_template:
+        _emit_representatives_template(args, R)
+        return
     (_build if args.build else _emit_template)(args, R)
 
 
@@ -735,6 +904,13 @@ def parse_args(argv):
                    help="write the spec skeleton of a selection_user Nuisance_DLI (one explicitly "
                         "chosen, fixed imaging vector from documented sources); CPU only, no "
                         "estimator, no recordings. Fill it, then --build with the same --nuisance-tag.")
+    p.add_argument("--emit-representatives-template", action="store_true",
+                   help="write the spec skeleton of an empirical_representatives Nuisance_DLI from an Experiment "
+                        "candidate archive (--candidate-archive); CPU only. Name the components and weights, then "
+                        "--build with the same --nuisance-tag (CPU; no neural sampling).")
+    p.add_argument("--candidate-archive", type=str, default=None,
+                   help="with --emit-representatives-template: the Experiment stage's aggregation_candidates.npz "
+                        "(beside its report).")
     p.add_argument("--nuisance-tag", type=str, default=None,
                    help="SCREAMING_SNAKE token ([A-Z0-9]+) naming the Nuisance_DLI artifact and its "
                         "spec beside the canonical ones (<alias>_<timing>_<TAG>_Nuisance_DLI.npz), e.g. a "

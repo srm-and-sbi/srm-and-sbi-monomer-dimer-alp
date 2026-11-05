@@ -44,6 +44,10 @@ IMPLEMENTATION_FILES = (
     # (its own estimation loop and writer) and the Nuisance-DLI module (builds live MAP pools).
     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py",
     "srm_and_sbi_monomer_dimer_alp/detector_nuisance_dli.py",
+    # The experimental aggregation of the retained window posteriors (its representatives are Experiment
+    # products) and the collection kernel that selects the pooled representatives.
+    "srm_and_sbi_monomer_dimer_alp/experiment_aggregation.py",
+    "srm_and_sbi_monomer_dimer_alp/sample_geometric_median.py",
 )
 
 

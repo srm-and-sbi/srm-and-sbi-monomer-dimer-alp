@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import shutil
 import time
 from collections import Counter
@@ -47,6 +48,7 @@ import torch._dynamo
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
 from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema
 from srm_and_sbi_monomer_dimer_alp import artifacts
+from srm_and_sbi_monomer_dimer_alp import experiment_aggregation as agg
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.evaluation import (
     ESTIMATE_DEFINITIONS_VERSION, QUANTILE_LEVELS,
@@ -152,7 +154,8 @@ def _aggregate_by_kind(estimate, kind_index, cell_arr, kinds, mode, n_params):
 
 
 def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Path,
-                             arrays: dict, run_start, persist_arrays: bool = True) -> dict:
+                             arrays: dict, run_start, persist_arrays: bool = True,
+                             aggregation: "agg.AggregationRequest" = None) -> dict:
     """Validate an experiment product, persist it and write the report + figures.
 
     ``arrays`` is the complete product (every field of
@@ -169,7 +172,12 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
     another table or condition is not re-rendered under this one. ``args.condition`` (the
     estimator's condition, when present) labels every table and figure of a kind that is not the
     estimator's own as a misspecification test. With ``persist_arrays=False`` (report-only
-    rendering) the arrays on disk are left untouched. Returns the validated manifest.
+    rendering) the arrays on disk are left untouched. ``aggregation`` (an
+    :class:`experiment_aggregation.AggregationRequest`) adds the section "Experimental aggregation and
+    nuisance candidates" and its supporting exports beside the report, computed from the retained clouds
+    (the product's own, or compatible retained collections) AFTER the product is complete; ``None`` or a
+    disabled request writes the section's statement that the calculations are unavailable, never a
+    substitute. Returns the validated manifest.
     """
     manifest = schema.validate_product(arrays, stage="experiment",
                                        source=f"experiment product {array_path.name}")
@@ -413,6 +421,14 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                                 f"values beyond it are counted in the tables, not drawn."
                                 + _misspecification_note(kind, condition))
 
+    # ---- Experimental aggregation and nuisance candidates (after the complete product, never per rank) --
+    try:
+        agg.report_aggregation(reporter, aggregation, arrays, manifest, draw_spec,
+                               out_dir=reporter.dump_dir if reporter.dump_dir is not None else array_path.parent,
+                               condition_display=condition_display, kind_notes=kind_notes)
+    except agg.AggregationError as exc:
+        raise SystemExit(f"Experimental aggregation refused: {exc}")
+
     reporter.summary()
     reporter.write_report()
     print(f"\nTotal elapsed: {time.time() - run_start:.1f}s")
@@ -432,7 +448,7 @@ def _save_shard(topo, out_dir: Path, arrays: dict, run_start) -> None:
 
 
 def _merge_shards(reporter, args, eval_cfg, draw_spec, out_dir: Path,
-                  array_path: Path, run_start, expected_ids) -> None:
+                  array_path: Path, run_start, expected_ids, aggregation=None) -> None:
     """Combine every per-shard product into the final report (no estimation). Shards are
     validated and must describe one computation; the merged ``(kind_index, cell, chunk)`` set
     must equal ``expected_ids`` exactly; rank coverage must be complete."""
@@ -455,7 +471,7 @@ def _merge_shards(reporter, args, eval_cfg, draw_spec, out_dir: Path,
                        "and every expected (kind, cell, chunk) window, so this is always complete.")
     print(f"Merged {merged['scores'].shape[0]} estimates from {n_used} shard(s).", flush=True)
     write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path,
-                             merged, run_start)
+                             merged, run_start, aggregation=aggregation)
     for shard_path in shard_paths:
         shard_path.unlink()
     print(f"Removed {len(shard_paths)} shard file(s).", flush=True)
@@ -498,6 +514,54 @@ def _expected_observations(paths, kinds, cells_by_kind, span, data_bank_root, n_
         n_avail = inspect_recording(tif_path)[0]
         expected.extend((ki, cell, c) for c in range(chunk_count(n_avail, n_frames, step_frames)))
     return expected
+
+
+_LABEL = re.compile(r"^[A-Z0-9]+$")
+
+
+def _review_label(args):
+    """The output-only review label of a --regenerate-report run (SCREAMING_SNAKE, required there); None otherwise."""
+    label = getattr(args, "review_label", None)
+    if getattr(args, "regenerate_report", False):
+        if not label or not _LABEL.match(str(label)):
+            raise SystemExit("--regenerate-report needs --review-label <TOKEN> ([A-Z0-9]+): the review copy is written to "
+                             "<product dir>_<TOKEN>/ so the adopted report is never overwritten.")
+        return str(label)
+    if label:
+        raise SystemExit("--review-label applies to --regenerate-report only.")
+    return None
+
+
+def _cloud_source_paths(args) -> list:
+    return [Path(p.strip()) for p in str(getattr(args, "cloud_sources", "") or "").split(",") if p.strip()]
+
+
+def _reference_artifact_path(cfg, paths, data_bank_root, timing_label, tag):
+    """The fixed reference vector's Nuisance_DLI artifact (detector workflow only; None for the biology)."""
+    if cfg.tag != "detector" or not tag:
+        return None
+    from srm_and_sbi_monomer_dimer_alp.detector_nuisance_dli import artifact_path
+    return artifact_path(data_bank_root / paths.posit_subdir, paths.project_alias, timing_label, tag)
+
+
+def _load_reference(cfg, paths, data_bank_root, timing_label, tag, table):
+    """``{name, log10, physical, identity}`` of a selection_user artifact under ``tag``, or None when absent
+    (the report then states that no reference is shown). Never built, never substituted."""
+    from srm_and_sbi_monomer_dimer_alp.detector_nuisance_dli import NuisanceDLI
+    from srm_and_sbi_monomer_dimer_alp.parameterization import to_physical
+    from srm_and_sbi_monomer_dimer_alp.provenance import file_sha256
+    ap = _reference_artifact_path(cfg, paths, data_bank_root, timing_label, tag)
+    if ap is None or not ap.exists():
+        return None
+    nu = NuisanceDLI.load(ap)
+    keys = [e["KEY"] for e in table]
+    if list(nu.parameter_keys) != keys or nu.fixed_vector_log10 is None:
+        print(f"WARNING: reference artifact {ap.name} is not a fixed selection_user vector over {keys}; no reference shown.")
+        return None
+    vec = np.asarray(nu.fixed_vector_log10, float)
+    return {"name": str(tag), "log10": vec, "physical": to_physical(vec, table),
+            "identity": {"artifact": str(ap), "sha256": file_sha256(ap), "nuisance_tag": str(tag),
+                         "posterior_sample_pool_choice": nu.posterior_sample_pool_choice, "selection": nu.selection}}
 
 
 def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
@@ -549,7 +613,16 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     debug_log = args.debug or args.debug_dump
 
     posterior_samples = args.posterior_samples or eval_cfg.posterior_samples
-    dump_samples = args.dump_posterior_samples
+    # Aggregation is part of the normal reporting path: its named window sets are resolved here, and
+    # enabling it retains the summary clouds already drawn (the existing posterior_samples_cloud storage;
+    # no second cloud is drawn). --no-aggregation is the explicit legacy mode.
+    aggregation_on = not args.no_aggregation
+    try:
+        window_sets = agg.parse_window_sets(args.aggregation_window_sets) if aggregation_on else {}
+    except agg.AggregationError as exc:
+        raise SystemExit(f"--aggregation-window-sets: {exc}")
+    dump_samples = bool(args.dump_posterior_samples or aggregation_on)
+    review_label = _review_label(args)
 
     # Video geometry: model-length windows stepped across each long recording.
     n_frames = timing.frame_count
@@ -565,6 +638,13 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     step_frames = int(round(step_seconds / timing.frame_time_seconds))
     exp_frames = int(round(span / timing.frame_time_seconds))
     n_chunks = (exp_frames - n_frames) // step_frames + 1
+    declared_geometry = schema.window_geometry(n_frames=n_frames, step_frames=step_frames, span_frames=exp_frames)
+    if aggregation_on:
+        # Preflight: a named position beyond the declared geometry is refused here, before any neural work.
+        try:
+            agg.validate_window_sets_against_geometry(window_sets, declared_geometry)
+        except agg.AggregationError as exc:
+            raise SystemExit(f"--aggregation-window-sets: {exc}")
 
     # ---- Resolve the (kind, cells) work list -----------------------------
     kinds = ([args.condition] if args.kinds is None
@@ -607,10 +687,16 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  --posterior-samples       : {posterior_samples}")
     n_windows_total = sum(len(cells_by_kind[k]) for k in kinds) * n_chunks
     mb = n_windows_total * posterior_samples * len(spec.draw_spec) * 4 / 1e6
-    print(f"  --dump-posterior-samples  : {dump_samples}"
+    print(f"  retain posterior_samples_cloud : {dump_samples}"
           + (f"   (+{mb:.0f} MB of raw draws: "
              f"{n_windows_total} windows x {posterior_samples} x "
-             f"{len(spec.draw_spec)})" if dump_samples else ""))
+             f"{len(spec.draw_spec)}; "
+             f"{'required by the aggregation' if aggregation_on else '--dump-posterior-samples'})" if dump_samples else "   (--no-aggregation, no --dump-posterior-samples)"))
+    print(f"  aggregation               : {'on: window sets ' + ', '.join(f'{k}=' + ('all' if v is None else str(list(v))) for k, v in window_sets.items()) if aggregation_on else 'OFF (--no-aggregation: legacy report, no candidate collections)'}")
+    print(f"  reference vector          : " + (f"Nuisance_DLI tag {args.reference_nuisance_tag} (displayed as a historical comparison; absent = none)" if aggregation_on and args.reference_nuisance_tag else "none"))
+    if args.regenerate_report:
+        print(f"  --regenerate-report       : CPU re-rendering of the saved product; review label {review_label}; retained clouds from "
+              + (args.cloud_sources if args.cloud_sources else "the product itself (if stored)"))
     print(f"  --seed                    : {args.seed}")
     print(f"  total MAP estimates       : {total_estimates}")
     print("\nMAP estimate hyperparameters (effective):")
@@ -619,11 +705,16 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         print(f"  {line}")
     print(f"  verbosity            : "
           f"{'debug-dump' if args.debug_dump else ('debug' if args.debug else ('verbose' if args.verbose else 'normal'))}")
+    report_dir = out_dir if review_label is None else out_dir.with_name(f"{out_dir.name}_{review_label}")
     print("\nOutput destinations:")
     print(f"  reads estimator  : {estimator_path}")
     print(f"  reads videos     : {experiment_dir}/Experiment_<KIND>_Cell_<n>_{span}S_RAW.tif")
-    print(f"  writes report    : {out_dir}")
-    print(f"  live progress    : {progress_path}   (tail -f to monitor)")
+    if args.regenerate_report:
+        print(f"  reads product    : {array_path}   (left untouched)")
+        print(f"  writes report    : {report_dir}   (a review copy; the adopted report and arrays are not modified)")
+    else:
+        print(f"  writes report    : {out_dir}")
+        print(f"  live progress    : {progress_path}   (tail -f to monitor)")
     print(f"\n{div}\n")
 
     # ---- Dry-run preview (no GPU, no compute) ----------------------------
@@ -645,6 +736,17 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             discovered = discover_cells(experiment_dir, kind, span)
             print(f"  discovered {kind} recordings: {len(discovered)} cell(s) "
                   f"({span}S_RAW.tif)")
+        if args.regenerate_report:
+            print(f"  reads product: {array_path}  [{'OK' if array_path.exists() else 'MISSING'}]")
+            missing += not array_path.exists()
+            for src in _cloud_source_paths(args):
+                print(f"  reads retained clouds: {src}  [{'OK' if src.exists() else 'MISSING'}]")
+                missing += not src.exists()
+            print(f"  writes review copy: {report_dir}  [{'EXISTS: refused' if report_dir.exists() else 'new'}]")
+            missing += report_dir.exists()
+        if aggregation_on and args.reference_nuisance_tag:
+            ref_path = _reference_artifact_path(cfg, paths, data_bank_root, timing_label, args.reference_nuisance_tag)
+            print(f"  reads reference  : {ref_path}  [{'OK' if ref_path is not None and ref_path.exists() else 'ABSENT (no reference shown)'}]")
         if missing:
             print(f"[DRY RUN] configuration validated; {missing} input(s) MISSING.")
         else:
@@ -654,6 +756,62 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
 
     run_start = time.time()
 
+    reference = (_load_reference(cfg, paths, data_bank_root, timing_label, args.reference_nuisance_tag, spec.draw_spec)
+                 if aggregation_on else None)
+
+    # The target binding every candidate archive records: the Experiment run's condition (the estimator's
+    # condition; KINDS may apply it to other recordings, which stays a labeled inspection result), timing and geometry.
+    target_binding = {"project_alias": paths.project_alias, "condition": str(args.condition), "timing_label": str(timing_label),
+                      "window_seconds": float(window_seconds), "n_frames": int(n_frames), "estimator_tag": args.artifact_tag or None,
+                      "product_label": f"{paths.project_alias}_{product_label}"}
+
+    def aggregation_request(clouds=None, coverage_note="", source_note=""):
+        return agg.AggregationRequest(window_sets=window_sets, enabled=aggregation_on, clouds=clouds, reference=reference,
+                                      coverage_note=coverage_note, window_seconds=float(window_seconds),
+                                      product_label=f"{paths.project_alias}_{product_label}", source_clouds_note=source_note,
+                                      target=target_binding)
+
+    # --regenerate-report: CPU re-rendering of the SAVED product (no estimation, no GPU) through the same
+    # writer, into a review copy named by --review-label; the adopted report and arrays stay untouched.
+    if args.regenerate_report:
+        if report_dir.exists():
+            raise SystemExit(f"--regenerate-report: review copy exists already; refusing to overwrite it:\n    {report_dir}")
+        if not array_path.exists():
+            raise SystemExit(f"--regenerate-report: Experiment product missing: {array_path}")
+        try:
+            arrays, manifest = schema.load_product(array_path, stage="experiment")
+        except schema.SchemaError as exc:
+            raise SystemExit(f"--regenerate-report: {exc}")
+        clouds, note, src_note = None, "", ""
+        sources = _cloud_source_paths(args)
+        if sources:
+            try:
+                collections = [agg.cloud_from_collection(p) for p in sources]
+                clouds = agg.combine_clouds(collections, reference_contract={k: manifest[k] for k in agg.CONTRACT_FIELDS},
+                                            reference_label=array_path.name)
+            except agg.AggregationError as exc:
+                raise SystemExit(f"--cloud-sources: {exc}")
+            n_cells = {k: int(np.unique(np.asarray(arrays['cell'])[np.asarray(arrays['kind_index']) == i]).size) for i, k in enumerate(kinds)}
+            n_win = {k: int((np.asarray(arrays['kind_index']) == i).sum()) for i, k in enumerate(kinds)}
+            covered = {k: sorted(set(int(c) for c in clouds.cell[clouds.kind_index == i])) for i, k in enumerate(kinds)}
+            note = ("This is a pilot subset, not the complete condition: " + "; ".join(
+                f"{condition_display(k)} {len(covered[k])} of {n_cells[k]} cells (cells {covered[k]}), "
+                f"{int((clouds.kind_index == i).sum())} of {n_win[k]} windows" for i, k in enumerate(kinds))
+                + ". The original MAP and summary references above come from the adopted product; the aggregation "
+                "summaries come from the retained collections named below, fresh draws of the same estimator that do not "
+                "reconstruct the original sampling attempt.")
+            src_note = "Retained draw collections (fresh clouds of the adopted estimator, collected after the Experiment run)."
+        reporter = DiagnosticReporter(
+            stage="Experiment", enabled=True, dump=True, dump_dir=report_dir,
+            run_label=f"{paths.project_alias}_{product_label}",
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            run_note=f"Review copy ({review_label}) regenerated on the CPU from the saved product {array_path.name}; "
+                     f"no estimation was repeated. Adopted report: {out_dir / 'report.md'}.")
+        reporter.stat("regenerated_from", str(array_path), note="the saved Experiment product re-rendered; its arrays are not modified.")
+        write_experiment_outputs(reporter, args, eval_cfg, spec.draw_spec, array_path, arrays, run_start,
+                                 persist_arrays=False, aggregation=aggregation_request(clouds, note, src_note))
+        return
+
     # ---- Diagnostics reporter (the experiment report is the deliverable) -
     reporter = DiagnosticReporter(
         stage="Experiment", enabled=True, dump=True, dump_dir=out_dir,
@@ -661,7 +819,8 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
     # --merge: combine the per-shard arrays from a multi-GPU sharded run into the
-    # final report, then exit (no estimation, no GPU, no posterior needed).
+    # final report, then exit (no estimation, no GPU, no posterior needed). The
+    # aggregation runs once, after the complete validated merge, never per rank.
     if args.merge:
         try:
             expected = _expected_observations(paths, kinds, cells_by_kind, span, data_bank_root,
@@ -669,7 +828,7 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         except RecordingLayoutError as exc:
             raise SystemExit(f"--merge: {exc}")
         _merge_shards(reporter, args, eval_cfg, spec.draw_spec, out_dir, array_path, run_start,
-                      expected)
+                      expected, aggregation=aggregation_request())
         return
 
     reporter.check_file("estimator artifact", estimator_path)
@@ -883,7 +1042,7 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         _save_shard(topo, out_dir, arrays, run_start)
     else:
         write_experiment_outputs(reporter, args, eval_cfg, spec.draw_spec, array_path,
-                                 arrays, run_start)
+                                 arrays, run_start, aggregation=aggregation_request())
 
 
 def build_experiment_parser() -> argparse.ArgumentParser:
@@ -940,6 +1099,42 @@ def build_experiment_parser() -> argparse.ArgumentParser:
         "--posterior-samples", type=int, default=None,
         help=f"Draws per window summarized by the quantiles, the median and the SGM "
              f"(default: {eval_cfg.posterior_samples}).",
+    )
+    parser.add_argument(
+        "--aggregation-window-sets", default=agg.DEFAULT_WINDOW_SETS,
+        help="Named window sets of the experimental aggregation (the report section 'Experimental aggregation "
+             "and nuisance candidates'): comma-separated items 'all' (every position), 'opening' (the first "
+             "window), NAME=a-b (a range of positions) or NAME=a+b+c (a list). Every construction (per_cell, "
+             f"per_window_position, global, per_cell_window) is computed for every set. Default '{agg.DEFAULT_WINDOW_SETS}'. "
+             "Enabling the aggregation retains the summary clouds already drawn (posterior_samples_cloud).",
+    )
+    parser.add_argument(
+        "--no-aggregation", action="store_true",
+        help="Legacy report without the aggregation section and without cloud retention (unless "
+             "--dump-posterior-samples); the report states that the candidate collections are unavailable.",
+    )
+    parser.add_argument(
+        "--reference-nuisance-tag", default="SEL",
+        help="Detector workflow: the nuisance tag of the fixed selection_user Nuisance_DLI artifact shown as the "
+             "historical reference in the aggregation section (default SEL; absent artifact = no reference shown; "
+             "pass '' for none). Comparison only: never rebuilt, never mixed into a collection.",
+    )
+    parser.add_argument(
+        "--regenerate-report", action="store_true",
+        help="CPU re-rendering of the SAVED product of this run (no estimation, no GPU) through the same writer "
+             "into a review copy <product dir>_<REVIEW_LABEL>/, with the aggregation section computed from the "
+             "product's retained clouds or from --cloud-sources. The adopted report and arrays are not modified.",
+    )
+    parser.add_argument(
+        "--review-label", default=None,
+        help="With --regenerate-report: output-only SCREAMING_SNAKE token ([A-Z0-9]+) naming the review copy; "
+             "it never changes the estimator tag or the product read.",
+    )
+    parser.add_argument(
+        "--cloud-sources", default=None,
+        help="With --regenerate-report: comma-separated retained draw collections (*_Window_Posterior_Draws[_<LABEL>].npz) "
+             "whose clouds feed the aggregation; they must share this product's computation contract (checkpoint, keys, "
+             "transform, scale, geometry, draw count, sampling mode). Default: the product's own stored clouds.",
     )
     parser.add_argument(
         "--aggregation", choices=("pooled", "cell-median"), default="pooled",

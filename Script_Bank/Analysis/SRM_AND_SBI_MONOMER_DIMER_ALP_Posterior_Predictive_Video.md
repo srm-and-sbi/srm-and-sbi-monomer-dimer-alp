@@ -24,6 +24,7 @@ the tail-structure analysis (`SRM_AND_SBI_MONOMER_DIMER_ALP_Brightness_Tail_Stru
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.md` | the detector shim's pointer to this note | reading |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB.toml` | the declared reaction-diffusion configuration for the MET-FAB check renders: each of the eleven values with its basis and source, the receptor total one declared value for every recording. It is an input of this analysis, specific to the MET-FAB recordings compared, confirmed by the user before rendering; it is not a generic model setting (section *A declared reaction-diffusion configuration*) | MET-FAB renders at a declared configuration (`--declared-rds`) |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_FAB_Density_Adjusted.toml` | the same configuration with the receptor total set per recording, scaled from the recording's opening spot count and capped by the prior range (section *A declared reaction-diffusion configuration*) | MET-FAB density-adjusted renders |
+| `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_INLB.toml` | the declared reaction-diffusion configuration for the MET-INLB check renders: each of the twelve values with its basis and source, the window-start allocation included. Three rows are literature-informed declared settings specific to MET-INLB (dissociation 1.0 per s, dimer mobility ratio 0.60, allocation at the midpoint 0.5 of its prior); the other rows repeat the MET-FAB companion's declared defaults, a common reference scenario that does not establish identical biology between the conditions. Confirmed by the user on 2026-11-02 | MET-INLB renders at a declared configuration (`--declared-rds`) |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py` | optional: chooses a recording's receptor total iteratively, with trial renders, so that a render approximates the recording's opening spot density; the declared configurations do not use it | only for an iteratively matched render |
 | `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.md` | that script's method, statuses and outputs | reading |
 | `notebooks/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Posterior_Predictive_Video.ipynb` | the viewer: the clip's provenance, experimental and synthetic clip side by side, scrubber and real-time player at the recording's frame rate (50 fps) | viewing a clip |
@@ -123,6 +124,12 @@ silently. Two MET-FAB configurations differ only in the receptor total:
   recording renders less dense than it is. The values are rendering settings and starting values, not
   matches: crowding lowers a detected count, and one render's count carries its labeling draw. Each
   density-adjusted render's own count is measured afterwards with the same companion.
+
+- `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Declared_RDS_INLB.toml` is the MET-INLB
+  configuration (twelve rows): the receptor total and the shared rows at the MET-FAB companion's declared
+  defaults, the dissociation rate and the dimer mobility ratio as literature-informed declared settings
+  specific to MET-INLB, and the window-start allocation at the midpoint of its prior (half of the
+  available probe-bound monomer-pair capacity, not half of the complexes).
 
 Inferring the receptor total is the biology workflow's task. An iterative match, when one is wanted,
 takes its receptor total from `SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video_Count_Match.py`

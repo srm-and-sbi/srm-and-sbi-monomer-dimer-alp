@@ -5,6 +5,114 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.45 - 2026-11-05
+
+The Experiment report gains the experimental aggregation of its window posteriors, and the Nuisance DLI
+analysis a weighted construction over the resulting representatives. No neural architecture, training,
+prior or Evaluation definition changes.
+
+- **Experimental aggregation (`experiment_aggregation.py`, `visualization_aggregation.py`).** One shared
+  calculation for both workflows groups the retained window clouds (`posterior_samples_cloud`) into the four
+  constructions `per_cell`, `per_window_position`, `global` and `per_cell_window` for every requested named
+  window set (`all`, `opening`, `NAME=a-b`, `NAME=a+b+c`), per condition, never pooling conditions. Each group
+  stores its SGM with the source identity of the retained draw (cell, chunk, draw index, collection), the
+  method (`window_stored` exact medoid reused for a single window; `exact_medoid` up to the pooled capacity of
+  10,000 rows, a quadratic matrix within that bound; the collection kernel's `weiszfeld_snap` above it, so the
+  standard large-pool route never allocates a quadratic matrix), the
+  marginal-median vector labeled as a composite, the mixture quantiles of the pooled draws and the
+  outside-prior mass. Equal weights are realized by the equal draw counts; coverage must be complete and
+  identities unique; retained collections are combined only under one computation contract (checkpoint,
+  keys, transform, scale, geometry, draw count, sampling mode), with labels, seeds and implementation hashes
+  disclosed rather than refused. Opening-only and single-cell equivalences reuse the computed group.
+- **The Experiment report section "Experimental aggregation and nuisance candidates".** Written by the stage
+  writer for a live run (after the complete product; in a sharded run once, after the validated merge) and for
+  a CPU regeneration alike: the canonical constructions table, coverage and window-set definitions, the SGM
+  representatives per construction (inverse weighted empirical CDF quantiles over the representatives,
+  differences from the reference, outside-prior mass), the global representative beside the reference, the
+  source-uncertainty summary (within-window and pooled posterior intervals against the dispersion of
+  representatives), the SGM-versus-median-vector table, and the figures (marginal CDFs, joint corner, temporal
+  comparison, window-selection comparison). Supporting exports beside the report: `aggregation_candidates.npz`
+  (the candidate archive), `aggregation_groups.csv`, `aggregation_comparison.csv`, `aggregation_manifest.json`.
+  The detector's fixed `SEL` artifact is shown as a historical comparison when present (`--reference-nuisance-tag`),
+  never reconstructed or mixed in.
+- **Experiment stage controls.** Aggregation is part of the normal reporting path: `--aggregation-window-sets`
+  (default `all,opening`) and the explicit legacy `--no-aggregation`; enabling it retains the clouds already
+  drawn (the existing `posterior_samples_cloud` storage, no second cloud), and the dry-run prints the effective
+  retention and aggregation settings. `--regenerate-report --review-label <TOKEN> [--cloud-sources ...]`
+  re-renders a SAVED product on the CPU through the same writer into a review copy `<product dir>_<TOKEN>/`,
+  with the aggregation from the product's own clouds or from compatible retained draw collections; the adopted
+  report and arrays are never modified, and a subset states its coverage (cells and windows of the product) and
+  the fresh sources. Both HPC Experiment launchers and both Submit scripts forward `AGGREGATION_WINDOW_SETS`,
+  `NO_AGGREGATION` and `REFERENCE_NUISANCE_TAG` to every rank and the merge.
+- **`empirical_representatives` Nuisance DLI (`detector_nuisance_dli.py`).** A weighted empirical distribution
+  over complete representative vectors selected from an Experiment candidate archive: the spec names K
+  components (source Experiment, condition, window set, grouping, statistic `sgm` or `median`) with explicit
+  weights summing to one (tolerance 1e-6; finite, non-negative, positive total mass; accepted roundoff normalized,
+  larger discrepancies refused), every
+  member of component k receives probability weight/n_k, exact duplicates are consolidated by adding their
+  probabilities with memberships kept, and `[override.<KEY>]` tables are explicit parameter-specific
+  treatments recorded and shown as transformations. The artifact stores the vectors with their probabilities
+  and the selection record; the sampler draws whole rows at the recorded probabilities (`sample(n, seed=None)`);
+  legacy unweighted artifacts keep uniform sampling and an unfamiliar construction is refused by every reader.
+  The analysis script gains `--emit-representatives-template --candidate-archive <archive>` and the CPU
+  `--build` route with the components, consolidation, overrides, weighted marginal summary and the final
+  weighted marginal and joint figures drawn by the Experiment's own plotting functions. SEL stays a comparison;
+  raw posterior draws and an SGM of SGMs are not constructions of this route.
+- **Collection kernel.** `sample_geometric_median.sample_geometric_median` takes an `exact_capacity` control
+  (default unchanged) so the aggregation never allocates a quadratic distance matrix at the default threshold.
+- **Reporter.** `DiagnosticReporter.prose` records a titled Markdown block among the tables.
+- **Provenance.** `experiment_aggregation.py` and `sample_geometric_median.py` join the implementation files
+  whose hash a product records.
+- **Target binding of the candidate archive.** Every `aggregation_candidates.npz` records the Experiment run's
+  target (project alias, condition, timing label, window length, estimator tag), and an `empirical_representatives`
+  build, its dry-run and the template emission require the explicit target of the artifact under construction
+  (`target=`; the analysis script passes its `--condition` and timing) to equal it, with every component's
+  recording condition equal to the target condition: an archive of another condition or duration is refused
+  before any file is written, and a cross-condition Experiment application (`KINDS`) stays a labeled inspection
+  result, never another condition's native nuisance.
+- **Window coverage against the declared geometry.** `all` is every position the declared window geometry admits
+  (`(span - n_frames) // step + 1` positions), every included cell must carry every position a set requests, and
+  a position missing from every cell is refused for `all` rather than silently redefining the acquisition period;
+  a deliberate subset is named explicitly (positions a named subset does not request may be absent). Named
+  positions beyond the geometry are refused at preflight, before neural work; supplied identities must be windows
+  of the source Experiment product (`aggregation_identities_in_product`).
+- **Preprocessing contract between collections.** The input conversion of the retained collections is compared
+  between them as well as against the reference product; two collections with conflicting recorded conversions
+  are refused even when the product records none, the agreed conversion is kept in the merged contract, and the
+  report states whether it was verified or is unavailable.
+- **Physical domain and probability normalization.** One shared rule (`physical_domain_error`) validates explicit
+  selections, overrides and every final vector of an explicitly selected artifact: a bleaching probability at or
+  above one is refused, while a physically valid acknowledged extrapolation stays available; diagnostic
+  unrestricted clouds are not clipped. Probabilities accepted within the declared tolerance are divided by their
+  sum before storage and sampling (a roundoff convention recorded in the manifest, not a weighting), so every
+  accepted artifact samples and round-trips; materially different totals remain refused.
+- **One median convention.** The selection console (`--emit-representatives-template`) summarizes the archive's
+  collections through the same inverse-empirical-CDF function as the Experiment report, the comparison export
+  and the mixture report (`experiment_aggregation.archive_summary_rows`).
+- **HPC forwarding.** `AGGREGATION_WINDOW_SETS` (comma-separated by grammar) rides the exported environment via
+  `ALL` in both Submit scripts, like `KINDS`, never the comma-split explicit `--export`; both launchers pass it to
+  every worker and the merge as one argument (`tests/test_hpc_submit_forwarding.py`, fake scheduler and
+  interpreter, no job).
+- **Report presentation.** Physical axes carry informative tick labels and unit labels (PSF width in px as
+  sqrt(2) x sigma, photons, the 100-frame bleaching reference interval, per second); the reference row states the
+  reference's current method (median over the per-window posterior medians, then the documented parameter-specific
+  selections) with the per-parameter decision record beside it; the section distinguishes the input posterior
+  mixtures from the exported collections of point representatives; supporting files and figures are links.
+- **Tests.** `tests/test_experiment_aggregation.py`: the four constructions and equal weights on identifiable
+  clouds, window-set parsing, opening equivalences and membership, coverage/duplicate/contract refusals,
+  single-process versus merged-shard equality and the mixed-storage guard, exports and the archive, the weighted
+  quantile, the extended report for live and saved rendering, mixture probabilities, consolidation, overrides
+  and invalid selections, the weighted artifact round trip, sampler, loader and legacy uniformity, the
+  reproduction of the saved four-cell pilot representatives, and the regressions of the review corrections
+  (target binding, declared-geometry coverage and product identities, conversion conflicts, override domain and
+  probability roundoff, the shared median convention); `tests/test_hpc_submit_forwarding.py` (new).
+- **Documentation.** `DETECTOR_WORKFLOW.md` §7.2–§7.3 defines the four representative constructions,
+  the historical SEL comparison, window sets, input mixtures, explicit component weights, and the
+  Experiment-to-selection-to-CPU-build procedure. The Nuisance DLI usage companion and `PROJECT_CONTEXT.md`
+  follow this procedure; the fixed-vector decision record remains historical. `VALIDATION.md` documents
+  the focused CPU checks and updates the inventory to 310 tests in 38 files. No production window set,
+  mixture, weights, statistic, or bleaching treatment is selected by these documentation changes.
+
 ## Unreleased
 
 Documentation checkpoint; no code change.

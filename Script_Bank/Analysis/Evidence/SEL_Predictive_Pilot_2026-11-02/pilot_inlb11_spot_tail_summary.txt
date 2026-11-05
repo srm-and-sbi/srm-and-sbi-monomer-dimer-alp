@@ -1,0 +1,16 @@
+SPOT COUNT (detected spots per frame, InlB cell 11)
+  SEL_R1 SEL_R1 (INLB_BERNOULLI): opening   75.5  closing   53.7  closing/opening 0.71 fluorescent_complexes_0 216 eta_opening 0.35
+  SEL_R1           experimental: opening  143.6  closing  176.0  closing/opening 1.23
+  SEL_R2 SEL_R2 (INLB_BERNOULLI): opening   81.2  closing   54.5  closing/opening 0.67 fluorescent_complexes_0 218 eta_opening 0.37
+  SEL_R2           experimental: opening  143.6  closing  176.0  closing/opening 1.23
+  SEL_R3 SEL_R3 (INLB_BERNOULLI): opening   76.1  closing   55.1  closing/opening 0.72 fluorescent_complexes_0 209 eta_opening 0.36
+  SEL_R3           experimental: opening  143.6  closing  176.0  closing/opening 1.23
+TAIL STRUCTURE (threshold 10000 ADU)
+  SEL_R1     opening 100 frames         experimental: median 1916 p99 7806 p99.9 13067 max 33707 frame-max med 26388 hot px 23387 blobs3+ 3468 above_exp_max -
+  SEL_R1     opening 100 frames SEL_R1 (INLB_BERNOULLI): median 1255 p99 2196 p99.9 3227 max 43917 frame-max med 9338 hot px 124 blobs3+ 20 above_exp_max 8
+  SEL_R1 whole clip (1000 frames)         experimental: median 1516 p99 5467 p99.9 9405 max 33707 frame-max med 16657 hot px 49405 blobs3+ 7003 above_exp_max -
+  SEL_R1 whole clip (1000 frames) SEL_R1 (INLB_BERNOULLI): median 1251 p99 2163 p99.9 3066 max 43917 frame-max med 7983 hot px 722 blobs3+ 92 above_exp_max 13
+  SEL_R2     opening 100 frames SEL_R2 (INLB_BERNOULLI): median 1256 p99 2203 p99.9 3284 max 21054 frame-max med 8592 hot px 39 blobs3+ 0 above_exp_max 0
+  SEL_R2 whole clip (1000 frames) SEL_R2 (INLB_BERNOULLI): median 1252 p99 2168 p99.9 3058 max 38133 frame-max med 8046 hot px 592 blobs3+ 55 above_exp_max 4
+  SEL_R3     opening 100 frames SEL_R3 (INLB_BERNOULLI): median 1255 p99 2185 p99.9 3190 max 14491 frame-max med 8256 hot px 46 blobs3+ 2 above_exp_max 0
+  SEL_R3 whole clip (1000 frames) SEL_R3 (INLB_BERNOULLI): median 1251 p99 2160 p99.9 3059 max 38503 frame-max med 7982 hot px 640 blobs3+ 72 above_exp_max 2

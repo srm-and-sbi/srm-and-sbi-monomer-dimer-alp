@@ -1,0 +1,116 @@
+{
+ "kind": "MET-INLB",
+ "cell": 11,
+ "window_adu": [
+  195.0,
+  14534.0
+ ],
+ "source_fps": 50,
+ "n_source_frames": 1000,
+ "seeds": {
+  "SEL_R1": 20261102,
+  "SEL_R2": 20261103,
+  "SEL_R3": 20261104
+ },
+ "players": [
+  {
+   "file": "INLB11_experimental_vs_SEL_R1_20s_every5.html",
+   "bytes": 76926309,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    195.0,
+    14534.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-INLB cell 11",
+    "SYNTHETIC SEL_R1 (seed 20261102)"
+   ],
+   "sha256": "85d1d4df69caac43c7bde3caafd19c54406b0713dc80bcd0f1e755b143a28d9e"
+  },
+  {
+   "file": "INLB11_experimental_vs_SEL_R2_20s_every5.html",
+   "bytes": 77007443,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    195.0,
+    14534.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-INLB cell 11",
+    "SYNTHETIC SEL_R2 (seed 20261103)"
+   ],
+   "sha256": "18ac5fc063136f4b664732410ee5059b1aa7336ac166357f9f89c78b51421f02"
+  },
+  {
+   "file": "INLB11_experimental_vs_SEL_R3_20s_every5.html",
+   "bytes": 76958985,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    195.0,
+    14534.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-INLB cell 11",
+    "SYNTHETIC SEL_R3 (seed 20261104)"
+   ],
+   "sha256": "ee7f5b2ccb79cf25e7e2df138a6f54f5f4aa2de3907ab4bfeb1409de1ce7c3ed"
+  },
+  {
+   "file": "INLB11_experimental_vs_R1_R2_R3_20s_every5.html",
+   "bytes": 141088943,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    195.0,
+    14534.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-INLB cell 11",
+    "SYNTHETIC SEL_R1 (seed 20261102)",
+    "SYNTHETIC SEL_R2 (seed 20261103)",
+    "SYNTHETIC SEL_R3 (seed 20261104)"
+   ],
+   "sha256": "6307a3f463cc567a7f09305d0b31655559487aa0e0b2772d9c1afd60c96752b1"
+  },
+  {
+   "file": "INLB11_experimental_vs_R1_R2_R3_opening4s_everyframe.html",
+   "bytes": 149884948,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 199,
+   "stride": 1,
+   "display_fps": 50.0,
+   "duration_s": 4.0,
+   "window_adu": [
+    195.0,
+    14534.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-INLB cell 11",
+    "SYNTHETIC SEL_R1 (seed 20261102)",
+    "SYNTHETIC SEL_R2 (seed 20261103)",
+    "SYNTHETIC SEL_R3 (seed 20261104)"
+   ],
+   "sha256": "27fd02ee9d7e023651bbb53859bcf33caf9ccfd575f26501ee33370d723076b9"
+  }
+ ]
+}

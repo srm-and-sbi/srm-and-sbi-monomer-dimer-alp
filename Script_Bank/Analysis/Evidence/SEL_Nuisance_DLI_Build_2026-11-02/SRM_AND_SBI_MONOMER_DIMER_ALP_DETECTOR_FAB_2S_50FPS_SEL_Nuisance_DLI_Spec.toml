@@ -1,0 +1,52 @@
+# ============================================================================
+# Nuisance_DLI spec -- selection_user: ONE explicitly chosen, fixed imaging vector.
+# ============================================================================
+# Fill every [selection.<KEY>] table: `value` in PHYSICAL units, `source` (where the value
+# comes from: which estimator, product and aggregation, or which measurement) and
+# `limitation` (what the value does not establish). The build converts to log10, refuses a
+# value outside the detector prior box unless its key is listed in allow_outside_prior with
+# a non-empty outside_prior_justification (an acknowledgement of extrapolation beyond the
+# tested imaging domain, not a certification), never clips, needs no estimator and no GPU,
+# and records the vector as user-selected and fixed, with no calibrated joint uncertainty.
+# provenance (auto-filled, do not edit): {"choice": "selection_user", "condition": "FAB", "nuisance_tag": "SEL", "timing_label": "2S_50FPS"}
+
+[block]
+posterior_sample_pool_choice = "selection_user"
+allow_outside_prior = []                 # keys whose value may sit outside the prior box
+outside_prior_justification = ""         # required (non-empty) when allow_outside_prior is not empty
+
+[selection.mu_r]
+# prior box (physical): [1, 1.99526]
+value = 1.734
+source = "adopted Fab detector estimator C128V42A, record ..._FAB_2S_50FPS_C128V42A_MAP_Experiment, median over the 600 per-window posterior medians (ten 2 s windows of the sixty recordings), transformed to physical units; MAP and SGM aggregates read beside it (MAP 1.737, SGM 1.738). Neural estimate supported by synthetic recovery (MAE 0.011 dex, r 0.98 on the 25,000 EVAL videos of the current model, DETECTOR_WORKFLOW.md sec. 9.10); replaces the direct PSF-width estimate 1.585 selected before, which becomes the sensitivity scenario SEL_MU_R"
+limitation = "a demonstrated synthetic accuracy, no demonstrated experimental one; 7 % of windows above the 2.0 px prior edge; the direct estimator disagrees by 0.04 dex with no ground truth to decide; the fitted width falls 0.03 dex along a recording, which no fixed value represents; point estimate retained as produced, precision not established"
+
+[selection.sigma_r]
+# prior box (physical): [0.1, 0.562341]
+value = 0.177
+source = "adopted Fab detector estimator C128V42A, same record and aggregation (MAP 0.178, SGM 0.176); supported by the direct PSF-width cross-check 0.21 and the fit-corrected localization reference about 0.15 (sec. 6.7). Neural estimate supported by synthetic recovery (MAE 0.034 dex, r 0.98)"
+limitation = "falls 0.15 dex along a recording in 92 % of recordings, a within-recording decline no fixed value represents; experimental accuracy model-dependent"
+
+[selection.mu_pc]
+# prior box (physical): [100, 562.341]
+value = 105.0
+source = "adopted Fab detector estimator C128V42A, same record and aggregation (MAP 105.3, SGM 104.8). Neural estimate supported by synthetic recovery (MAE 0.028 dex, r 0.98)"
+limitation = "no independent experimental cross-check (the localization per-detection brightness 386 is a spot-level sum, sec. 6.7 caveat 3); 8 to 14 % of windows below the 100-photon prior edge; falls 0.03 dex along a recording; a per-dye window median under the labeling and camera assumptions"
+
+[selection.sigma_pc]
+# prior box (physical): [0.177828, 1]
+value = 0.5848
+source = "adopted Fab detector estimator C128V42A, same record and aggregation (MAP 0.5779, SGM 0.5861); fit-corrected localization reference about 0.5. Neural estimate supported by synthetic recovery (MAE 0.079 dex, r 0.90, the weakest of the four spatial and brightness parameters)"
+limitation = "experimental accuracy model-dependent"
+
+[selection.prob_photo_bleach]
+# prior box (physical): [0.01, 0.316228]
+value = 0.05
+source = "empirically anchored: a declared per-dye bleaching probability, anchored to the measured whole-recording fluorescence decline of the sixty MET-FAB recordings over 20 s (0.054 to 0.057 per 100-frame interval on the 16-bit frames; record ..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW), rounded as a working value, selected on 2026-10-01 from the overlay of single-rate declines on the measured curves (figures/field_flux_curves_FAB.png). The adopted estimator's own value (median 0.093, MAP 0.148) plays no part: it does not recover the parameter (r 0.06, MAE comparable to a constant guess). Probability over the fixed 100-frame reference interval"
+limitation = "the analysis measures the field-fluorescence decline, not per-dye bleaching; the mapping to the simulator's per-dye probability rests on the assumptions recorded in DETECTOR_WORKFLOW.md sec. 7.6 (ideal independent dyes of stationary mean brightness); the recorded decline is not single-exponential and is stronger in brighter recordings; the background itself falls 9 %; emitters leaving the field and label exchange are not separable from bleaching; the late-phase rate 0.03 and the faster-loss value 0.10 are the declared sensitivity scenarios SEL_PB03 and SEL_PB10"
+
+[selection.lambda_rate]
+# prior box (physical): [1, 10]
+value = 8.0
+source = "declared, rounded from the adopted Fab detector estimator C128V42A (median 8.096 per second, MAP 8.204, SGM 7.884; window spread 0.07 dex), the neural value being the default source under the hierarchy; partially recovered (MAE 0.217 dex, r 0.49), so its digits are not retained; replaces the nominal 5 chosen before. The localization-autocorrelation anchor about 5 (sec. 6.5) sits 0.21 dex below, comparable in magnitude to the synthetic mean absolute error"
+limitation = "not a uniquely measured rate; nothing on the recordings decides between 8 and the anchor 5; rises 0.06 dex along a recording; correlation time 0.12 s"

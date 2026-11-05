@@ -703,7 +703,7 @@ what has to be built:
 | block | source of truth | record token | detector | production (biology) |
 |---|---|---|---|---|
 | biology (the master rows of §6.1: eleven under MET-FAB, twelve under MET-INLB) | the biology prior, realized once per condition as the trajectory tier (§4) | the tier's own `Theta_Set` | marginalized — re-imaged; its schema is checked against the condition's biology table before rendering | inferred — the same file is the label |
-| photophysics (six rows, §6.2) | the detector calibration on the experimental recordings | `Nuisance_DLI` artifact, recorded as `Nuisance_DLI_Theta_Set` | inferred — its posterior mints the artifact | marginalized — drawn from the artifact |
+| photophysics (six rows, §6.2) | the detector calibration and recorded nuisance selection | `Nuisance_DLI` artifact, recorded as `Nuisance_DLI_Theta_Set` | inferred — Experiment reports representatives; the analysis constructs the selection | marginalized — drawn from the artifact |
 | camera (five rows, §6.3) | acquisition-protocol values, known a priori | transient `BoxUniform`, recorded as `Nuisance_SCOPE_Theta_Set` (§9.3) | marginalized | marginalized — the one block shared by both |
 | a photophysics row measured directly (§9.4, proposal) | a direct estimator's measured range (§9.5) | nuisance-from-spec with that range (§5), same record token | — | marginalized over the measured range, never a point value |
 
@@ -717,97 +717,161 @@ proposes for any parameter that leaves the inferred block.
 
 ### 7.2 The `Nuisance_DLI` artifact
 
-**What it is.** A trained detector estimator is a prerequisite. The construction reads every experimental
-recording, cuts each into model-length windows, draws the posterior conditioned on each window, and pools the
-draws across every window of every recording into the **`posterior_sample_pool`**. That pool is a *mixture*: the
-recordings genuinely differ in imaging, so the across-recording spread *is* the nuisance, and a single posterior
-conditioned on all recordings at once — which would assume one shared parameter vector — is the wrong object.
-One user choice, **`posterior_sample_pool_choice`**, turns the pool into the artifact (`detector_nuisance_dli.py`):
+**Purpose and current state.** The artifact is the samplable distribution of the six imaging parameters
+that the biology DLI stage uses. Experiment calculates and reports candidate collections; a separate CPU
+analysis records the scientific selection and builds an `empirical_representatives` artifact from those
+collections. The artifact stores complete vectors, their probabilities, and construction provenance. Biology
+generation samples it without the detector estimator or experimental recordings. The five camera parameters
+remain the separately sampled SCOPE nuisance (§9.3).
 
-| choice | representation | cross-parameter correlations |
-|---|---|---|
-| `raw` (default) | resample the pool per whole vector | preserved exactly |
-| `map_estimate_pool` | resample the pooled per-window MAP estimates per whole vector | preserved (point estimates) |
-| `gaussian` | a full-covariance multivariate normal fit to the pool | linear only (via the covariance) |
-| `box` | a per-parameter uniform over pool quantiles | none (independent per dimension) |
-| `box_user` | a per-parameter uniform over user-set ranges | none |
-| `sgm_percentiles` | whole actual vectors at signed distance-to-SGM percentiles -- an SGM of window MAPs under `selection_source = "experiment"`, of window posterior SGMs under `"window-sgm"`; one frozen vector (`[50]`) or a small pool | whole vectors: a multi-member pool keeps its members' co-occurring coordinates; a single frozen vector carries none |
-| `selection_user` | one explicitly chosen, fixed imaging vector assembled from documented sources: six named physical values, each with its source and limitation, typed into the spec; needs no estimator, Experiment product, GPU or pool; returned unchanged to every simulation | none: a single fixed vector carries no joint structure and no calibrated joint uncertainty |
+The existing Fab and InlB `SEL` artifacts are fixed reference scenarios (§7.6). They were built and remain
+available for comparison. A production selection of empirical representatives, window sets, mixture weights,
+and any parameter-specific treatment has not yet been made. The saved-draw implementation check covers two
+cells per condition; it is not a complete-cohort nuisance selection.
 
-`raw` is the faithful form: resampling whole vectors preserves the joint structure exactly, including the ridges
-the calibration constrains — the ADU floor depends on the product `gamma·kappa_o`, so those two ride a joint
-ridge that independent per-parameter sampling would break. `gaussian` keeps such a ridge as a linear
-correlation but not multimodality or curvature; `box`/`box_user` discard correlations. `sgm_percentiles` selects
-a few *whole* actual vectors at percentiles of a signed distance to the Sample Geometric Median — the
-correlation-preserving median vector, an actual member of the cloud, never the vector of per-dimension medians,
-which can be an impossible combination — so `[50]` freezes the imaging to one actual vector and several
-percentiles give a small pool of actual acquisitions; it reuses the Experiment stage's MAP estimates and needs no
-GPU. A single selected vector fixes the six photophysics parameters across generated recordings. It does not fix
-the separately sampled SCOPE camera parameters (§9.3). Selecting fixed photophysics is an explicit construction
-choice; it should not be described as the general biology-workflow behavior. The companion `…_Sample_Geometric_Median` analysis reports that median for inspection and mints nothing; the
-construction is the authoritative source, and both call one `sample_geometric_median` implementation. `pool_mode`
-(`bounded` default, `unrestricted`) follows the Evaluation and Experiment convention: bounded rejection-samples
-the pool within the imaging prior box, unrestricted keeps the flow's draws wherever they fall. The
-calibration-faithful forms (`raw`, `map_estimate_pool`, `gaussian`, `sgm_percentiles`) are never clipped; only
-`box`/`box_user` are clamped to the prior box, at build, logged and counted. The artifact stores the numeric
-parameters of its representation — a `[low, high]` box, a sample matrix, or a Gaussian mean and covariance — so
-generation samples it standalone, needing neither the estimator nor the recordings. Per-parameter
-`[imaging.<KEY>]` ranges are supplied if and only if the choice is `box_user`; `[selection.<KEY>]` tables
-(`value` in physical units, `source`, `limitation`) if and only if it is `selection_user`, whose build converts
-the values to the log10 storage space, refuses a value outside the detector prior box unless the spec lists
-the key under `allow_outside_prior` with a non-empty `outside_prior_justification` (an acknowledgement that
-the value lies beyond the tested imaging domain, not a certification), clips nothing, and records the vector as
-user-selected and fixed. **Selecting an artifact.** The canonical artifact carries the plain timing label; a
-*nuisance tag* (`--nuisance-tag`, a SCREAMING_SNAKE token with the grammar of the estimator's artifact tag)
-names a further artifact beside it, `<alias>_<timing>_<TAG>_Nuisance_DLI.npz`, for a reference vector or a
-sensitivity variant. The tag names the nuisance artifact, never the estimator that informed it. Every consumer
-selects an artifact by that tag and records the selected artifact's identity in its outputs: the biology DLI
-stage (`--nuisance-tag`, dispatcher knob `NUISANCE_TAG`) writes it into every `Nuisance_DLI_Theta_Set` record's
-schema, the posterior-predictive render into its clip file and figure provenance, the horizon audit into every
-generated file's imaging description, and the SGM analysis into its report.
+**Experiment owns the aggregation report.** Each 20 s recording has 1,000 frames at 50 FPS. The adopted
+estimator receives ten non-overlapping 2 s windows, with 10,000 joint summary draws per window in this setup.
+Its existing report gains **Experimental aggregation and nuisance candidates**, with the tables and plots
+below. Supporting archives, CSV files, and figures are linked from that report. Aggregation groups window
+posteriors without changing the 2 s neural input or computing an aggregate MAP.
 
-**Status and the decision.** No `Nuisance_DLI` has been built for this project; smokes use `box_user` over the
-full prior box as a stand-in that needs no estimator. The decision on what the biology reference run conditions
-on is made and recorded in §7.6: one explicitly chosen, fixed imaging vector assembled from documented sources,
-minted by the `selection_user` choice under a nuisance tag of its own. For the pooled choices the
-construction resolves the estimator from the product namespace it is run under (`…_DETECTOR_…` or
-`…_ONEDYE_DETECTOR_…`) and writes that estimator's weights SHA-256 into the spec's provenance comment and the
-cached pool (`pool_provenance`), so the estimator behind an artifact is visible and never implicit in a
-default; the pooled representations are retained beside the reference vector for a marginalizing run.
+Synthetic Evaluation compares estimates with known generating parameters. Experimental aggregation instead
+defines which differences between recordings and acquisition periods the nuisance distribution should
+represent. Sampling and numerical utilities are shared; the scientific summaries serve different purposes.
 
-**An empirical-Bayes choice, stated.** The pool is drawn from *all* experimental recordings, and the resulting
-imaging distribution then conditions the biology pipeline applied to those same recordings. The recordings are
-the only available anchor for the imaging manifold, so this is deliberate — but the downstream fit to them is
-not an independent evaluation on experimental data, and no reader should take it for one. A calibration/analysis
-split of the cells, cross-fitting across cells, or a leave-one-recording-out sensitivity check would restore that
-independence; none is performed here.
+**Construction options.** Let C be the included cells of one condition and S a non-empty set of window
+positions shared by those cells. Counts below assume C = 60 and all ten windows. Fab and InlB stay separate.
+
+| ID | Construction | Calculation | Vectors per condition | What it represents |
+|---|---|---|---:|---|
+| `reference` (SEL) | Historical fixed scenario | Coordinate-wise median over the 600 per-window posterior medians, transformed to physical units, followed by the documented parameter-specific selections, including bleaching and rounded flicker values | 1 | One assembled fixed scenario; not a joint SGM |
+| `per_cell` | One representative per cell | Pool complete draws from the cell's selected windows with equal window weights; select the SGM | C = 60 | Variation between cell representatives over the selected acquisition period |
+| `per_window_position` | One representative per position | At each selected position, pool complete draws across cells with equal cell weights; select the SGM | Number of positions = 10 | Variation between acquisition-period representatives, with cell differences compressed at each position |
+| `global` | One representative of the selected collection | Pool complete draws with equal cell weights and equal selected-window weights within each cell; select the SGM | 1 | An overall joint center of the selected collection |
+| `per_cell_window` | One representative per cell-window pair | Select the SGM of each included window posterior | C × number of positions = 600 | Variation between window representatives, retaining cell and window identities |
+
+Each computed group stores the SGM, the marginal-median vector, and marginal quantiles. SGM is the default
+candidate statistic. The alternative `median` vector is a coordinate-wise composite whose coordinates need
+not have occurred together. A selection must name the statistic. An SGM of window SGMs is not an active
+construction in this route; it is generally different from the SGM of pooled posterior draws.
+
+**Window sets and input weights.** `all` means every position admitted by the declared window geometry;
+`opening` means chunk 0, the first 2 s here. Other sets are named explicitly using `NAME=a-b` for an inclusive
+range or `NAME=a+b+c` for a list. The standard report calculates all four constructions for `all,opening`.
+Positions are zero-based chunk indices. Every included cell must have every requested position; missing
+positions are refused rather than silently redefining `all`. Every supplied identity must belong to the
+source Experiment. A deliberately chosen subset is represented by its own name.
+
+Writing q_cw for a window posterior, the per-cell and global input mixtures are
+
+$$
+Q_c(\theta)=\frac{1}{|S|}\sum_{w\in S}q_{cw}(\theta),
+\qquad
+Q_{\mathrm{global}}(\theta)=\frac{1}{C|S|}
+\sum_{c=1}^{C}\sum_{w\in S}q_{cw}(\theta).
+$$
+
+Equal draw counts implement these weights directly. These pooled clouds are descriptive mixtures, not a
+posterior jointly conditioned on a recording. The exported candidate collections contain point representatives
+of those clouds. Raw posterior draws are retained as calculation inputs and audit records; they are not the
+selected nuisance vectors in this strategy. Within-window uncertainty and variation between representatives
+are therefore reported separately.
+
+**Coordinates and SGM method.** Distances use estimator coordinates divided by prior widths, matching the
+per-window convention. All six detector coordinates are log10; report values and axes use physical units.
+A single-window group reuses its stored exact sample medoid. Pooled groups above 10,000 rows use the
+collection kernel's Weiszfeld geometric median snapped to a retained draw, recorded as `weiszfeld_snap`, an
+approximation to the exact medoid. Small exact groups remain possible. Every SGM records its source cell,
+chunk, draw index, and collection. Selecting a joint draw retains its co-occurring coordinates, not the full
+posterior covariance or uncertainty. Pooled marginal intervals come from the pooled draws, not aggregated
+window-level interval endpoints.
+
+**Combining constructions.** A component identifies a source Experiment, condition, window set, grouping,
+and statistic. If component k contains n_k representatives, its empirical distribution and the selected
+mixture are
+
+$$
+G_k=\frac{1}{n_k}\sum_{j=1}^{n_k}\delta_{v_{kj}},
+\qquad
+G=\sum_{k=1}^{K}\alpha_kG_k,
+\qquad
+\alpha_k\geq0,\quad\sum_k\alpha_k=1.
+$$
+
+Each member receives probability alpha_k / n_k. Simply concatenating 60 cell, 10 position, one global, and
+600 cell-window representatives would give the last construction 89.4% of the mass by row count. Component
+weights must therefore be explicit. Combining constructions changes the weighting of representative states;
+it does not add independent evidence. A global component introduces a point mass at the overall center.
+Equivalent selections are disclosed. Exact duplicate vectors are consolidated by adding probabilities and
+retaining memberships; rows are not deduplicated by rounded displayed values.
+
+Component weights must sum to one within 1e-6. Accepted numerical residuals are removed by normalization
+before storage/sampling; the component weights remain recorded as the scientific selection. Larger errors
+are refused. Every draw is a complete stored row. Legacy unweighted artifacts retain uniform sampling.
+
+**Reports and interpretation.** For every requested set, Experiment compares normalized marginal empirical
+CDFs and joint projections. Temporal plots show cell-window and position-level SGMs with separately labeled
+source-posterior intervals; matched per-cell plots compare window selections. The numerical table gives
+counts, medians, interquartile and central 90% ranges, differences from SEL, and outside-training-box mass.
+Ranges over representatives use the inverse weighted empirical CDF and describe empirical dispersion. Raw
+posterior quantiles retain the existing interpolation in estimator coordinates and transformation to physical
+units. These quantities are not interchangeable credible intervals. The source-uncertainty table names the
+first multi-position set it summarizes; every group's quantiles remain in the archive.
+
+Unrestricted clouds are not clipped. Valid values outside the detector training box remain labeled as
+extrapolations; the artifact records `pool_mode = "unrestricted"` when positive mass lies outside that box.
+Explicit selections and final vectors must still respect physical domains, including a bleaching probability
+strictly between zero and one. A stable pooled bleaching center is not a new empirical calibration of that
+parameter. The 0.05 reference and any alternative treatment require their own recorded decision. An explicit
+override is shown as a transformation; its result is not labeled as the original joint draw. Pairwise
+correlations remain diagnostics rather than an imposed sigma_pc–lambda relationship.
+
+**Artifact identity and compatibility.** A nuisance tag (`--nuisance-tag`, `[A-Z0-9]+`) names the selected
+artifact beside the canonical one. It names the nuisance distribution, not its source estimator. Consumers
+select the tag and record its identity, including the construction record, in their outputs. Template emission,
+dry-run, and build bind the source archive to the target condition and timing; components from a cross-condition
+Experiment application remain inspection results, not another condition's native nuisance. Older archives
+without that binding require CPU report regeneration before this construction can use them.
+
+The older `raw`, `map_estimate_pool`, `gaussian`, `box`, `box_user`, `sgm_percentiles`, and `selection_user`
+routes remain available for historical artifacts, explicit fixed scenarios, and tests. They are not alternative
+defaults of this representative-based procedure. Compatibility details are in the analysis companion.
+
+The distribution is calibrated from experimental recordings and subsequently used for biology inference on
+those recordings. Downstream agreement is consequently not an independent experimental validation. This
+construction performs no held-out-cell calibration split or cross-fitting.
 
 ### 7.3 The construction step
 
-The `Nuisance_DLI` is a **user-authored, analysis-emitted artifact**, not a hardcoded table, because its source
-of truth is the calibration plus a human judgment that varies per experiment. It is a post-hoc analysis
-(`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py`), never a canonical stage, and it
-is where the two-stage calibration's human refinement (§3) becomes explicit: the posterior is the initial guess,
-the analyst decides how it feeds production. Three properties govern it.
+The `Nuisance_DLI` is a **user-authored, analysis-emitted artifact**. The calculation is reproducible;
+the acquisition period, representative construction, weights, statistic, and any parameter-specific treatment
+are recorded scientific choices. The route has three steps:
 
-1. **A gate, not a rebuild.** The analysis emits the spec (`…_Nuisance_DLI_Spec.toml`, values in log10; a spec
-   cannot exist without having run it), validates it at build — structure, a valid choice and `pool_mode`, and
-   for `box_user` ranges inside the imaging prior box of §6.2 — and builds the artifact (`…_Nuisance_DLI.npz`).
-   Consumers (the production import; the matched-synthetic generation of §8) call `require_nuisance_dli`, which
-   loads the built artifact and fails loud, naming the analysis to run, if it is absent. It never rebuilds:
-   building needs the estimator and a GPU.
-2. **The analysis suggests; the user decides.** Emit-template mode draws a light pool and presents the calibrated
-   imaging (per-parameter 5th/95th percentiles) as suggestions, pre-filling `box_user`; the user sets the choice.
-   Those percentiles are estimates on experimental recordings, which have no ground truth — decision support, not
-   a demonstrated recovery (recovery is quantified only on held-out synthetic data, §6.9–§6.10 and §9.2 B5).
-3. **The build is self-contained.** Build mode loads the estimator, reads and windows the recordings itself
-   (`--total-time-seconds`, `--experiment-span-seconds`, `--chunk-step-seconds`), builds the pool, materializes
-   the chosen representation, and writes the artifact with its manifest; provenance goes into the spec's
-   provenance comment. The per-simulation `Nuisance_DLI_Theta_Set` record is written later, at generation, when
-   production marginalizes the imaging (§9.2 Phase D) — not by this build.
+1. **Calculate and inspect in Experiment.** Aggregation is on by default with sets `all,opening`, retaining
+   the same clouds already drawn for the per-window summaries. It runs once after the complete single-process
+   product or validated shard merge. The main report links `aggregation_candidates.npz`, the group and comparison
+   CSVs, `aggregation_manifest.json`, and its figures. `--no-aggregation` explicitly selects the legacy reporting
+   mode. `--regenerate-report --review-label <TOKEN>` reuses saved results on CPU through the same report writer;
+   compatible retained collections can be supplied with `--cloud-sources`. A pilot states its actual coverage.
+2. **Record the selection.** The analysis script's `--emit-representatives-template --candidate-archive <path>`
+   reads the archive on CPU, displays the same representative summaries as Experiment, and emits a skeleton
+   with components commented out. The user names the components, their weights, the statistic (`sgm` or `median`),
+   and rationale. Optional `[override.<KEY>]` tables declare physical values and reasons. No production selection
+   is inferred from the skeleton or an illustrative example.
+3. **Validate and build on CPU.** `--build --dry-run` checks archive identity, target binding, component
+   definitions, coverage, weights, and physical values. The build writes the selected complete vectors,
+   probabilities, manifest, and a report with weighted marginal and joint plots using Experiment's plotting
+   functions. It does not load the estimator or repeat neural sampling. Generation calls `require_nuisance_dli`
+   to load the chosen artifact; it never rebuilds one. The per-simulation `Nuisance_DLI_Theta_Set` record is written
+   later when the biology DLI stage samples the artifact.
 
-Arguments, the seven choices, and how to choose among them are in the companion
-`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md`; this section records the design, not the usage.
+Compatible saved clouds must agree on checkpoint, parameter order, coordinates, scale, window geometry,
+draw count, and sampling mode. Explicit preprocessing descriptions are compared between collections even if
+the original product lacks the field; missing metadata are disclosed rather than reported as verified.
+Source identities, checksums, and any differences in collection labels or seed histories remain in the record.
+
+Usage and selection-specification fields are documented in
+[`SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md`](Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md).
 
 ### 7.4 Persisted nuisance records
 
@@ -852,6 +916,11 @@ estimator format; both workflows write and read it, and the run-identity table o
 `weights_sha256`.
 
 ### 7.6 The working imaging vector: sources, selected values and limitations
+
+**Historical fixed-scenario record.** This subsection preserves the decisions and evidence behind `REF`,
+`SEL`, and their variants. The built `SEL` artifacts are the fixed references shown by Experiment. The
+active representative-based procedure is in §7.2–§7.3; its production selection has not been made. Historical
+selections below do not automatically supply the weights or parameter treatment of an empirical artifact.
 
 The biology reference run conditions on one fixed imaging vector, chosen explicitly from the sources that the
 synthetic benchmarks of §6.9, §9.6 and §9.7 rank, and applied to the experimental recordings, which have no

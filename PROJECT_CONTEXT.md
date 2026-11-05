@@ -987,8 +987,14 @@ it is marginalized as the SCOPE camera nuisance, each value drawn per simulation
 from its a-priori box (§2). The calibration is per condition, because the
 labeling law that shapes the videos is.
 
-**Output:** A posterior over `β` and a versioned, provenanced imaging-parameter
-artifact. This calibration is a complete workflow parallel to the biology
+**Output:** A trained posterior over `β` and the detector Experiment report,
+including candidate collections of imaging representatives. Experiment retains
+window draws and reports `per_cell`, `per_window_position`, `global`, and
+`per_cell_window` constructions for each requested window set. A separate CPU
+analysis records the chosen components, statistics, and weights and builds the
+versioned `Nuisance_DLI`; no production empirical selection is automatic. The
+canonical definitions and current status are in `DETECTOR_WORKFLOW.md` §7.2–§7.3.
+This calibration is a complete workflow parallel to the biology
 pipeline, run in this repository with its own committed submission machinery,
 separate from — never wired into — the biology `Submit.sh` dispatcher and its
 stage wrappers; its Simulation stage is a DLI-only pass over the condition's
@@ -1293,8 +1299,11 @@ per-frame bleach probability is
 `numb_photo_bleach = 100` is a fixed reference-frame count (a calibration
 convention, *not* the clip or video frame count) and `prob_photo_bleach` is the
 cumulative bleach fraction over that 100-frame (2 s at 50 Hz) reference window —
-a detector-inferred photophysics parameter, marginalized per simulation from the
-`Nuisance_DLI` artifact (production calibration ≈ 0.107), not a fixed constant.
+an imaging parameter supplied per simulation by the selected `Nuisance_DLI`
+artifact. Its treatment is recorded separately from the neural estimate: the
+fixed SEL scenarios use the declared or empirically anchored 0.05, and the
+representative-based production treatment remains to be selected
+(`DETECTOR_WORKFLOW.md` §7.2, §7.6).
 
 The bleach rate is parameterized by this pair — a cumulative bleach probability
 together with the reference-frame count over which it accrues — rather than by a
@@ -1627,15 +1636,28 @@ rather than a single monolithic support file. The modules and their roles:
   detector-facing name `render_detector_video`, so both DLI stages render
   through one implementation.
 - **`detector_nuisance_dli.py`** — the `Nuisance_DLI` calibrated-imaging
-  nuisance: the artifact format, its construction from the detector posterior
-  (including the pool modes and the single-vector sample-geometric-median
-  collapse), and the require-gate through which the biology DLI stage loads it.
+  nuisance: the artifact format, the weighted `empirical_representatives`
+  construction from Experiment candidates, target/physical-domain checks,
+  whole-vector sampling, and the require-gate through which biology DLI loads
+  it. Historical unweighted constructions remain readable.
 - **`experiment_support.py`** — the workflow-agnostic real-recording machinery:
   loading, windowing, and preparing experimental microscopy videos, and the one
   definition of the condition names (`condition_display`, and `kind_label`, which
   marks a recording kind other than the estimator's condition as a
   misspecification test). It is shared by both the Experiment stage and the
   `Nuisance_DLI` analysis, so it carries no workflow-specific assumptions.
+- **`experiment_aggregation.py`** — shared aggregation of retained window
+  posteriors into per-cell, per-position, global, and per-cell-window
+  representative collections. It checks source contracts and coverage, keeps
+  SGM and marginal-median vectors distinct, exports the candidate archive, and
+  adds the aggregation section to the existing Experiment report. Saved-result
+  regeneration calls the same reporting function on CPU; it performs no
+  neural sampling. Detector candidates feed the separate nuisance-selection
+  analysis; biology uses the same grouping and reporting utilities.
+- **`visualization_aggregation.py`** — marginal CDF, joint, temporal, and
+  window-selection plots for the Experiment report, reused for the final
+  weighted nuisance distribution. Representative dispersion and input-posterior
+  uncertainty have separate labels.
 - **`inference_network.py`** — the network architecture (§6): positional
   encoding, attention block, temporal transformer, and the 3D-CNN video encoder.
 - **`inference_support.py`** — the training pipeline: the video dataset (with
@@ -1721,9 +1743,11 @@ rather than a single monolithic support file. The modules and their roles:
   network place the real recordings where it places its own synthetic
   distribution?); its two namespaced Analysis shims share it.
 - **`sample_geometric_median.py`** — the workflow-agnostic sample-geometric-median
-  kernel: the correlation-preserving single-vector summary of a cloud of
-  parameter vectors (the median vector snapped to a realized sample, never the
-  vector of per-dimension medians).
+  kernel: an exact sample medoid below the caller's capacity and a Weiszfeld
+  geometric median snapped to a retained member above it, explicitly logged as
+  an approximation. The caller supplies the coordinate system and scale. A
+  selected member retains its co-occurring coordinates, not the full cloud's
+  correlations or uncertainty.
 - **`sample_geometric_median_runner.py`** — the shared engine for the
   sample-geometric-median analysis over the Experiment MAP cloud (and, for
   detector, the `Nuisance_DLI` pool); its two namespaced Analysis shims share it.
@@ -1954,7 +1978,8 @@ shared runner, and produces a defined on-disk artifact. Module paths are relativ
 | Leak-proof TRAIN / TEST / EVAL split, sizing rule, and dataset construction | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Generate_Datasets.py` (runs the RDS stage once per `--conditions` entry per split, then one DLI pass per `--workflows` entry over each condition's tier, with the `CORE = TRAIN + TEST`, `EVAL = max(floor, 0.1·CORE)` sizing; refuses to regenerate a condition's existing tier and checks the biology's `Nuisance_DLI` artifacts up front); dataset assembly in `inference_support.py` → `build_datasets()` (with `VideoDataset`, `normalize_video()`) | `_TRAIN` / `_TEST` / `_EVAL`-suffixed trajectory `.h5` and video `.zarr` namespaces |
 | Posterior training run (gradient updates on TRAIN, selection on TEST) | entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Inference.py` (drives `build_datasets()` → `setup_training()` → `train_loop()`, then `artifacts.save_estimator()`) | version-portable estimator artifact (`Estimator.npz`, via `artifacts.py` → `save_estimator()`), loaded downstream as a `DirectPosterior`; network checkpoint at each new optimum |
 | MAP recovery and calibration on held-out EVAL | `evaluation.py` → `map_estimate()` (seed-then-optimize: `collect_theta_prex()`, `collect_score_prex()`, `extract_elite_prex()`, `optimize_elite()`), `posterior_summary()` (quantiles + `sample_geometric_median()`), `point_estimate_agreement_table()`, `recovery_stats()`, `recovery_table()`, `posterior_coverage_table()`; driven by entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Evaluation.py` | recovery report (figures + tables + arrays + a live `progress.log`) under the validation output directory |
-| Real-data application (no ground truth) | same `evaluation.py` estimator (`map_estimate()`, `experiment_table()`); driven by entry point `SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py` | per-condition inferred-parameter report under the validation output directory |
+| Real-data application (no ground truth) | shared `experiment_runner.py` with `evaluation.py` per-window estimates and `experiment_aggregation.py` candidate collections; both Experiment entry points use the same writer | existing Experiment report extended with aggregation tables/figures, retained clouds, candidate archive, and CSV/manifest exports |
+| Imaging nuisance selection | `detector_nuisance_dli.py` and the detector Nuisance DLI analysis: explicit components, statistics, weights, and rationale, read from Experiment candidates on CPU | tagged `empirical_representatives` artifact with complete vectors, probabilities, target binding, and selection report |
 | Configuration, paths, storage routing, and file I/O | `parameterization.py` → `Paths`, `MachineProfile` / `load_machine_profile()`, `FrameConfig`, `RunTiming`; `io.py` → `load_data()`, `save_video_set()`, `save_theta_set()`, `convert_video_dtype()`, `theta_set_schema()`, `write_theta_set()`, `load_theta_set()`, `theta_set_status()` | resolved absolute paths (per-machine `machine_profiles.toml`); all artifacts above land under the configured roots |
 
 The five pipeline stages are RDS, DLI, Inference, Evaluation, and Experiment.
@@ -2111,6 +2136,20 @@ correctness check. A two-mode candidate pool supports both regimes: a `bounded`
 pool (rejection sampling within the prior; correct for a well-trained posterior)
 and an `unrestricted` pool (sampling the flow directly, for smoke tests and
 undertrained posteriors whose mass can lie outside the prior box).
+
+Experiment also extends its main report with **Experimental aggregation and
+nuisance candidates**. It retains the same window draws and calculates four
+representative collections for each requested window set, with `all,opening`
+as the standard comparison. The inputs remain model-length windows. The
+selected vectors describe differences between cell or acquisition-period
+representatives; the report keeps their dispersion separate from the source
+posteriors' uncertainty. A complete shard merge precedes these calculations.
+`--regenerate-report --review-label <TOKEN>` uses the same writer on CPU for
+saved products, optionally joining compatible retained collections through
+`--cloud-sources`; coverage and sampling provenance are explicit. This
+experimental grouping is a separate scientific question from recovery against
+known synthetic truth. The Nuisance DLI analysis subsequently selects and
+weights detector representatives; it does not repeat neural inference.
 
 Both stages compute and store **three point estimates** for every observation —
 the numerical MAP candidate (`map_estimate`), the marginal median of the draws

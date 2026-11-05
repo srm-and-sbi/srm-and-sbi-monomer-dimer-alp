@@ -1,0 +1,57 @@
+{
+ "clip": "SRM_AND_SBI_MONOMER_DIMER_ALP_INLB_2S_50FPS_Declared_RDS_MET-INLB_Cell_11_20S_SEL_N20000_SINGLE_Synthetic_Video.npz",
+ "kind": "MET-INLB",
+ "cell": 11,
+ "count_total": 20000,
+ "seed": 20261102,
+ "window_adu": [
+  195.0,
+  14534.0
+ ],
+ "fps": 50,
+ "n_frames": 1000,
+ "saturated_pixel_samples_above_window": {
+  "experimental": 6551,
+  "synthetic": 160,
+  "of": 65536000
+ },
+ "labeling": {
+  "n_subunits": 952.0,
+  "n_dyes": 475.0,
+  "n_labeled_subunits": 475.0,
+  "monomers_0": 411.0,
+  "monomers_fluorescent_0": 197.0,
+  "dimers_0": 334.0,
+  "dimers_fluorescent_0": 228.0,
+  "dimers_two_labeled_0": 50.0,
+  "occupancy_monomer": 1.0,
+  "occupancy_dimer": 1.0,
+  "dimers_one_probe_0": 127.0,
+  "dimers_two_probe_0": 207.0,
+  "two_probe_share": 0.024390243902439025
+ },
+ "files": {
+  "INLB11_N20000_experimental_vs_synthetic_20s_50FPS.mkv": {
+   "bytes": 351281337,
+   "sha256": "3ab36cb573b45eabfb2b992bd1175c7bf3f20f59c403988bbd8a2ecfff33075f",
+   "probe": {
+    "codec_name": "ffv1",
+    "width": 1032,
+    "height": 580,
+    "r_frame_rate": "50/1",
+    "nb_read_frames": "1000"
+   }
+  },
+  "INLB11_N20000_experimental_vs_synthetic_20s_50FPS.webm": {
+   "bytes": 317480901,
+   "sha256": "554044ef739fe2e63c066169559fe24180325686c679881f41ab347dec51db43",
+   "probe": {
+    "codec_name": "vp9",
+    "width": 1032,
+    "height": 580,
+    "r_frame_rate": "50/1",
+    "nb_read_frames": "1000"
+   }
+  }
+ }
+}

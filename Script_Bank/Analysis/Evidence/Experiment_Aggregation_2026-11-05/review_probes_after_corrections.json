@@ -1,0 +1,67 @@
+{
+  "inlb_archive_under_fab_target": {
+    "accepted": false,
+    "target_condition": "FAB",
+    "source_conditions": [
+      "INLB"
+    ],
+    "dry_run_transcript": "",
+    "error": "candidate archive: target condition 'FAB' != the archive's 'INLB' (source Experiment SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32). A native Nuisance DLI of FAB 2S_50FPS is built only from that condition's and duration's Experiment; another Experiment's candidates are inspection results, not nuisance sources.",
+    "artifact_written": false
+  },
+  "same_window_missing_from_every_cell": {
+    "accepted": false,
+    "error": "FAB: window set 'all' = positions [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] (every position of the declared geometry) requires every included cell to carry them; missing (cell, position) [(4, 5), (26, 5)]. A deliberate subset of positions must be named explicitly (NAME=a-b or NAME=a+b+c); nothing is dropped silently."
+  },
+  "different_input_conversions_with_product_reference": {
+    "accepted": false,
+    "error": "input_conversion differs between the collections: /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Window_Posterior_Pilot_2026-11-03/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_Window_Posterior_Draws.npz: \"read_cell_chunks(domain='stored'): 16-bit raw frames to 8-bit, normalize_video in the sampler\"; /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Window_Posterior_Additional_Cells_2026-11-03/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_Window_Posterior_Draws_CELL4.npz: 'INCOMPATIBLE normalization for negative test'. Collections preprocessed differently are not pooled, whether or not the reference records a conversion."
+  },
+  "bleaching_override_above_one": {
+    "accepted": false,
+    "error": "spec: [override.prob_photo_bleach].value: prob_photo_bleach = 1.2 must be a probability below 1 (physical units)."
+  },
+  "two_median_conventions": {
+    "condition": "FAB",
+    "component": "all/per_cell/sgm",
+    "parameter_keys": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc",
+      "prob_photo_bleach",
+      "lambda_rate"
+    ],
+    "template_console_physical": [
+      1.7345486338104759,
+      0.16374408004953023,
+      103.29884146716714,
+      0.5779087826719593,
+      0.09072140596604916,
+      7.912481997551193
+    ],
+    "experiment_report_physical": [
+      1.6485968414716894,
+      0.15287813097376388,
+      101.74499300542757,
+      0.5613769984412098,
+      0.08755606862446341,
+      7.81003407735347
+    ]
+  },
+  "probability_tolerance_and_sampler": {
+    "constructor_accepted": true,
+    "probability_sum": 0.9999999999999998,
+    "sampler_error": null
+  },
+  "comma_bearing_slurm_exports": [
+    {
+      "submitter": "SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh",
+      "export_line": "--export     : ALL,REPO=/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp,CONDITION=FAB,TOTAL_TIME=2.0"
+    },
+    {
+      "submitter": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Submit.sh",
+      "export_line": "--export     : ALL,REPO=/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp,CONDITION=FAB,TOTAL_TIME=2.0"
+    }
+  ]
+}

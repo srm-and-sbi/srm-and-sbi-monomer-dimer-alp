@@ -41,7 +41,7 @@
 #                   new weights-initialized phase from that product tag's estimator,
 #                   with ARTIFACT_TAG naming the phase, never with RESURRECT)
 #     evaluation  : CONDITION EVAL_TASKS POOL_MODE TOTAL_TIME
-#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME
+#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME AGGREGATION_WINDOW_SETS NO_AGGREGATION REFERENCE_NUISANCE_TAG
 #
 # sbatch-level overrides (env, optional -- unset = the stage script's baked #SBATCH):
 #   PART      CPU partition for Simulation (its baked --partition is a placeholder,
@@ -69,7 +69,8 @@
 # timing_label is rendered from TOTAL_TIME exactly as PARAMETERS.simulation.timing.label
 # ("{duration}S_50FPS", duration via %g: 2.0 -> 2, 5.0 -> 5, 2.5 -> 2.5; FPS pinned 50).
 # The KINDS comma-split trap (Slurm splits --export on commas) is avoided by carrying
-# KINDS through the exported environment via ALL, never inside the explicit --export.
+# KINDS through the exported environment via ALL, never inside the explicit --export;
+# AGGREGATION_WINDOW_SETS (comma-separated by grammar) is carried the same way.
 #
 # Examples (all DRY-RUN by default -- print the sbatch line, submit nothing):
 #   bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
@@ -138,7 +139,7 @@ export REPO   # also carried by ALL; listed explicitly in --export for clarity
 
 # Build the explicit --export list, appending only knobs that are actually set
 # (an unset knob falls back to the stage script's own default). _add never adds a
-# comma-bearing value -- those (KINDS) ride the exported environment via ALL.
+# comma-bearing value -- those (KINDS, AGGREGATION_WINDOW_SETS) ride the exported environment via ALL.
 declare -a EXPORT_PARTS=( "ALL" "REPO=$REPO" )
 _add(){ local k="$1"; [ -n "${!k:-}" ] && EXPORT_PARTS+=( "$k=${!k}" ); }
 
@@ -197,9 +198,14 @@ case "$STAGE" in
     SUBMIT_SCRIPT="$REPO/Script_Bank/HPC/SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh"
     JOBNAME="SRM_AND_SBI_MONOMER_DIMER_ALP${cond_slot}_${timing_label}${tag_slot}_Experiment"
     _add CONDITION; _add MAX_CELLS; _add CHUNK_STEP; _add POOL_MODE; _add TOTAL_TIME; _add ARTIFACT_TAG
+    # The experimental aggregation of the report (window sets; explicit legacy off switch; the reference tag).
+    _add NO_AGGREGATION; _add REFERENCE_NUISANCE_TAG
+    # AGGREGATION_WINDOW_SETS is comma-separated by its grammar (e.g. all,opening,late=5-9), so like KINDS it
+    # rides the exported environment via ALL and never enters the comma-split explicit --export list.
+    if [ -n "${AGGREGATION_WINDOW_SETS:-}" ]; then export AGGREGATION_WINDOW_SETS; KINDS_NOTE="${KINDS_NOTE:+$KINDS_NOTE; }AGGREGATION_WINDOW_SETS=$AGGREGATION_WINDOW_SETS (carried via ALL, comma-safe)"; fi
     # KINDS may be multi-value (FAB,INLB, a deliberate cross-condition application); Slurm splits --export on commas, so carry
     # it via the exported environment (ALL) rather than the explicit --export list.
-    if [ -n "${KINDS:-}" ]; then export KINDS; KINDS_NOTE="KINDS=$KINDS (carried via ALL, comma-safe)"; fi
+    if [ -n "${KINDS:-}" ]; then export KINDS; KINDS_NOTE="${KINDS_NOTE:+$KINDS_NOTE; }KINDS=$KINDS (carried via ALL, comma-safe)"; fi
     [ -n "${GPU_PART:-}" ] && SB+=( --partition="$GPU_PART" )
     [ -n "${GRES:-}" ]     && SB+=( --gres="$GRES" )
     [ -n "${NODES:-}" ]    && SB+=( --nodes="$NODES" )   # multi-node: --gres is per node -> world_size = NODES * GPUs-per-node

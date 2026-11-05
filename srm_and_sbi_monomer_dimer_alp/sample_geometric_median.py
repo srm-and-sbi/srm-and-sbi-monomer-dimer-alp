@@ -50,18 +50,20 @@ KDE_SUBSAMPLE = 50000            # cap on points used to estimate local density 
 FIGURE_SUBSAMPLE = 5000          # cap on scatter points drawn per figure
 
 
-def sample_geometric_median(vecs_abs, range_abs):
+def sample_geometric_median(vecs_abs, range_abs, *, exact_capacity=EXACT_MEDOID_CAPACITY):
     """``(index, method)`` of the collection's SGM member, in prior-range-normalized absolute space.
 
-    Up to ``EXACT_MEDOID_CAPACITY`` members: the exact medoid, the member minimizing the summed
-    Euclidean distance to all members (``"exact_medoid"``; ties resolve to the lowest index). Above
-    it: the member nearest the continuous geometric median found by Weiszfeld's iteration
-    (``"weiszfeld_snap"``), an approximation that need not minimize the summed distance. Either way
-    the result is an actual member, so its coordinates co-occurred. (Ramirez Sierra & Sokolowski
-    2025.)"""
+    Up to ``exact_capacity`` members (default ``EXACT_MEDOID_CAPACITY``): the exact medoid, the member
+    minimizing the summed Euclidean distance to all members (``"exact_medoid"``; ties resolve to the
+    lowest index). Above it: the member nearest the continuous geometric median found by Weiszfeld's
+    iteration (``"weiszfeld_snap"``), an approximation that need not minimize the summed distance.
+    Either way the result is an actual member, so its coordinates co-occurred. (Ramirez Sierra &
+    Sokolowski 2025.) ``exact_capacity`` is a memory control for a caller whose pools would otherwise
+    allocate a quadratic distance matrix at the default threshold (the experimental aggregation of
+    pooled window posteriors); every other caller keeps the default."""
     from scipy.spatial.distance import pdist, squareform     # lazy: keep the sampling path numpy-only
     m = np.asarray(vecs_abs, dtype=float) / range_abs
-    if m.shape[0] <= EXACT_MEDOID_CAPACITY:
+    if m.shape[0] <= int(exact_capacity):
         return int(np.argmin(squareform(pdist(m)).sum(0))), "exact_medoid"
     y = m.mean(0)
     for _ in range(WEISZFELD_ITERS):

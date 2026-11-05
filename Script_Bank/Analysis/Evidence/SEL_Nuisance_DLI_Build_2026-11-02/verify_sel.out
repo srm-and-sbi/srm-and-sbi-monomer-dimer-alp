@@ -1,0 +1,62 @@
+expected production key order: ['mu_r', 'sigma_r', 'mu_pc', 'sigma_pc', 'prob_photo_bleach', 'lambda_rate']
+
+=== FAB  artifact SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_SEL_Nuisance_DLI.npz
+    spec     SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_SEL_Nuisance_DLI_Spec.toml
+  [PASS] choice selection_user  selection_user
+  [PASS] parameter_keys == production order  ['mu_r', 'sigma_r', 'mu_pc', 'sigma_pc', 'prob_photo_bleach', 'lambda_rate']
+  [PASS] exactly one stored vector  (1, 6)
+  [PASS] mu_r physical 1.734 == approved 1.734  log10 +0.2390
+  [PASS] sigma_r physical 0.177 == approved 0.177  log10 -0.7520
+  [PASS] mu_pc physical 105 == approved 105.0  log10 +2.0212
+  [PASS] sigma_pc physical 0.5848 == approved 0.5848  log10 -0.2330
+  [PASS] prob_photo_bleach physical 0.05 == approved 0.05  log10 -1.3010
+  [PASS] lambda_rate physical 8 == approved 8.0  log10 +0.9031
+  [PASS] 1000 draws identical to the fixed vector
+  [PASS] repeated sampling identical
+  [PASS] selection record present  ['fixed', 'input_units', 'joint_uncertainty', 'kind', 'outside_prior', 'outside_prior_justification', 'sources', 'values_log10', 'values_physical']
+    sources[mu_r] = {"source": "adopted Fab detector estimator C128V42A, record ..._FAB_2S_50FPS_C128V42A_MAP_Experiment, median over the 600 per-window posterior medians (ten 2 s 
+  [PASS] mu_r: non-empty source + limitation in the record
+  [PASS] sigma_r: non-empty source + limitation in the record
+  [PASS] mu_pc: non-empty source + limitation in the record
+  [PASS] sigma_pc: non-empty source + limitation in the record
+  [PASS] prob_photo_bleach: non-empty source + limitation in the record
+  [PASS] lambda_rate: non-empty source + limitation in the record
+  [PASS] values_physical in the record == approved table  {'mu_r': 1.734, 'sigma_r': 0.177, 'mu_pc': 105.0, 'sigma_pc': 0.5848, 'prob_photo_bleach': 0.05, 'lambda_rate': 8.0}
+  [PASS] FAB: nothing outside the prior box  []
+  [PASS] FAB: pool_mode bounded  bounded
+  [PASS] identity() fixed=True n_samples=1
+    SHA-256 spec     5877c912fa52c454f19d95f7eb00d54fe3abcbade3c213a1433290efbec7b39e
+    SHA-256 artifact fe9cb5bae47eb0fc88cc70c195d6b46dd7804e4d006bf973c33028846a9159ad
+    sizes: spec 5756 B, artifact 3840 B
+
+=== INLB  artifact SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_SEL_Nuisance_DLI.npz
+    spec     SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_SEL_Nuisance_DLI_Spec.toml
+  [PASS] choice selection_user  selection_user
+  [PASS] parameter_keys == production order  ['mu_r', 'sigma_r', 'mu_pc', 'sigma_pc', 'prob_photo_bleach', 'lambda_rate']
+  [PASS] exactly one stored vector  (1, 6)
+  [PASS] mu_r physical 2.256 == approved 2.256  log10 +0.3533
+  [PASS] sigma_r physical 0.4029 == approved 0.4029  log10 -0.3948
+  [PASS] mu_pc physical 152.9 == approved 152.9  log10 +2.1844
+  [PASS] sigma_pc physical 0.8588 == approved 0.8588  log10 -0.0661
+  [PASS] prob_photo_bleach physical 0.05 == approved 0.05  log10 -1.3010
+  [PASS] lambda_rate physical 2 == approved 2.0  log10 +0.3010
+  [PASS] 1000 draws identical to the fixed vector
+  [PASS] repeated sampling identical
+  [PASS] selection record present  ['fixed', 'input_units', 'joint_uncertainty', 'kind', 'outside_prior', 'outside_prior_justification', 'sources', 'values_log10', 'values_physical']
+  [PASS] mu_r: non-empty source + limitation in the record
+  [PASS] sigma_r: non-empty source + limitation in the record
+  [PASS] mu_pc: non-empty source + limitation in the record
+  [PASS] sigma_pc: non-empty source + limitation in the record
+  [PASS] prob_photo_bleach: non-empty source + limitation in the record
+  [PASS] lambda_rate: non-empty source + limitation in the record
+  [PASS] values_physical in the record == approved table  {'mu_r': 2.256, 'sigma_r': 0.4029, 'mu_pc': 152.9, 'sigma_pc': 0.8588, 'prob_photo_bleach': 0.05, 'lambda_rate': 2.0}
+  [PASS] INLB: mu_r acknowledged outside the prior box  ['mu_r']
+  [PASS] INLB: acknowledgement text survives  mu_r 2.256 px lies above the detector prior box [1, 1.99526]: the adopted InlB e
+  [PASS] INLB: pool_mode unrestricted (records the acknowledged extrapolation)  unrestricted
+  [PASS] INLB: only mu_r outside the box
+  [PASS] identity() fixed=True n_samples=1
+    SHA-256 spec     7b67b7e75668c52134e24a62bad6f07c5751fc9fab919403655660b831d1ab46
+    SHA-256 artifact 2b2d98f99e4fd0c5c3734280cb613582df3bdbaa387e4f953ec71b7592ceac6f
+    sizes: spec 6812 B, artifact 4349 B
+
+RESULT: ALL PASS

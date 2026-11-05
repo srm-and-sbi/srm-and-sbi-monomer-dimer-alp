@@ -109,7 +109,9 @@ stage script's own default). sbatch-level overrides go in the environment:
 trajectory tier is per condition) is validated and
 forwarded by the dispatcher and enters the job name right after the alias. A multi-value `KINDS`
 (e.g. `KINDS=FAB,INLB`, a deliberate cross-condition application) is carried safely through the exported environment via
-`ALL` rather than the comma-split `--export`. The helper is to a single job what
+`ALL` rather than the comma-split `--export`; `AGGREGATION_WINDOW_SETS` (comma-separated by its grammar, e.g.
+`all,opening,late=5-9`) is carried the same way, so every worker and the merge receive the complete selection
+as one argument. The helper is to a single job what
 the generation controller (§5) is to the full generation campaign — both default
 to dry-run, and you opt in to submitting with `DRYRUN=0`.
 
@@ -428,6 +430,10 @@ replacement may run in a new Slurm job or locally: each shard records the execut
 wrote it (its own job id, or none), the merged manifest keeps every shard's, and the merge never
 compares them. "The same args" includes `--dump-posterior-samples` exactly when the original run
 used it: raw-draw storage is a run-level setting, and shards that differ in it are refused. The
+same holds for the experimental aggregation settings the launcher forwards (`AGGREGATION_WINDOW_SETS`,
+`NO_AGGREGATION`, `REFERENCE_NUISANCE_TAG` -> `--aggregation-window-sets`, `--no-aggregation`,
+`--reference-nuisance-tag`): an enabled aggregation retains the clouds in every shard, and the
+section "Experimental aggregation and nuisance candidates" is computed once, in the merge. The
 replacement must also run from the same repository state: the same HEAD commit, the same
 dirty-state flag and byte-identical implementation files, because the manifest's whole code block
 is part of the contract. A commit made between the original run and the replacement makes the

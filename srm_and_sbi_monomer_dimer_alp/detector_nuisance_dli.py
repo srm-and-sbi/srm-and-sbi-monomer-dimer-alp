@@ -34,6 +34,18 @@ user choice, `posterior_sample_pool_choice`, turns that pool into the samplable 
                             the spec acknowledges it explicitly with a recorded justification; the
                             acknowledgement flags extrapolation beyond the tested imaging domain and
                             certifies nothing; nothing is clipped.
+  - ``empirical_representatives`` — a WEIGHTED empirical distribution over complete representative
+                            vectors selected from the Experiment stage's candidate archive
+                            (``aggregation_candidates.npz``: the per_cell / per_window_position /
+                            global / per_cell_window SGMs, or the marginal-median vectors, of named
+                            window sets). The user-authored spec names K components (source
+                            Experiment, condition, window set, grouping, statistic) with explicit
+                            weights alpha_k; every member of component k receives probability
+                            alpha_k / n_k, exact duplicates are consolidated by adding their
+                            probabilities (memberships kept), and the artifact stores the vectors
+                            with their probabilities and provenance. CPU only; no neural sampling.
+                            SEL is a comparison, never an automatically mixed component; raw
+                            posterior draws and an SGM of SGMs are not constructions of this route.
 
 Selecting an artifact. The canonical artifact carries the plain timing label. A ``nuisance_tag``
 (a SCREAMING_SNAKE token, the grammar of the estimator's artifact tag) names a further artifact
@@ -84,11 +96,38 @@ ARTIFACT_FORMAT_VERSION = 2                  # v2: posterior_sample_pool_choice 
 POOL_FORMAT_VERSION = 1                      # v1: pool cache carries per-row kind_index/cell/chunk labels
 
 POOL_CHOICES = ("raw", "map_estimate_pool", "gaussian", "box", "box_user", "sgm_percentiles",
+                "empirical_representatives",
                 "selection_user")
 POOL_MODES = ("bounded", "unrestricted")
 DEFAULT_BOX_QUANTILES = (0.05, 0.95)
 _EMPIRICAL = ("raw", "map_estimate_pool", "sgm_percentiles",
-              "selection_user")            # stored as a sample matrix, resampled per-vector (one row: fixed)
+              "selection_user", "empirical_representatives")   # stored as a sample matrix, resampled per-vector (one row: fixed)
+_WEIGHTED = ("empirical_representatives",)   # a sample matrix with per-row sampling probabilities (stored, never implied)
+REPRESENTATIVE_STATISTICS = ("sgm", "median")
+WEIGHT_NORMALIZATION_TOLERANCE = 1e-6
+# Parameters whose physical domain is a probability (0, 1): the per-dye bleaching probability. An explicit
+# selection or override of such a parameter, and every final vector of an explicitly selected artifact
+# (selection_user, empirical_representatives), must respect it; a physically valid value outside the TRAINING
+# prior (an acknowledged extrapolation) is a different case and stays available.
+PROBABILITY_KEYS = ("prob_photo_bleach",)
+
+
+def physical_domain_error(key, value, entry=None) -> str:
+    """The reason a physical ``value`` of parameter ``key`` is outside its physical domain, or ``""`` when it
+    is valid: finite; positive for a log-ranged row (``entry`` with ``PRIOR_RANGE``/``LOG_FLAG``); strictly
+    below one for a probability parameter. Shared by the selection_user, the override and the final-vector checks."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return f"{key} = {value!r} is not a number"
+    if not np.isfinite(v):
+        return f"{key} = {v!r} must be finite"
+    log_row = entry is not None and (entry.get("PRIOR_RANGE") is not None or bool(entry.get("LOG_FLAG")))
+    if (log_row or key in PROBABILITY_KEYS) and v <= 0:
+        return f"{key} = {v} must be positive" + (" (a log10-ranged row)" if log_row else "")
+    if key in PROBABILITY_KEYS and v >= 1.0:
+        return f"{key} = {v} must be a probability below 1"
+    return ""
 _BOX = ("box", "box_user")                   # stored as low/high, drawn as a per-param uniform
 
 # The sgm_percentiles selection (whole vectors at signed distance-to-SGM percentiles; p50 = the SGM).
@@ -102,7 +141,7 @@ SGM_CONDITIONS = ("FAB", "INLB")
 # posterior pool's per-window SGMs -- with no GPU).
 POOL_KINDS = {"raw": "PosteriorSample", "gaussian": "PosteriorSample", "box": "PosteriorSample",
               "map_estimate_pool": "MapEstimate", "box_user": None, "sgm_percentiles": None,
-              "selection_user": None}
+              "selection_user": None, "empirical_representatives": None}
 
 _ANALYSIS = "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py"
 
@@ -152,7 +191,7 @@ class NuisanceDLI:
 
     def __init__(self, parameter_keys, posterior_sample_pool_choice, pool_mode,
                  prior_low, prior_high, *, low=None, high=None, samples=None,
-                 mean=None, cov=None, space="log10", selection=None):
+                 mean=None, cov=None, space="log10", selection=None, probabilities=None):
         self.parameter_keys = list(parameter_keys)
         self.posterior_sample_pool_choice = posterior_sample_pool_choice
         self.pool_mode = pool_mode
@@ -167,6 +206,8 @@ class NuisanceDLI:
         self.samples = None if samples is None else np.asarray(samples, dtype=float)
         self.mean = None if mean is None else np.asarray(mean, dtype=float)
         self.cov = None if cov is None else np.asarray(cov, dtype=float)
+        # empirical_representatives only: one sampling probability per stored row (normalized, stored).
+        self.probabilities = None if probabilities is None else np.asarray(probabilities, dtype=float)
 
         d = len(self.parameter_keys)
         if self.posterior_sample_pool_choice not in POOL_CHOICES:
@@ -187,6 +228,27 @@ class NuisanceDLI:
                     or self.samples.shape[1] != d):
                 raise ValueError(f"choice {choice!r} needs a (n, {d}) sample matrix; got "
                                  f"{None if self.samples is None else self.samples.shape}.")
+            if choice in _WEIGHTED:
+                pr = self.probabilities
+                if pr is None or pr.shape != (self.samples.shape[0],):
+                    raise ValueError(f"choice {choice!r} needs one sampling probability per stored row "
+                                     f"({self.samples.shape[0]}); got {None if pr is None else pr.shape}.")
+                if not np.all(np.isfinite(pr)) or np.any(pr < 0) or pr.sum() <= 0:
+                    raise ValueError(f"choice {choice!r}: probabilities must be finite, non-negative with positive total mass.")
+                if abs(pr.sum() - 1.0) > WEIGHT_NORMALIZATION_TOLERANCE:
+                    raise ValueError(f"choice {choice!r}: probabilities sum to {pr.sum():.9f}, not 1 within "
+                                     f"{WEIGHT_NORMALIZATION_TOLERANCE}; a weighted artifact stores normalized probabilities.")
+                # The accepted roundoff residual is removed here, so every accepted vector is sampled and
+                # round-tripped identically: the stored probabilities are the given ones divided by their sum
+                # (a numerical convention; the scientific component weights live in the selection record).
+                self.probability_residual = float(pr.sum() - 1.0)
+                if abs(self.probability_residual) > 1e-12:          # an already normalized vector is kept bit-identical
+                    self.probabilities = pr / pr.sum()
+                if not self.selection or self.selection.get("kind") != "representatives":
+                    raise ValueError(f"choice {choice!r} needs its selection record (components, weights, sources); "
+                                     "build it through load_spec + build_nuisance_dli.")
+            elif self.probabilities is not None:
+                raise ValueError(f"choice {choice!r} carries no per-row probabilities; only {_WEIGHTED} do.")
             if choice == "selection_user":
                 if self.samples.shape[0] != 1:
                     raise ValueError("choice 'selection_user' holds exactly one fixed vector; got "
@@ -199,6 +261,15 @@ class NuisanceDLI:
             if (self.mean is None or self.cov is None
                     or self.mean.shape != (d,) or self.cov.shape != (d, d)):
                 raise ValueError(f"choice 'gaussian' needs mean ({d},) and cov ({d}, {d}).")
+        # Final-vector physical domain of the explicitly selected constructions (never a clipping; the
+        # calibration pools of raw/gaussian/box are diagnostic clouds and are not checked here).
+        if choice in ("selection_user",) + _WEIGHTED and self.space == "log10":
+            for j, k in enumerate(self.parameter_keys):
+                if k in PROBABILITY_KEYS:
+                    bad = np.flatnonzero(self.samples[:, j] >= 0.0)      # log10(p) >= 0  <=>  p >= 1
+                    if bad.size:
+                        raise ValueError(f"choice {choice!r}: {k} is a probability; {bad.size} stored vector(s) carry "
+                                         f"{k} >= 1 (rows {bad[:5].tolist()}).")
 
     # -- builders ----------------------------------------------------------
     @classmethod
@@ -226,6 +297,14 @@ class NuisanceDLI:
                    samples=vec, selection=selection)
 
     @classmethod
+    def from_representatives(cls, parameter_keys, vectors_log10, probabilities, selection, *, prior_low, prior_high,
+                             pool_mode="bounded"):
+        """A weighted empirical distribution over complete representative vectors (log10) with their recorded
+        sampling probabilities and the selection record (components, weights, sources, consolidation, overrides)."""
+        return cls(parameter_keys, "empirical_representatives", pool_mode, prior_low, prior_high,
+                   samples=np.asarray(vectors_log10, dtype=float), probabilities=probabilities, selection=selection)
+
+    @classmethod
     def from_gaussian(cls, parameter_keys, mean, cov, *, pool_mode="bounded",
                       prior_low=None, prior_high=None, space="log10"):
         """A full-covariance multivariate normal fit to the posterior_sample_pool."""
@@ -233,8 +312,9 @@ class NuisanceDLI:
                    mean=mean, cov=cov, space=space)
 
     # -- sampling (numpy only; no clipping — see module docstring) ---------
-    def sample(self, n):
-        """Draw ``n`` nuisance vectors, shape ``(n, D)`` in the declared ``space`` (log10).
+    def sample(self, n, seed=None):
+        """Draw ``n`` nuisance vectors, shape ``(n, D)`` in the declared ``space`` (log10). ``seed`` (optional)
+        fixes the generator for a controlled check; production draws unseeded, as before.
 
         ``box``/``box_user`` draw each parameter independently within ``[low, high]``;
         ``raw``/``map_estimate_pool`` resample **whole rows** of the stored matrix (so the
@@ -243,13 +323,17 @@ class NuisanceDLI:
         calibration, and ``box``/``box_user`` are bounded by construction.
         """
         n = int(n)
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(seed)
         choice = self.posterior_sample_pool_choice
         if choice in _BOX:
             return rng.uniform(self.low, self.high, size=(n, self.low.size))
+        if choice in _WEIGHTED:
+            pr = self.probabilities / self.probabilities.sum()        # stored normalized; the sampler's own tolerance is tighter
+            idx = rng.choice(self.samples.shape[0], size=n, p=pr)
+            return self.samples[idx]                          # whole-vector resample at the recorded probabilities
         if choice in _EMPIRICAL:
             idx = rng.integers(0, self.samples.shape[0], size=n)
-            return self.samples[idx]                          # whole-vector resample
+            return self.samples[idx]                          # whole-vector resample (uniform)
         return rng.multivariate_normal(self.mean, self.cov, size=n)   # gaussian
 
     # -- persistence -------------------------------------------------------
@@ -263,6 +347,13 @@ class NuisanceDLI:
             "n_samples": (int(self.samples.shape[0]) if self.posterior_sample_pool_choice
                           in _EMPIRICAL else None),
             "selection": self.selection,
+            "weighted": self.posterior_sample_pool_choice in _WEIGHTED,
+            "n_components": (len(self.selection.get("components", [])) if self.selection
+                             and self.posterior_sample_pool_choice in _WEIGHTED else None),
+            "probability_normalization": (f"the stored probabilities are the given ones divided by their sum (accepted total within "
+                                          f"{WEIGHT_NORMALIZATION_TOLERANCE} of one; a roundoff convention, not a weighting); residual "
+                                          f"removed {getattr(self, 'probability_residual', 0.0):.3e}"
+                                          if self.posterior_sample_pool_choice in _WEIGHTED else None),
         }
 
     @property
@@ -282,6 +373,9 @@ class NuisanceDLI:
                "fixed": self.posterior_sample_pool_choice == "selection_user"}
         if self.selection is not None:
             out["selection"] = self.selection
+        if self.posterior_sample_pool_choice in _WEIGHTED:
+            out["weighted"] = True
+            out["n_components"] = m["n_components"]
         return out
 
     def flush(self, path):
@@ -297,6 +391,8 @@ class NuisanceDLI:
             arrays["high"] = self.high
         elif choice in _EMPIRICAL:
             arrays["samples"] = self.samples
+            if choice in _WEIGHTED:
+                arrays["probabilities"] = self.probabilities
         else:                                                 # gaussian
             arrays["mean"] = self.mean
             arrays["cov"] = self.cov
@@ -307,7 +403,7 @@ class NuisanceDLI:
         """Reload a flushed artifact for sampling (numpy only)."""
         with np.load(str(path), allow_pickle=False) as data:
             m = json.loads(str(data["manifest"]))
-            payload = {k: data[k] for k in ("low", "high", "samples", "mean", "cov")
+            payload = {k: data[k] for k in ("low", "high", "samples", "mean", "cov", "probabilities")
                        if k in data.files}
             return cls(m["parameter_keys"], m["posterior_sample_pool_choice"],
                        m["pool_mode"], data["prior_low"], data["prior_high"],
@@ -875,13 +971,12 @@ def selection_from_spec(spec, table, prior_low, prior_high):
         lim = str(row.get("limitation", "") or "").strip()
         if not src or not lim:
             raise ValueError(f"[selection.{k}] needs non-empty `source` and `limitation` strings.")
+        err = physical_domain_error(k, v, e)
+        if err:
+            raise ValueError(f"[selection.{k}].value: {err}.")
         if e.get("PRIOR_RANGE") is None:
             stored = v
         else:
-            if v <= 0:
-                raise ValueError(f"[selection.{k}].value = {v} must be positive (a log10-ranged row).")
-            if k == "prob_photo_bleach" and v >= 1.0:
-                raise ValueError(f"[selection.{k}].value = {v} must be a probability below 1.")
             stored = float(np.log10(v)) if e.get("LOG_BASE", 10) == 10 else float(
                 np.log(v) / np.log(e["LOG_BASE"]))
         lo, hi = float(prior_low[i]), float(prior_high[i])
@@ -907,6 +1002,236 @@ def selection_from_spec(spec, table, prior_low, prior_high):
               "outside_prior_justification": just if outside else "",
               "joint_uncertainty": "none (a user-selected, fixed vector; no calibrated joint uncertainty)"}
     return np.asarray(vec, dtype=float), record
+
+
+REPRESENTATIVE_GROUPINGS = ("per_cell", "per_window_position", "global", "per_cell_window")
+
+
+def emit_representatives_template(path, archive, *, provenance=None, reference=None, target=None):
+    """Write the spec skeleton of an ``empirical_representatives`` Nuisance_DLI from an Experiment candidate
+    archive (``experiment_aggregation.load_candidate_archive``): every available component (condition, window
+    set, grouping) is listed COMMENTED OUT with its member count, so the file cannot be built before the user
+    has named the components, their weights and the rationale. ``reference`` (``{key: physical}``) is printed
+    beside the block as a comparison only. ``target`` (condition, timing label; required) is checked against the
+    archive's recorded target before anything is written (:func:`check_archive_target`)."""
+    a, m = archive["arrays"], archive["manifest"]
+    check_archive_target(archive, target, where="template emission")
+    combos = {}
+    for k, w, c in zip(a["kind"], a["window_set"], a["construction"]):
+        combos[(str(k), str(w), str(c))] = combos.get((str(k), str(w), str(c)), 0) + 1
+    out = [
+        "# ============================================================================",
+        "# Nuisance_DLI spec -- empirical_representatives: a WEIGHTED distribution over complete",
+        "# representative vectors selected from the Experiment stage's candidate archive.",
+        "# ============================================================================",
+        "# Name K components ([[component]] tables): each is one (source Experiment, condition, window",
+        "# set, grouping, statistic) collection of the archive with an explicit weight alpha_k. The",
+        "# weights must sum to 1 (tolerance 1e-6); every member of component k receives probability",
+        "# alpha_k / n_k, so a 600-member collection never outweighs a 60-member one by its row count.",
+        "# Exact duplicate vectors are consolidated by adding their probabilities (memberships kept).",
+        "# `statistic` is \"sgm\" (a retained joint draw; the default) or \"median\" (the marginal-median",
+        "# vector of the group, a coordinate-wise composite, never a sampled row). `rationale` records",
+        "# the scientific reason for the selection. An [override.<KEY>] table (value in physical units,",
+        "# reason) is an explicit parameter-specific treatment applied to EVERY selected vector and shown",
+        "# in the report; a transformed vector is no longer the original joint draw. The reference",
+        "# scenario (SEL) is a comparison only and is never mixed in automatically. No component is",
+        "# selected here: this file is a skeleton, and the example weights below are NOT a decision.",
+        f"# provenance (auto-filled, do not edit): {json.dumps(provenance or {}, sort_keys=True)}",
+        "",
+        "[block]",
+        'posterior_sample_pool_choice = "empirical_representatives"',
+        f'candidate_archive = "{archive["path"]}"',
+        f'candidate_archive_sha256 = "{archive["sha256"]}"',
+        'rationale = ""                            # REQUIRED: why these components, this window set and this statistic',
+        "",
+        f"# archive target (binding): {json.dumps(m.get('target'), sort_keys=True, default=str)}",
+        f"# archive: product {m.get('product_label')}, conditions {m.get('condition_labels')}, window sets "
+        f"{ {k: v for k, v in m.get('window_sets', {}).items()} }, written {m.get('written_at')}",
+        f"# coverage: {m.get('coverage')}" + (f"; NOTE {m.get('coverage_note')}" if m.get("coverage_note") else ""),
+    ]
+    if reference:
+        out.append("# reference (comparison only): " + ", ".join(f"{k} {v:.6g}" for k, v in reference.items()))
+    out += ["", "# Available components (uncomment, set the weights so they sum to 1):"]
+    for (k, w, c), n in sorted(combos.items()):
+        out += ["# [[component]]", f'# source_experiment = "{m.get("product_label")}"', f'# condition = "{k}"', f'# window_set = "{w}"',
+                f'# grouping = "{c}"                       # {n} representative(s)', '# statistic = "sgm"', "# weight = 1.0", ""]
+    out += ["# Optional explicit parameter-specific treatment (shown in the report; NOT applied unless uncommented):",
+            "# [override.prob_photo_bleach]", "# value = 0.05", '# reason = "<the recorded decision this value rests on>"', ""]
+    Path(path).write_text("\n".join(out))
+    return Path(path)
+
+
+def _validate_representatives_block(spec, imaging_keys, where, table=None):
+    block = spec.get("block", {})
+    entries = {e["KEY"]: e for e in (table or [])}
+    arc = str(block.get("candidate_archive", "") or "").strip()
+    if not arc:
+        raise ValueError(f"{where}: [block].candidate_archive must name the Experiment aggregation_candidates.npz.")
+    if not str(block.get("rationale", "") or "").strip():
+        raise ValueError(f"{where}: [block].rationale must be a non-empty statement of the selection's reason.")
+    comps = spec.get("component", [])
+    if not isinstance(comps, list) or not comps:
+        raise ValueError(f"{where}: at least one [[component]] table is required.")
+    weights = []
+    for i, c in enumerate(comps):
+        if not isinstance(c, dict):
+            raise ValueError(f"{where}: [[component]] {i} is not a table.")
+        for k in ("source_experiment", "condition", "window_set", "grouping"):
+            if not str(c.get(k, "") or "").strip():
+                raise ValueError(f"{where}: [[component]] {i} needs a non-empty `{k}`.")
+        if c.get("grouping") not in REPRESENTATIVE_GROUPINGS:
+            raise ValueError(f"{where}: [[component]] {i}.grouping={c.get('grouping')!r} must be one of {REPRESENTATIVE_GROUPINGS}.")
+        if c.get("statistic", "sgm") not in REPRESENTATIVE_STATISTICS:
+            raise ValueError(f"{where}: [[component]] {i}.statistic={c.get('statistic')!r} must be one of {REPRESENTATIVE_STATISTICS}.")
+        try:
+            w = float(c.get("weight"))
+        except (TypeError, ValueError):
+            raise ValueError(f"{where}: [[component]] {i}.weight = {c.get('weight')!r} is not a number.")
+        if not np.isfinite(w) or w < 0:
+            raise ValueError(f"{where}: [[component]] {i}.weight = {w} must be finite and non-negative.")
+        weights.append(w)
+    total = float(np.sum(weights))
+    if total <= 0:
+        raise ValueError(f"{where}: the component weights have no positive total mass ({weights}).")
+    if abs(total - 1.0) > WEIGHT_NORMALIZATION_TOLERANCE:
+        raise ValueError(f"{where}: the component weights sum to {total:.9f}, not 1 within {WEIGHT_NORMALIZATION_TOLERANCE}: "
+                         f"{weights}. Write the intended normalized weights; nothing is repaired silently.")
+    over = spec.get("override", {}) or {}
+    if not isinstance(over, dict):
+        raise ValueError(f"{where}: [override.<KEY>] tables expected.")
+    for k, row in over.items():
+        if k not in imaging_keys:
+            raise ValueError(f"{where}: [override.{k}] names an unknown parameter; keys are {list(imaging_keys)}.")
+        if not isinstance(row, dict) or "value" not in row or not str(row.get("reason", "") or "").strip():
+            raise ValueError(f"{where}: [override.{k}] needs `value` (physical units) and a non-empty `reason`.")
+        err = physical_domain_error(k, row["value"], entries.get(k, {"PRIOR_RANGE": (0, 1)}))
+        if err:
+            raise ValueError(f"{where}: [override.{k}].value: {err} (physical units).")
+    return comps, weights
+
+
+TARGET_FIELDS = ("condition", "timing_label")
+
+
+def check_archive_target(archive, target, *, where="candidate archive"):
+    """The archive's recorded target (the Experiment run's condition, timing label, geometry) must equal the
+    ``target`` the artifact is built for; a native nuisance artifact of one condition and duration is never
+    built from another's Experiment, and an archive without a target binding is refused. Returns the binding."""
+    if not target or any(not target.get(k) for k in TARGET_FIELDS):
+        raise ValueError(f"{where}: the target identity (condition, timing_label) of the artifact under construction "
+                         f"must be passed explicitly (target=); got {target!r}.")
+    m = archive["manifest"]
+    bound = m.get("target")
+    if not bound:
+        raise ValueError(f"{where} ({archive['path']}) records no target binding (condition, timing label, geometry); it was "
+                         f"written before target binding. Regenerate the Experiment report with the current implementation.")
+    for k in TARGET_FIELDS:
+        if str(target[k]) != str(bound.get(k)):
+            raise ValueError(f"{where}: target {k} {target[k]!r} != the archive's {bound.get(k)!r} (source Experiment "
+                             f"{m.get('product_label')}). A native Nuisance DLI of {target['condition']} {target['timing_label']} "
+                             f"is built only from that condition's and duration's Experiment; another Experiment's candidates "
+                             f"are inspection results, not nuisance sources.")
+    if target.get("project_alias") and bound.get("project_alias") and str(target["project_alias"]) != str(bound["project_alias"]):
+        raise ValueError(f"{where}: project alias {target['project_alias']!r} != the archive's {bound['project_alias']!r}.")
+    geom = (m.get("contract") or {}).get("window_geometry") or {}
+    if target.get("n_frames") is not None and bound.get("n_frames") is not None and int(target["n_frames"]) != int(bound["n_frames"]):
+        raise ValueError(f"{where}: window length {target['n_frames']} frames != the archive's {bound['n_frames']} (geometry {geom}).")
+    if target.get("n_frames") is not None and geom.get("n_frames") is not None and int(target["n_frames"]) != int(geom["n_frames"]):
+        raise ValueError(f"{where}: window length {target['n_frames']} frames != the archive contract's geometry {geom}.")
+    return dict(bound)
+
+
+def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, spec_path=None, target=None):
+    """Build the weighted representative distribution a finalized ``empirical_representatives`` spec declares
+    from the loaded candidate ``archive``. Returns ``(vectors_log10, probabilities, record)``:
+
+    - every component's members get probability ``weight / n_members`` (the documented normalization);
+    - exact duplicate vectors are consolidated by ADDING their probabilities; every membership is retained
+      in the record (component index and member identity); rows are never deduplicated by displayed values;
+    - ``[override.<KEY>]`` tables replace that coordinate in every vector, recorded as a transformation with
+      the replaced values' range; the result is then no longer the original joint draws and the record says so;
+    - the record names the archive (path, checksum, product, target binding), each component's identities and
+      probabilities, the rationale, the outside-prior mass and whether the rows are sampled draws;
+    - ``target`` (``condition``, ``timing_label``, optional ``project_alias``, ``n_frames``) is the identity of the
+      artifact under construction: it must equal the archive's recorded target, and every component's recording
+      condition must equal it (a cross-condition Experiment application stays an inspection result).
+    """
+    from .experiment_aggregation import archive_component
+    keys = [e["KEY"] for e in table]
+    comps, weights = _validate_representatives_block(spec, keys, "spec", table=table)
+    block = spec["block"]
+    m = archive["manifest"]
+    bound = check_archive_target(archive, target)
+    if archive["keys"] != keys:
+        raise ValueError(f"the archive's parameter keys {archive['keys']} differ from the table's {keys}.")
+    declared = str(block.get("candidate_archive_sha256", "") or "").strip()
+    if declared and declared != archive["sha256"]:
+        raise ValueError(f"candidate archive checksum {archive['sha256']} differs from the spec's {declared}; the spec was "
+                         f"written against another archive.")
+    vectors, probs, memberships, comp_records = [], [], [], []
+    for i, (c, w) in enumerate(zip(comps, weights)):
+        if str(c["source_experiment"]) != str(m.get("product_label")):
+            raise ValueError(f"[[component]] {i}: source_experiment {c['source_experiment']!r} is not the archive's product "
+                             f"{m.get('product_label')!r}.")
+        if str(c["condition"]) not in [str(k) for k in m.get("condition_labels", [])]:
+            raise ValueError(f"[[component]] {i}: condition {c['condition']!r} not in the archive's {m.get('condition_labels')}.")
+        if str(c["condition"]) != str(target["condition"]):
+            raise ValueError(f"[[component]] {i}: recordings of condition {c['condition']!r} cannot enter the native Nuisance DLI of "
+                             f"{target['condition']!r}; the archive's application of this estimator to {m.get('condition_labels')} "
+                             f"is a labeled inspection result, not a nuisance source of another condition.")
+        stat = c.get("statistic", "sgm")
+        comp = archive_component(archive, kind=str(c["condition"]), window_set=str(c["window_set"]),
+                                 construction=str(c["grouping"]), statistic=stat)
+        n = comp["vectors"].shape[0]
+        for j in range(n):
+            vectors.append(comp["vectors"][j]); probs.append(w / n); memberships.append((i, j))
+        comp_records.append({"index": i, "source_experiment": str(c["source_experiment"]), "condition": str(c["condition"]),
+                             "window_set": str(c["window_set"]), "grouping": str(c["grouping"]), "statistic": stat,
+                             "weight": float(w), "n_members": int(n), "member_probability": float(w / n),
+                             "window_set_chunks": m.get("window_sets", {}).get(str(c["window_set"])),
+                             "members": comp["identities"], "is_sampled_rows": stat == "sgm"})
+    V = np.asarray(vectors, dtype=float); P = np.asarray(probs, dtype=float)
+    uniq, inverse = np.unique(V, axis=0, return_inverse=True)
+    inverse = np.asarray(inverse).ravel()
+    probabilities = np.zeros(uniq.shape[0]); groups = [[] for _ in range(uniq.shape[0])]
+    for r, (p_, mem) in enumerate(zip(P, memberships)):
+        probabilities[inverse[r]] += p_; groups[inverse[r]].append({"component": mem[0], "member": mem[1]})
+    probabilities = probabilities / probabilities.sum()
+    consolidated = [{"row": int(u), "memberships": g, "probability": float(probabilities[u])} for u, g in enumerate(groups) if len(g) > 1]
+    overrides, over = {}, (spec.get("override", {}) or {})
+    final = uniq.copy()
+    for k, row in over.items():
+        j = keys.index(k); e = table[j]
+        v = float(row["value"])
+        stored = float(np.log10(v)) if bool(e.get("LOG_FLAG")) else v      # the row's own coordinate (log10 or linear)
+        overrides[k] = {"value_physical": v, "value_stored": stored, "reason": str(row["reason"]).strip(),
+                        "replaced_range_stored": [float(final[:, j].min()), float(final[:, j].max())],
+                        "replaced_rows": int(final.shape[0])}
+        final[:, j] = stored
+    # physical domain of every FINAL vector (archive rows and overrides alike; never a clipping)
+    for j, e in enumerate(table):
+        phys = np.power(10.0, final[:, j]) if bool(e.get("LOG_FLAG")) else final[:, j]
+        for r in range(final.shape[0]):
+            err = physical_domain_error(e["KEY"], phys[r], e)
+            if err:
+                raise ValueError(f"final vector {r}: {err} (physical units); the selection cannot be stored.")
+    lo = np.asarray(prior_low, float); hi = np.asarray(prior_high, float)
+    outside_rows = np.any((final < lo) | (final > hi), axis=1)
+    record = {"kind": "representatives", "fixed": False, "input_units": "archive (estimator coordinates, log10)",
+              "target": {k: target.get(k) for k in ("project_alias", "condition", "timing_label", "n_frames")},
+              "archive": {"path": archive["path"], "sha256": archive["sha256"], "product_label": m.get("product_label"),
+                          "target": bound, "condition_labels": m.get("condition_labels"), "written_at": m.get("written_at"),
+                          "coverage": m.get("coverage"), "coverage_note": m.get("coverage_note")},
+              "spec_path": None if spec_path is None else str(spec_path),
+              "rationale": str(block.get("rationale")).strip(), "components": comp_records,
+              "normalization": "member probability = component weight / component member count; exact duplicates consolidated by adding probabilities",
+              "n_member_rows": int(V.shape[0]), "n_unique_rows": int(uniq.shape[0]), "consolidated": consolidated,
+              "overrides": overrides,
+              "is_sampled_rows": bool(all(c["is_sampled_rows"] for c in comp_records) and not overrides),
+              "outside_prior_mass": float(probabilities[outside_rows].sum()),
+              "outside_prior_by_key": {k: float(probabilities[(final[:, j] < lo[j]) | (final[:, j] > hi[j])].sum()) for j, k in enumerate(keys)},
+              "joint_uncertainty": "none beyond the dispersion of the selected representatives; the input posteriors' uncertainty is not carried"}
+    return final, probabilities, record
 
 
 # =============================================================================
@@ -965,6 +1290,11 @@ def load_spec(path, imaging_keys, prior_low, prior_high, table=None):
             selection_from_spec(spec, table, prior_low, prior_high)
         except ValueError as exc:
             raise ValueError(f"{path}: {exc}") from exc
+    if choice == "empirical_representatives":
+        try:
+            _validate_representatives_block(spec, imaging_keys, str(path), table=table)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
     if choice == "sgm_percentiles":
         pct = block.get("percentiles", list(SGM_DEFAULT_PERCENTILES))
         if (not isinstance(pct, (list, tuple)) or len(pct) == 0
@@ -984,14 +1314,17 @@ def load_spec(path, imaging_keys, prior_low, prior_high, table=None):
 # =============================================================================
 # Build the Nuisance_DLI from the finalized spec (+ pool, for the derived choices)
 # =============================================================================
-def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None, table=None):
+def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None, table=None, archive=None,
+                       spec_path=None, target=None):
     """Construct the `NuisanceDLI` for the spec's choice, from an already-computed pool.
 
     CPU-only: the expensive pool is built and cached by the caller (see the pool cache and
     `build_posterior_sample_pool` / `build_map_estimate_pool`), so switching among choices
-    that share a pool costs nothing here. ``box_user`` needs no pool; every other choice
-    requires the matching ``pool`` (the posterior-sample pool for raw/gaussian/box, the MAP
-    pool for map_estimate_pool).
+    that share a pool costs nothing here. ``box_user`` and ``selection_user`` need no pool;
+    ``empirical_representatives`` needs the loaded candidate ``archive`` (and ``table``) and the explicit
+    ``target`` identity (condition, timing label) the artifact is built for, checked against the archive;
+    every other choice requires the matching ``pool`` (the posterior-sample pool for
+    raw/gaussian/box, the MAP pool for map_estimate_pool).
     """
     block = spec["block"]
     choice = block["posterior_sample_pool_choice"]
@@ -1006,6 +1339,16 @@ def build_nuisance_dli(spec, imaging_keys, prior_low, prior_high, *, pool=None, 
         mode = "unrestricted" if record["outside_prior"] else "bounded"
         return NuisanceDLI.from_selection(imaging_keys, vec, record, prior_low=prior_low,
                                           prior_high=prior_high, pool_mode=mode)
+
+    if choice == "empirical_representatives":
+        if table is None or archive is None:
+            raise ValueError("choice 'empirical_representatives' needs the parameter table (table=) and the loaded "
+                             "candidate archive (archive=, from experiment_aggregation.load_candidate_archive).")
+        vectors, probabilities, record = representatives_from_spec(spec, archive, table, prior_low, prior_high,
+                                                                   spec_path=spec_path, target=target)
+        mode = "unrestricted" if record["outside_prior_mass"] > 0 else "bounded"
+        return NuisanceDLI.from_representatives(imaging_keys, vectors, probabilities, record, prior_low=prior_low,
+                                                prior_high=prior_high, pool_mode=mode)
 
     if choice == "box_user":
         low = [float(spec["imaging"][k]["low"]) for k in imaging_keys]

@@ -1,0 +1,98 @@
+# ============================================================================
+# Nuisance_DLI spec -- empirical_representatives: a WEIGHTED distribution over complete
+# representative vectors selected from the Experiment stage's candidate archive.
+# ============================================================================
+# Name K components ([[component]] tables): each is one (source Experiment, condition, window
+# set, grouping, statistic) collection of the archive with an explicit weight alpha_k. The
+# weights must sum to 1 (tolerance 1e-6); every member of component k receives probability
+# alpha_k / n_k, so a 600-member collection never outweighs a 60-member one by its row count.
+# Exact duplicate vectors are consolidated by adding their probabilities (memberships kept).
+# `statistic` is "sgm" (a retained joint draw; the default) or "median" (the marginal-median
+# vector of the group, a coordinate-wise composite, never a sampled row). `rationale` records
+# the scientific reason for the selection. An [override.<KEY>] table (value in physical units,
+# reason) is an explicit parameter-specific treatment applied to EVERY selected vector and shown
+# in the report; a transformed vector is no longer the original joint draw. The reference
+# scenario (SEL) is a comparison only and is never mixed in automatically. No component is
+# selected here: this file is a skeleton, and the example weights below are NOT a decision.
+# provenance (auto-filled, do not edit): {"candidate_archive": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment_PILOT2CELLSR1/aggregation_candidates.npz", "candidate_archive_sha256": "47c6155fb77f54607f6b5520c2581b722caa02551d65ee5446f95d3b8b071679", "choice": "empirical_representatives", "condition": "FAB", "note": "illustrative; not a selection", "nuisance_tag": "EXAMPLE", "timing_label": "2S_50FPS"}
+
+[block]
+posterior_sample_pool_choice = "empirical_representatives"
+candidate_archive = "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment_PILOT2CELLSR1/aggregation_candidates.npz"
+candidate_archive_sha256 = "47c6155fb77f54607f6b5520c2581b722caa02551d65ee5446f95d3b8b071679"
+rationale = ""                            # REQUIRED: why these components, this window set and this statistic
+
+# archive target (binding): {"condition": "FAB", "estimator_tag": "C128V42A", "n_frames": 100, "product_label": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A", "project_alias": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB", "timing_label": "2S_50FPS", "window_seconds": 2.0}
+# archive: product SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A, conditions ['FAB'], window sets {'all': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'opening': [0]}, written 2026-11-05 14:14:28 UTC
+# coverage: {'FAB': {'cells': [4, 26], 'chunks': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'declared_positions': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'n_draws_per_window': 10000, 'n_windows': 20}}; NOTE This is a pilot subset, not the complete condition: MET-FAB 2 of 60 cells (cells [4, 26]), 20 of 600 windows. The original MAP and summary references above come from the adopted product; the aggregation summaries come from the retained collections named below, fresh draws of the same estimator that do not reconstruct the original sampling attempt.
+# reference (comparison only): mu_r 1.734, sigma_r 0.177, mu_pc 105, sigma_pc 0.5848, prob_photo_bleach 0.05, lambda_rate 8
+
+# Available components (uncomment, set the weights so they sum to 1):
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "all"
+# grouping = "global"                       # 1 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "all"
+# grouping = "per_cell"                       # 2 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "all"
+# grouping = "per_cell_window"                       # 20 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "all"
+# grouping = "per_window_position"                       # 10 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "opening"
+# grouping = "global"                       # 1 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "opening"
+# grouping = "per_cell"                       # 2 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "opening"
+# grouping = "per_cell_window"                       # 2 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# [[component]]
+# source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+# condition = "FAB"
+# window_set = "opening"
+# grouping = "per_window_position"                       # 1 representative(s)
+# statistic = "sgm"
+# weight = 1.0
+
+# Optional explicit parameter-specific treatment (shown in the report; NOT applied unless uncommented):
+# [override.prob_photo_bleach]
+# value = 0.05
+# reason = "<the recorded decision this value rests on>"

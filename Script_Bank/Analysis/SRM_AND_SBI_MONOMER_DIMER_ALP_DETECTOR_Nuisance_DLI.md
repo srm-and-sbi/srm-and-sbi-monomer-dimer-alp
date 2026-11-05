@@ -1,305 +1,229 @@
-# Nuisance_DLI construction — usage and interpretation
+# Nuisance DLI construction — usage and interpretation
 
-Companion to `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py`. The Detector calibrates the imaging
-model on real recordings; this analysis turns that calibration into the `Nuisance_DLI` — the
-samplable imaging distribution the production run draws from when it marginalizes the imaging block.
-This note explains what the step builds, how to run it, and how to choose among its options, so the
-construction can be used and understood without reading the code.
+The detector Experiment stage reports collections of imaging-parameter representatives. This analysis
+selects a distribution from those collections and builds the `Nuisance_DLI` that the biology DLI stage
+samples. Candidate calculation belongs in the **existing Experiment report**; selection and construction
+are a separate, user-driven CPU analysis.
 
-This is a post-hoc, user-driven analysis step, not one of the canonical pipeline stages. It lives in
-`Script_Bank/Analysis`, is never wired into the stage dispatcher, and is **self-contained**: it loads
-the trained detector estimator, reads the real recordings, and runs the estimator itself. It does not
-depend on the Detector Experiment stage's output — running the estimator here lets the step own the
-chunk windowing. Because it runs the estimator, both of its modes are a GPU step.
+The scientific definitions, full options table, and weighting equations are in
+[DETECTOR_WORKFLOW.md §7.2–§7.3](../../DETECTOR_WORKFLOW.md#72-the-nuisance_dli-artifact).
+The current creation route is `empirical_representatives`. It reads the Experiment candidate archive and
+performs no neural sampling. The older pool-based routes remain available for compatibility and are
+summarized at the end of this note.
 
-## What it builds
+## 1. What Experiment provides
 
-The trained detector estimator is a **required** prerequisite: there is no way to declare a
-`Nuisance_DLI` a priori, because its content *is* the calibration result. The step reads every
-experimental recording, cuts each into model-length windows, draws the posterior conditioned on each
-window, and pools those draws across every window of every recording into the **posterior sample
-pool**.
+Each recording contains 1,000 frames at 50 FPS (20 s). The adopted detector receives ten non-overlapping
+2 s inputs, each with 10,000 joint summary draws in this setup. Aggregation does not change the neural
+input length. For each named window set, Experiment calculates:
 
-The pool is a *mixture*, and that is the key modeling point. The real recordings genuinely differ in
-their imaging conditions, so the quantity we want is the *distribution of imaging parameters across
-the recordings* — not a single posterior conditioned on all of them at once. Conditioning on multiple
-observations jointly (an amortized posterior's iid mode) would assume they share one parameter vector,
-which would collapse the across-recording spread that is precisely the nuisance we are after. Pooling
-the per-window posteriors is therefore not a workaround; it is the correct representation. Being a
-mixture, the pool is *empirical* — a cloud of sample vectors, not a closed-form density.
+| Grouping ID | Representative population | Count with 60 cells and all ten windows |
+|---|---|---:|
+| `per_cell` | One SGM of the pooled window draws per cell | 60 |
+| `per_window_position` | One SGM of the pooled cell draws per position | 10 |
+| `global` | One SGM of the pooled draws from all selected cell-window pairs | 1 |
+| `per_cell_window` | The SGM of each selected cell-window posterior | 600 |
+| `reference` (SEL, comparison only) | The historical coordinate-wise median of window posterior medians followed by documented parameter-specific selections | 1 |
 
-One user choice, `posterior_sample_pool_choice`, decides how that pool becomes the samplable artifact:
+Input clouds are pooled with equal cell weights and equal selected-window weights within cells. The
+SGM is a complete retained draw. Small groups can use an exact sample medoid; pooled groups above
+10,000 rows use the logged `weiszfeld_snap` approximation. Distances use estimator coordinates divided
+by prior widths; displayed values use physical units. A single point retains its co-occurring coordinates,
+not the entire posterior's correlations or uncertainty.
 
-| choice | what it is | cross-parameter correlations |
-|---|---|---|
-| **`raw`** (default) | resample the pool per whole vector | **preserved exactly** |
-| **`map_estimate_pool`** | resample the pooled per-window MAP candidates (`map_estimate`) per whole vector | the pool's realized joint structure (point estimates only; MAP-derived) |
-| **`gaussian`** | a full-covariance multivariate Gaussian fit to the pool | linear only (via the covariance) |
-| **`box`** | a per-parameter uniform over quantiles of the pool | none (independent per dimension) |
-| **`box_user`** | a per-parameter uniform over user-set ranges | none |
-| **`sgm_percentiles`** | whole real vectors at signed distance-to-SGM percentiles — an SGM of window MAPs (`"experiment"`) or of window posterior SGMs (`"window-sgm"`); one frozen vector or a small pool | whole vectors: a multi-member pool keeps its members' co-occurring coordinates; a single frozen vector carries none |
-| **`selection_user`** | ONE explicitly chosen, fixed imaging vector assembled from documented sources (six named physical values, each with its source and limitation); no estimator, Experiment product, GPU or pool | none: a single fixed vector; no calibrated joint uncertainty |
+Every group also stores the vector of marginal medians (`statistic = "median"`) and pooled marginal
+quantiles. The median vector is a coordinate-wise composite, not necessarily a sampled vector. An aggregate
+MAP and an SGM of SGMs are not constructions of this route. Raw posterior draws are retained as calculation
+inputs, rather than offered as the nuisance distribution in this strategy.
 
-**Why `raw` is the faithful default.** Each entry in the pool is a complete parameter vector whose
-components were drawn jointly, so resampling *whole vectors* preserves the joint structure exactly —
-including the degeneracies the calibration constrains. The dominant one in this model is concrete: the
-videos identify essentially only the ratio `γ = g/C` of the EM gain `g` (`kappa_g`) to the
-electrons-per-ADU conversion `C` (`kappa_c`), so `g` and `C` ride a tight ridge in the posterior.
-Because θ is in log₁₀, that ridge is a straight line (`log g − log C ≈ const`). Sampling the two
-parameters independently — as any per-dimension representation does — would pair a gain from one draw
-with a conversion from another and break the very `γ` the data pins down, injecting physically
-impossible detectors into the training set. `raw` never does this; it only ever emits vectors that
-actually occurred.
+The standard sets are `all` and `opening`. `all` contains every position implied by the validated geometry;
+`opening` is chunk 0. Additional sets use zero-based positions, for example `later=5-9` or `selected=1+3+5`.
+Every included cell must contain every requested position. Missing positions are refused, rather than
+silently dropped from `all`. Fab and InlB remain separate.
 
-**Why the other forms are lossy, in order.** `gaussian` fits a single tilted ellipsoid to the pool: it
-keeps the *linear* correlations (the `g/C` ridge survives in the covariance's off-diagonal) but cannot
-represent multimodality or a curved ridge, and it smooths the cloud into one unimodal blob. `box` and
-`box_user` are per-parameter uniforms, so they discard all correlation — they sample box corners the
-joint posterior never visits. The fidelity order is thus `raw` (exact) → `gaussian` (linear only) →
-`box`/`box_user` (none). The compensating benefits are compactness (a Gaussian is `mean` + covariance;
-a box is `[low, high]`), smoothness (a genuine continuous density rather than a resampled cloud), and,
-for the boxes, hard bounds.
+The main Experiment report contains **Experimental aggregation and nuisance candidates**, with coverage,
+construction tables, physical-unit summaries, marginal CDFs, joint projections, temporal comparisons, and
+matched window-selection plots. It links these supporting files in its own output directory:
 
-**`pool_mode`** (`bounded` by default, or `unrestricted`) is identical to the convention used by the
-Detector Evaluation and Experiment stages: `bounded` rejection-samples the pool within the imaging
-prior box; `unrestricted` takes the raw normalizing-flow draws, whose mass may lie outside it. It
-governs how the pool is drawn, so it shapes `raw`, `gaussian`, and `box` (and the MAP pool);
-`sgm_percentiles` ignores it (it reuses already-computed data). The calibration-faithful forms
-(`raw`, `map_estimate_pool`, `gaussian`, and the real-vector `sgm_percentiles`) are **not clipped** —
-under `unrestricted` the pool forms can legitimately place mass outside the prior box, matching
-Evaluation and Experiment, and `sgm_percentiles` returns real acquisitions as-is. Only `box`/`box_user`
-are constrained to the prior box, clamped at build.
+- `aggregation_candidates.npz`: group vectors, quantiles, identities, methods, source contract, and target binding.
+- `aggregation_groups.csv`: each group's physical values and source draw identity.
+- `aggregation_comparison.csv`: representative-distribution summaries by grouping, set, statistic, and parameter.
+- `aggregation_manifest.json`: source identities and checksums, coverage, methods, and archive checksum.
+- `figures/aggregation_*`: the figures embedded in the report.
 
-**`selection_user` — one fixed vector you chose.** The seventh choice is not a representation of the pool at
-all: it is one explicitly chosen imaging vector, assembled from documented sources (for the working vector of
-`DETECTOR_WORKFLOW.md` §7.6: neural posterior medians for four coordinates, a direct estimator for one, a
-provisional anchor for one), typed into the spec in physical units with a `source` and a `limitation` per
-coordinate. The build converts to log10, refuses a value outside the detector prior box unless its key is
-listed under `allow_outside_prior` with a non-empty `outside_prior_justification` (which acknowledges
-extrapolation beyond the tested imaging domain and certifies nothing), clips nothing, needs no estimator and
-no GPU, and stores the vector as user-selected and fixed: every biology simulation receives it unchanged,
-and the biology inference is conditional on these six values. It carries no calibrated joint uncertainty;
-the estimators behind its values are provenance, not the artifact's identity. Mint it under a nuisance tag
-(below) so it lives beside the canonical artifact and any sensitivity variant.
+The source-uncertainty table names the first requested multi-position set it summarizes. The archive retains
+quantiles for every other group. Ranges over representatives describe empirical dispersion, not posterior
+credible intervals. Representative-distribution summaries use the inverse empirical CDF; raw posterior
+quantiles retain their interpolated convention. The selection console and final mixture report use the
+same representative-summary definition as Experiment.
 
-**The nuisance tag.** `--nuisance-tag <TAG>` (a SCREAMING_SNAKE token, `[A-Z0-9]+`) names the spec and the
-artifact `<alias>_<timing>_<TAG>_Nuisance_DLI_Spec.toml` / `..._Nuisance_DLI.npz`. It names the NUISANCE
-artifact, never an estimator. Every consumer selects an artifact by the same tag and records which one it
-used: the biology DLI stage (`--nuisance-tag`; dispatcher knob `NUISANCE_TAG`) writes the artifact's identity
-into every `Nuisance_DLI_Theta_Set` record's schema, the posterior-predictive render into its clip file and
-figure provenance, the horizon audit into every generated file, and the SGM analysis into its report. No tag
-means the canonical artifact.
+## 2. Run or regenerate the Experiment report
 
-**The range rule.** A user supplies per-parameter `[imaging.<KEY>]` ranges only for `box_user`. `box`
-derives its ranges from pool quantiles (the 5th/95th percentiles by default) clamped to the prior box;
-`raw`/`map_estimate_pool`/`gaussian` take no range at all; and `sgm_percentiles` reads no per-parameter
-range either — instead `percentiles`, `condition`, and `selection_source` (below). So the spec asks for
-`[imaging.<KEY>]` ranges if and only if the choice is `box_user`.
+Aggregation is enabled by default, with `--aggregation-window-sets all,opening`, retaining the same clouds
+already drawn for per-window summaries. It runs after the complete single-process product or validated shard
+merge. `--no-aggregation` selects the legacy reporting mode; `--dump-posterior-samples` can still retain clouds
+in that mode. The older `--aggregation pooled|cell-median` controls the existing point-summary display and
+is a different option.
 
-**`sgm_percentiles` — freeze the imaging, or build a small pool of whole real vectors.** Unlike the
-choices built from the on-the-fly GPU pool, `sgm_percentiles` does not build that pool; it selects a
-few *whole* real vectors and REUSES already-computed data, and the operator's name alone does not say
-which: under `selection_source = "experiment"` (the default) the collection is the Detector Experiment
-product's per-window MAP candidates (`map_estimate`, read through the artifact schema), so the
-construction is an **SGM of window MAPs** and every selected vector is MAP-derived — it inherits
-whatever the MAP path had, and an artifact built from a pre-0.1.15 Experiment product is a
-recomputation item (`DETECTOR_WORKFLOW.md` §9.8); under `"window-sgm"` the collection is the labeled
-posterior pool's per-window SGMs, an **SGM of window posterior SGMs**. Either way it runs on the
-**CPU**. Running it therefore presupposes the Detector Experiment stage has run. Three fields govern it: `percentiles` (a list; default `[50]`), `condition`
-(`FAB` = MET-FAB or `INLB` = MET-INLB; default the artifact's own condition), and `selection_source`. The construction is a **signed
-distance-to-SGM** coordinate, computed in prior-range-normalized absolute space (where the renderer
-consumes the values):
+The detector reference is selected by `--reference-nuisance-tag` (default `SEL`); an absent reference is
+reported. No reference artifact is rebuilt or automatically included in a mixture.
 
-- the **magnitude** is the distance to the Sample Geometric Median `g` — the correlation-preserving
-  median *vector* (the actual member minimizing the summed normalized distance; the same object this
-  note's companion `…_Sample_Geometric_Median` analysis reports);
-- the **sign** is which side of `g` a vector lies on along the cloud's main axis of variation (the
-  largest-variance direction, PC1, of the `g`-centered points, oriented toward increasing brightness
-  `mu_pc`).
+To regenerate a saved report on CPU, use an unused output-only review label. This example loads Fab's
+adopted product and uses its own stored clouds if present:
 
-So **`p50` is `g` exactly**; `p < 50` walks the dim/narrow side to the extreme at `p = 0`, and `p > 50`
-the bright/wide side to the extreme at `p = 100`. Hence `percentiles = [50]` **freezes** the imaging to
-the SGM (one fixed vector — the Nuisance_DLI then renders every video with it), while a list such as
-`[5, 25, 50, 75, 95]` yields a small marginalization pool whose members are all real acquisitions whose
-coordinates co-occurred (a multi-member pool keeps the collection's realized joint structure; a single
-frozen vector carries none). A percentile is snapped to the actual member nearest that signed rank;
-duplicates (or a percentile on an empty side) collapse, and the empty-side fallback to `g` is logged.
+```bash
+MACHINE_PROFILE=mars_pc python Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment.py \
+    --condition FAB --total-time-seconds 2.0 --artifact-tag C128V42A \
+    --regenerate-report --review-label AGGREGATIONREVIEW
+```
 
-## How to run it
+When the original product did not retain clouds, add
+`--cloud-sources /path/to/first_collection.npz,/path/to/second_collection.npz`.
+These must be compatible retained window-draw collections. Their identities must be windows of the source
+product; checkpoint, parameter order, scale, coordinates, geometry, draw count, and sampling mode must match.
+Recorded preprocessing descriptions are compared between collections even when the original product lacks
+that field. Missing preprocessing metadata are disclosed. Collection labels and seeds can differ and remain
+in provenance. A partial review explicitly states its cell and window coverage and identifies fresh clouds
+as a separate sampling attempt.
 
-Preview any mode first with `--dry-run`, which resolves the input and output paths and reports what
-would be read or written without loading the estimator or computing.
+The report is written beside the source product under the review label; an existing destination is refused.
+The label does not change the estimator tag. InlB uses `--condition INLB --artifact-tag C128V42AP3LR32`.
+The biology Experiment entry point shares the reporting implementation, but only detector candidates feed
+this imaging artifact.
 
-    MACHINE_PROFILE=<profile> python \
-      Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
-      --total-time-seconds 2.0 --experiment-span-seconds 20 --emit-template [--pool-mode unrestricted] [--dry-run]
+On HPC, `AGGREGATION_WINDOW_SETS` carries the same comma-separated grammar. Both submitters export it via
+the environment and `ALL`, following the same comma-safe rule as `KINDS`; they do not insert the value into
+Slurm's comma-delimited explicit export list. `NO_AGGREGATION=1` selects the legacy report and
+`REFERENCE_NUISANCE_TAG` selects a displayed fixed reference. Workers and merge receive the same settings.
 
-    (edit the emitted *_Nuisance_DLI_Spec.toml: set posterior_sample_pool_choice (and pool_mode,
-     pre-filled from --pool-mode); for box_user, also set the [imaging.<KEY>] ranges)
+## 3. Emit a selection specification
 
-    MACHINE_PROFILE=<profile> python \
-      Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
-      --total-time-seconds 2.0 --experiment-span-seconds 20 --build [--dry-run]
+Use the archive whose report was reviewed. It must record the source Experiment's target condition,
+timing label, and window geometry; old archives without that binding require CPU regeneration. Template
+emission, build dry-run, and actual build refuse a mismatched target. A cross-condition Experiment application
+can be inspected, but its recording-condition component cannot become another condition's native nuisance.
 
-    MACHINE_PROFILE=<profile> python \
-      Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
-      --total-time-seconds 2.0 --migrate-pool-labels [--dry-run]     # CPU maintenance; see Caching
+The following commands illustrate the interface. Replace the archive path with the reviewed source.
+`STUDY` is an illustrative nuisance tag, not a selected scientific treatment.
 
-Arguments:
+```bash
+MACHINE_PROFILE=mars_pc python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
+    --condition FAB --total-time-seconds 2.0 --nuisance-tag STUDY \
+    --emit-representatives-template --candidate-archive /path/to/aggregation_candidates.npz --dry-run
+```
 
-- `--total-time-seconds` (required) — the model window / recording duration that sets the `timing_label`
-  (for example `2.0` → `2S_50FPS`), used to locate the estimator and name the outputs. It is the same
-  timing knob every pipeline stage takes; the label is always derived from it, never set by hand.
-- `--experiment-span-seconds` — the duration of the real recordings to read (the files are named
-  `Experiment_<KIND>_Cell_<n>_<span>S_RAW.tif`); default `20`.
-- `--condition` — the run's experimental condition (`FAB` or `INLB`); selects the condition-specific detector calibration and Nuisance_DLI namespace.
-- `--kinds` — comma-separated recording kinds to pool (default: the run's condition). The construction pools
-  across kinds; a by-kind split is only ever a diagnostic, never the constructed artifact, because the
-  imaging is a property of the microscope, not the biological condition.
-- `--chunk-step-seconds` — the sliding-window step; default is the model window (non-overlapping
-  chunks). A smaller step yields more, overlapping chunks per recording.
-- `--pool-mode` (`bounded` default, or `unrestricted`) — an emit-only knob: the mode the posterior pool
-  is drawn under, written into the emitted spec as its `pool_mode` default so the finalized spec records
-  how emit sampled. `--build` reads `pool_mode` from the spec, not this flag. It matches the `pool_mode`
-  vocabulary of the Evaluation and Experiment stages. Use `unrestricted` when the posterior sits largely
-  outside the prior box, where bounded rejection barely accepts.
-- `--n-per-chunk` — posterior draws per chunk, both modes (default: the evaluation config's
-  `posterior_samples`).
-- `--repool` — force recomputing the pool on the GPU even when a fresh cache exists (see Caching).
-- `--merge` — emit-only shard-combine mode: read the per-rank pool shards written by a multi-GPU
-  `--emit-template` run (in the `Posit/` directory), concatenate them into the posterior-sample pool,
-  cache it, then emit the spec, and exit. It does no estimation and needs no GPU; the HPC launcher runs
-  it once after the sharded workers finish. Single-GPU emit runs never use it (they build directly).
-- `--max-cells` — cap the cells per kind (0 = all).
-- `--migrate-pool-labels` — CPU-only maintenance (a mode of its own, independent of `--emit-template`/
-  `--build`, needing no estimator or GPU): add the per-row condition/window labels (see Caching) to an
-  existing *legacy* posterior-sample pool by borrowing them from the Detector Experiment product
-  (`map_estimate`, read through the artifact schema), after
-  verifying the two share a window ordering. It backs up the original and preserves the pool's cache key
-  (so `--build` still reuses it without a GPU). A pool that already carries labels is left unchanged.
-- `--emit-selection-user` — write the spec skeleton of a `selection_user` Nuisance_DLI (every value line
-  commented out, so it cannot be built before each `value`, `source` and `limitation` is typed); CPU only,
-  no estimator, no recordings. Then `--build` with the same `--nuisance-tag`:
+Remove `--dry-run` to emit the skeleton. It lists every available component as a commented table and leaves
+`rationale` empty. It cannot be built until the selection is filled. An existing spec is refused, so use a
+separate tag for another construction. The generated provenance and source checksum identify the archive.
 
-      MACHINE_PROFILE=<profile> python \
-        Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
-        --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --emit-selection-user
-      (fill every [selection.<KEY>] table of ..._2S_50FPS_REF_Nuisance_DLI_Spec.toml)
-      MACHINE_PROFILE=<profile> python \
-        Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
-        --condition FAB --total-time-seconds 2.0 --nuisance-tag REF --build [--dry-run]
+## 4. Fill the scientific selection
 
-- `--nuisance-tag` — SCREAMING_SNAKE token naming the spec and artifact beside the canonical ones (a
-  reference vector, a sensitivity variant); consumers select the artifact by the same tag.
-- `--dry-run` — resolve the paths and report what would be read and written; load nothing, compute
-  nothing.
+The spec uses the following fields:
 
-## Caching
+| Field | Meaning |
+|---|---|
+| `[block].posterior_sample_pool_choice` | `"empirical_representatives"` |
+| `[block].candidate_archive` | Absolute path, or path relative to the spec |
+| `[block].candidate_archive_sha256` | Checksum of the reviewed archive |
+| `[block].rationale` | Why these acquisition windows, representatives, statistics, and weights were chosen |
+| `[[component]].source_experiment` | Product label recorded in the archive |
+| `[[component]].condition` | Native target condition, `FAB` or `INLB` |
+| `[[component]].window_set` | A named set present in the archive |
+| `[[component]].grouping` | One of the four grouping IDs above |
+| `[[component]].statistic` | `"sgm"` by default, or explicitly `"median"` |
+| `[[component]].weight` | Non-negative component mass; all component weights sum to one |
+| `[override.<KEY>].value` and `.reason` | Optional explicit physical value and the recorded justification for applying it to every vector |
 
-The pool — the posterior draws over every chunk — is the GPU cost, and it is cached so exploring
-choices is cheap. `--emit-template` computes the pool once and caches it as
-`<alias>_<timing_label>_Nuisance_DLI_<Kind>Pool.npz`; `--build` then reuses that cache (no GPU) to apply
-the chosen representation. The cache is keyed on the build inputs (kinds, span, step, draws per chunk,
-`pool_mode`, cell cap) and the estimator's weight checksum, so it is reused only when those are unchanged
-and recomputed automatically when a different estimator is swapped in. The **MapEstimate** pool is
-additionally keyed on the MAP computation contract — artifact-schema and estimate-definition versions,
-the implementation hash of the code that runs the optimizer, its settings and the checkpoint
-(`detector_nuisance_dli.live_map_pool_contract`) — so an implementation change cannot silently reuse
-an old MAP pool; the draw-only PosteriorSample pool carries no such entry and is unaffected by an
-optimizer-only change.
+A single component with weight one is a valid choice. If component k has weight alpha_k and n_k members,
+each member receives probability alpha_k / n_k. Uniform concatenation of differently sized collections
+would give larger collections more mass solely because of their row counts; this is not the rule used here.
 
-The cached pool is **self-describing**: beside the sample matrix it stores, per row, the condition
-(`kind_index` into `kinds`) and the time-window position (`cell`, sliding-window `chunk`), stamped with a
-`pool_format_version`. So the pool can be filtered by condition or acquisition from the file alone — this
-is what `--condition`, the `sgm_percentiles` selection, and the companion Sample-Geometric-Median analysis
-read; without it the window→condition mapping would be only positional (an unstored artifact of the build
-order). A fresh build writes these labels (threaded through both the single-process and the multi-GPU
-sharded paths); a legacy pool built before the scheme carries none, and `--migrate-pool-labels` adds them.
+Components reuse observations. Combining them changes the probability assigned to representative states,
+not the amount of independent experimental evidence. Adding a global representative places a point mass at
+the overall center. No mixture is automatically better or chosen by the template. Exact duplicate vectors
+are consolidated by adding probabilities, with memberships retained; displayed rounded values are not used
+for deduplication.
 
-`raw`, `gaussian`, and `box` all draw from the one posterior-sample pool, so switching among them costs
-nothing beyond re-applying the representation; `map_estimate_pool` uses a separate MAP pool (its own GPU
-pass); `box_user` needs no pool at all. Pass `--repool` to force a recompute even when a fresh cache
-exists.
+Weights must be finite, non-negative, have positive total mass, and sum to one within 1e-6. Larger discrepancies
+are refused. Accepted roundoff residuals are removed by dividing probabilities by their sum before storage
+and sampling. The manifest records this numerical convention separately from the scientific component weights.
 
-## Outputs
+An override is an explicit transformation and is shown in the final report, including the replaced range.
+It does not create another joint posterior draw. Physical domains are validated: values must be finite and
+positive for the log-ranged imaging parameters, and bleaching probability must be strictly between zero and
+one. A valid value outside the detector training range remains a labeled extrapolation, rather than being
+clipped. A broad bleaching posterior or a pooled center near 0.1 does not automatically replace the separately
+anchored 0.05 reference. That treatment remains a recorded scientific choice.
 
-Written to the Detector-namespaced `Posit/` subdirectory under the data bank (here `<alias>` is the
-Detector-namespaced project alias `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR`):
+The selected representative distribution does not carry the full within-window posterior uncertainty. That
+uncertainty remains available for inspection in Experiment. No pairwise correlation imposes a separate
+sigma_pc–lambda selection rule.
 
-- **Emit-template** writes `<alias>_<timing_label>_Nuisance_DLI_Spec.toml` — the value-based
-  specification (all values in log₁₀). Its `[block]` sets `posterior_sample_pool_choice`, `pool_mode`,
-  and `box_quantiles`; its `[imaging.<KEY>]` ranges are pre-filled with the pool's 5th/95th percentiles
-  as suggestions and are read only by `box_user`. A provenance comment records the estimator, the pool
-  source, the chunk count, and the draws per chunk. The file is authoritative only once the user saves
-  their edits.
-- **Build** writes `<alias>_<timing_label>_Nuisance_DLI.npz` — the built, self-contained artifact,
-  carrying its `parameter_keys` manifest, the chosen representation's numeric parameters (a box's
-  `[low, high]`, a resampled sample matrix, or a Gaussian's `mean`/`covariance`), the prior box, and the
-  `posterior_sample_pool_choice` and `pool_mode` it was built with. Being self-contained, it is sampled
-  at generation with neither the estimator nor the recordings.
-- **Build** also writes a `<alias>_<timing_label>_Nuisance_DLI_Analysis/` directory beside the artifact:
-  a `report.md` (a checks table — artifact written, parameter keys in the detector table's order, draw
-  shape, finite draws, and, for the bounded and box constructions, every draw inside the imaging prior
-  box — then provenance and a per-parameter marginal summary — median, 5th/95th percentiles, prior
-  box, and the fraction of each parameter's mass outside the prior box) and
-  `figures/nuisance_marginals.png` (the 1-D marginal of each imaging parameter, with the prior bounds
-  marked). This is the record a person reads to judge, and choose between, nuisance constructions.
+## 5. Dry-run and build
 
-Any downstream stage obtains the `Nuisance_DLI` through the module's gate (`require_nuisance_dli`),
-which **loads** the built artifact and fails loud — naming this analysis — if it is absent. The gate
-does not rebuild: the build is this step's job.
+After filling the spec, use the same condition, duration, and nuisance tag:
 
-## Choosing a representation
+```bash
+MACHINE_PROFILE=mars_pc python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py \
+    --condition FAB --total-time-seconds 2.0 --nuisance-tag STUDY --build --dry-run
+```
 
-- **`raw`** — the recommended default. Use it unless you have a specific reason not to: it is the only
-  form that reproduces the calibrated imaging distribution faithfully, correlations and all.
-- **`gaussian`** — when a compact, smooth, continuous density is wanted and the pool is plausibly
-  unimodal. It preserves the linear correlations but averages away any second mode.
-- **`box`** — when a bounded, correlation-free uniform is wanted, sized automatically from the pool's
-  central mass (the quantiles). Conservative and simple.
-- **`box_user`** — the manual escape hatch: a uniform over ranges you set (for example, to reproduce a
-  fixed-imaging production by setting each range to a single value). Clamped to the prior box.
-- **`map_estimate_pool`** — the point-estimate sibling of `raw`: it pools the per-window MAP candidates
-  (`map_estimate`) instead of full posterior draws, so it captures the across-recording spread of the
-  point estimates but discards the within-window posterior width. MAP-derived: its cache is keyed on
-  the MAP computation contract (see Caching).
+The preview validates the selected archive, target, components, weights, and physical values, and lists the
+vectors and output paths. It performs CPU calculations but neither neural sampling nor an artifact write.
+Remove `--dry-run` for the reviewed build. This step also uses CPU only.
 
-- **`selection_user`** — when the biology run is to condition on one explicitly chosen vector from documented
-  sources rather than on a calibrated pool: the reference biology configuration of `DETECTOR_WORKFLOW.md`
-  §7.6, and its sensitivity variants under their own tags. The pooled choices stay available for a
-  marginalizing run.
+The output paths follow the active machine profile, under `Posit`:
 
-## Caveats
+- `<alias>_<timing>_<TAG>_Nuisance_DLI_Spec.toml`: the selection and rationale.
+- `<alias>_<timing>_<TAG>_Nuisance_DLI.npz`: vectors, probabilities, parameter keys, and construction record.
+- `<alias>_<timing>_<TAG>_Nuisance_DLI_Analysis/report.md`: components, normalization, memberships, overrides,
+  weighted marginal summaries, and final marginal/joint comparisons with the components and SEL.
 
-- **Only `raw` preserves the joint distribution.** Every other choice trades correlation fidelity for
-  compactness, smoothness, or bounds; the report and this note make that trade explicit so it is a
-  deliberate choice, not an accident. The `g/C` degeneracy above is the concrete stake.
-- **The pool is a mixture, and may be multimodal.** It is pooled across recordings with different
-  imaging, so a single Gaussian (`gaussian`) can misrepresent it by placing mass between modes. Prefer
-  `raw` when in doubt.
-- **`unrestricted` can produce out-of-prior draws.** This is intentional and matches the Evaluation and
-  Experiment stages; it is not clipped. Use `bounded` (the default) to keep the pool within the prior
-  box by rejection.
-- **These are calibrated estimates on real data, not ground-truth recovery.** The recordings have no
-  ground truth; the pool describes where the calibrated imaging posterior places its mass, not a
-  demonstrated recovery of true imaging parameters. Recovery is quantified only on held-out synthetic
-  data with known values, in the Detector Evaluation stage.
-- **Prior-box clamping is logged, not silent.** For `box`/`box_user`, any parameter range the prior-box
-  clamp reduces is reported and counted at build.
-- **A `selection_user` vector fixes the imaging.** Recording-to-recording imaging variation is not
-  marginalized in a run that consumes it, the SCOPE camera nuisance stays separate, and the values carry
-  no calibrated joint uncertainty; an acknowledged outside-prior coordinate lies beyond the detector's
-  tested imaging domain and the acknowledgement records that fact rather than validating the value.
+The artifact stores the six imaging coordinates in log10. `pool_mode` records `unrestricted` when positive
+probability mass lies outside the detector training box; support is not clipped. The NumPy-only sampler
+draws complete rows at their stored probabilities. The camera remains a separate SCOPE draw.
 
-## Reference
+The tag identifies the nuisance artifact, not the source estimator. The biology DLI stage selects it with
+`--nuisance-tag` (dispatcher `NUISANCE_TAG`) and records its identity in each `Nuisance_DLI_Theta_Set`.
+The posterior-predictive renderer and other consumers use the same identity mechanism. Consumers load an
+existing artifact through `require_nuisance_dli`; they do not construct one implicitly.
 
-The negative log-likelihood the pool is drawn under is the logarithmic score, a strictly proper scoring
-rule (Gneiting and Raftery, "Strictly Proper Scoring Rules, Prediction, and Estimation," *Journal of
-the American Statistical Association*, 2007). The multivariate-Gaussian fit stores the sample mean and
-covariance; the boxes are `BoxUniform` distributions over log₁₀ ranges.
+## 6. Compatibility with historical constructions
 
-Real recordings: MET single-particle-tracking data, BioImage Archive accession S-BSST712. The imaging
-model and the `g/C` (`kappa_g`/`kappa_c`) degeneracy are described under the EMCCD noise model in
-`REFERENCE_EMCCD_NOISE_MODEL.md`; the nuisance and artifact design, the value-based parameter table, and
-the imaging prior box are in `DETECTOR_WORKFLOW.md` (section "Nuisance and artifact design"); the
-recovery quantification this construction defers to is the Detector Evaluation stage.
+These routes remain implemented for historical reproduction, fixed scenarios, and tests. They are not
+alternative defaults of the representative-based procedure above. Older unweighted artifacts keep uniform
+row sampling, and an old reader refuses the unfamiliar weighted construction rather than ignoring probabilities.
+
+| Stored construction | Meaning and compatibility |
+|---|---|
+| `selection_user` | One fixed vector with physical values, sources, and limitations in `[selection.<KEY>]`; the existing SEL references use this route. `--emit-selection-user` emits its skeleton on CPU. Values outside the training prior require its explicit acknowledgment fields |
+| `sgm_percentiles` | Signed-distance selection from stored window MAPs (`selection_source = "experiment"`) or window SGMs (`"window-sgm"`); a different calculation from pooling full window posterior clouds |
+| `map_estimate_pool` | Uniform sampling of the stored per-window MAP candidates |
+| `raw` | Uniform sampling of a retained posterior-draw pool, including within-window uncertainty; not the selected representation strategy |
+| `gaussian` | A full-covariance Gaussian fitted to a posterior-draw pool |
+| `box` | Independent coordinate-wise ranges derived from pool quantiles |
+| `box_user` | Independent user-declared coordinate ranges; used as a fast stand-in for smoke tests, not a calibrated empirical distribution |
+
+The older `--emit-template`, `--repool`, and pool-cache machinery belongs to those historical pool-based
+routes. Drawing a missing pool can require the trained estimator, recordings, and GPU; these are not inputs
+to `empirical_representatives`. `--migrate-pool-labels` adds labels to an old posterior-sample cache only
+after its alignment check, keeping a backup of the original. Per-coordinate box constructions do not retain
+joint parameter relationships. The six imaging coordinates are distinct from the five camera parameters;
+the current detector does not infer camera gain or conversion as part of this six-vector artifact.
+
+## 7. Project state and sources
+
+The Fab and InlB SEL artifacts are built fixed references. The empirical construction was validated on saved
+draws for Fab cells 26 and 4 and InlB cells 11 and 42; its illustrative build is an interface example, not a
+production selection. The acquisition period, construction or mixture, weights, statistic, and bleaching
+treatment remain open. The InlB external catalog cross-check and full-cohort draw collection also remain pending.
+
+The corrected review reports carry the label `PILOT2CELLSR1`; earlier `PILOT2CELLS` reports are historical.
+Their scientific candidate arrays agree. Both sets remain on disk unless a deletion is explicitly authorized.
+
+Scientific and execution records:
+
+- [DETECTOR_WORKFLOW.md §7](../../DETECTOR_WORKFLOW.md#7-nuisance-and-artifact-design): definitions, source decisions, and artifact design.
+- [PROJECT_CONTEXT.md §3](../../PROJECT_CONTEXT.md#3-inference-pipeline-two-stage-architecture): the two-workflow scientific context.
+- [VALIDATION.md](../../VALIDATION.md): pipeline checks, including the artifact smoke-test stand-in.
+- [Implementation evidence](Evidence/Experiment_Aggregation_2026-11-05/COMPLETION_NOTE.md): measured costs, validation, review corrections, and output index.

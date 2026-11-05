@@ -1,0 +1,135 @@
+# Declared reaction-diffusion configuration for MET-INLB posterior-predictive checks.
+#
+# Confirmed on 2026-11-02 as a declared scenario. Three rows carry literature-informed declared
+# settings specific to MET-INLB (marked below); every other row repeats the MET-FAB companion's
+# declared defaults, which gives the two conditions a common reference scenario and does not
+# establish that their biological parameters are identical. Documented in
+# SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Video.md (sections "The files of the posterior-predictive
+# video check" and "A declared reaction-diffusion configuration"). It is an input of that analysis, specific
+# to the MET-INLB recordings compared and confirmed by the user before rendering; it is not a generic model
+# setting and no pipeline stage reads it.
+#
+# Read by posterior_predictive_video_runner.load_declared_rds (--declared-rds); the SHA-256 of this
+# file and the origin of every value are recorded in each clip rendered from it. Every value below
+# is an explicit ASSUMPTION, stated with its basis and source; none is an estimate of the biology of
+# these recordings, and none is evidence about it.
+#
+# Not set here, because the production path sets it: the imaging block is read from the tagged
+# Nuisance_DLI artifact (--nuisance-tag SEL), and the labeling is the condition's production
+# observation layer: the retained population (every simulated InlB receptor carries a probe; B1 one,
+# B2 two), Bernoulli(0.5) dye counts per bound InlB; the equilibrium occupancy 0.0476 at 0.25 nM
+# realizes the retained population from the receptor total at the RDS stage, and the window-start
+# allocation below pairs part of the reference's probe-bound monomers into two-InlB dimers
+# (labeling.resolve_labeling; PROJECT_CONTEXT.md sec. 2, Modeling assumptions).
+#
+# Units are physical (counts, um^2/s, 1/s, dimensionless ratios and fractions). The biology prior box of
+# every row is in PROJECT_CONTEXT.md sec. 2; a log row outside it is recorded as an extrapolation, a
+# fraction outside [0, 1] is refused at load.
+
+[scenario]
+name = "INLB_DECLARED_RDS"
+condition = "INLB"
+status = "declared assumptions for posterior-predictive checks; not estimates"
+description = """One reaction-diffusion configuration for every MET-INLB render compared with the \
+experimental recordings. The initial composition and the diffusion scale follow stated external \
+references; the dissociation rate and the dimer mobility ratio use literature-informed declared \
+settings; the window-start allocation is the declared midpoint of its prior; every other value, the \
+receptor total included, is the center of its prior, declared as a default where no MET-INLB evidence \
+fixes it. The shared defaults give a common reference scenario; they do not establish that the \
+biological parameters are identical between conditions."""
+
+[parameters.count_total]
+value = 10000.0
+basis = "prior center (declared default)"
+source = """Center of the decided prior 1,000-100,000 receptor subunits (log10 [3.0, 5.0]), one value for every \
+recording, the same declared default as the MET-FAB companion. It is not matched to a recording: the rendered \
+spot density can differ from a recording's, and inferring the receptor total is the biology workflow's task. \
+N_total counts the TRUE receptor subunits, probe-bound and unbound, in the whole simulated field (256 x 256 px, \
+40.4 um square, open lateral boundary), not in the cell footprint; the generator simulates the retained \
+population realized from it through the equilibrium MET-INLB occupancy 0.0476 at 0.25 nM."""
+
+[parameters.fraction_basal_dimers_reference]
+value = 0.075
+basis = "declared assumption (external reference range)"
+source = """f = 7.5 %, the basal REFERENCE fraction of dimers among the complexes of the underlying \
+population (f = D / (M + D)), the same declared value as the MET-FAB companion (middle of the 5-10 % \
+working range for resting MET; Baldering et al., iScience 24, 101895 (2021), doi:10.1016/j.isci.2020.101895; \
+Dietz et al., BMC Biophysics 6, 6 (2013)). Under MET-INLB it is the reference the window-start allocation \
+acts on: the STARTING composition adds the allocated two-InlB dimers to it (relative_count_active_dimers_initial \
+below), so the starting dimer fraction is derived, not this value. A published cluster or spot fraction is a \
+different estimand, measured in other cells with other labels."""
+
+[parameters.rate_dissociation]
+value = 1.0
+basis = "literature-informed declared setting, specific to MET-INLB (alternative: prior center 0.1)"
+source = """Li et al., Small 22, e07115 (2026), doi:10.1002/smll.202507115: 0.77 and 1.25 per s measured \
+for InlB-activated MET, which the MET-FAB companion scopes to this condition; declared as 1.0 per s, a rounded \
+working value between the two anchors, inside the decided prior 0.001-10 per s; a declared setting, not an estimate \
+for these recordings. With association on under MET-INLB, \
+the composition relaxes toward the balance of association and dissociation during the recording."""
+
+[parameters.diffusivity_alp]
+value = 0.10
+basis = "declared assumption (literature representative value)"
+source = """Li et al., Small 22, e07115 (2026): donor-only segments 0.109 +/- 0.068 and 0.093 +/- 0.053 um^2/s \
+(mean 0.10), measured in InlB-activated cells, the same declared value as the MET-FAB companion. SCOPE: an \
+APPARENT diffusion coefficient of tracked segments, used here as the model's free-mode monomer coefficient \
+D[A, f], a different quantity; the mode-averaged coefficient under the declared stationary mode weights is \
+0.44 D_A = 0.044 um^2/s. Whether the rendered motion corresponds to the recordings' tracks remains a check \
+of the renders."""
+
+[parameters.relative_diffusivity_dimer]
+value = 0.60
+basis = "literature-informed declared setting, specific to MET-INLB (alternative: prior center 0.3162)"
+source = """Li et al., Small 22, e07115 (2026): 0.60, the dimer-to-monomer mobility ratio derived from \
+InlB-activated MET, which the MET-FAB companion scopes to this condition; inside the decided prior 0.1-1. SCOPE: an \
+apparent ratio measured from tracked trajectories, used here as a proxy for the model's within-mode dimer-to-monomer \
+ratio R_B, a different quantity that is not automatically identical to it. It acts on every dimer of the scene (basal, \
+allocated and formed by association)."""
+
+[parameters.relative_diffusivity_slow]
+value = 0.3162
+basis = "prior center (declared default)"
+source = """Center of the decided prior 0.1-1; the specification's anchors (confined/free 0.7 by \
+segment analysis, 0.28 by hidden Markov analysis; PROJECT_CONTEXT.md sec. 2) bracket it. Not \
+fitted to these recordings."""
+
+[parameters.relative_diffusivity_immobile]
+value = 0.003162
+basis = "prior center (declared default)"
+source = """Center of the decided prior 0.001-0.01: D_i = R_i D_A = 0.0003 um^2/s, below the \
+tracking pipelines' immobility thresholds (0.0028 and 0.0065 um^2/s). Not fitted."""
+
+[parameters.rate_fast_slow]
+value = 1.0
+basis = "prior center (declared default)"
+source = """Center of the decided prior 0.1-10 per s. Observed free/confined/immobile class \
+fractions are not used: observational classes are not established equivalents of the model's \
+modes, and class fractions would constrain rate ratios, not absolute switching times."""
+
+[parameters.rate_slow_fast]
+value = 1.0
+basis = "prior center (declared default)"
+source = "Center of the decided prior 0.1-10 per s; as rate_fast_slow."
+
+[parameters.rate_slow_immobile]
+value = 1.0
+basis = "prior center (declared default)"
+source = "Center of the decided prior 0.1-10 per s; as rate_fast_slow."
+
+[parameters.rate_immobile_slow]
+value = 1.0
+basis = "prior center (declared default)"
+source = "Center of the decided prior 0.1-10 per s; as rate_fast_slow."
+
+[parameters.relative_count_active_dimers_initial]
+value = 0.5
+basis = "declared midpoint of the allocation prior (no MET-INLB measurement of the window-start allocation)"
+source = """Midpoint of the decided prior [0, 1] (linear): R_active = 0.5 allocates half of the available capacity \
+cap = A_ref // 2 of the reference's probe-bound monomer pairs into additional two-InlB dimers before the recording \
+starts; it does not mean that half of the complexes are dimers, the starting dimer fraction being derived from f, \
+the occupancy and this allocation \
+(c = round(R_active * cap); A_start = A_ref - 2c, B2_start = B2_ref + c; PROJECT_CONTEXT.md sec. 2, item 9). \
+No measurement of this allocation on the recordings exists; the published 63 % activation at 5 nM (quantitative \
+PALM, Baldering et al. 2021) is an activation fraction of the total population under another concentration \
+and labeling, not this quantity. Inferring the allocation is the biology workflow's task."""

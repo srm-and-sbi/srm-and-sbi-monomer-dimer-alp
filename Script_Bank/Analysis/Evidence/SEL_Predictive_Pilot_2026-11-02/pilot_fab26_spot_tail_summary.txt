@@ -1,0 +1,16 @@
+SPOT COUNT (detected spots per frame, cell 26)
+  SEL_R1   SEL_R1 (FAB_POISSON): opening   60.0  closing   39.2  closing/opening 0.65 fluorescent_complexes_0 116 eta_opening 0.52
+  SEL_R1           experimental: opening  188.0  closing  116.2  closing/opening 0.62
+  SEL_R2   SEL_R2 (FAB_POISSON): opening   70.4  closing   45.7  closing/opening 0.65 fluorescent_complexes_0 125 eta_opening 0.56
+  SEL_R2           experimental: opening  188.0  closing  116.2  closing/opening 0.62
+  SEL_R3   SEL_R3 (FAB_POISSON): opening   56.1  closing   42.9  closing/opening 0.77 fluorescent_complexes_0 116 eta_opening 0.48
+  SEL_R3           experimental: opening  188.0  closing  116.2  closing/opening 0.62
+TAIL STRUCTURE (threshold 10000 ADU)
+  SEL_R1     opening 100 frames         experimental: median 1242 p99 3247 p99.9 6223 max 15885 frame-max med 12603 hot px 500 blobs3+ 49 local/bg 1.37 above_exp_max -
+  SEL_R1     opening 100 frames SEL_R1 (FAB_POISSON): median 1244 p99 2144 p99.9 2868 max 7298 frame-max med 5022 hot px 0 blobs3+ 0 local/bg nan above_exp_max 0
+  SEL_R1 whole clip (1000 frames)         experimental: median 1179 p99 2712 p99.9 5280 max 18321 frame-max med 10880 hot px 1835 blobs3+ 148 local/bg 1.36 above_exp_max -
+  SEL_R1 whole clip (1000 frames) SEL_R1 (FAB_POISSON): median 1243 p99 2113 p99.9 2683 max 9325 frame-max med 4659 hot px 0 blobs3+ 0 local/bg nan above_exp_max 0
+  SEL_R2     opening 100 frames SEL_R2 (FAB_POISSON): median 1246 p99 2168 p99.9 3039 max 7757 frame-max med 5308 hot px 0 blobs3+ 0 local/bg nan above_exp_max 0
+  SEL_R2 whole clip (1000 frames) SEL_R2 (FAB_POISSON): median 1244 p99 2134 p99.9 2842 max 11037 frame-max med 5050 hot px 1 blobs3+ 0 local/bg 1.09 above_exp_max 0
+  SEL_R3     opening 100 frames SEL_R3 (FAB_POISSON): median 1245 p99 2150 p99.9 2962 max 9373 frame-max med 5513 hot px 0 blobs3+ 0 local/bg nan above_exp_max 0
+  SEL_R3 whole clip (1000 frames) SEL_R3 (FAB_POISSON): median 1243 p99 2124 p99.9 2797 max 11723 frame-max med 5423 hot px 8 blobs3+ 1 local/bg 1.10 above_exp_max 0

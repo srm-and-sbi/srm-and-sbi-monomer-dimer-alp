@@ -1,0 +1,22 @@
+# ILLUSTRATIVE spec (Evidence only): the weights below are an EXAMPLE of the interface, not a selection.
+[block]
+posterior_sample_pool_choice = "empirical_representatives"
+candidate_archive = "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment_PILOT2CELLS/aggregation_candidates.npz"
+candidate_archive_sha256 = "d353d4bffed1d90b13a21466fa21dd5719e6c31b7613f71535d8ce9918fd9668"
+rationale = "Illustration of the interface on the two-cell pilot archive: the per-cell representatives over all ten windows beside the global representative; weights are an example, not a decision."
+
+[[component]]
+source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+condition = "FAB"
+window_set = "all"
+grouping = "per_cell"
+statistic = "sgm"
+weight = 0.75
+
+[[component]]
+source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+condition = "FAB"
+window_set = "all"
+grouping = "global"
+statistic = "sgm"
+weight = 0.25

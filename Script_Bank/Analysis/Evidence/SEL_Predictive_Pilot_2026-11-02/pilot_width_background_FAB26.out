@@ -1,0 +1,170 @@
+{
+ "kind": "MET-FAB",
+ "cell": 26,
+ "camera": {
+  "gamma": 41.84100418410041,
+  "kappa_o": 28.7,
+  "kappa_b": 175.0,
+  "kappa_s": 10.5,
+  "kappa_q": 0.9
+ },
+ "windows": {
+  "opening": [
+   0,
+   100
+  ],
+  "closing": [
+   900,
+   1000
+  ]
+ },
+ "rows": {
+  "experimental": {
+   "opening": {
+    "background_median_adu": 1239.5,
+    "signal_above_bg_per_frame": 12020039.5,
+    "p99_adu": 3247.0,
+    "p999_adu": 6223.0,
+    "frame_max_median": 12603.0,
+    "width_median_px": 1.5653263367524488,
+    "width_iqr_px": [
+     1.378422162076608,
+     1.8826390110446887
+    ],
+    "spot_fits": 3759,
+    "frames_used": 20,
+    "amplitude_median_adu": 20961.73799933395
+   },
+   "closing": {
+    "background_median_adu": 1153.0,
+    "signal_above_bg_per_frame": 9272696.0,
+    "p99_adu": 2396.0,
+    "p999_adu": 4843.0,
+    "frame_max_median": 10781.0,
+    "width_median_px": 1.3539502516694184,
+    "width_iqr_px": [
+     1.192532694929315,
+     1.5059179287738906
+    ],
+    "spot_fits": 2348,
+    "frames_used": 20,
+    "amplitude_median_adu": 12399.926129409532
+   }
+  },
+  "SEL_R1": {
+   "opening": {
+    "background_median_adu": 1244.0,
+    "signal_above_bg_per_frame": 8996235.5,
+    "p99_adu": 2144.0,
+    "p999_adu": 2868.0,
+    "frame_max_median": 5021.5,
+    "width_median_px": 1.6011483606510246,
+    "width_iqr_px": [
+     1.273191605191555,
+     1.9121521292464225
+    ],
+    "spot_fits": 1262,
+    "frames_used": 20,
+    "amplitude_median_adu": 10111.765037818754
+   },
+   "closing": {
+    "background_median_adu": 1241.0,
+    "signal_above_bg_per_frame": 8742912.5,
+    "p99_adu": 2090.0,
+    "p999_adu": 2536.0,
+    "frame_max_median": 4155.0,
+    "width_median_px": 1.5665563977593973,
+    "width_iqr_px": [
+     1.2376657154806912,
+     1.9062500155207274
+    ],
+    "spot_fits": 830,
+    "frames_used": 20,
+    "amplitude_median_adu": 8603.933816925695
+   },
+   "seed": 20261102,
+   "n_dyes": 227,
+   "n_subunits": 167
+  },
+  "SEL_R2": {
+   "opening": {
+    "background_median_adu": 1246.0,
+    "signal_above_bg_per_frame": 9101678.0,
+    "p99_adu": 2168.0,
+    "p999_adu": 3039.4010000005364,
+    "frame_max_median": 5308.0,
+    "width_median_px": 1.596311189244546,
+    "width_iqr_px": [
+     1.3317206598125657,
+     1.850163836053507
+    ],
+    "spot_fits": 1461,
+    "frames_used": 20,
+    "amplitude_median_adu": 10999.400744575476
+   },
+   "closing": {
+    "background_median_adu": 1242.0,
+    "signal_above_bg_per_frame": 8811187.0,
+    "p99_adu": 2105.0,
+    "p999_adu": 2654.0,
+    "frame_max_median": 4727.5,
+    "width_median_px": 1.5545065659568507,
+    "width_iqr_px": [
+     1.2527904252355229,
+     1.8355272333644332
+    ],
+    "spot_fits": 975,
+    "frames_used": 20,
+    "amplitude_median_adu": 8885.177794744188
+   },
+   "seed": 20261103,
+   "n_dyes": 260,
+   "n_subunits": 167
+  },
+  "SEL_R3": {
+   "opening": {
+    "background_median_adu": 1245.0,
+    "signal_above_bg_per_frame": 9035705.0,
+    "p99_adu": 2150.0,
+    "p999_adu": 2962.0,
+    "frame_max_median": 5513.0,
+    "width_median_px": 1.5966793040689489,
+    "width_iqr_px": [
+     1.3018924402076248,
+     1.9556193215317907
+    ],
+    "spot_fits": 1173,
+    "frames_used": 20,
+    "amplitude_median_adu": 10476.770029129228
+   },
+   "closing": {
+    "background_median_adu": 1242.0,
+    "signal_above_bg_per_frame": 8818421.0,
+    "p99_adu": 2103.0,
+    "p999_adu": 2652.0,
+    "frame_max_median": 5022.5,
+    "width_median_px": 1.5493774458402947,
+    "width_iqr_px": [
+     1.2497672647369604,
+     1.855673500427318
+    ],
+    "spot_fits": 912,
+    "frames_used": 20,
+    "amplitude_median_adu": 9563.383551160474
+   },
+   "seed": 20261104,
+   "n_dyes": 243,
+   "n_subunits": 167
+  }
+ }
+}
+
+      series   window  bg med signal/frame    p99  p99.9 fmax med width med           IQR  fits amp med
+experimental  opening    1240    1.202e+07   3247   6223    12603     1.565     1.38-1.88  3759   20962
+experimental  closing    1153    9.273e+06   2396   4843    10781     1.354     1.19-1.51  2348   12400
+      SEL_R1  opening    1244    8.996e+06   2144   2868     5022     1.601     1.27-1.91  1262   10112
+      SEL_R1  closing    1241    8.743e+06   2090   2536     4155     1.567     1.24-1.91   830    8604
+      SEL_R2  opening    1246    9.102e+06   2168   3039     5308     1.596     1.33-1.85  1461   10999
+      SEL_R2  closing    1242    8.811e+06   2105   2654     4728     1.555     1.25-1.84   975    8885
+      SEL_R3  opening    1245    9.036e+06   2150   2962     5513     1.597     1.30-1.96  1173   10477
+      SEL_R3  closing    1242    8.818e+06   2103   2652     5022     1.549     1.25-1.86   912    9563

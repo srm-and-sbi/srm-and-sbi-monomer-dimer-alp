@@ -517,13 +517,15 @@ section intro). The artifact is Detector-namespaced and per condition
 FAB detector calibration produces the FAB artifact, which the FAB biology DLI consumes.
 
 The construction (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.py`)
-reads a value-based spec whose `posterior_sample_pool_choice` sets how the calibration
-becomes the samplable artifact. The **biology reference run** conditions on one fixed,
-user-selected imaging vector assembled from documented sources (`DETECTOR_WORKFLOW.md` §7.6),
-minted by the `selection_user` choice, which needs no estimator and no GPU; `raw` — the
-faithful calibration, resampled from the detector estimator's posterior over the real
-recordings, a GPU step that needs the estimator trained in the detector Inference stage —
-remains the marginalizing form. For a **smoke** the
+reads an explicit selection spec. The representative-based route reads the candidate archive
+of the existing detector Experiment report and builds a weighted `empirical_representatives`
+artifact on CPU, with no repeated neural sampling. The user selects the acquisition windows,
+grouping or mixture, statistic, weights, and any parameter-specific treatment. See
+[`DETECTOR_WORKFLOW.md` §7.2–§7.3](DETECTOR_WORKFLOW.md#72-the-nuisance_dli-artifact) and the
+[analysis companion](Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Nuisance_DLI.md).
+The built fixed `SEL` artifacts are historical comparison references (§7.6); a production
+empirical selection remains open. The older pool-based routes are retained for compatibility.
+For a **smoke** the
 imaging values need only be valid, so use `box_user` with each parameter's range set to its
 imaging prior box — the six learnable imaging parameters' `PRIOR_RANGE` values defined in
 `srm_and_sbi_monomer_dimer_alp/detector_parameterization.py` (the `DETECTOR_PARAMETERIZATION` table).
@@ -1174,6 +1176,36 @@ carries it.
 
 ---
 
+#### Experimental aggregation and empirical nuisance construction
+
+These CPU checks validate the experimental grouping and construction rules, independently of
+parameter recovery on synthetic EVAL videos. The source clouds already exist; no neural sampling,
+HPC job, or production selection is required:
+
+```bash
+MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_experiment_aggregation.py
+MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_hpc_submit_forwarding.py
+MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_selection_user.py
+MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_contract_enforcement.py
+```
+
+The aggregation checks cover the four constructions and window sets, complete requested coverage
+against the declared geometry, identities belonging to the source product, compatible preprocessing
+and checkpoint contracts, single-process versus merged-shard results, exact draw identities, and
+the existing Experiment report's extended section. They also check target binding, physical-domain
+refusals, probability normalization and sampling, inverse-CDF representative summaries, duplicate
+memberships, serialization, and the legacy uniform sampler. The forwarding checks use a fake
+scheduler and interpreter, so comma-bearing window selections reach the worker and merge unchanged
+without a real submission. The same normalization and median conventions are used by the selection
+console, exports, Experiment report, and selected-mixture report.
+
+The saved-cloud reproduction uses Fab cells 26 and 4 and InlB cells 11 and 42 when available.
+An extended report for these data must say two of sixty cells and twenty of six hundred windows,
+and distinguish fresh retained collections from original Experiment summaries. Numerical agreement
+with these inputs validates the implementation, not experimental parameter accuracy or a particular
+nuisance selection. The implementation and correction evidence is indexed in
+[`COMPLETION_NOTE.md`](Script_Bank/Analysis/Evidence/Experiment_Aggregation_2026-11-05/COMPLETION_NOTE.md).
+
 ### 3.5 Focused tests and audits of the window-start composition
 
 The window-start composition is validated by focused tests and the two audits, not by a
@@ -1240,9 +1272,11 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_dli_banner.py` | 3 | the detector DLI stage's dry-run banner under the probe-class rule and under the `--occupancy` override |
 | `tests/test_embedding_probe.py` | 3 | the embedding probe's arithmetic: a linear signal is recovered, an absent parameter scores no better than the null, the split is disjoint, the report is written |
 | `tests/test_estimator_scorecard.py` | 6 | the estimator scorecard on synthetic, schema-valid records: alignment by identifier, the recovery, coverage and paired log-density numbers, the flags |
+| `tests/test_experiment_aggregation.py` | 16 | the four representative constructions and named window sets; source and coverage guards; existing Experiment report integration; saved pilot reproduction; target binding; weighted empirical artifacts, physical domains, normalization, and consistent median summaries |
 | `tests/test_experiment_comparison.py` | 5 | the Experiment comparison on synthetic products: alignment by identifier, the location, prior-box shares and discrepancy numbers of the three point estimates |
 | `tests/test_fleet_sync.py` | 10 | the fleet sync: every failure status propagates, and a live sync counts as a success only after the content verification |
 | `tests/test_gradient_accumulation.py` | 6 | gradient accumulation to a fixed global batch: the step resolution and the equivalence with a whole-group batch |
+| `tests/test_hpc_submit_forwarding.py` | 2 | both workflows' submitters and Experiment launchers forward comma-bearing window sets through the environment to worker and merge; fake scheduler/interpreter only |
 | `tests/test_inference_network.py` | 10 | the embedding network and its encoder-screening settings: the defaults reproduce the original network, every preset builds at every documented duration, passes stay finite |
 | `tests/test_information_budget.py` | 6 | the budget kernel: the field-noise derivation, the model's operating point of each condition, no typed operating-point constant, the bound's scaling with the noise |
 | `tests/test_labeling_compliance.py` | 9 | every renderer of simulated trajectories labels them the way the training data were labeled |
@@ -1269,7 +1303,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_weights_initialized_phase.py` | 6 | the weights-initialized phase: an artifact restores every weight and buffer of a compiled-layout network and its losses; field-by-field refusal of a mismatched artifact; a fresh optimizer, rate, patience and counters with the global epoch continued; a resumed phase keeps its schedule and refuses another patience; the runner's refusals; the HPC forwarding |
 | `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
 
-Total: 292 tests over 36 files.
+Total: 310 tests over 38 files.
 
 ## 4. Troubleshooting
 

@@ -1,0 +1,529 @@
+{
+ "archive_format_version": 1,
+ "stage": "experiment_aggregation",
+ "product_label": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32",
+ "target": {
+  "project_alias": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB",
+  "condition": "INLB",
+  "timing_label": "2S_50FPS",
+  "window_seconds": 2.0,
+  "n_frames": 100,
+  "estimator_tag": "C128V42AP3LR32",
+  "product_label": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32"
+ },
+ "condition_labels": [
+  "INLB"
+ ],
+ "constructions": [
+  "per_cell",
+  "per_window_position",
+  "global",
+  "per_cell_window"
+ ],
+ "construction_definitions": {
+  "per_cell": {
+   "name": "One representative per cell",
+   "calculation": "pool all retained draws of the cell's selected windows, equal weight per window, and select the SGM",
+   "interpretation": "variation between cell representatives over the declared acquisition period"
+  },
+  "per_window_position": {
+   "name": "One representative per window position",
+   "calculation": "at each selected position, pool the retained draws across the included cells, equal weight per cell, and select the SGM",
+   "interpretation": "variation between acquisition-period representatives, cell differences compressed at each position"
+  },
+  "global": {
+   "name": "One representative of the selected collection",
+   "calculation": "pool the retained draws with equal cell weight and equal selected-window weight within each cell, and select the SGM",
+   "interpretation": "an overall joint center of the selected collection"
+  },
+  "per_cell_window": {
+   "name": "One representative per cell-window pair",
+   "calculation": "the SGM of each included cell-window posterior",
+   "interpretation": "variation between window representatives, cell and window identities retained"
+  }
+ },
+ "statistics": [
+  "sgm",
+  "median"
+ ],
+ "default_statistic": "sgm",
+ "window_sets": {
+  "all": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "opening": [
+   0
+  ]
+ },
+ "coverage": {
+  "INLB": {
+   "cells": [
+    11,
+    42
+   ],
+   "chunks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ],
+   "n_windows": 20,
+   "n_draws_per_window": 10000,
+   "declared_positions": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ]
+  }
+ },
+ "coverage_note": "This is a pilot subset, not the complete condition: MET-INLB 2 of 60 cells (cells [11, 42]), 20 of 600 windows. The original MAP and summary references above come from the adopted product; the aggregation summaries come from the retained collections named below, fresh draws of the same estimator that do not reconstruct the original sampling attempt.",
+ "n_product_cells": {
+  "INLB": 60
+ },
+ "n_product_windows": {
+  "INLB": 600
+ },
+ "parameter_keys": [
+  "mu_r",
+  "sigma_r",
+  "mu_pc",
+  "sigma_pc",
+  "prob_photo_bleach",
+  "lambda_rate"
+ ],
+ "quantile_levels": [
+  0.05,
+  0.25,
+  0.5,
+  0.75,
+  0.95
+ ],
+ "metric": "estimator coordinates divided by the prior widths (sgm_scale)",
+ "sgm_scale": [
+  0.3,
+  0.75,
+  0.75,
+  0.75,
+  1.5,
+  1.0
+ ],
+ "prior_low": [
+  0.0,
+  -1.0,
+  2.0,
+  -0.75,
+  -2.0,
+  0.0
+ ],
+ "prior_high": [
+  0.3,
+  -0.25,
+  2.75,
+  0.0,
+  -0.5,
+  1.0
+ ],
+ "methods": {
+  "single_window": "the window's stored exact sample medoid (reused) or the exact medoid",
+  "pooled": "exact medoid up to 10000 rows; above it the collection kernel's Weiszfeld geometric median snapped to the nearest retained draw (weiszfeld_snap), an approximation to the exact medoid",
+  "quantiles": "mixture quantiles of the pooled draws in estimator coordinates (numpy linear interpolation); physical endpoints are the transform of the quantile",
+  "representative_quantiles": "inverse weighted empirical CDF (smallest value with cumulative weight >= p)"
+ },
+ "contract": {
+  "parameter_keys": [
+   "mu_r",
+   "sigma_r",
+   "mu_pc",
+   "sigma_pc",
+   "prob_photo_bleach",
+   "lambda_rate"
+  ],
+  "coordinate_transform": "parameterization.to_flow (log10 for log rows, linear rows as-is)",
+  "sgm_scale": [
+   0.3,
+   0.75,
+   0.75,
+   0.75,
+   1.5,
+   1.0
+  ],
+  "pool_mode": "unrestricted",
+  "n_summary_draws": 10000,
+  "checkpoint_sha256": "178e7dd91b41f7e55a816b784349b5cf00c19700fe795d6976a425d0eeac92b8",
+  "window_geometry": {
+   "n_frames": 100,
+   "span_frames": 1000,
+   "step_frames": 100
+  },
+  "input_conversion": "read_cell_chunks(domain='stored'): 16-bit raw frames to 8-bit, normalize_video in the sampler",
+  "input_conversion_status": "verified: every source (2) records the same input conversion; the reference product does not record one"
+ },
+ "sources": [
+  {
+   "path": "Script_Bank/Analysis/Evidence/Window_Posterior_Pilot_2026-11-03/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_Window_Posterior_Draws.npz",
+   "sha256": "235fcd2a33109dfbce8274a28aa021d9157f63e26ab53213b4b6a33258c704f2",
+   "label": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_Window_Posterior_Draws",
+   "kind": "retained_draw_collection",
+   "collection_label": null,
+   "seed_policy": {
+    "base_seed": 20261103,
+    "per_rank": "same base seed on every rank; no rank offset"
+   },
+   "written_at": "2026-11-03 15:20:35 UTC",
+   "implementation_sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6",
+   "source_product": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment.npz",
+   "source_product_sha256": "bc764157da595fe002b9ca2c85b9e61bb0bc0b09464e036057bfc3a1263ff1ef",
+   "cells": [
+    11
+   ],
+   "execution": {
+    "argv": [
+     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Draws.py",
+     "--total-time-seconds",
+     "2.0",
+     "--condition",
+     "INLB",
+     "--artifact-tag",
+     "C128V42AP3LR32",
+     "--cells",
+     "11",
+     "--seed",
+     "20261103"
+    ],
+    "backend": "GPU",
+    "device": "cuda:0",
+    "host": "MARS-FIAS-ThinkPad-P53",
+    "numpy": "2.4.6",
+    "package_version": "0.1.44",
+    "peak_gpu_memory_mib": 913.6748046875,
+    "python": "3.13.14",
+    "seconds_per_window": [
+     3.25,
+     2.34,
+     2.29,
+     2.3,
+     2.3,
+     2.29,
+     2.33,
+     2.29,
+     2.32,
+     2.32
+    ],
+    "torch": "2.7.1+cu118"
+   }
+  },
+  {
+   "path": "Script_Bank/Analysis/Evidence/Window_Posterior_Additional_Cells_2026-11-03/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_Window_Posterior_Draws_CELL42.npz",
+   "sha256": "7b7f030d3e55971a17f979b78ba4e657c63d6b6f15cf252709cff3b63dee1cd1",
+   "label": "CELL42",
+   "kind": "retained_draw_collection",
+   "collection_label": "CELL42",
+   "seed_policy": {
+    "base_seed": 20261103,
+    "per_rank": "same base seed on every rank; no rank offset"
+   },
+   "written_at": "2026-11-03 17:17:05 UTC",
+   "implementation_sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6",
+   "source_product": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment.npz",
+   "source_product_sha256": "bc764157da595fe002b9ca2c85b9e61bb0bc0b09464e036057bfc3a1263ff1ef",
+   "cells": [
+    42
+   ],
+   "execution": {
+    "argv": [
+     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Draws.py",
+     "--total-time-seconds",
+     "2.0",
+     "--condition",
+     "INLB",
+     "--artifact-tag",
+     "C128V42AP3LR32",
+     "--cells",
+     "42",
+     "--posterior-samples",
+     "10000",
+     "--seed",
+     "20261103",
+     "--collection-label",
+     "CELL42"
+    ],
+    "backend": "GPU",
+    "device": "cuda:0",
+    "host": "MARS-FIAS-ThinkPad-P53",
+    "numpy": "2.4.6",
+    "package_version": "0.1.44",
+    "peak_gpu_memory_mib": 913.6748046875,
+    "python": "3.13.14",
+    "seconds_per_window": [
+     3.24,
+     2.27,
+     2.28,
+     2.27,
+     2.27,
+     2.31,
+     2.28,
+     2.28,
+     2.28,
+     2.25
+    ],
+    "torch": "2.7.1+cu118"
+   }
+  }
+ ],
+ "disclosed_source_differences": {
+  "collection_label": [
+   null,
+   "CELL42"
+  ],
+  "written_at": [
+   "2026-11-03 15:20:35 UTC",
+   "2026-11-03 17:17:05 UTC"
+  ]
+ },
+ "reference": {
+  "artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_SEL_Nuisance_DLI.npz",
+  "sha256": "2b2d98f99e4fd0c5c3734280cb613582df3bdbaa387e4f953ec71b7592ceac6f",
+  "nuisance_tag": "SEL",
+  "posterior_sample_pool_choice": "selection_user",
+  "selection": {
+   "kind": "user",
+   "fixed": true,
+   "input_units": "physical",
+   "values_physical": {
+    "mu_r": 2.256,
+    "sigma_r": 0.4029,
+    "mu_pc": 152.9,
+    "sigma_pc": 0.8588,
+    "prob_photo_bleach": 0.05,
+    "lambda_rate": 2.0
+   },
+   "values_log10": {
+    "mu_r": 0.35333909531130464,
+    "sigma_r": -0.39480273261162224,
+    "mu_pc": 2.1844074854123203,
+    "sigma_pc": -0.06610796423578892,
+    "prob_photo_bleach": -1.3010299956639813,
+    "lambda_rate": 0.3010299956639812
+   },
+   "sources": {
+    "mu_r": {
+     "source": "adopted InlB detector estimator C128V42AP3LR32, record ..._INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment, median over the 600 per-window posterior medians (ten 2 s windows of the sixty recordings), transformed to physical units; MAP and SGM aggregates read beside it (MAP 2.256, SGM 2.253). Declared reference scenario: the estimator recovers mu_r on synthetic videos inside the prior box (MAE 0.009 dex, r 0.99) and returns, on the recordings, values beyond its training range (above the 2.0 px edge in 94 % of windows and in 57 of 60 recordings); retained under the source hierarchy because the recordings are read as wider than any in-box value and no in-box value is better supported (the lead, 2026-10-27). The localization per-detection width 1.47 against 1.36 for Fab (sec. 6.7 caveat 3) is the same direction and a different quantity",
+     "limitation": "an extrapolation of the learned flow beyond its tested imaging domain, which does not independently establish the physical PSF width of the InlB recordings; the in-domain value at the exact prior ceiling, 10^0.3 = 1.9952623 px, is the sensitivity scenario SEL_MU_R, and neither choice establishes the physical width; falls 0.02 dex along a recording; point estimate retained as produced, precision not established"
+    },
+    "sigma_r": {
+     "source": "adopted InlB detector estimator C128V42AP3LR32, same record and aggregation (MAP 0.4015, SGM 0.403); localization reference 0.42 as fitted (sec. 6.2). Neural estimate retained as a working value: synthetic recovery is demonstrated within the training domain (MAE 0.029 dex, r 0.98); experimental use here accompanies the extrapolated PSF-width estimate",
+     "limitation": "the assembled vector lies outside the tested joint domain through mu_r; wider than Fab's 0.177; no within-recording trend (+0.01 dex, not significant); experimental accuracy model-dependent"
+    },
+    "mu_pc": {
+     "source": "adopted InlB detector estimator C128V42AP3LR32, same record and aggregation (MAP 156, SGM 148.1). Neural estimate retained as a working value: synthetic recovery is demonstrated within the training domain (MAE 0.024 dex, r 0.99); experimental use here accompanies the extrapolated PSF-width estimate. The localization per-detection brightness 690 against 386 for Fab is a spot-level sum (sec. 6.7 caveat 3); the per-dye ratio to Fab here is 1.46",
+     "limitation": "window spread 0.29 dex and a fall of 0.20 dex along a recording (over 0.3 dex in 35 to 38 % of recordings), markedly less stable than Fab's; 18 to 20 % of windows below the 100-photon prior edge; a window median across a strong within-recording decline; a per-dye value under the labeling and camera assumptions"
+    },
+    "sigma_pc": {
+     "source": "adopted InlB detector estimator C128V42AP3LR32, same record and aggregation (MAP 0.8238, SGM 0.857); localization reference 0.55 as fitted (sec. 6.2). Neural estimate retained as a working value: synthetic recovery is demonstrated within the training domain (MAE 0.074 dex, r 0.92); experimental use here accompanies the extrapolated PSF-width estimate",
+     "limitation": "the same conditioning as mu_pc; 5 to 6 % of windows above the 1.0 prior edge; experimental accuracy model-dependent"
+    },
+    "prob_photo_bleach": {
+     "source": "declared: an explicit shared-rate assumption, the same dye, illumination, camera settings and 100-frame reference interval as MET-FAB, so the Fab empirically anchored value 0.05 is adopted as the practical baseline in the absence of an InlB decline analysis (the lead, 2026-10-27). The adopted estimator's own value (median 0.100, MAP 0.120) plays no part: it does not recover the parameter (r 0.02)",
+     "limitation": "no measurement on the InlB recordings supports it; the swift track-termination rate for InlB (0.014 per frame against 0.010 for Fab, Rahm et al. 2021) does not establish a change in per-dye bleaching; the faster-loss value 0.10 is the declared sensitivity scenario SEL_PB10; an InlB decline analysis would supply an independent empirical constraint, not a direct measurement of this parameter, and is deferred"
+    },
+    "lambda_rate": {
+     "source": "declared, the rounded neural-based working choice from the adopted InlB detector estimator C128V42AP3LR32 (median 2.283 per second, MAP 2.664, SGM 2.376; window spread 0.36 dex); partially recovered (MAE 0.206 dex, r 0.53), so its digits are not retained; no InlB localization anchor exists",
+     "limitation": "unstable across windows and conditioned on the extrapolated PSF-width estimate; the unrounded neural medians differ by a factor of about 3.5 between the conditions (2.28 against 8.10) and the selected values by a factor of four (2 against 8), a difference the model attributes to the recordings and the record does not explain; Fab's value 8 is the shared-rate sensitivity scenario SEL_LAMBDA, a useful comparison that does not establish that both conditions must share one inferred effective flicker rate; rises 0.09 dex along a recording"
+    }
+   },
+   "outside_prior": [
+    "mu_r"
+   ],
+   "outside_prior_justification": "mu_r 2.256 px lies above the detector prior box [1, 1.99526]: the adopted InlB estimator returns PSF-width estimates beyond its training range on 94 % of the experimental windows; this acknowledges an extrapolation beyond the tested imaging domain and certifies nothing about the physical PSF width (DETECTOR_WORKFLOW.md sec. 7.6 and 9.10; the lead, 2026-10-27)",
+   "joint_uncertainty": "none (a user-selected, fixed vector; no calibrated joint uncertainty)"
+  }
+ },
+ "equivalences": [
+  {
+   "group": "per_cell[opening]",
+   "equals": "per_cell_window[opening]",
+   "kind": "INLB",
+   "cell": 11,
+   "chunk": -1
+  },
+  {
+   "group": "per_cell[opening]",
+   "equals": "per_cell_window[opening]",
+   "kind": "INLB",
+   "cell": 42,
+   "chunk": -1
+  },
+  {
+   "group": "global[opening]",
+   "equals": "per_window_position[opening]",
+   "kind": "INLB",
+   "cell": -1,
+   "chunk": -1
+  }
+ ],
+ "timing_seconds": {
+  "all/per_cell_window": 0.033,
+  "all/per_cell": 0.286,
+  "all/per_window_position": 0.295,
+  "all/global": 0.27,
+  "opening/per_cell_window": 0.004,
+  "opening/per_window_position": 0.035
+ },
+ "source_product_manifest": {
+  "run_identity": {
+   "invocation_id": "dbbd4d4c-ac39-42b7-872f-db53a9e4b393",
+   "product_label": "2S_50FPS_C128V42AP3LR32"
+  },
+  "checkpoint_sha256": "178e7dd91b41f7e55a816b784349b5cf00c19700fe795d6976a425d0eeac92b8",
+  "written_at": "2026-10-26 23:35:39 UTC",
+  "n_observations": 600,
+  "code": {
+   "changed_during_run": false,
+   "git_dirty": null,
+   "git_head": null,
+   "implementation": {
+    "files": [
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation.py",
+      "sha256": "ba96c1c9b728d6e8a8fddb3d0097d3979d3dc990a81c49b4c25478c59c20fa85"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation_runner.py",
+      "sha256": "054d83716f85c8b77f6189403a6cd301c59c7fd1a9f7474ef7b839f18f57d3bd"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_runner.py",
+      "sha256": "ccac23ced5fa0676983dda860a58b04cbb4c8ab77bea90205ad600402ae91cb5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_support.py",
+      "sha256": "f325af574aeb027eb8ee2a28c44dd42779a603d94c8a0ad5ed4ce80568da8183"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifact_schema.py",
+      "sha256": "4d42d207539f7f780049382bf27c9c5de53aa241f873883f1274aba3a4c44db1"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/provenance.py",
+      "sha256": "f33de8a42b182031bb07a60b2480b232b08c20170d0b34510e27c4de1f2faf98"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/inference_support.py",
+      "sha256": "840d69e0b1f0f3c1dfbe9956a3d386e6a651d61791b8fe941e0259709df21015"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifacts.py",
+      "sha256": "3b9aadaaa4527fc029141d655df4d6908e6509d7f541cb423e20feb0a8a39fec"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/parameterization.py",
+      "sha256": "ae9a3a8ab35044420e4dc7d30570468b5b0fe2d3dc8099956b094b086b885d54"
+     },
+     {
+      "path": "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py",
+      "sha256": "2c786bf29be8b5cc42ef2e7816507587dd4b62388737a6c853869a71dc77dce5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/detector_nuisance_dli.py",
+      "sha256": "d6cbb527af1eae5f5e14ea69be8db764fc4ba6eb2b55e50a97a3e4d99199e270"
+     }
+    ],
+    "sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6"
+   },
+   "implementation_at_write": {
+    "files": [
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation.py",
+      "sha256": "ba96c1c9b728d6e8a8fddb3d0097d3979d3dc990a81c49b4c25478c59c20fa85"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation_runner.py",
+      "sha256": "054d83716f85c8b77f6189403a6cd301c59c7fd1a9f7474ef7b839f18f57d3bd"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_runner.py",
+      "sha256": "ccac23ced5fa0676983dda860a58b04cbb4c8ab77bea90205ad600402ae91cb5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_support.py",
+      "sha256": "f325af574aeb027eb8ee2a28c44dd42779a603d94c8a0ad5ed4ce80568da8183"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifact_schema.py",
+      "sha256": "4d42d207539f7f780049382bf27c9c5de53aa241f873883f1274aba3a4c44db1"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/provenance.py",
+      "sha256": "f33de8a42b182031bb07a60b2480b232b08c20170d0b34510e27c4de1f2faf98"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/inference_support.py",
+      "sha256": "840d69e0b1f0f3c1dfbe9956a3d386e6a651d61791b8fe941e0259709df21015"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifacts.py",
+      "sha256": "3b9aadaaa4527fc029141d655df4d6908e6509d7f541cb423e20feb0a8a39fec"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/parameterization.py",
+      "sha256": "ae9a3a8ab35044420e4dc7d30570468b5b0fe2d3dc8099956b094b086b885d54"
+     },
+     {
+      "path": "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py",
+      "sha256": "2c786bf29be8b5cc42ef2e7816507587dd4b62388737a6c853869a71dc77dce5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/detector_nuisance_dli.py",
+      "sha256": "d6cbb527af1eae5f5e14ea69be8db764fc4ba6eb2b55e50a97a3e4d99199e270"
+     }
+    ],
+    "sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6"
+   }
+  }
+ },
+ "written_at": "2026-11-05 14:14:45 UTC",
+ "reference_vector": {
+  "name": "SEL",
+  "log10": [
+   0.35333909531130464,
+   -0.39480273261162224,
+   2.1844074854123203,
+   -0.06610796423578892,
+   -1.3010299956639813,
+   0.3010299956639812
+  ],
+  "physical": [
+   2.256,
+   0.4029,
+   152.90000000000006,
+   0.8588,
+   0.049999999999999996,
+   2.0
+  ]
+ },
+ "source_clouds_note": "Retained draw collections (fresh clouds of the adopted estimator, collected after the Experiment run).",
+ "aggregation_seconds": 0.93,
+ "archive_sha256": "28db6fe0eb6ad820ccf2d99ecd2596483b90852d41971639c329803f8a93293e"
+}

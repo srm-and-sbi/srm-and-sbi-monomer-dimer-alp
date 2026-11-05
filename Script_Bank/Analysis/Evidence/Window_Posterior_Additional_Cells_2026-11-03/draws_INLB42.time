@@ -1,0 +1,23 @@
+	Command being timed: "env MACHINE_PROFILE=mars_pc PYTHONPATH=. /home/mars-fias/anaconda3/envs/SRM_AND_SBI_ENVY_V0/bin/python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Draws.py --total-time-seconds 2.0 --condition INLB --artifact-tag C128V42AP3LR32 --cells 42 --posterior-samples 10000 --seed 20261103 --collection-label CELL42"
+	User time (seconds): 104.97
+	System time (seconds): 85.24
+	Percent of CPU this job got: 401%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:47.40
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5467848
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 30
+	Minor (reclaiming a frame) page faults: 4341201
+	Voluntary context switches: 3403
+	Involuntary context switches: 28383
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 56
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

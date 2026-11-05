@@ -1,0 +1,504 @@
+{
+ "archive_format_version": 1,
+ "stage": "experiment_aggregation",
+ "product_label": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A",
+ "condition_labels": [
+  "FAB"
+ ],
+ "constructions": [
+  "per_cell",
+  "per_window_position",
+  "global",
+  "per_cell_window"
+ ],
+ "construction_definitions": {
+  "per_cell": {
+   "name": "One representative per cell",
+   "calculation": "pool all retained draws of the cell's selected windows, equal weight per window, and select the SGM",
+   "interpretation": "variation between cell representatives over the declared acquisition period"
+  },
+  "per_window_position": {
+   "name": "One representative per window position",
+   "calculation": "at each selected position, pool the retained draws across the included cells, equal weight per cell, and select the SGM",
+   "interpretation": "variation between acquisition-period representatives, cell differences compressed at each position"
+  },
+  "global": {
+   "name": "One representative of the selected collection",
+   "calculation": "pool the retained draws with equal cell weight and equal selected-window weight within each cell, and select the SGM",
+   "interpretation": "an overall joint center of the selected collection"
+  },
+  "per_cell_window": {
+   "name": "One representative per cell-window pair",
+   "calculation": "the SGM of each included cell-window posterior",
+   "interpretation": "variation between window representatives, cell and window identities retained"
+  }
+ },
+ "statistics": [
+  "sgm",
+  "median"
+ ],
+ "default_statistic": "sgm",
+ "window_sets": {
+  "all": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "opening": [
+   0
+  ]
+ },
+ "coverage": {
+  "FAB": {
+   "cells": [
+    4,
+    26
+   ],
+   "chunks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ],
+   "n_windows": 20,
+   "n_draws_per_window": 10000
+  }
+ },
+ "coverage_note": "This is a pilot subset, not the complete condition: MET-FAB 2 of 60 cells (cells [4, 26]), 20 of 600 windows. The original MAP and summary references above come from the adopted product; the aggregation summaries come from the retained collections named below, fresh draws of the same estimator that do not reconstruct the original sampling attempt.",
+ "n_product_cells": {
+  "FAB": 60
+ },
+ "n_product_windows": {
+  "FAB": 600
+ },
+ "parameter_keys": [
+  "mu_r",
+  "sigma_r",
+  "mu_pc",
+  "sigma_pc",
+  "prob_photo_bleach",
+  "lambda_rate"
+ ],
+ "quantile_levels": [
+  0.05,
+  0.25,
+  0.5,
+  0.75,
+  0.95
+ ],
+ "metric": "estimator coordinates divided by the prior widths (sgm_scale)",
+ "sgm_scale": [
+  0.3,
+  0.75,
+  0.75,
+  0.75,
+  1.5,
+  1.0
+ ],
+ "prior_low": [
+  0.0,
+  -1.0,
+  2.0,
+  -0.75,
+  -2.0,
+  0.0
+ ],
+ "prior_high": [
+  0.3,
+  -0.25,
+  2.75,
+  0.0,
+  -0.5,
+  1.0
+ ],
+ "methods": {
+  "single_window": "the window's stored exact sample medoid (reused) or the exact medoid",
+  "pooled": "exact medoid up to 10000 rows; above it the collection kernel's Weiszfeld geometric median snapped to the nearest retained draw (weiszfeld_snap), an approximation to the exact medoid",
+  "quantiles": "mixture quantiles of the pooled draws in estimator coordinates (numpy linear interpolation); physical endpoints are the transform of the quantile",
+  "representative_quantiles": "inverse weighted empirical CDF (smallest value with cumulative weight >= p)"
+ },
+ "contract": {
+  "parameter_keys": [
+   "mu_r",
+   "sigma_r",
+   "mu_pc",
+   "sigma_pc",
+   "prob_photo_bleach",
+   "lambda_rate"
+  ],
+  "coordinate_transform": "parameterization.to_flow (log10 for log rows, linear rows as-is)",
+  "sgm_scale": [
+   0.3,
+   0.75,
+   0.75,
+   0.75,
+   1.5,
+   1.0
+  ],
+  "pool_mode": "unrestricted",
+  "n_summary_draws": 10000,
+  "checkpoint_sha256": "01a2d0c17b99105132be2aad12fcf3e0085f6451577958608886bbd81097a6d7",
+  "window_geometry": {
+   "n_frames": 100,
+   "span_frames": 1000,
+   "step_frames": 100
+  }
+ },
+ "sources": [
+  {
+   "path": "Script_Bank/Analysis/Evidence/Window_Posterior_Pilot_2026-11-03/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_Window_Posterior_Draws.npz",
+   "sha256": "8a0fc325338f8d3df6c53a03d3dca663bec3dc54d9dc0575e6a9b4b8319eeac7",
+   "label": "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_Window_Posterior_Draws",
+   "kind": "retained_draw_collection",
+   "collection_label": null,
+   "seed_policy": {
+    "base_seed": 20261103,
+    "per_rank": "same base seed on every rank; no rank offset"
+   },
+   "written_at": "2026-11-03 15:19:28 UTC",
+   "implementation_sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6",
+   "source_product": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment.npz",
+   "source_product_sha256": "addc6fc1395aed08b83bec1bbfde93a1a6c84843003ec6ae3541ed2d019d9737",
+   "cells": [
+    26
+   ],
+   "execution": {
+    "argv": [
+     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Draws.py",
+     "--total-time-seconds",
+     "2.0",
+     "--condition",
+     "FAB",
+     "--artifact-tag",
+     "C128V42A",
+     "--cells",
+     "26",
+     "--seed",
+     "20261103"
+    ],
+    "backend": "GPU",
+    "device": "cuda:0",
+    "host": "MARS-FIAS-ThinkPad-P53",
+    "numpy": "2.4.6",
+    "package_version": "0.1.44",
+    "peak_gpu_memory_mib": 913.6748046875,
+    "python": "3.13.14",
+    "seconds_per_window": [
+     4.64,
+     2.28,
+     2.27,
+     2.28,
+     2.26,
+     2.35,
+     2.3,
+     2.32,
+     2.28,
+     2.3
+    ],
+    "torch": "2.7.1+cu118"
+   }
+  },
+  {
+   "path": "Script_Bank/Analysis/Evidence/Window_Posterior_Additional_Cells_2026-11-03/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_Window_Posterior_Draws_CELL4.npz",
+   "sha256": "5d517eb42cbf5fac97e1a263db65a357a6ee9755a2f0509081345f8f6f7b0f15",
+   "label": "CELL4",
+   "kind": "retained_draw_collection",
+   "collection_label": "CELL4",
+   "seed_policy": {
+    "base_seed": 20261103,
+    "per_rank": "same base seed on every rank; no rank offset"
+   },
+   "written_at": "2026-11-03 17:16:10 UTC",
+   "implementation_sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6",
+   "source_product": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment.npz",
+   "source_product_sha256": "addc6fc1395aed08b83bec1bbfde93a1a6c84843003ec6ae3541ed2d019d9737",
+   "cells": [
+    4
+   ],
+   "execution": {
+    "argv": [
+     "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Draws.py",
+     "--total-time-seconds",
+     "2.0",
+     "--condition",
+     "FAB",
+     "--artifact-tag",
+     "C128V42A",
+     "--cells",
+     "4",
+     "--posterior-samples",
+     "10000",
+     "--seed",
+     "20261103",
+     "--collection-label",
+     "CELL4"
+    ],
+    "backend": "GPU",
+    "device": "cuda:0",
+    "host": "MARS-FIAS-ThinkPad-P53",
+    "numpy": "2.4.6",
+    "package_version": "0.1.44",
+    "peak_gpu_memory_mib": 913.6748046875,
+    "python": "3.13.14",
+    "seconds_per_window": [
+     3.24,
+     2.32,
+     2.25,
+     2.25,
+     2.25,
+     2.25,
+     2.26,
+     2.26,
+     2.24,
+     2.23
+    ],
+    "torch": "2.7.1+cu118"
+   }
+  }
+ ],
+ "disclosed_source_differences": {
+  "collection_label": [
+   null,
+   "CELL4"
+  ],
+  "written_at": [
+   "2026-11-03 15:19:28 UTC",
+   "2026-11-03 17:16:10 UTC"
+  ]
+ },
+ "reference": {
+  "artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_SEL_Nuisance_DLI.npz",
+  "sha256": "fe9cb5bae47eb0fc88cc70c195d6b46dd7804e4d006bf973c33028846a9159ad",
+  "nuisance_tag": "SEL",
+  "posterior_sample_pool_choice": "selection_user",
+  "selection": {
+   "kind": "user",
+   "fixed": true,
+   "input_units": "physical",
+   "values_physical": {
+    "mu_r": 1.734,
+    "sigma_r": 0.177,
+    "mu_pc": 105.0,
+    "sigma_pc": 0.5848,
+    "prob_photo_bleach": 0.05,
+    "lambda_rate": 8.0
+   },
+   "values_log10": {
+    "mu_r": 0.2390490931401915,
+    "sigma_r": -0.7520267336381934,
+    "mu_pc": 2.0211892990699383,
+    "sigma_pc": -0.23299263605019596,
+    "prob_photo_bleach": -1.3010299956639813,
+    "lambda_rate": 0.9030899869919435
+   },
+   "sources": {
+    "mu_r": {
+     "source": "adopted Fab detector estimator C128V42A, record ..._FAB_2S_50FPS_C128V42A_MAP_Experiment, median over the 600 per-window posterior medians (ten 2 s windows of the sixty recordings), transformed to physical units; MAP and SGM aggregates read beside it (MAP 1.737, SGM 1.738). Neural estimate supported by synthetic recovery (MAE 0.011 dex, r 0.98 on the 25,000 EVAL videos of the current model, DETECTOR_WORKFLOW.md sec. 9.10); replaces the direct PSF-width estimate 1.585 selected before, which becomes the sensitivity scenario SEL_MU_R",
+     "limitation": "a demonstrated synthetic accuracy, no demonstrated experimental one; 7 % of windows above the 2.0 px prior edge; the direct estimator disagrees by 0.04 dex with no ground truth to decide; the fitted width falls 0.03 dex along a recording, which no fixed value represents; point estimate retained as produced, precision not established"
+    },
+    "sigma_r": {
+     "source": "adopted Fab detector estimator C128V42A, same record and aggregation (MAP 0.178, SGM 0.176); supported by the direct PSF-width cross-check 0.21 and the fit-corrected localization reference about 0.15 (sec. 6.7). Neural estimate supported by synthetic recovery (MAE 0.034 dex, r 0.98)",
+     "limitation": "falls 0.15 dex along a recording in 92 % of recordings, a within-recording decline no fixed value represents; experimental accuracy model-dependent"
+    },
+    "mu_pc": {
+     "source": "adopted Fab detector estimator C128V42A, same record and aggregation (MAP 105.3, SGM 104.8). Neural estimate supported by synthetic recovery (MAE 0.028 dex, r 0.98)",
+     "limitation": "no independent experimental cross-check (the localization per-detection brightness 386 is a spot-level sum, sec. 6.7 caveat 3); 8 to 14 % of windows below the 100-photon prior edge; falls 0.03 dex along a recording; a per-dye window median under the labeling and camera assumptions"
+    },
+    "sigma_pc": {
+     "source": "adopted Fab detector estimator C128V42A, same record and aggregation (MAP 0.5779, SGM 0.5861); fit-corrected localization reference about 0.5. Neural estimate supported by synthetic recovery (MAE 0.079 dex, r 0.90, the weakest of the four spatial and brightness parameters)",
+     "limitation": "experimental accuracy model-dependent"
+    },
+    "prob_photo_bleach": {
+     "source": "empirically anchored: a declared per-dye bleaching probability, anchored to the measured whole-recording fluorescence decline of the sixty MET-FAB recordings over 20 s (0.054 to 0.057 per 100-frame interval on the 16-bit frames; record ..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW), rounded as a working value, selected on 2026-10-01 from the overlay of single-rate declines on the measured curves (figures/field_flux_curves_FAB.png). The adopted estimator's own value (median 0.093, MAP 0.148) plays no part: it does not recover the parameter (r 0.06, MAE comparable to a constant guess). Probability over the fixed 100-frame reference interval",
+     "limitation": "the analysis measures the field-fluorescence decline, not per-dye bleaching; the mapping to the simulator's per-dye probability rests on the assumptions recorded in DETECTOR_WORKFLOW.md sec. 7.6 (ideal independent dyes of stationary mean brightness); the recorded decline is not single-exponential and is stronger in brighter recordings; the background itself falls 9 %; emitters leaving the field and label exchange are not separable from bleaching; the late-phase rate 0.03 and the faster-loss value 0.10 are the declared sensitivity scenarios SEL_PB03 and SEL_PB10"
+    },
+    "lambda_rate": {
+     "source": "declared, rounded from the adopted Fab detector estimator C128V42A (median 8.096 per second, MAP 8.204, SGM 7.884; window spread 0.07 dex), the neural value being the default source under the hierarchy; partially recovered (MAE 0.217 dex, r 0.49), so its digits are not retained; replaces the nominal 5 chosen before. The localization-autocorrelation anchor about 5 (sec. 6.5) sits 0.21 dex below, comparable in magnitude to the synthetic mean absolute error",
+     "limitation": "not a uniquely measured rate; nothing on the recordings decides between 8 and the anchor 5; rises 0.06 dex along a recording; correlation time 0.12 s"
+    }
+   },
+   "outside_prior": [],
+   "outside_prior_justification": "",
+   "joint_uncertainty": "none (a user-selected, fixed vector; no calibrated joint uncertainty)"
+  }
+ },
+ "equivalences": [
+  {
+   "group": "per_cell[opening]",
+   "equals": "per_cell_window[opening]",
+   "kind": "FAB",
+   "cell": 4,
+   "chunk": -1
+  },
+  {
+   "group": "per_cell[opening]",
+   "equals": "per_cell_window[opening]",
+   "kind": "FAB",
+   "cell": 26,
+   "chunk": -1
+  },
+  {
+   "group": "global[opening]",
+   "equals": "per_window_position[opening]",
+   "kind": "FAB",
+   "cell": -1,
+   "chunk": -1
+  }
+ ],
+ "timing_seconds": {
+  "all/per_cell_window": 0.035,
+  "all/per_cell": 0.347,
+  "all/per_window_position": 0.292,
+  "all/global": 0.336,
+  "opening/per_cell_window": 0.003,
+  "opening/per_window_position": 0.027
+ },
+ "source_product_manifest": {
+  "run_identity": {
+   "invocation_id": "34562552-4227-4518-b4ee-c0137b7d0846",
+   "product_label": "2S_50FPS_C128V42A"
+  },
+  "checkpoint_sha256": "01a2d0c17b99105132be2aad12fcf3e0085f6451577958608886bbd81097a6d7",
+  "written_at": "2026-10-23 17:01:25 UTC",
+  "n_observations": 600,
+  "code": {
+   "changed_during_run": false,
+   "git_dirty": null,
+   "git_head": null,
+   "implementation": {
+    "files": [
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation.py",
+      "sha256": "ba96c1c9b728d6e8a8fddb3d0097d3979d3dc990a81c49b4c25478c59c20fa85"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation_runner.py",
+      "sha256": "054d83716f85c8b77f6189403a6cd301c59c7fd1a9f7474ef7b839f18f57d3bd"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_runner.py",
+      "sha256": "ccac23ced5fa0676983dda860a58b04cbb4c8ab77bea90205ad600402ae91cb5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_support.py",
+      "sha256": "f325af574aeb027eb8ee2a28c44dd42779a603d94c8a0ad5ed4ce80568da8183"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifact_schema.py",
+      "sha256": "4d42d207539f7f780049382bf27c9c5de53aa241f873883f1274aba3a4c44db1"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/provenance.py",
+      "sha256": "f33de8a42b182031bb07a60b2480b232b08c20170d0b34510e27c4de1f2faf98"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/inference_support.py",
+      "sha256": "840d69e0b1f0f3c1dfbe9956a3d386e6a651d61791b8fe941e0259709df21015"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifacts.py",
+      "sha256": "3b9aadaaa4527fc029141d655df4d6908e6509d7f541cb423e20feb0a8a39fec"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/parameterization.py",
+      "sha256": "ae9a3a8ab35044420e4dc7d30570468b5b0fe2d3dc8099956b094b086b885d54"
+     },
+     {
+      "path": "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py",
+      "sha256": "2c786bf29be8b5cc42ef2e7816507587dd4b62388737a6c853869a71dc77dce5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/detector_nuisance_dli.py",
+      "sha256": "d6cbb527af1eae5f5e14ea69be8db764fc4ba6eb2b55e50a97a3e4d99199e270"
+     }
+    ],
+    "sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6"
+   },
+   "implementation_at_write": {
+    "files": [
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation.py",
+      "sha256": "ba96c1c9b728d6e8a8fddb3d0097d3979d3dc990a81c49b4c25478c59c20fa85"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/evaluation_runner.py",
+      "sha256": "054d83716f85c8b77f6189403a6cd301c59c7fd1a9f7474ef7b839f18f57d3bd"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_runner.py",
+      "sha256": "ccac23ced5fa0676983dda860a58b04cbb4c8ab77bea90205ad600402ae91cb5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/experiment_support.py",
+      "sha256": "f325af574aeb027eb8ee2a28c44dd42779a603d94c8a0ad5ed4ce80568da8183"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifact_schema.py",
+      "sha256": "4d42d207539f7f780049382bf27c9c5de53aa241f873883f1274aba3a4c44db1"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/provenance.py",
+      "sha256": "f33de8a42b182031bb07a60b2480b232b08c20170d0b34510e27c4de1f2faf98"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/inference_support.py",
+      "sha256": "840d69e0b1f0f3c1dfbe9956a3d386e6a651d61791b8fe941e0259709df21015"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/artifacts.py",
+      "sha256": "3b9aadaaa4527fc029141d655df4d6908e6509d7f541cb423e20feb0a8a39fec"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/parameterization.py",
+      "sha256": "ae9a3a8ab35044420e4dc7d30570468b5b0fe2d3dc8099956b094b086b885d54"
+     },
+     {
+      "path": "Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment_CD86_CTLA-4_Controls.py",
+      "sha256": "2c786bf29be8b5cc42ef2e7816507587dd4b62388737a6c853869a71dc77dce5"
+     },
+     {
+      "path": "srm_and_sbi_monomer_dimer_alp/detector_nuisance_dli.py",
+      "sha256": "d6cbb527af1eae5f5e14ea69be8db764fc4ba6eb2b55e50a97a3e4d99199e270"
+     }
+    ],
+    "sha256": "c86416260f1f8b85cfe4b5b077abfd49a8d33f0687bd805f29ae39b7308b83d6"
+   }
+  }
+ },
+ "written_at": "2026-11-05 13:09:31 UTC",
+ "reference_vector": {
+  "name": "SEL",
+  "log10": [
+   0.2390490931401915,
+   -0.7520267336381934,
+   2.0211892990699383,
+   -0.23299263605019596,
+   -1.3010299956639813,
+   0.9030899869919435
+  ],
+  "physical": [
+   1.734,
+   0.177,
+   105.00000000000004,
+   0.5848,
+   0.049999999999999996,
+   7.999999999999999
+  ]
+ },
+ "source_clouds_note": "Retained draw collections (fresh clouds of the adopted estimator, collected after the Experiment run).",
+ "aggregation_seconds": 1.04,
+ "archive_sha256": "d353d4bffed1d90b13a21466fa21dd5719e6c31b7613f71535d8ce9918fd9668"
+}

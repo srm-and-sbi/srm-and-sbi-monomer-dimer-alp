@@ -443,6 +443,16 @@ class DiagnosticReporter:
         if note:
             print(f"  ({note})", flush=True)
 
+    def prose(self, title: str, text: str) -> None:
+        """Record a titled prose block (Markdown) rendered in order among the tables, so a stage can open
+        an indexed section whose tables and figure links follow it. Printed to the console as well."""
+        if not self.enabled:
+            return
+        self._tables.append((title, None, str(text), ""))
+        print(f"{SEEK} {title} {SEEK}", flush=True)
+        for line in str(text).splitlines():
+            print(f"  {line}", flush=True)
+
     # ------------------------------------------------------------------
     # Figures: save an already-built matplotlib Figure as PNG (dump mode).
     # ------------------------------------------------------------------
@@ -537,6 +547,10 @@ class DiagnosticReporter:
         for title, headers, rows, note in self._tables:
             lines.append(f"## {title}")
             lines.append("")
+            if headers is None:                     # a prose block (``prose``): Markdown text as given
+                lines.append(str(rows))
+                lines.append("")
+                continue
             lines.append("| " + " | ".join(headers) + " |")
             lines.append("|" + "|".join(["---"] * len(headers)) + "|")
             for row in rows:

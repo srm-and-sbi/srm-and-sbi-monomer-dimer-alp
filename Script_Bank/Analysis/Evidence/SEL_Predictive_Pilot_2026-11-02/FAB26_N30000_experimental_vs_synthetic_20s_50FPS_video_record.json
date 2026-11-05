@@ -1,0 +1,57 @@
+{
+ "clip": "SRM_AND_SBI_MONOMER_DIMER_ALP_FAB_2S_50FPS_Declared_RDS_MET-FAB_Cell_26_20S_SEL_N30000_SINGLE_Synthetic_Video.npz",
+ "kind": "MET-FAB",
+ "cell": 26,
+ "count_total": 30000,
+ "seed": 20261102,
+ "window_adu": [
+  206.0,
+  8130.0
+ ],
+ "fps": 50,
+ "n_frames": 1000,
+ "saturated_pixel_samples_above_window": {
+  "experimental": 6553,
+  "synthetic": 105,
+  "of": 65536000
+ },
+ "labeling": {
+  "n_subunits": 503.0,
+  "n_dyes": 759.0,
+  "n_labeled_subunits": 366.0,
+  "monomers_0": 381.0,
+  "monomers_fluorescent_0": 316.0,
+  "dimers_0": 61.0,
+  "dimers_fluorescent_0": 50.0,
+  "dimers_two_labeled_0": 0.0,
+  "occupancy_monomer": 1.0,
+  "occupancy_dimer": 0.5037199238697501,
+  "dimers_one_probe_0": 61.0,
+  "dimers_two_probe_0": 0.0,
+  "two_probe_share": 0.007439847739500217
+ },
+ "files": {
+  "FAB26_N30000_experimental_vs_synthetic_20s_50FPS.mkv": {
+   "bytes": 417678910,
+   "sha256": "40c42068a714ae9c167acfa588cef8e190e4e9a39675e1ebeb0e43f529bed8c9",
+   "probe": {
+    "codec_name": "ffv1",
+    "width": 1032,
+    "height": 580,
+    "r_frame_rate": "50/1",
+    "nb_read_frames": "1000"
+   }
+  },
+  "FAB26_N30000_experimental_vs_synthetic_20s_50FPS.webm": {
+   "bytes": 341305794,
+   "sha256": "c787cebc59acac0ee834b1615dc336af5e0509d10da81b1e150a2ba50ad00b29",
+   "probe": {
+    "codec_name": "vp9",
+    "width": 1032,
+    "height": 580,
+    "r_frame_rate": "50/1",
+    "nb_read_frames": "1000"
+   }
+  }
+ }
+}

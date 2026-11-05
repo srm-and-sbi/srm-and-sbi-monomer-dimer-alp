@@ -1,0 +1,114 @@
+{
+ "window_adu": [
+  206.0,
+  8130.0
+ ],
+ "source_fps": 50,
+ "n_source_frames": 1000,
+ "seeds": {
+  "SEL_R1": 20261102,
+  "SEL_R2": 20261103,
+  "SEL_R3": 20261104
+ },
+ "players": [
+  {
+   "file": "FAB26_experimental_vs_SEL_R1_20s_every5.html",
+   "bytes": 87548884,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    206.0,
+    8130.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-FAB cell 26",
+    "SYNTHETIC SEL_R1 (seed 20261102)"
+   ],
+   "sha256": "bd51f9be7274569d87c9c16d420519d8ebc569cd9a8d437f8d5cc344f4ccab39"
+  },
+  {
+   "file": "FAB26_experimental_vs_SEL_R2_20s_every5.html",
+   "bytes": 87677210,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    206.0,
+    8130.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-FAB cell 26",
+    "SYNTHETIC SEL_R2 (seed 20261103)"
+   ],
+   "sha256": "c604a91d96f3d88bfbbe16f88ef6bbf444be3bce08b7e75094d884d28047ca22"
+  },
+  {
+   "file": "FAB26_experimental_vs_SEL_R3_20s_every5.html",
+   "bytes": 87640358,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    206.0,
+    8130.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-FAB cell 26",
+    "SYNTHETIC SEL_R3 (seed 20261104)"
+   ],
+   "sha256": "fe19450ebc5056ff50d7f50b738bd1f460add1ec0e5806d9de1c55d7ba33a895"
+  },
+  {
+   "file": "FAB26_experimental_vs_R1_R2_R3_20s_every5.html",
+   "bytes": 167827068,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 995,
+   "stride": 5,
+   "display_fps": 10.0,
+   "duration_s": 20.0,
+   "window_adu": [
+    206.0,
+    8130.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-FAB cell 26",
+    "SYNTHETIC SEL_R1 (seed 20261102)",
+    "SYNTHETIC SEL_R2 (seed 20261103)",
+    "SYNTHETIC SEL_R3 (seed 20261104)"
+   ],
+   "sha256": "696ba507006e551de2a338d8e343a654dffafe86f80480d3eb31553013e2621d"
+  },
+  {
+   "file": "FAB26_experimental_vs_R1_R2_R3_opening4s_everyframe.html",
+   "bytes": 169314105,
+   "frames_embedded": 200,
+   "first_frame": 0,
+   "last_frame": 199,
+   "stride": 1,
+   "display_fps": 50.0,
+   "duration_s": 4.0,
+   "window_adu": [
+    206.0,
+    8130.0
+   ],
+   "panels": [
+    "EXPERIMENTAL MET-FAB cell 26",
+    "SYNTHETIC SEL_R1 (seed 20261102)",
+    "SYNTHETIC SEL_R2 (seed 20261103)",
+    "SYNTHETIC SEL_R3 (seed 20261104)"
+   ],
+   "sha256": "4ac772722a2145983ebfc042399829cea25a703b0d4c8925605d68d46a5deb57"
+  }
+ ]
+}
