@@ -70,7 +70,7 @@ SSH_PLAIN="ssh -o BatchMode=yes -o ConnectTimeout=15"
 # name | ssh command | host | absolute repo path on that machine
 FLEET=(
   "jupiter|$SSH_JSC|ramirezsierra1@login.jupiter.fz-juelich.de|/e/project1/chkf10/ramirezsierra1/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp"
-  "juwels|$SSH_JSC|ramirezsierra1@juwels-cluster.fz-juelich.de|/p/project1/chkf10/ramirezsierra1/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp"
+  # juwels (ramirezsierra1@juwels-cluster.fz-juelich.de, /p/project1/chkf10/...): access ended 2026-11-05; not a fleet member.
   "goethe|$SSH_PLAIN|ramirez@goethe.hhlr-gu.de|/home/biochemsim/ramirez/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp"
   "rcl01|$SSH_PLAIN|rcl_fias@10.83.255.103|/home/rcl_fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp"
 )
