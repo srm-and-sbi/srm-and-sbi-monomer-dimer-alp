@@ -260,6 +260,12 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
              "below uses these three tokens. The three are read together; no one replaces the "
              "others.")
 
+    # Data scope, early: the original-summary diagnostics and the retained-cloud aggregation are two scopes, stated
+    # apart (a pilot aggregation never relabels the original sixty-cell figures); the tag travels on their captions.
+    scope_headers, scope_rows, scope_note, scope_tag = agg.scope_table(arrays, manifest, aggregation, condition_display)
+    reporter.table("Data scope", scope_headers, scope_rows, note=scope_note)
+    src_tag = " " + scope_tag
+
     kind_notes = "".join(_misspecification_note(k, condition) for k in foreign)
     for key in (tok["map"], tok["median"], tok["sgm"]):
         headers, rows = experiment_table(draw_spec, by_kind[key], shown)
@@ -368,7 +374,7 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                                 f"90 % intervals of the draws (median across recordings). Dotted "
                                 f"red lines are the prior bounds. The three lines share one draw "
                                 f"set, so the band is drawn once."
-                                + _misspecification_note(kind, condition))
+                                + _misspecification_note(kind, condition) + src_tag)
 
     if reporter.dump and n_estimates:
         for i, para in enumerate(draw_spec):
@@ -390,7 +396,7 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                         f"({agg_desc}). Right: each window's {tok['median']} +/- IQR of its draws "
                         f"per condition (within-window spread), the {tok['map']} overlaid. The "
                         f"{tok['sgm']} is tabulated above and its gap to the median is in the "
-                        f"agreement table." + kind_notes,
+                        f"agreement table." + kind_notes + src_tag,
             )
         # The point-estimate view for experimental recordings: no truth exists, so the three
         # estimates are laid out per recording over the IQR of the draws (one shared band),
@@ -419,7 +425,7 @@ def write_experiment_outputs(reporter, args, eval_cfg, draw_spec, array_path: Pa
                                 f"Q25 and Q75) as the band, drawn once and identical on every panel. "
                                 f"The estimate axis is clipped to the prior box widened by 40 %; "
                                 f"values beyond it are counted in the tables, not drawn."
-                                + _misspecification_note(kind, condition))
+                                + _misspecification_note(kind, condition) + src_tag)
 
     # ---- Experimental aggregation and nuisance candidates (after the complete product, never per rank) --
     try:
@@ -794,9 +800,11 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
             n_cells = {k: int(np.unique(np.asarray(arrays['cell'])[np.asarray(arrays['kind_index']) == i]).size) for i, k in enumerate(kinds)}
             n_win = {k: int((np.asarray(arrays['kind_index']) == i).sum()) for i, k in enumerate(kinds)}
             covered = {k: sorted(set(int(c) for c in clouds.cell[clouds.kind_index == i])) for i, k in enumerate(kinds)}
-            note = ("This is a pilot subset, not the complete condition: " + "; ".join(
-                f"{condition_display(k)} {len(covered[k])} of {n_cells[k]} cells (cells {covered[k]}), "
-                f"{int((clouds.kind_index == i).sum())} of {n_win[k]} windows" for i, k in enumerate(kinds))
+            product_cells = {k: sorted(set(int(c) for c in np.asarray(arrays['cell'])[np.asarray(arrays['kind_index']) == i])) for i, k in enumerate(kinds)}
+            complete = all(covered[k] == product_cells[k] and int((clouds.kind_index == i).sum()) == n_win[k] for i, k in enumerate(kinds))
+            note = (("Complete cohort: " if complete else "This is a pilot subset, not the complete condition: ") + "; ".join(
+                f"{condition_display(k)} {len(covered[k])} of {n_cells[k]} cells" + (f" (cells {covered[k]})" if len(covered[k]) <= 12 else "")
+                + f", {int((clouds.kind_index == i).sum())} of {n_win[k]} windows" for i, k in enumerate(kinds))
                 + ". The original MAP and summary references above come from the adopted product; the aggregation "
                 "summaries come from the retained collections named below, fresh draws of the same estimator that do not "
                 "reconstruct the original sampling attempt.")

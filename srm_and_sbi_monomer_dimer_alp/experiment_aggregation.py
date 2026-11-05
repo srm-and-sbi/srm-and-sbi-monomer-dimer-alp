@@ -100,6 +100,125 @@ POOLED_EXACT_CAPACITY = 10_000
 STATISTICS = ("sgm", "median")
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
+# ---- user-facing presentation ------------------------------------------------------------------------------
+# The visible language of the report and the figures (the internal IDs stay unchanged in archives, specifications
+# and scripts): what each construction yields, which samples are pooled before one representative is selected, the
+# phrase of a window set and the data-scope line every figure carries. One formatter serves the Experiment writer
+# and the Nuisance DLI report; the scientific definitions stay in CONSTRUCTION_DEFINITIONS and are not duplicated.
+DISPLAY = {
+    "per_cell": ("One {W} per cell", "{S} per cell", "all selected window clouds from one cell"),
+    "per_window_position": ("One {W} per window position", "{S} per window position",
+                            "the clouds at the same position across the included cells"),
+    "global": ("One {W} for the included dataset", "{S} for included dataset", "all selected cell-window clouds"),
+    "per_cell_window": ("One {W} per cell–window pair", "{S} per cell–window", "one window's own cloud"),
+    "reference": ("Existing fixed nuisance vector", "Fixed reference",
+                  "loaded from the reference artifact and its selection record (nothing pooled)"),
+}
+STATISTIC_WORDS = {"sgm": ("SGM vector", "SGM"), "median": ("marginal-median vector", "marginal-median vector")}
+NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
+                10: "ten", 11: "eleven", 12: "twelve"}
+
+
+def display_name(construction, *, statistic="sgm", short=False, n=None, reference_name=None) -> str:
+    """The visible description of a construction (``short`` = the legend phrase), naming the statistic it
+    selects (an SGM, or the marginal-median vector, which is never called an SGM) and, with ``n``, the actual
+    number of vectors; the reference names its artifact (``reference_name``)."""
+    if construction not in DISPLAY:
+        raise AggregationError(f"unknown construction {construction!r}; known: {list(DISPLAY)}")
+    if statistic not in STATISTIC_WORDS:
+        raise AggregationError(f"unknown statistic {statistic!r}; known: {list(STATISTIC_WORDS)}")
+    long, brief, _ = DISPLAY[construction]
+    W, S = STATISTIC_WORDS[statistic]
+    text = (brief if short else long).format(W=W, S=S)
+    if construction == "reference" and reference_name:
+        text += f": {reference_name}"
+    if n is not None:
+        text += " (one vector)" if int(n) == 1 else f" ({int(n)} vectors)"
+    return text
+
+
+def pooled_samples(construction) -> str:
+    """Which samples are pooled before one representative is selected (the constructions table's column)."""
+    return DISPLAY[construction][2]
+
+
+def window_set_phrase(name, chunks, geometry, *, window_seconds=None) -> str:
+    """The visible phrase of a window set: 'all ten 2 s windows' (every declared position), 'opening 0–2 s
+    window only' (the first position alone), else the named set with its positions and window starts."""
+    chunks = tuple(int(c) for c in chunks)
+    ws = f"{float(window_seconds):g} s " if window_seconds else ""
+    if chunks == tuple(expected_positions(geometry)):
+        return f"all {NUMBER_WORDS.get(len(chunks), str(len(chunks)))} {ws}windows"
+    if chunks == (0,):
+        return f"opening 0–{float(window_seconds):g} s window only" if window_seconds else "opening window only"
+    starts = ""
+    if window_seconds and geometry.get("n_frames"):
+        step_s = float(window_seconds) * float(geometry["step_frames"]) / float(geometry["n_frames"])
+        starts = " (window starts " + ", ".join(f"{c * step_s:g}" for c in chunks) + " s)"
+    return f"named set '{name}' = positions {list(chunks)}{starts}"
+
+
+def scope_line(kind_display, coverage, n_product_cells, n_product_windows, *, set_name, chunks, geometry, n_draws,
+               window_seconds=None, statistic="sgm") -> str:
+    """The data-scope line of a figure: which cells and windows contributed (from the aggregation's coverage,
+    never from an assumed cohort size; a subset is called a pilot), the window selection with the number of
+    selected windows when it is a subset of the source collection, the draws per window and the representative."""
+    cells = list(coverage["cells"]); nc, nw = len(cells), int(coverage["n_windows"])
+    complete = nc == int(n_product_cells) and nw == int(n_product_windows)
+    chunks = tuple(int(c) for c in chunks)
+    n_sel = nc * len(chunks)
+    if complete:
+        head = f"{kind_display} · {nc}/{n_product_cells} cells, {nw}/{n_product_windows} windows"
+    else:
+        ids = f" ({', '.join(str(c) for c in cells)})" if nc <= 12 else ""
+        head = f"{kind_display} · aggregation pilot: {nc}/{n_product_cells} cells{ids}, {nw}/{n_product_windows} windows"
+    sel = f" ({n_sel} selected window{'s' if n_sel != 1 else ''} of the {nw})" if n_sel != nw else ""
+    return (f"{head} · windows included: {window_set_phrase(set_name, chunks, geometry, window_seconds=window_seconds)}{sel}"
+            f" · {int(n_draws):,} joint draws/window · representative: {STATISTIC_WORDS[statistic][1]}")
+
+
+def scope_table(arrays, manifest, request, condition_display):
+    """The early 'Data scope' table of the Experiment report: per condition, the scope of the original-summary
+    diagnostics (the product's own windows and the draws summarized when it was written) and of the
+    retained-cloud aggregation (the clouds the request supplies, or the product's own, or none), with the cell
+    identities when the subset is small. Returns (headers, rows, note, caption_tag); ``caption_tag`` is the
+    compact source statement appended to the captions of the original diagnostic figures. Computes nothing."""
+    kinds = [str(k) for k in arrays["kinds"]]
+    cell_arr = np.asarray(arrays["cell"]).astype(int); kind_index = np.asarray(arrays["kind_index"]).astype(int)
+    # Three states, told apart: aggregation explicitly disabled; enabled but no clouds (neither the product's own nor
+    # external collections); enabled with clouds (the coverage below).
+    disabled = request is None or not request.enabled
+    clouds = None
+    if not disabled:
+        clouds = request.clouds if request.clouds is not None else ("product" if "posterior_samples_cloud" in arrays else None)
+    rows, tags = [], []
+    for i, k in enumerate(kinds):
+        m = kind_index == i
+        cells = sorted(set(cell_arr[m].tolist())); nw = int(m.sum())
+        rows.append(["original Experiment summaries (the tables and diagnostic figures)", condition_display(k), str(len(cells)), str(nw),
+                     f"{int(manifest['n_summary_draws'])} {manifest.get('draw_label', 'draw')}s per window summarized when the product was written"
+                     + ("; the draws themselves are stored" if "posterior_samples_cloud" in arrays else "; the draws themselves were not retained"),
+                     "every cell of the product"])
+        tags.append(f"{condition_display(k)}: {len(cells)} cells, {nw} windows")
+        if clouds is None:
+            rows.append(["retained-cloud aggregation", condition_display(k), "-", "-",
+                         "not computed (aggregation disabled)" if disabled else "not computed (no retained clouds)", "-"])
+            continue
+        if clouds == "product":
+            cc, cw, nd = cells, nw, int(np.asarray(arrays["posterior_samples_cloud"]).shape[1])
+        else:
+            cm = clouds.kind_index == i
+            cc, cw, nd = sorted(set(int(c) for c in clouds.cell[cm])), int(cm.sum()), int(clouds.n_draws)
+        complete = len(cc) == len(cells) and cw == nw
+        rows.append(["retained-cloud aggregation", condition_display(k), f"{len(cc)} of {len(cells)}", f"{cw} of {nw}",
+                     f"{nd:,} joint draws retained per window", "complete cohort" if complete else
+                     (f"pilot subset: cells {cc}" if len(cc) <= 12 else f"pilot subset of {len(cc)} cells (identities in aggregation_groups.csv)")])
+    note = ("the two scopes are stated separately: the original diagnostics summarize the product's own windows; the aggregation "
+            "groups retained joint draws (the product's own, or compatible collections of the same estimator drawn after the run). "
+            "A pilot subset never relabels the original figures.")
+    tag = "Source: the original Experiment summaries (" + "; ".join(tags) + "), not the retained clouds of the aggregation."
+    return ["data", "condition", "cells", "windows", "draws", "coverage"], rows, note, tag
+
 
 class AggregationError(ValueError):
     """An input the aggregation refuses; the message names the offending identities."""
@@ -673,6 +792,44 @@ def export_manifest(result: AggregationResult, *, product_label, condition_label
     }
 
 
+# Up to this many sources are named inline in the report with their labels and checksums; a larger set (the complete
+# cohort's one collection per cell) is counted and summarized inline, every path, label, seed, checksum and write time
+# staying in aggregation_manifest.json (`sources`, `disclosed_source_differences`).
+SOURCES_LISTED_INLINE = 6
+
+
+def sources_description(sources) -> str:
+    """The inline description of the retained sources: each named with label and checksum up to
+    ``SOURCES_LISTED_INLINE``; beyond that, the count, the labels' form and the first and last file."""
+    def name(s):
+        return Path(s["path"]).name if s.get("path") else s["label"]
+    if len(sources) <= SOURCES_LISTED_INLINE:
+        return "; ".join(f"`{name(s)}`" + (f" (collection label {s['collection_label']})" if s.get("collection_label") else "")
+                         + (f", sha256 {s['sha256'][:12]}…" if s.get("sha256") else "") for s in sources)
+    labels = [s.get("collection_label") for s in sources]
+    n_lab = sum(1 for v in labels if v)
+    return (f"{len(sources)} retained draw collections, each named with its path, collection label and sha256 in "
+            f"aggregation_manifest.json (`sources`): first `{name(sources[0])}`, last `{name(sources[-1])}`; "
+            f"{n_lab} carry a collection label" + (f" ({', '.join(sorted(set(v for v in labels if v))[:3])}, …)" if n_lab > 3 else ""))
+
+
+def disclosed_differences_summary(sources) -> str:
+    """One sentence counting the disclosed (non-contract) differences of a large source set: distinct labels,
+    seeds and implementation hashes, and the range of write times; the values themselves stay in the manifest."""
+    d = _disclosed_differences(sources)
+    if not d:
+        return ""
+    parts = []
+    for k, vals in d.items():
+        if k == "written_at":
+            times = sorted(str(v) for v in vals if v is not None)
+            parts.append(f"written between {times[0]} and {times[-1]}")
+        else:
+            parts.append(f"{len({json.dumps(v, sort_keys=True, default=str) for v in vals})} distinct {k.replace('_', ' ')} values")
+    return ("Disclosed differences between the sources (not part of the computation contract; listed per source in "
+            "aggregation_manifest.json under `disclosed_source_differences`): " + ", ".join(parts) + ".")
+
+
 def _disclosed_differences(sources) -> dict:
     out = {}
     for k in ("collection_label", "seed_policy", "implementation_sha256", "written_at"):
@@ -905,9 +1062,12 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
     coverage_lines = []
     for k in result.coverage:
         cov = result.coverage[k]
-        coverage_lines.append(f"{condition_display(k)}: {len(cov['cells'])} of {n_product_cells[k]} cells of this product "
-                              f"(cells {cov['cells']}), {cov['n_windows']} of {n_product_windows[k]} windows, positions "
-                              f"{cov['chunks']}, {cov['n_draws_per_window']} retained draws per window.")
+        complete = len(cov["cells"]) == n_product_cells[k] and cov["n_windows"] == n_product_windows[k]
+        coverage_lines.append(f"{condition_display(k)}: " + ("complete cohort, " if complete else "pilot subset, ")
+                              + f"{len(cov['cells'])} of {n_product_cells[k]} cells of this product "
+                              + (f"(cells {cov['cells']}), " if len(cov["cells"]) <= 12 else "(identities in aggregation_groups.csv), ")
+                              + f"{cov['n_windows']} of {n_product_windows[k]} windows, positions {cov['chunks']}, "
+                              f"{cov['n_draws_per_window']} retained draws per window.")
     agg_manifest = export_manifest(result, product_label=request.product_label, condition_labels=kinds,
                                    reference=None if ref is None else ref.get("identity"),
                                    coverage_note=request.coverage_note, product_manifest={k: manifest.get(k) for k in
@@ -919,10 +1079,9 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
     paths = write_aggregation_exports(result, out_dir, table, manifest=agg_manifest, reference=ref)
     # ---- the section ----------------------------------------------------------------------------------------
     sets_desc = "; ".join(format_window_set(n, c) for n, c in result.window_sets.items())
-    src_desc = "; ".join(f"`{Path(s['path']).name if s.get('path') else s['label']}`"
-                         + (f" (collection label {s['collection_label']})" if s.get("collection_label") else "")
-                         + (f", sha256 {s['sha256'][:12]}…" if s.get("sha256") else "") for s in result.sources)
-    disclosed = _disclosed_differences(result.sources)
+    src_desc = sources_description(result.sources)
+    disclosed = {k: v for k, v in _disclosed_differences(result.sources).items()} if len(result.sources) <= SOURCES_LISTED_INLINE else {}
+    disclosed_summary = "" if disclosed or len(result.sources) <= SOURCES_LISTED_INLINE else disclosed_differences_summary(result.sources)
     geom = coll.contract["window_geometry"]
     declared = next(iter(result.coverage.values()))["declared_positions"]
     conv_status = coll.contract.get("input_conversion_status") or "unavailable"
@@ -943,11 +1102,20 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
         f"step {geom['step_frames']} frames, recording span {geom.get('span_frames')} frames: positions {declared}), and every "
         f"included cell must carry every position a set requests; `opening` is the first window. A deliberate subset is named "
         f"explicitly; nothing is dropped silently.", "",
+        "**Two independent choices.** (1) Windows included: " + ", ".join(f"`{n}` = {window_set_phrase(n, c, geom, window_seconds=request.window_seconds)}"
+                                                                     for n, c in result.window_sets.items())
+        + " (this is all a window set selects). (2) Samples pooled before one representative is selected: within a cell (one vector "
+        "per cell), across the included cells at one window position (one vector per position), across the included dataset (one "
+        "vector), or separately for every cell–window pair (one vector per window). `all` describes the window selection only: under "
+        "`all` the per-cell construction still returns one vector per cell. With `opening`, per-cell equals per-cell-window and "
+        "per-position equals global, so overlapping curves and points in the opening figures are expected and are listed in the "
+        "equivalent-groups table, not missing output.", "",
         f"**Retained clouds.** {src_desc}." + (f" {request.source_clouds_note}" if request.source_clouds_note else "")
         + f" Every supplied identity (condition, cell, chunk) is a window of this product. Input conversion (preprocessing): "
           f"{conv_status}" + (f"; recorded as `{coll.contract.get('input_conversion')}`" if coll.contract.get("input_conversion") else "") + "."
         + (" Disclosed differences between the sources (not part of the computation contract): "
-           + ", ".join(f"{k} = {v}" for k, v in disclosed.items()) + "." if disclosed else ""), "",
+           + ", ".join(f"{k} = {v}" for k, v in disclosed.items()) + "." if disclosed else "")
+        + (f" {disclosed_summary}" if disclosed_summary else ""), "",
         f"**Methods.** Distances in estimator coordinates divided by the prior widths {result.scale.tolist()} (the per-window "
         f"SGM convention). A single-window group reuses the window's stored exact sample medoid; a pooled group above "
         f"{result.exact_capacity} rows takes the collection kernel's Weiszfeld geometric median snapped to the nearest retained "
@@ -1003,13 +1171,18 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
         name, calc, interp = CONSTRUCTION_DEFINITIONS[c]
         counts = "; ".join(f"{s}: " + ", ".join(f"{len(result.select(construction=c, window_set=s, kind=k))} ({condition_display(k)})"
                                                  for k in result.coverage) for s in result.window_sets)
-        rows.append([f"`{c}`", name, calc, counts, interp])
+        rows.append([f"`{c}`", display_name(c), pooled_samples(c), calc, counts, interp])
     if ref is not None:
-        rows.insert(0, [f"`reference` ({ref['name']})", "Historical fixed scenario", "median over the per-window posterior medians of the "
-                        "adopted Experiment product (physical units), followed by the documented parameter-specific selections "
-                        "(per-parameter record below); not an SGM of draws", "1", "one fixed scenario; comparison only"])
-    reporter.table(f"{SECTION_TITLE}: constructions", ["ID", "construction", "calculation", "representatives per window set", "interpretation"],
-                   rows, note="the canonical options; counts are per condition. An SGM of window SGMs is not an active construction; no aggregate MAP exists.")
+        rows.insert(0, [f"`reference` ({ref['name']})", display_name("reference", reference_name=ref["name"]), pooled_samples("reference"),
+                        "median over the per-window posterior medians of the adopted Experiment product (physical units), followed by the "
+                        "documented parameter-specific selections (per-parameter record below); not an SGM of draws", "1",
+                        "one fixed scenario; comparison only"])
+    reporter.table(f"{SECTION_TITLE}: constructions",
+                   ["ID", "visible description", "samples pooled before one SGM is selected", "calculation", "representatives per window set", "interpretation"],
+                   rows, note="the canonical options; counts are per condition. Legends shorten the descriptions to "
+                              + ", ".join(f"'{display_name(c, short=True)}'" for c in CONSTRUCTIONS)
+                              + (f" and '{display_name('reference', short=True, reference_name=ref['name'])}'" if ref is not None else "")
+                              + ", with the actual number of vectors. An SGM of window SGMs is not an active construction; no aggregate MAP exists.")
     sel = ((ref or {}).get("identity") or {}).get("selection") if ref is not None else None
     if sel and isinstance(sel.get("sources"), dict):
         reporter.table(f"{SECTION_TITLE}: the reference {ref['name']} per parameter (its decision record)",
@@ -1041,7 +1214,7 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
                         vs = f"{(qp[j, 2] / ref['physical'][j] - 1) * 100:+.1f} % ({np.log10(qp[j, 2] / ref['physical'][j]):+.3f} dex)"
                     else:
                         vs = f"{qp[j, 2] - ref['physical'][j]:+.4f}"
-                    rows.append([c, key, str(summ["n"]), _fmt(qp[j, 2]), f"{_fmt(qp[j, 1])} – {_fmt(qp[j, 3])}",
+                    rows.append([f"{display_name(c, short=True)} (`{c}`)", key, str(summ["n"]), _fmt(qp[j, 2]), f"{_fmt(qp[j, 1])} – {_fmt(qp[j, 3])}",
                                  f"{_fmt(qp[j, 0])} – {_fmt(qp[j, 4])}", vs, f"{100 * summ['outside_by_key'][j]:.1f} %"])
             reporter.table(f"{SECTION_TITLE} [{kname}, window set {set_name}]: SGM representatives (physical units)",
                            ["construction", "parameter", "n", "median", "IQR (q25 – q75)", "central 90 % range", "median vs reference", "outside-prior mass"],
@@ -1092,48 +1265,107 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
         reporter.table(f"{SECTION_TITLE} [{kname}]: SGM versus marginal-median vector of the per_cell groups (median / max |difference|, stored coordinates)",
                        ["window set"] + keys, rows, note="the marginal-median vector is a coordinate-wise composite whose coordinates need not have "
                        "occurred together; it is stored beside the SGM and must be named explicitly by a selection that uses it.")
-        # figures
+        # figures (plan 2026-11-05: visible labels, the data-scope subtitle, captions that name what was pooled)
         if reporter.dump:
+            geom = coll.contract["window_geometry"]; ws = request.window_seconds
+            cov = result.coverage[kind]
+            ref_label = None if ref is None else display_name("reference", short=True, reference_name=ref["name"])
+            ex_key = "mu_pc" if "mu_pc" in keys else keys[0]; jx = keys.index(ex_key)
+            phrases = {sn: window_set_phrase(sn, ch, geom, window_seconds=ws) for sn, ch in result.window_sets.items()}
+            prior_note = ("Dotted red lines are the training-prior bounds of the estimator: training bounds, not uncertainty intervals "
+                          "and not clipping thresholds.")
             for set_name, chunks in result.window_sets.items():
+                phrase = phrases[set_name]
+                sub = scope_line(kname, cov, n_product_cells[kind], n_product_windows[kind], set_name=set_name, chunks=chunks,
+                                 geometry=geom, n_draws=coll.n_draws, window_seconds=ws)
                 series = []
                 for c in ("per_cell", "per_window_position", "per_cell_window", "global"):
                     gs = result.select(construction=c, window_set=set_name, kind=kind)
-                    series.append({"name": c, "role": c, "vectors": group_vectors(gs, "sgm")})
+                    series.append({"name": display_name(c, short=True, n=len(gs)), "role": c, "vectors": group_vectors(gs, "sgm")})
                 if ref is not None:
-                    series.append({"name": ref["name"], "role": "reference", "vectors": np.asarray(ref["log10"], float)[None, :]})
+                    series.append({"name": ref_label, "role": "reference", "vectors": np.asarray(ref["log10"], float)[None, :]})
+                eq = [(g, e) for g, e, k_, c_, w_ in result.equivalences if k_ == kind]
+                eq_note = ""
+                if eq:
+                    pairs = sorted({(g.split("[")[0], e.split("[")[0]) for g, e in eq if g.endswith(f"[{set_name}]")})
+                    if pairs:
+                        eq_note = (" Exact equivalences under this window selection: " + "; ".join(
+                            f"{display_name(a, short=True)} = {display_name(b, short=True)}" for a, b in pairs)
+                            + " (the same vectors drawn twice, so their curves coincide; expected, not missing output).")
+                pc = result.select(construction="per_cell", window_set=set_name, kind=kind)
+                example = ""
+                if len(pc) >= 2:
+                    vals = sorted((float(to_physical(g.sgm_log10, table)[jx]), g.cell) for g in pc)
+                    example = (f" Reading example: the '{display_name('per_cell', short=True)}' curve of {ex_key} rises in {len(pc)} equal steps, "
+                               f"one at the {ex_key} coordinate of each complete cell-level SGM vector (the smallest {_fmt(vals[0][0])} for cell "
+                               f"{vals[0][1]}, the largest {_fmt(vals[-1][0])} for cell {vals[-1][1]}).")
                 reporter.save_figure(f"aggregation_{kind}_{set_name}_marginals",
-                                     figure_marginal_cdfs(series, table, title=f"{kname}, window set '{set_name}': marginal CDFs of the SGM representatives",
-                                                          subtitle="each collection normalized to unit mass; a one-member collection is a reference line; dotted red = prior box"),
-                                     caption=f"{kname}, window set {format_window_set(set_name, chunks)}: normalized empirical CDFs of the SGM representatives "
-                                             f"of every construction, physical units; the global representative and the reference are vertical lines. Dispersion "
+                                     figure_marginal_cdfs(series, table, title="Aggregation methods compared: distributions of SGM parameter values", subtitle=sub),
+                                     caption=f"{sub}. Each panel is one parameter in physical units; each curve is the empirical cumulative distribution "
+                                             f"of one construction's SGM vectors (the fraction of its representatives at or below the x value), every "
+                                             f"construction normalized separately to total mass one, so the curves assign no weights of a selected "
+                                             f"nuisance mixture. The dataset vector and the fixed reference are vertical lines: a point representation, "
+                                             f"whose lack of width shows nothing about parameter recovery. {prior_note}{example}{eq_note} Dispersion "
                                              f"across representatives, not posterior uncertainty.{kind_notes}")
                 reporter.save_figure(f"aggregation_{kind}_{set_name}_joint",
-                                     figure_joint_corner(series, table, title=f"{kname}, window set '{set_name}': joint projections of the SGM representatives"),
-                                     caption=f"{kname}, window set {format_window_set(set_name, chunks)}: pairwise projections of the representatives "
-                                             f"(co-occurring coordinates of retained draws); correlations are descriptive, no relation is imposed.{kind_notes}")
+                                     figure_joint_corner(series, table, title="Aggregation methods compared: pairs of coordinates from the same SGM vectors", subtitle=sub),
+                                     caption=f"{sub}. Each point projects one complete representative vector onto a parameter pair (physical axes); the "
+                                             f"dataset vector and the fixed reference are single points; the empty half of the matrix avoids showing every "
+                                             f"pair twice. A trend across representatives is variation BETWEEN representatives, not the correlation "
+                                             f"inside an individual window posterior and not a within-window compensation law; nothing is fitted and "
+                                             f"no relation is imposed. {prior_note}{eq_note}{kind_notes}")
                 if len(chunks) > 1:
-                    cells = result.coverage[kind]["cells"]
+                    cells = cov["cells"]
                     pcw = {c: np.asarray([g.sgm_log10 for g in result.select(construction="per_cell_window", window_set=set_name, kind=kind) if g.cell == c]) for c in cells}
                     pw = np.asarray([g.sgm_log10 for g in result.select(construction="per_window_position", window_set=set_name, kind=kind)])
                     bands = np.median(np.asarray([[g.quantiles_log10 for g in result.select(construction="per_cell_window", window_set=set_name, kind=kind) if g.cell == c]
                                                   for c in cells]), axis=0)
-                    geom = coll.contract["window_geometry"]
-                    step_s = (float(request.window_seconds) * geom["step_frames"] / geom["n_frames"]) if request.window_seconds else 1.0
+                    step_s = (float(ws) * geom["step_frames"] / geom["n_frames"]) if ws else 1.0
                     times = np.asarray(chunks, float) * step_s
+                    last = f" The last point at {times[-1]:g} s represents the frames from {times[-1]:g} to {times[-1] + float(ws):g} s." if ws else ""
                     reporter.save_figure(f"aggregation_{kind}_{set_name}_temporal",
                                          figure_temporal(pcw, pw, result.select(construction="global", window_set=set_name, kind=kind)[0].sgm_log10,
-                                                         None if ref is None else {"name": ref["name"], "log10": ref["log10"]}, table, times=times,
-                                                         window_bands=bands, title=f"{kname}, window set '{set_name}': representatives over acquisition time"),
-                                         caption=f"{kname}, window set {format_window_set(set_name, chunks)}: per_cell_window SGMs (thin lines, one per cell: "
-                                                 f"across-cell dispersion), per_window_position SGMs (bold), the global SGM and the reference (horizontal lines), "
-                                                 f"over the within-window 50 % and 90 % intervals of the draws (median across cells: retained posterior "
-                                                 f"uncertainty). x = window start in seconds{' (step ' + f'{step_s:g}' + ' s)' if request.window_seconds else ''}.{kind_notes}")
-            per_cell_by_set = {s: {g.cell: g.sgm_log10 for g in result.select(construction="per_cell", window_set=s, kind=kind)} for s in result.window_sets}
-            global_by_set = {s: result.select(construction="global", window_set=s, kind=kind)[0].sgm_log10 for s in result.window_sets}
+                                                         None if ref is None else {"name": ref_label, "log10": ref["log10"]}, table, times=times,
+                                                         window_bands=bands, window_seconds=ws, subtitle=sub,
+                                                         title=f"SGM estimates across the {NUMBER_WORDS.get(len(chunks), len(chunks))} {f'{float(ws):g} s ' if ws else ''}windows"),
+                                         caption=f"{sub}. x = start of each {f'{float(ws):g} s ' if ws else ''}window within the recording.{last} Thin lines: "
+                                                 f"'{display_name('per_cell_window', short=True)}', one line per cell ({len(cells)} cells"
+                                                 + ("; identified in the legend" if len(cells) <= 6 else "; identities in the report inventory") + "). "
+                                                 f"Thick line: '{display_name('per_window_position', short=True)}', calculated from the joint samples pooled "
+                                                 f"across cells at each position: it is not an average of the thin lines and need not lie between their "
+                                                 f"values in every panel. Horizontal lines: '{display_name('global', short=True)}' and "
+                                                 f"'{ref_label or 'no reference'}'. Gray shading: the source within-window 50 % and 90 % marginal intervals, "
+                                                 f"summarized by the median endpoint across cells: a summary of the input posteriors, not a confidence band "
+                                                 f"for the thick line and not a range containing 90 % of the cells. Tightly grouped SGM centers can coexist "
+                                                 f"with broad source intervals (bleaching shows this); representative dispersion is never posterior "
+                                                 f"precision, and a change of a fitted imaging coordinate along the recording is assigned no physical "
+                                                 f"cause here. {prior_note}{kind_notes}")
+            sets = list(result.window_sets)
+            per_cell_by_set = {sn: {g.cell: g.sgm_log10 for g in result.select(construction="per_cell", window_set=sn, kind=kind)} for sn in sets}
+            global_by_set = {sn: result.select(construction="global", window_set=sn, kind=kind)[0].sgm_log10 for sn in sets}
+            sel_example = ""
+            if len(sets) >= 2:
+                a, b = sets[0], sets[1]
+                common = [c for c in per_cell_by_set[a] if c in per_cell_by_set[b]]
+                if len(common) >= 2:
+                    diffs = sorted((abs(float(per_cell_by_set[b][c][jx]) - float(per_cell_by_set[a][c][jx])), c) for c in common)
+                    pick = [diffs[-1][1], diffs[0][1]]
+                    sel_example = (" Examples (descriptive, not a rule): " + "; ".join(
+                        f"cell {c}: {ex_key} {_fmt(to_physical(per_cell_by_set[b][c], table)[jx])} ({phrases[b]}) against "
+                        f"{_fmt(to_physical(per_cell_by_set[a][c], table)[jx])} ({phrases[a]})" for c in pick)
+                        + ". The effect of the window selection is recording-dependent.")
+            sub_sel = scope_line(kname, cov, n_product_cells[kind], n_product_windows[kind], set_name=sets[0], chunks=result.window_sets[sets[0]],
+                                 geometry=geom, n_draws=coll.n_draws, window_seconds=ws).split(" · windows included")[0] \
+                + " · windows included: " + " versus ".join(phrases[sn] for sn in sets) + f" · {int(coll.n_draws):,} joint draws/window · representative: SGM"
             reporter.save_figure(f"aggregation_{kind}_window_selection",
-                                 figure_window_selection(per_cell_by_set, table, reference=None if ref is None else {"name": ref["name"], "log10": ref["log10"]},
-                                                         global_by_set=global_by_set, title=f"{kname}: per-cell representatives under each window set"),
-                                 caption=f"{kname}: the per_cell SGM of every cell under each requested window set ({sets_desc}), cell identity preserved "
-                                         f"(a thin line joins the same cell), with the global SGM of each set and the reference.{kind_notes}")
+                                 figure_window_selection(per_cell_by_set, table, reference=None if ref is None else {"name": ref_label, "log10": ref["log10"]},
+                                                         global_by_set=global_by_set, set_labels=phrases, subtitle=sub_sel,
+                                                         title="One SGM per cell: " + " versus ".join(phrases[sn] for sn in sets)),
+                                 caption=f"{sub_sel}. x = cell identity. Each cell carries one marker per window selection (the per-cell construction's blue: "
+                                         f"filled for '{phrases[sets[0]]}'" + (f", hollow for '{phrases[sets[1]]}'" if len(sets) > 1 else "")
+                                         + "), joined by a thin connector that represents a change of window selection, not elapsed time and not an "
+                                         f"uncertainty interval. Orange lines: '{display_name('global', short=True)}' of each selection (one line style per "
+                                         f"selection); purple dashed: '{ref_label or 'no reference'}'. Blue never means the dataset vector and orange never "
+                                         f"means a per-cell vector.{sel_example} {prior_note}{kind_notes}")
     agg_manifest["exports"] = {k: str(v) for k, v in paths.items()}
     return agg_manifest

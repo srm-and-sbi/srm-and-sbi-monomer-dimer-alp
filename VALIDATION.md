@@ -1272,7 +1272,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_dli_banner.py` | 3 | the detector DLI stage's dry-run banner under the probe-class rule and under the `--occupancy` override |
 | `tests/test_embedding_probe.py` | 3 | the embedding probe's arithmetic: a linear signal is recovered, an absent parameter scores no better than the null, the split is disjoint, the report is written |
 | `tests/test_estimator_scorecard.py` | 6 | the estimator scorecard on synthetic, schema-valid records: alignment by identifier, the recovery, coverage and paired log-density numbers, the flags |
-| `tests/test_experiment_aggregation.py` | 16 | the four representative constructions and named window sets; source and coverage guards; existing Experiment report integration; saved pilot reproduction; target binding; weighted empirical artifacts, physical domains, normalization, and consistent median summaries |
+| `tests/test_experiment_aggregation.py` | 17 | the four representative constructions and named window sets; the visible labels, window-set phrases, scope lines and the Data scope table; source and coverage guards; existing Experiment report integration; saved pilot reproduction; target binding; weighted empirical artifacts, physical domains, normalization, and consistent median summaries |
 | `tests/test_experiment_comparison.py` | 5 | the Experiment comparison on synthetic products: alignment by identifier, the location, prior-box shares and discrepancy numbers of the three point estimates |
 | `tests/test_fleet_sync.py` | 10 | the fleet sync: every failure status propagates, and a live sync counts as a success only after the content verification |
 | `tests/test_gradient_accumulation.py` | 6 | gradient accumulation to a fixed global batch: the step resolution and the equivalence with a whole-group batch |
@@ -1303,7 +1303,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_weights_initialized_phase.py` | 6 | the weights-initialized phase: an artifact restores every weight and buffer of a compiled-layout network and its losses; field-by-field refusal of a mismatched artifact; a fresh optimizer, rate, patience and counters with the global epoch continued; a resumed phase keeps its schedule and refuses another patience; the runner's refusals; the HPC forwarding |
 | `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
 
-Total: 310 tests over 38 files.
+Total: 311 tests over 38 files.
 
 ## 4. Troubleshooting
 

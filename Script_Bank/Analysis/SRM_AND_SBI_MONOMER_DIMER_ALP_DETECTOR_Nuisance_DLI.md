@@ -43,7 +43,19 @@ silently dropped from `all`. Fab and InlB remain separate.
 
 The main Experiment report contains **Experimental aggregation and nuisance candidates**, with coverage,
 construction tables, physical-unit summaries, marginal CDFs, joint projections, temporal comparisons, and
-matched window-selection plots. It links these supporting files in its own output directory:
+matched window-selection plots. Its visible language is the project's own: each construction is described as
+what it yields ("One SGM vector per cell", "One SGM vector per window position", "One SGM vector for the
+included dataset", "One SGM vector per cell–window pair"; the reference as "Existing fixed nuisance vector:
+SEL"), with the samples pooled before one representative is selected and, in legends, the actual number of
+vectors; a component selected with the marginal-median statistic is labeled "marginal-median vector per …",
+never an SGM. The report opens its data with a **Data scope** table (the original Experiment summaries and the
+retained-cloud aggregation, stated apart: cells, windows, draws, "complete cohort" or "pilot subset: cells
+[...]"), and every aggregation figure carries a subtitle with the covered cells and windows, the windows
+included ("all ten 2 s windows", "opening 0–2 s window only" with the number of selected windows, or a named
+set with its positions), the draws per window and the representative. The section states the two independent
+choices once: which windows are included, and which samples are pooled; `opening` makes per-cell equal
+per-cell-window and per-position equal global, and the opening figures name these equivalences. It links
+these supporting files in its own output directory:
 
 - `aggregation_candidates.npz`: group vectors, quantiles, identities, methods, source contract, and target binding.
 - `aggregation_groups.csv`: each group's physical values and source draw identity.

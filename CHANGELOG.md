@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.46 - 2026-11-05
+
+The Experiment report's aggregation section and its six figures speak the project's own language and state
+their scope; the full cohort of both conditions gains retained draw collections. No calculation, construction,
+weight, quantile convention, geometry, estimator, prior or artifact schema changes.
+
+- **Visible language (`experiment_aggregation.display_name`, `pooled_samples`, `window_set_phrase`).** One
+  formatter gives every construction its description ("One SGM vector per cell", "One SGM vector per window
+  position", "One SGM vector for the included dataset", "One SGM vector per cell–window pair", "Existing fixed
+  nuisance vector: SEL"), its legend phrase with the actual number of vectors ("SGM per cell (60 vectors)"),
+  the statistic it selects (a marginal-median component is "marginal-median vector per …", never an SGM) and
+  the samples pooled before one representative is selected; the constructions table carries these columns
+  and the internal IDs stay unchanged in archives, specifications and scripts. Window sets are phrased from the
+  declared geometry: "all ten 2 s windows", "opening 0–2 s window only", or a named set with its positions and
+  window starts. The section states the two independent choices (windows included; samples pooled) once, and
+  that `opening` makes per-cell equal per-cell-window and per-position equal global.
+- **Scope made visible (`scope_line`, `scope_table`).** The report opens its data with a "Data scope" table
+  placed before the diagnostic figures: the original Experiment summaries (every cell of the product; the
+  draws summarized when it was written) and the retained-cloud aggregation (the cells and windows the clouds
+  cover, the draws per window; "complete cohort" or "pilot subset: cells [...]"), derived from the validated
+  product and clouds, never from file names or an assumed cohort size; with aggregation disabled the row reads
+  "not computed (aggregation disabled)", and "not computed (no retained clouds)" only when it is enabled and no
+  clouds exist. Every aggregation figure carries a
+  subtitle with the condition, the covered cells and windows ("aggregation pilot: 2/60 cells (11, 42), 20/600
+  windows" or "60/60 cells, 600/600 windows"), the windows included with the number of selected windows when
+  the set is a subset of the source collection, the draws per window and the representative; the original
+  diagnostic figures carry a source tag naming the original summaries so a pilot extension never relabels them.
+  A CPU regeneration whose collections cover the whole product states "Complete cohort" instead of the pilot
+  wording.
+- **The six figures (`visualization_aggregation.py`).** Marginal CDFs: y axis "fraction of representatives at or
+  below this value", one shared legend below the panels, the training-prior bounds labeled as such, reading
+  example in the caption. Joint corner: "each point = one complete representative vector" over the legend, the
+  caption separating variation between representatives from within-window correlation. Temporal: x = start of
+  the 2 s window (from the saved geometry), neutral gray source-interval bands labeled as a summary of the
+  input posteriors (not a confidence band for the bold line, not a range containing 90 % of the cells), up to
+  six cells identified by color, the bold position line described as pooled joint samples rather than an
+  average of the thin lines, no physical cause assigned to a temporal change. Opening figures name the exact
+  equivalences. Window selection: filled and hollow blue markers for the two window selections of the per-cell
+  construction, orange line styles per selection for the dataset vector, purple dashed reference, a caption
+  example of a recording-dependent effect taken from the data. Figure and section titles follow the plan
+  ("Aggregation methods compared: …", "SGM estimates across the ten 2 s windows", "One SGM per cell: … versus …").
+- **Nuisance DLI report.** The weighted-mixture figures use the same formatter (component labels with statistic,
+  count and window set; the mixture labeled with its recorded probabilities; the scope subtitle) and their
+  captions state that a marginal-median component is never an SGM.
+- **Full-cohort retained draws.** The remaining 58 cells per condition were collected on rcl01 with the draws
+  companion (one collection per cell, labels `COHORTCELL<n>`, distinct per-cell seeds 2026110500 + n for Fab and
+  2026110600 + n for InlB, the adopted estimators, 10,000 draws per window, the source Experiment's sampling
+  mode and conversion); the orchestration and validation helpers and the catalog verification (every working
+  recording of the adopted Experiment products byte-identical to the complete MET movie bank under the
+  sixty-cell catalog) are kept under `Script_Bank/Analysis/Evidence/Experiment_Aggregation_Cohort_2026-11-05/`.
+  The complete-cohort review copies `COHORT60PLOTS` sit beside the adopted products.
+- **Tests.** `tests/test_experiment_aggregation.py` gains the presentation test (labels, window-set phrases,
+  scope lines, the Data scope table for a complete product and a two-cell pilot, a named window set, the
+  opening equivalences, the median-statistic label, the figures' legends and subtitles): 17 tests.
+
 ## 0.1.45 - 2026-11-05
 
 The Experiment report gains the experimental aggregation of its window posteriors, and the Nuisance DLI

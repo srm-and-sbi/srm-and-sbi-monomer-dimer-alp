@@ -1,0 +1,23 @@
+	Command being timed: "/home/rcl_fias/anaconda3/envs/SRM_AND_SBI_ENVY_V0/bin/python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Draws.py --total-time-seconds 2.0 --condition INLB --artifact-tag C128V42AP3LR32 --cells 17 --posterior-samples 10000 --seed 2026110617 --collection-label COHORTCELL17"
+	User time (seconds): 114.07
+	System time (seconds): 32.05
+	Percent of CPU this job got: 427%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:34.18
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5742824
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3958100
+	Voluntary context switches: 3158
+	Involuntary context switches: 7563
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 9032
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -628,6 +628,112 @@ def test_the_saved_four_cell_pilot_representatives_reproduce():
         assert not agg.verify_members(res, merged)
 
 
+
+def test_presentation_labels_scope_lines_and_the_early_scope_table():
+    """The visible language (plan 2026-11-05): construction descriptions with the statistic and the vector count,
+    window-set phrases from the declared geometry, scope lines that count the actual coverage (a subset is a pilot,
+    the complete product is not) and name the selected windows of a subset, the early Data scope table with the
+    two scopes apart, the opening equivalences and the median-statistic label; figures carry the scope subtitle."""
+    from srm_and_sbi_monomer_dimer_alp.experiment_runner import write_experiment_outputs
+    # labels
+    assert agg.display_name("per_cell") == "One SGM vector per cell"
+    assert agg.display_name("per_cell", short=True, n=60) == "SGM per cell (60 vectors)"
+    assert agg.display_name("global", short=True, n=1) == "SGM for included dataset (one vector)"
+    assert agg.display_name("per_cell_window", short=True) == "SGM per cell–window"
+    assert agg.display_name("reference", short=True, reference_name="SEL") == "Fixed reference: SEL"
+    med = agg.display_name("per_window_position", statistic="median", short=True, n=10)
+    assert med == "marginal-median vector per window position (10 vectors)" and "SGM" not in med
+    _expect(agg.AggregationError, lambda: agg.display_name("sgm_of_sgms"), "unknown construction")
+    _expect(agg.AggregationError, lambda: agg.display_name("per_cell", statistic="mean"), "unknown statistic")
+    # window-set phrases from the declared geometry (four positions here)
+    assert agg.window_set_phrase("all", (0, 1, 2, 3), GEOMETRY, window_seconds=2.0) == "all four 2 s windows"
+    assert agg.window_set_phrase("opening", (0,), GEOMETRY, window_seconds=2.0) == "opening 0–2 s window only"
+    assert agg.window_set_phrase("late", (2, 3), GEOMETRY, window_seconds=2.0) == "named set 'late' = positions [2, 3] (window starts 4, 6 s)"
+    # scope lines: pilot versus complete, the selected-window count of a subset
+    cov = {"cells": [3, 7], "n_windows": 8}
+    line = agg.scope_line("MET-FAB", cov, 3, 12, set_name="opening", chunks=(0,), geometry=GEOMETRY, n_draws=50, window_seconds=2.0)
+    assert line == ("MET-FAB · aggregation pilot: 2/3 cells (3, 7), 8/12 windows · windows included: opening 0–2 s window only "
+                    "(2 selected windows of the 8) · 50 joint draws/window · representative: SGM"), line
+    full = agg.scope_line("MET-FAB", {"cells": [3, 7, 11], "n_windows": 12}, 3, 12, set_name="all", chunks=(0, 1, 2, 3), geometry=GEOMETRY,
+                          n_draws=10000, window_seconds=2.0)
+    assert full == "MET-FAB · 3/3 cells, 12/12 windows · windows included: all four 2 s windows · 10,000 joint draws/window · representative: SGM", full
+    assert "pilot" not in full
+    # the report: complete product clouds -> complete cohort; a two-cell collection -> pilot subset; named set in the subtitle
+    eval_cfg = PARAMETERS.inference.evaluation
+    rng = np.random.default_rng(11)
+    a = _product_with_clouds(rng, IDS)
+    m = S.decode_manifest(a[S.MANIFEST_KEY])
+    xargs = SimpleNamespace(aggregation="pooled", seed=None, condition="FAB")
+    ref = {"name": "REFX", "log10": np.array([-0.5, 0.4, 0.5]), "physical": np.array([10 ** -0.5, 0.4, 0.5]), "identity": {"artifact": "x"}}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        rep = DiagnosticReporter(stage="Experiment", enabled=True, dump=True, dump_dir=tmp / "full", run_label="T", timestamp="now")
+        req = agg.AggregationRequest(window_sets=agg.parse_window_sets("all,opening,late=2+3"), reference=ref, window_seconds=2.0, product_label="P", target=TARGET)
+        write_experiment_outputs(rep, xargs, eval_cfg, TABLE, tmp / "full" / "p.npz", a, run_start=0.0, aggregation=req)
+        text = (tmp / "full" / "report.md").read_text()
+        assert "## Data scope" in text and "| retained-cloud aggregation | MET-FAB | 3 of 3 | 12 of 12 |" in text and "complete cohort" in text
+        assert "Source: the original Experiment summaries (MET-FAB: 3 cells, 12 windows), not the retained clouds" in text
+        assert "MET-FAB: complete cohort, 3 of 3 cells of this product" in text and "pilot" not in text.split("## Experimental aggregation")[1].split("**Window sets.**")[0]
+        assert "**Two independent choices.**" in text and "`late` = named set 'late' = positions [2, 3] (window starts 4, 6 s)" in text
+        assert "| `per_cell` | One SGM vector per cell | all selected window clouds from one cell |" in text
+        assert "SGM per cell (`per_cell`)" in text and "Fixed reference: REFX" in text
+        assert "Exact equivalences under this window selection: SGM for included dataset = SGM per window position; SGM per cell = SGM per cell–window" in text
+        assert "windows included: opening 0–2 s window only (3 selected windows of the 12)" in text
+        assert "named set 'late' = positions [2, 3]" in text and (tmp / "full" / "figures" / "aggregation_FAB_late_temporal.png").exists()
+        assert "windows included: all four 2 s windows versus opening 0–2 s window only versus named set 'late'" in text
+        assert "Reading example: the 'SGM per cell' curve of a rises in 3 equal steps" in text
+        assert "Examples (descriptive, not a rule): cell " in text
+        # the data-scope table counts the actual cells of a two-cell collection: a pilot, with its identities
+        sub_ids = [i for i in IDS if i[1] in (3, 7)]
+        b = _product_with_clouds(rng, sub_ids)
+        p = _collection_file(tmp / "two.npz", b, S.decode_manifest(b[S.MANIFEST_KEY]), label="TWO")
+        clouds = agg.combine_clouds([agg.cloud_from_collection(p)], reference_contract={k: m[k] for k in agg.CONTRACT_FIELDS})
+        rep2 = DiagnosticReporter(stage="Experiment", enabled=True, dump=True, dump_dir=tmp / "pilot", run_label="T", timestamp="now")
+        req2 = agg.AggregationRequest(window_sets=agg.parse_window_sets("all,opening"), clouds=clouds, reference=ref, window_seconds=2.0,
+                                      product_label="P", target=TARGET)
+        write_experiment_outputs(rep2, xargs, eval_cfg, TABLE, tmp / "pilot" / "p.npz", a, run_start=0.0, persist_arrays=False, aggregation=req2)
+        text2 = (tmp / "pilot" / "report.md").read_text()
+        assert "| retained-cloud aggregation | MET-FAB | 2 of 3 | 8 of 12 |" in text2 and "pilot subset: cells [3, 7]" in text2
+        assert "MET-FAB · aggregation pilot: 2/3 cells (3, 7), 8/12 windows · windows included: all four 2 s windows" in text2
+        assert "| original Experiment summaries (the tables and diagnostic figures) | MET-FAB | 3 | 12 |" in text2
+        # the aggregation disabled: the scope table still states the original scope and the reason 'aggregation disabled'
+        # (the product's stored clouds do not change that reason); enabled without any clouds: 'no retained clouds'
+        rep3 = DiagnosticReporter(stage="Experiment", enabled=True, dump=False, run_label="T", timestamp="now")
+        write_experiment_outputs(rep3, xargs, eval_cfg, TABLE, tmp / "p3.npz", a, run_start=0.0, persist_arrays=False,
+                                 aggregation=agg.AggregationRequest(window_sets={}, enabled=False))
+        headers, rows, note, tag = agg.scope_table(a, m, agg.AggregationRequest(window_sets={}, enabled=False), lambda k: f"MET-{k}")
+        assert rows[1][4] == "not computed (aggregation disabled)" and rows[0][2] == "3" and "MET-FAB: 3 cells, 12 windows" in tag
+        assert "the draws themselves are stored" in rows[0][4]
+        b0 = fx.product("experiment", IDS, rng)
+        _, rows0, _, _ = agg.scope_table(b0, S.decode_manifest(b0[S.MANIFEST_KEY]), agg.AggregationRequest(window_sets={"all": None}), lambda k: f"MET-{k}")
+        assert rows0[1][4] == "not computed (no retained clouds)" and "were not retained" in rows0[0][4]
+        _, rows_off, _, _ = agg.scope_table(b0, S.decode_manifest(b0[S.MANIFEST_KEY]), None, lambda k: f"MET-{k}")
+        assert rows_off[1][4] == "not computed (aggregation disabled)"
+    # a large source set (one collection per cell) is counted inline, never listed file by file
+    few = [{"path": f"/x/c{i}.npz", "label": f"c{i}", "collection_label": f"L{i}", "sha256": "ab" * 32, "seed_policy": {"base_seed": i},
+            "written_at": f"2026-11-05 16:{i:02d}:00 UTC"} for i in range(3)]
+    many = [dict(f, path=f"/x/c{i}.npz", collection_label=f"COHORTCELL{i}", seed_policy={"base_seed": i}, written_at=f"2026-11-05 16:{i:02d}:00 UTC")
+            for i, f in enumerate([few[0]] * 60)]
+    assert agg.sources_description(few).count("sha256") == 3 and "c2.npz" in agg.sources_description(few)
+    big = agg.sources_description(many)
+    assert big.startswith("60 retained draw collections") and "first `c0.npz`, last `c59.npz`" in big and big.count("sha256") == 1 and len(big) < 400
+    summ = agg.disclosed_differences_summary(many)
+    assert "60 distinct collection label values" in summ and "60 distinct seed policy values" in summ
+    assert "written between 2026-11-05 16:00:00 UTC and 2026-11-05 16:59:00 UTC" in summ
+    # the shared figures accept the composed names and a median-statistic series (the Nuisance DLI caller's use)
+    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import figure_joint_corner, figure_marginal_cdfs
+    vec = np.array([[-0.5, 0.4, 0.5], [-0.6, 0.5, 0.4], [-0.4, 0.3, 0.6]])
+    series = [{"name": agg.display_name("per_cell", statistic="median", short=True, n=3), "role": "per_cell", "vectors": vec},
+              {"name": "selected mixture at its recorded probabilities (3 vectors)", "role": "mixture", "vectors": vec, "weights": np.array([0.5, 0.25, 0.25])},
+              {"name": agg.display_name("reference", short=True, reference_name="REFX"), "role": "reference", "vectors": vec[:1]}]
+    fig = figure_marginal_cdfs(series, TABLE, title="t", subtitle="scope")
+    labels = [t.get_text() for t in fig.legends[0].get_texts()]
+    assert "marginal-median vector per cell (3 vectors)" in labels and "Fixed reference: REFX" in labels and "training prior bounds" in labels
+    assert fig.texts and any(t.get_text() == "scope" for t in fig.texts)
+    fig2 = figure_joint_corner(series, TABLE, title="t", subtitle="scope")
+    assert any("REFX" in t.get_text() for t in fig2.legends[0].get_texts())
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

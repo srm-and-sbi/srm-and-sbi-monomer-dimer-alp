@@ -811,7 +811,14 @@ are refused. Every draw is a complete stored row. Legacy unweighted artifacts re
 
 **Reports and interpretation.** For every requested set, Experiment compares normalized marginal empirical
 CDFs and joint projections. Temporal plots show cell-window and position-level SGMs with separately labeled
-source-posterior intervals; matched per-cell plots compare window selections. The numerical table gives
+source-posterior intervals; matched per-cell plots compare window selections. The report's visible language
+describes each construction by what it yields (one SGM vector per cell, per window position, for the included
+dataset, per cell–window pair; the fixed reference by its artifact), names the samples pooled before one
+representative is selected and the statistic selected (a marginal-median vector is never called an SGM), and
+states the two independent choices, windows included and samples pooled, once. A "Data scope" table precedes
+the diagnostic figures and states the original-summary scope and the retained-cloud scope apart; every
+aggregation figure carries a subtitle with the covered cells and windows, the windows included (with the number
+of selected windows for a subset), the draws per window and the representative. The numerical table gives
 counts, medians, interquartile and central 90% ranges, differences from SEL, and outside-training-box mass.
 Ranges over representatives use the inverse weighted empirical CDF and describe empirical dispersion. Raw
 posterior quantiles retain the existing interpolation in estimator coordinates and transformation to physical
@@ -852,7 +859,7 @@ are recorded scientific choices. The route has three steps:
    product or validated shard merge. The main report links `aggregation_candidates.npz`, the group and comparison
    CSVs, `aggregation_manifest.json`, and its figures. `--no-aggregation` explicitly selects the legacy reporting
    mode. `--regenerate-report --review-label <TOKEN>` reuses saved results on CPU through the same report writer;
-   compatible retained collections can be supplied with `--cloud-sources`. A pilot states its actual coverage.
+   compatible retained collections can be supplied with `--cloud-sources`. A pilot states its actual coverage; collections covering every cell and window of the product are reported as the complete cohort.
 2. **Record the selection.** The analysis script's `--emit-representatives-template --candidate-archive <path>`
    reads the archive on CPU, displays the same representative summaries as Experiment, and emits a skeleton
    with components commented out. The user names the components, their weights, the statistic (`sgm` or `median`),

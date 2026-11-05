@@ -747,16 +747,22 @@ def _report_representatives(reporter, nu, R, archive):
     if archive is not None:
         for c in sel["components"]:
             comp = agg.archive_component(archive, kind=c["condition"], window_set=c["window_set"], construction=c["grouping"], statistic=c["statistic"])
-            series.append({"name": f"component {c['index']}: {c['window_set']}/{c['grouping']}/{c['statistic']}", "role": c["grouping"], "vectors": comp["vectors"]})
-    series.append({"name": "selected mixture (recorded probabilities)", "role": "mixture", "vectors": nu.samples, "weights": nu.probabilities})
+            series.append({"name": f"component {c['index']}: " + agg.display_name(c["grouping"], statistic=c["statistic"], short=True, n=comp["vectors"].shape[0])
+                                   + f", windows: {c['window_set']}", "role": c["grouping"], "vectors": comp["vectors"]})
+    series.append({"name": f"selected mixture at its recorded probabilities ({nu.samples.shape[0]} vectors)", "role": "mixture", "vectors": nu.samples,
+                   "weights": nu.probabilities})
     ref_p, ref = _reference_physical(R)
     if ref is not None:
-        series.append({"name": ref["name"], "role": "reference", "vectors": ref["log10"][None, :]})
-    reporter.save_figure("representatives_marginals", figure_marginal_cdfs(series, table, title="Selected representative distribution: weighted marginal CDFs",
-                                                                           subtitle="components at equal member weight; the mixture at its recorded probabilities; a one-member series is a reference line"),
-                         caption="Weighted empirical CDFs of the selected mixture beside its components (each normalized to unit mass) and the reference, physical units.")
-    reporter.save_figure("representatives_joint", figure_joint_corner(series, table, title="Selected representative distribution: joint projections"),
-                         caption="Pairwise projections of the selected vectors (marker size follows the recorded probability) beside the components and the reference.")
+        series.append({"name": agg.display_name("reference", short=True, reference_name=ref["name"]), "role": "reference", "vectors": ref["log10"][None, :]})
+    scope = (f"{sel['archive'].get('target', {}).get('condition', '')} · selected mixture of {nu.samples.shape[0]} vectors from {len(sel['components'])} component(s); "
+             "components at equal member weight, the mixture at its recorded probabilities; a one-member series is a reference line").strip(" ·")
+    reporter.save_figure("representatives_marginals", figure_marginal_cdfs(series, table, title="Selected representative distribution: weighted marginal CDFs", subtitle=scope),
+                         caption="Weighted empirical CDFs of the selected mixture beside its components (each normalized to unit mass) and the reference, physical "
+                                 "units (the fraction of a series' vectors at or below the x value). A component selected with the marginal-median statistic is "
+                                 "labeled as a marginal-median vector, never as an SGM. Dotted red lines are the training-prior bounds.")
+    reporter.save_figure("representatives_joint", figure_joint_corner(series, table, title="Selected representative distribution: joint projections", subtitle=scope),
+                         caption="Pairwise projections of the selected vectors (marker size follows the recorded probability) beside the components and the reference; "
+                                 "each point is one complete vector. Dotted red lines are the training-prior bounds.")
 
 
 def _migrate_pool_labels(args, R):
