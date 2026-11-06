@@ -43,9 +43,15 @@ Per window: Pearson and Spearman correlation matrices in estimator coordinates a
 physical axes (contours of the full cloud; the scatter is a fixed-seed subset, display only); the marginal densities of
 the ten windows; the within-window correlation heat maps. `joint_depth.csv` places the reference vector, the source
 MAP, the source SGM and the fresh median vector relative to each cloud: the prior-scaled distance to the fresh SGM and
-the share of draws farther from the SGM than the reference (a distance rank relative to the SGM: near 1 when most draws lie
-farther than the reference, near 0 when almost all lie closer; not a posterior-density or credible-region statement),
-beside the marginal membership (inside every 90 % interval). `window_summaries.csv` carries the fresh and the
+the share of draws strictly farther from the SGM than the reference (a distance rank relative to the SGM: near 1 when most
+draws lie farther than the reference, near 0 when almost all lie closer; not a posterior-density or credible-region
+statement), beside the marginal membership (inside every 90 % interval). The rank is the shared definition
+`experiment_aggregation.reference_distance_ranks` (strict comparison, prior-width scale, float64), the same rank the
+official Experiment report uses in its posterior-compatibility subsection; the two differ in what is compared: this
+companion places fixed reference vectors (SEL, the source MAP, the source SGM, the fresh median vector) in one window's
+cloud, while the Experiment report compares the SGM representatives of groups with the clouds of their peer groups and
+reduces each row to its median score. This companion's `joint_depth.csv` is a diagnostic of one collection, not the
+official aggregation reporting. `window_summaries.csv` carries the fresh and the
 source summaries side by side with their differences in dex, which measure Monte Carlo reproducibility, not a change
 of the posterior.
 

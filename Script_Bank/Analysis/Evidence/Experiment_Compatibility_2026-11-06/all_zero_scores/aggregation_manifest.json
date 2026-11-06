@@ -1,0 +1,250 @@
+{
+ "compatibility": {
+  "protocol": {
+   "name": "sgm_distance_rank_v1",
+   "rank": "share of the reference's retained draws strictly farther from the reference's own SGM than the candidate SGM (comparison '>', empirical-CDF lookup with searchsorted side='right'); rows = candidates, columns = references, self reference excluded by group identity (NaN diagonal); generally asymmetric",
+   "metric": "estimator coordinates divided by the prior widths (sgm_scale); coordinates are stored as the estimator declares them (log10 for a log row) and are not transformed again",
+   "sgm_scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "score": "ordinary sample median of the candidate's off-diagonal row (two middle ranks averaged when even); raw, not normalized across candidates; a computed zero is a valid outcome distinct from a missing score",
+   "reference_populations": {
+    "per_cell": "the other included cells of the same condition and window set; each reference is its own equal-window cloud mixture",
+    "per_cell_window": "the other selected windows of the same cell and condition; each reference is one window's own cloud",
+    "per_window_position": "no rank policy in this scope (uniform selection remains available)",
+    "global": "no same-level peer (uniform selection remains available)"
+   },
+   "statuses": [
+    "computed",
+    "insufficient_peers",
+    "not_applicable"
+   ],
+   "availability": "computed when at least one other reference group exists in the block; insufficient_peers for a per_cell block with one included cell or a per_cell_window block with one selected window (no score, zero references); not_applicable for per_window_position and global; equivalent groups (an opening per_cell = per_cell_window alias) keep their own availability, scores are never copied",
+   "precision": "float64"
+  },
+  "arrays": {
+   "score": "compatibility_score",
+   "n_references": "compatibility_n_references",
+   "status": "compatibility_status",
+   "sgm_outside_prior_keys": "sgm_outside_prior_keys"
+  },
+  "blocks": [
+   {
+    "index": 0,
+    "kind": "FAB",
+    "window_set": "all",
+    "construction": "per_cell",
+    "cell": -1,
+    "n_groups": 3,
+    "arrays": {
+     "group_index": "compatibility_block_0_group_index",
+     "ranks": "compatibility_block_0_ranks",
+     "reference_draws": "compatibility_block_0_reference_draws"
+    },
+    "orientation": "rows = candidates, columns = references, both in group_index order; diagonal NaN"
+   },
+   {
+    "index": 1,
+    "kind": "FAB",
+    "window_set": "all",
+    "construction": "per_cell_window",
+    "cell": 3,
+    "n_groups": 2,
+    "arrays": {
+     "group_index": "compatibility_block_1_group_index",
+     "ranks": "compatibility_block_1_ranks",
+     "reference_draws": "compatibility_block_1_reference_draws"
+    },
+    "orientation": "rows = candidates, columns = references, both in group_index order; diagonal NaN"
+   },
+   {
+    "index": 2,
+    "kind": "FAB",
+    "window_set": "all",
+    "construction": "per_cell_window",
+    "cell": 7,
+    "n_groups": 2,
+    "arrays": {
+     "group_index": "compatibility_block_2_group_index",
+     "ranks": "compatibility_block_2_ranks",
+     "reference_draws": "compatibility_block_2_reference_draws"
+    },
+    "orientation": "rows = candidates, columns = references, both in group_index order; diagonal NaN"
+   },
+   {
+    "index": 3,
+    "kind": "FAB",
+    "window_set": "all",
+    "construction": "per_cell_window",
+    "cell": 11,
+    "n_groups": 2,
+    "arrays": {
+     "group_index": "compatibility_block_3_group_index",
+     "ranks": "compatibility_block_3_ranks",
+     "reference_draws": "compatibility_block_3_reference_draws"
+    },
+    "orientation": "rows = candidates, columns = references, both in group_index order; diagonal NaN"
+   }
+  ],
+  "status_counts": {
+   "computed": 9,
+   "insufficient_peers": 0,
+   "not_applicable": 3
+  },
+  "n_zero_scores": 3,
+  "seconds": 0.001,
+  "bound_to": "the target, contract (checkpoint, keys, scale, geometry, draws, pool mode, input conversion), coverage and sources recorded in this manifest"
+ },
+ "archive_format_version": 2,
+ "stage": "experiment_aggregation",
+ "product_label": "P",
+ "target": {
+  "project_alias": "T",
+  "condition": "FAB",
+  "timing_label": "2S_50FPS",
+  "n_frames": 100
+ },
+ "condition_labels": [
+  "FAB"
+ ],
+ "constructions": [
+  "per_cell",
+  "per_window_position",
+  "global",
+  "per_cell_window"
+ ],
+ "construction_definitions": {
+  "per_cell": {
+   "name": "One representative per cell",
+   "calculation": "pool all retained draws of the cell's selected windows, equal weight per window, and select the SGM",
+   "interpretation": "variation between cell representatives over the declared acquisition period"
+  },
+  "per_window_position": {
+   "name": "One representative per window position",
+   "calculation": "at each selected position, pool the retained draws across the included cells, equal weight per cell, and select the SGM",
+   "interpretation": "variation between acquisition-period representatives, cell differences compressed at each position"
+  },
+  "global": {
+   "name": "One representative of the selected collection",
+   "calculation": "pool the retained draws with equal cell weight and equal selected-window weight within each cell, and select the SGM",
+   "interpretation": "an overall joint center of the selected collection"
+  },
+  "per_cell_window": {
+   "name": "One representative per cell-window pair",
+   "calculation": "the SGM of each included cell-window posterior",
+   "interpretation": "variation between window representatives, cell and window identities retained"
+  }
+ },
+ "statistics": [
+  "sgm",
+  "median"
+ ],
+ "default_statistic": "sgm",
+ "window_sets": {
+  "all": [
+   0,
+   1
+  ]
+ },
+ "coverage": {
+  "FAB": {
+   "cells": [
+    3,
+    7,
+    11
+   ],
+   "chunks": [
+    0,
+    1
+   ],
+   "n_windows": 6,
+   "n_draws_per_window": 30,
+   "declared_positions": [
+    0,
+    1
+   ]
+  }
+ },
+ "coverage_note": "",
+ "n_product_cells": null,
+ "n_product_windows": null,
+ "parameter_keys": [
+  "a",
+  "b",
+  "c"
+ ],
+ "quantile_levels": [
+  0.05,
+  0.25,
+  0.5,
+  0.75,
+  0.95
+ ],
+ "metric": "estimator coordinates divided by the prior widths (sgm_scale)",
+ "sgm_scale": [
+  1.0,
+  1.0,
+  1.0
+ ],
+ "prior_low": [
+  -1.0,
+  0.0,
+  0.0
+ ],
+ "prior_high": [
+  0.0,
+  1.0,
+  1.0
+ ],
+ "methods": {
+  "single_window": "the window's stored exact sample medoid (reused) or the exact medoid",
+  "pooled": "exact medoid up to 10000 rows; above it the collection kernel's Weiszfeld geometric median snapped to the nearest retained draw (weiszfeld_snap), an approximation to the exact medoid",
+  "quantiles": "mixture quantiles of the pooled draws in estimator coordinates (numpy linear interpolation); physical endpoints are the transform of the quantile",
+  "representative_quantiles": "inverse weighted empirical CDF (smallest value with cumulative weight >= p)"
+ },
+ "contract": {
+  "parameter_keys": [
+   "a",
+   "b",
+   "c"
+  ],
+  "coordinate_transform": "log10",
+  "sgm_scale": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "pool_mode": "unrestricted",
+  "n_summary_draws": 30,
+  "checkpoint_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "window_geometry": {
+   "n_frames": 100,
+   "step_frames": 100,
+   "span_frames": 200
+  },
+  "input_conversion": "test"
+ },
+ "sources": [
+  {
+   "path": null,
+   "sha256": null,
+   "label": "fixture",
+   "kind": "test",
+   "collection_label": null
+  }
+ ],
+ "disclosed_source_differences": {},
+ "reference": null,
+ "equivalences": [],
+ "timing_seconds": {
+  "all/per_cell_window": 0.001,
+  "all/per_cell": 0.001,
+  "all/per_window_position": 0.001,
+  "all/global": 0.0
+ },
+ "source_product_manifest": null,
+ "written_at": "2026-11-06 15:38:41 UTC",
+ "archive_sha256": "bd25e4a2b01e49c005140661ba8b8e22b4c6216a011b3ae56a1ca7f3e5775266"
+}

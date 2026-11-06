@@ -105,6 +105,16 @@ _EMPIRICAL = ("raw", "map_estimate_pool", "sgm_percentiles",
 _WEIGHTED = ("empirical_representatives",)   # a sample matrix with per-row sampling probabilities (stored, never implied)
 REPRESENTATIVE_STATISTICS = ("sgm", "median")
 WEIGHT_NORMALIZATION_TOLERANCE = 1e-6
+# Member-weighting policies of an empirical_representatives component. ``uniform`` (the backward-compatible default:
+# every member of component k receives alpha_k / n_k) and ``posterior_rank_median`` (consensus weighting: the member's
+# probability is proportional to the median cross-posterior distance rank Experiment exported for its SGM; per_cell:
+# p = alpha_k * s_c / sum_d s_d over the component's cells; per_cell_window: equal total cell mass alpha_k / |C_k|, then
+# s_cw / sum_u s_cu WITHIN each cell, never one normalization over all windows and never multiplied by cell-level
+# ranks). A zero score gives exactly zero probability (kept, never floored, clipped or dropped); an all-zero normalizer
+# is refused. No other policy exists in production; an unknown policy, a missing or unavailable score, a non-SGM
+# statistic, an unsupported grouping or a format-1 archive is an explicit error, never a fallback to uniform.
+MEMBER_WEIGHTINGS = ("uniform", "posterior_rank_median")
+RANK_WEIGHTED_GROUPINGS = ("per_cell", "per_cell_window")
 # Parameters whose physical domain is a probability (0, 1): the per-dye bleaching probability. An explicit
 # selection or override of such a parameter, and every final vector of an explicitly selected artifact
 # (selection_user, empirical_representatives), must respect it; a physically valid value outside the TRAINING
@@ -1026,8 +1036,14 @@ def emit_representatives_template(path, archive, *, provenance=None, reference=N
         "# ============================================================================",
         "# Name K components ([[component]] tables): each is one (source Experiment, condition, window",
         "# set, grouping, statistic) collection of the archive with an explicit weight alpha_k. The",
-        "# weights must sum to 1 (tolerance 1e-6); every member of component k receives probability",
-        "# alpha_k / n_k, so a 600-member collection never outweighs a 60-member one by its row count.",
+        "# weights must sum to 1 (tolerance 1e-6). `member_weighting` selects how alpha_k is spread over",
+        "# the component's members: \"uniform\" (the default: every member receives alpha_k / n_k, so a",
+        "# 600-member collection never outweighs a 60-member one by its row count) or",
+        "# \"posterior_rank_median\" (consensus weighting: a member's probability is proportional to the",
+        "# median cross-posterior distance rank Experiment exported for its SGM; per_cell normalizes over",
+        "# the component's cells, per_cell_window keeps equal cell mass alpha_k / |C| and normalizes within",
+        "# each cell; a zero score is exactly zero probability, kept and shown; an all-zero normalizer is",
+        "# refused; requires statistic \"sgm\", grouping per_cell or per_cell_window and a format-2 archive).",
         "# Exact duplicate vectors are consolidated by adding their probabilities (memberships kept).",
         "# `statistic` is \"sgm\" (a retained joint draw; the default) or \"median\" (the marginal-median",
         "# vector of the group, a coordinate-wise composite, never a sampled row). `rationale` records",
@@ -1051,14 +1067,56 @@ def emit_representatives_template(path, archive, *, provenance=None, reference=N
     ]
     if reference:
         out.append("# reference (comparison only): " + ", ".join(f"{k} {v:.6g}" for k, v in reference.items()))
-    out += ["", "# Available components (uncomment, set the weights so they sum to 1):"]
+    avail = component_weighting_availability(archive)
+    out += ["", f"# member_weighting policies: {list(MEMBER_WEIGHTINGS)}; archive format {archive.get('format_version', 1)}"
+            + (" (compatibility scores present)" if archive.get("compatibility") else " (no compatibility scores: posterior_rank_median "
+               "needs a format-2 archive; regenerate the Experiment report on the CPU)"),
+            "# Available components (uncomment, set the weights so they sum to 1):"]
     for (k, w, c), n in sorted(combos.items()):
         out += ["# [[component]]", f'# source_experiment = "{m.get("product_label")}"', f'# condition = "{k}"', f'# window_set = "{w}"',
-                f'# grouping = "{c}"                       # {n} representative(s)', '# statistic = "sgm"', "# weight = 1.0", ""]
+                f'# grouping = "{c}"                       # {n} representative(s)', '# statistic = "sgm"', "# weight = 1.0",
+                f'# member_weighting = "uniform"           # posterior_rank_median: {avail[(k, w, c)]}', ""]
     out += ["# Optional explicit parameter-specific treatment (shown in the report; NOT applied unless uncommented):",
             "# [override.prob_photo_bleach]", "# value = 0.05", '# reason = "<the recorded decision this value rests on>"', ""]
     Path(path).write_text("\n".join(out))
     return Path(path)
+
+
+def component_weighting_availability(archive) -> dict:
+    """Per (condition, window set, grouping) of an archive, one sentence on whether ``posterior_rank_median`` can be
+    selected: the computed-score count over the members, the unavailable reason, or 'not applicable'."""
+    a = archive["arrays"]; compat = archive.get("compatibility")
+    out = {}
+    for k, w, c, i in zip(a["kind"], a["window_set"], a["construction"], range(a["kind"].shape[0])):
+        key = (str(k), str(w), str(c))
+        out.setdefault(key, []).append(i)
+    text = {}
+    for key, idx in out.items():
+        c = key[2]
+        if c not in RANK_WEIGHTED_GROUPINGS:
+            text[key] = "not applicable to this grouping (uniform only)"
+        elif compat is None:
+            text[key] = "unavailable: archive format 1 without compatibility scores (regenerate the Experiment report on the CPU)"
+        else:
+            st = [compat["by_group"][int(i)]["status"] for i in idx]
+            n_ok = sum(1 for s in st if s == "computed")
+            if n_ok != len(st):
+                reasons = sorted(set(s for s in st if s != "computed"))
+                text[key] = f"unavailable: {len(st) - n_ok}/{len(st)} members without a computed score ({', '.join(reasons)}; " \
+                            f"a singleton reference set has no score)"
+                continue
+            # scores computed is not the same as normalizable: apply the constructor's own normalization rules
+            from .experiment_aggregation import archive_component
+            try:
+                member_probabilities("posterior_rank_median", 1.0, archive_component(archive, kind=key[0], window_set=key[1], construction=c),
+                                     where="availability")
+            except ValueError as exc:
+                reason = str(exc).split(": ", 1)[-1].split(";")[0]
+                text[key] = (f"unavailable: compatibility scores computed for {n_ok}/{len(st)} members, but the policy cannot be normalized "
+                             f"({reason}); the computed zero scores remain valid diagnostics")
+                continue
+            text[key] = f"available, compatibility scores computed for {n_ok}/{len(st)} members and normalizable"
+    return text
 
 
 def _validate_representatives_block(spec, imaging_keys, where, table=None):
@@ -1083,6 +1141,17 @@ def _validate_representatives_block(spec, imaging_keys, where, table=None):
             raise ValueError(f"{where}: [[component]] {i}.grouping={c.get('grouping')!r} must be one of {REPRESENTATIVE_GROUPINGS}.")
         if c.get("statistic", "sgm") not in REPRESENTATIVE_STATISTICS:
             raise ValueError(f"{where}: [[component]] {i}.statistic={c.get('statistic')!r} must be one of {REPRESENTATIVE_STATISTICS}.")
+        mw = c.get("member_weighting", "uniform")
+        if mw not in MEMBER_WEIGHTINGS:
+            raise ValueError(f"{where}: [[component]] {i}.member_weighting={mw!r} must be one of {MEMBER_WEIGHTINGS}; no other policy "
+                             f"exists and nothing falls back to uniform.")
+        if mw == "posterior_rank_median":
+            if c.get("statistic", "sgm") != "sgm":
+                raise ValueError(f"{where}: [[component]] {i}: member_weighting 'posterior_rank_median' requires statistic = \"sgm\": the "
+                                 f"compatibility scores describe the SGM representatives and are never reused for marginal-median vectors.")
+            if c.get("grouping") not in RANK_WEIGHTED_GROUPINGS:
+                raise ValueError(f"{where}: [[component]] {i}: member_weighting 'posterior_rank_median' is available for groupings "
+                                 f"{RANK_WEIGHTED_GROUPINGS} only; {c.get('grouping')!r} carries no rank score (select 'uniform').")
         try:
             w = float(c.get("weight"))
         except (TypeError, ValueError):
@@ -1141,20 +1210,75 @@ def check_archive_target(archive, target, *, where="candidate archive"):
     return dict(bound)
 
 
-def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, spec_path=None, target=None):
+def member_probabilities(policy, weight, comp, *, where="component"):
+    """The member contributions of ONE component under ``policy`` (see ``MEMBER_WEIGHTINGS``): ``(probabilities (n,),
+    normalizers, scores (n,) or None)``. ``comp`` is :func:`experiment_aggregation.archive_component`'s result; the
+    scores are read through each member's identity record (``compatibility``), never by archive position. Refusals:
+    a format-1 archive or missing compatibility data; any member whose score is not ``computed``; an all-zero
+    normalizer (the whole component for per_cell; any included cell for per_cell_window). A zero score keeps the member
+    with exactly zero probability."""
+    idents = comp["identities"]; n = len(idents)
+    if policy == "uniform":
+        return np.full(n, float(weight) / n), {"scope": "component", "rule": "weight / n_members", "n_members": n}, None
+    if policy != "posterior_rank_median":
+        raise ValueError(f"{where}: unknown member_weighting {policy!r}; policies are {MEMBER_WEIGHTINGS}.")
+    if not comp.get("compatibility_available"):
+        raise ValueError(f"{where}: member_weighting 'posterior_rank_median' needs the compatibility scores of a format-2 candidate archive; "
+                         f"this archive is format {comp.get('archive_format_version')} without them. Regenerate the Experiment report on the "
+                         f"CPU (--regenerate-report --review-label <TOKEN>, with --cloud-sources when the product stores no clouds) and "
+                         f"name the regenerated archive.")
+    bad = [(d["cell"], d["chunk"], (d.get("compatibility") or {}).get("status")) for d in idents
+           if (d.get("compatibility") or {}).get("status") != "computed"]
+    if bad:
+        raise ValueError(f"{where}: {len(bad)} member(s) carry no computed compatibility score (cell, chunk, status): {bad[:6]}"
+                         f"{' …' if len(bad) > 6 else ''}. A singleton reference set has no score; select 'uniform' for this component "
+                         f"or a selection with peers. Nothing falls back silently.")
+    s = np.asarray([float(d["compatibility"]["score"]) for d in idents], float)
+    if not np.all(np.isfinite(s)) or np.any(s < 0):
+        raise ValueError(f"{where}: the compatibility scores must be finite and non-negative; got {s.tolist()[:6]}.")
+    if comp["construction"] == "per_cell":
+        tot = float(s.sum())
+        if tot <= 0:
+            raise ValueError(f"{where}: every per-cell score of this component is zero (sum {tot}); the selection cannot be normalized "
+                             f"and is refused (no uniform fallback, no floor).")
+        return float(weight) * s / tot, {"scope": "component", "rule": "weight * score / sum of the component's scores",
+                                         "sum_of_scores": tot, "n_members": n}, s
+    if comp["construction"] != "per_cell_window":
+        raise ValueError(f"{where}: member_weighting 'posterior_rank_median' is available for {RANK_WEIGHTED_GROUPINGS} only.")
+    cells = sorted({int(d["cell"]) for d in idents}); C = len(cells)
+    p = np.empty(n); sums = {}
+    for c in cells:
+        idx = [j for j, d in enumerate(idents) if int(d["cell"]) == c]
+        tot = float(s[idx].sum()); sums[str(c)] = tot
+        if tot <= 0:
+            raise ValueError(f"{where}: cell {c}: every selected-window score is zero (sum {tot}); the selection is refused rather than "
+                             f"dropping the cell or redistributing its mass (no uniform fallback, no floor).")
+        p[idx] = (float(weight) / C) * s[idx] / tot
+    return p, {"scope": "within each cell", "rule": "(weight / n_cells) * score / sum of that cell's selected-window scores",
+               "n_cells": C, "cell_mass": float(weight) / C, "sum_of_scores_by_cell": sums, "n_members": n}, s
+
+
+def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, spec_path=None, target=None, force_uniform=False):
     """Build the weighted representative distribution a finalized ``empirical_representatives`` spec declares
     from the loaded candidate ``archive``. Returns ``(vectors_log10, probabilities, record)``:
 
-    - every component's members get probability ``weight / n_members`` (the documented normalization);
+    - every component's members get their contributions under its ``member_weighting`` (:func:`member_probabilities`:
+      ``uniform`` = ``weight / n_members``; ``posterior_rank_median`` = the hierarchical normalization of Experiment's
+      compatibility scores, read through each member's identity); the contributions of a component sum to its weight;
     - exact duplicate vectors are consolidated by ADDING their probabilities; every membership is retained
-      in the record (component index and member identity); rows are never deduplicated by displayed values;
+      in the record (component index and member identity); rows are never deduplicated by displayed values; a zero
+      contribution stays a zero contribution of that membership (nothing is transferred between memberships);
     - ``[override.<KEY>]`` tables replace that coordinate in every vector, recorded as a transformation with
       the replaced values' range; the result is then no longer the original joint draws and the record says so;
-    - the record names the archive (path, checksum, product, target binding), each component's identities and
-      probabilities, the rationale, the outside-prior mass and whether the rows are sampled draws;
+      the scores describe the ORIGINAL SGMs and are not recomputed for transformed points;
+    - the record names the archive (path, checksum, product, target binding), each component's identities, scores and
+      probabilities, the rationale, the zero counts, the effective number of rows, the outside-prior mass and whether
+      the rows are sampled draws; when a component is rank-weighted, the record also carries the equal-member baseline
+      (the same components, masses and overrides with uniform members, aligned to the same stored rows);
     - ``target`` (``condition``, ``timing_label``, optional ``project_alias``, ``n_frames``) is the identity of the
       artifact under construction: it must equal the archive's recorded target, and every component's recording
-      condition must equal it (a cross-condition Experiment application stays an inspection result).
+      condition must equal it (a cross-condition Experiment application stays an inspection result);
+    - ``force_uniform`` builds the equal-member baseline of a spec (every component uniform; nothing else changes).
     """
     from .experiment_aggregation import archive_component
     keys = [e["KEY"] for e in table]
@@ -1180,24 +1304,44 @@ def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, sp
                              f"{target['condition']!r}; the archive's application of this estimator to {m.get('condition_labels')} "
                              f"is a labeled inspection result, not a nuisance source of another condition.")
         stat = c.get("statistic", "sgm")
+        policy = "uniform" if force_uniform else str(c.get("member_weighting", "uniform"))
         comp = archive_component(archive, kind=str(c["condition"]), window_set=str(c["window_set"]),
                                  construction=str(c["grouping"]), statistic=stat)
         n = comp["vectors"].shape[0]
+        p_members, normalizers, scores = member_probabilities(policy, w, comp, where=f"[[component]] {i}")
+        if abs(float(p_members.sum()) - float(w)) > 1e-9:
+            raise ValueError(f"[[component]] {i}: member contributions sum to {p_members.sum()!r}, not the component mass {w!r}.")
+        members = []
         for j in range(n):
-            vectors.append(comp["vectors"][j]); probs.append(w / n); memberships.append((i, j))
+            vectors.append(comp["vectors"][j]); probs.append(float(p_members[j])); memberships.append((i, j))
+            members.append({**comp["identities"][j], "probability": float(p_members[j]),
+                            "score_used": None if scores is None else float(scores[j]), "stored_row": None})   # stored_row set below
+        within = p_members / float(w) if w > 0 else p_members
         comp_records.append({"index": i, "source_experiment": str(c["source_experiment"]), "condition": str(c["condition"]),
                              "window_set": str(c["window_set"]), "grouping": str(c["grouping"]), "statistic": stat,
-                             "weight": float(w), "n_members": int(n), "member_probability": float(w / n),
+                             "weight": float(w), "n_members": int(n), "member_weighting": policy,
+                             "member_probability": float(w / n) if policy == "uniform" else None,
+                             "normalizers": normalizers, "n_positive_members": int(np.sum(p_members > 0)), "n_zero_members": int(np.sum(p_members == 0)),
+                             "probability_range": [float(p_members.min()), float(p_members.max())],
+                             "effective_members": float(1.0 / np.sum(within ** 2)) if w > 0 and np.sum(within ** 2) > 0 else None,
+                             "effective_members_scope": "1 / sum(p^2) over this component's members with their contributions normalized to the "
+                                                        "component mass; a concentration measure, not a count of independent experiments",
+                             "score_source": None if scores is None else {"protocol": ((archive.get("compatibility") or {}).get("protocol") or {}).get("name"),
+                                                                           "statistic_scored": "sgm", "note": "the scores describe the original SGM "
+                                                                           "candidates; explicit overrides transform the stored rows afterwards"},
                              "window_set_chunks": m.get("window_sets", {}).get(str(c["window_set"])),
-                             "members": comp["identities"], "is_sampled_rows": stat == "sgm"})
+                             "members": members, "is_sampled_rows": stat == "sgm"})
     V = np.asarray(vectors, dtype=float); P = np.asarray(probs, dtype=float)
     uniq, inverse = np.unique(V, axis=0, return_inverse=True)
     inverse = np.asarray(inverse).ravel()
     probabilities = np.zeros(uniq.shape[0]); groups = [[] for _ in range(uniq.shape[0])]
     for r, (p_, mem) in enumerate(zip(P, memberships)):
-        probabilities[inverse[r]] += p_; groups[inverse[r]].append({"component": mem[0], "member": mem[1]})
+        probabilities[inverse[r]] += p_; groups[inverse[r]].append({"component": mem[0], "member": mem[1], "contribution": float(p_)})
+        # the member's stored row, carried by identity through consolidation (an override may later make distinct rows equal)
+        comp_records[mem[0]]["members"][mem[1]]["stored_row"] = int(inverse[r])
     probabilities = probabilities / probabilities.sum()
     consolidated = [{"row": int(u), "memberships": g, "probability": float(probabilities[u])} for u, g in enumerate(groups) if len(g) > 1]
+    rank_weighted = any(cr["member_weighting"] != "uniform" for cr in comp_records)
     overrides, over = {}, (spec.get("override", {}) or {})
     final = uniq.copy()
     for k, row in over.items():
@@ -1224,13 +1368,31 @@ def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, sp
                           "coverage": m.get("coverage"), "coverage_note": m.get("coverage_note")},
               "spec_path": None if spec_path is None else str(spec_path),
               "rationale": str(block.get("rationale")).strip(), "components": comp_records,
-              "normalization": "member probability = component weight / component member count; exact duplicates consolidated by adding probabilities",
+              "member_weightings": [cr["member_weighting"] for cr in comp_records],
+              "normalization": ("member contribution = component weight / component member count (uniform) or the hierarchical normalization "
+                                "of Experiment's median compatibility ranks (posterior_rank_median: per_cell = weight * score / sum of scores; "
+                                "per_cell_window = equal cell mass weight / n_cells, then score / sum of that cell's selected-window scores); "
+                                "exact duplicates consolidated by adding contributions; a zero score is exactly zero probability"),
               "n_member_rows": int(V.shape[0]), "n_unique_rows": int(uniq.shape[0]), "consolidated": consolidated,
+              "n_zero_member_rows": int(np.sum(P == 0)), "n_zero_probability_rows": int(np.sum(probabilities == 0)),
+              "effective_rows": float(1.0 / np.sum(probabilities ** 2)),
+              "effective_rows_scope": "1 / sum(p^2) over the stored (consolidated) rows of the whole artifact; a concentration measure of the "
+                                      "sampling probabilities, not a count of independent experiments and not a calibrated uncertainty",
               "overrides": overrides,
               "is_sampled_rows": bool(all(c["is_sampled_rows"] for c in comp_records) and not overrides),
               "outside_prior_mass": float(probabilities[outside_rows].sum()),
               "outside_prior_by_key": {k: float(probabilities[(final[:, j] < lo[j]) | (final[:, j] > hi[j])].sum()) for j, k in enumerate(keys)},
               "joint_uncertainty": "none beyond the dispersion of the selected representatives; the input posteriors' uncertainty is not carried"}
+    if rank_weighted and not force_uniform:
+        # the equal-member baseline: the same selection, consolidation and overrides with uniform members, aligned row by row
+        base_final, base_p, base_rec = representatives_from_spec(spec, archive, table, prior_low, prior_high, spec_path=spec_path,
+                                                                 target=target, force_uniform=True)
+        if base_final.shape != final.shape or not np.array_equal(base_final, final):
+            raise ValueError("internal: the equal-member baseline does not align with the selected rows.")
+        record["equal_member_baseline"] = {"probabilities": [float(v) for v in base_p], "effective_rows": base_rec["effective_rows"],
+                                           "n_zero_probability_rows": base_rec["n_zero_probability_rows"],
+                                           "definition": "the same components, component masses, duplicate consolidation and overrides with "
+                                                         "member_weighting = uniform in every component; aligned to the stored rows"}
     return final, probabilities, record
 
 

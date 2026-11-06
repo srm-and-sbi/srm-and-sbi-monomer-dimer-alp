@@ -1,0 +1,13 @@
+kind,window_set,construction,cell_context,candidate_group,candidate_cell,candidate_chunk,reference_group,reference_cell,reference_chunk,reference_draws,rank
+FAB,all,per_cell,,6,3,-1,7,7,-1,60,0.0
+FAB,all,per_cell,,6,3,-1,8,11,-1,60,0.0
+FAB,all,per_cell,,7,7,-1,6,3,-1,60,0.0
+FAB,all,per_cell,,7,7,-1,8,11,-1,60,0.0
+FAB,all,per_cell,,8,11,-1,6,3,-1,60,0.0
+FAB,all,per_cell,,8,11,-1,7,7,-1,60,0.0
+FAB,all,per_cell_window,3,0,3,0,1,3,1,30,0.6666666666666666
+FAB,all,per_cell_window,3,1,3,1,0,3,0,30,0.7666666666666667
+FAB,all,per_cell_window,7,2,7,0,3,7,1,30,0.9666666666666667
+FAB,all,per_cell_window,7,3,7,1,2,7,0,30,0.9333333333333333
+FAB,all,per_cell_window,11,4,11,0,5,11,1,30,0.9666666666666667
+FAB,all,per_cell_window,11,5,11,1,4,11,0,30,0.9666666666666667

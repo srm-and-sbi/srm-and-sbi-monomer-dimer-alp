@@ -1,0 +1,51 @@
+{
+  "protocol_scale_conflict": {
+    "accepted": false,
+    "error": "AggregationError: /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/probe_archives/protocol_scale_conflict.npz: the protocol sgm_scale [0.6, 0.75, 0.75, 0.75, 1.5, 1.0] is not the archive's [0.3, 0.75, 0.75, 0.75, 1.5, 1.0]; the stored ranks were computed under another metric."
+  },
+  "wrong_reference_draw_counts": {
+    "accepted": false,
+    "error": "AggregationError: /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/probe_archives/wrong_reference_draw_counts.npz: block 0 (FAB/all/per_cell): reference draw counts [1, 1, 1, 1, 1, 1] are not the referenced groups' pooled draw counts [100000, 100000, 100000, 100000, 100000, 100000]."
+  },
+  "split_peer_population": {
+    "accepted": false,
+    "error": "AggregationError: /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/probe_archives/split_peer_population.npz: block 0 (FAB/all/per_cell) holds groups [600, 601, 602, 603, 604, 605, 606, 607, 608, 609, 610, 611] but the context's complete peer population is [600, 601, 602, 603, 604, 605, 606, 607, 608, 609, 610, 611] (60 groups): a block must hold exactly the context's groups, never a subset or a foreign group."
+  },
+  "zero_component_uniform": {
+    "valid_builder_result": true,
+    "zero_component_record": {
+      "weight": 0.0,
+      "n_members": 60,
+      "n_positive_members": 0,
+      "n_zero_members": 60,
+      "effective_members": null
+    },
+    "report_completed": true,
+    "reported_members_positive_zero": "60 / 0 / 60",
+    "dry_run_completed": true
+  },
+  "zero_component_posterior_rank_median": {
+    "valid_builder_result": true,
+    "zero_component_record": {
+      "weight": 0.0,
+      "n_members": 60,
+      "n_positive_members": 0,
+      "n_zero_members": 60,
+      "effective_members": null
+    },
+    "report_completed": true,
+    "reported_members_positive_zero": "60 / 0 / 60",
+    "dry_run_completed": true
+  },
+  "override_collision_row_memberships": {
+    "stored_rows": 60,
+    "unique_final_vectors": 1,
+    "rows_missing_memberships": 0,
+    "source_members": 60
+  },
+  "all_zero_policy_availability": {
+    "description": "unavailable: compatibility scores computed for 3/3 members, but the policy cannot be normalized (every per-cell score of this component is zero (sum 0.0)); the computed zero scores remain valid diagnostics",
+    "build_accepted": false,
+    "error": "[[component]] 0: every per-cell score of this component is zero (sum 0.0); the selection cannot be normalized and is refused (no uniform fallback, no floor)."
+  }
+}

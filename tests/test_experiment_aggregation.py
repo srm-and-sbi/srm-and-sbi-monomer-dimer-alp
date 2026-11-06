@@ -236,8 +236,9 @@ def test_exports_round_trip_and_the_archive_marks_medians_as_composites():
     coll = agg.cloud_from_product(a, m)
     res = agg.aggregate(coll, TABLE, window_sets={"all": None, "opening": (0,)})
     with tempfile.TemporaryDirectory() as tmp:
-        man = agg.export_manifest(res, product_label="P", condition_labels=["FAB"], target=TARGET)
-        paths = agg.write_aggregation_exports(res, tmp, TABLE, manifest=man)
+        compat = agg.compute_compatibility(res, coll)
+        man = agg.export_manifest(res, product_label="P", condition_labels=["FAB"], target=TARGET, compatibility=compat)
+        paths = agg.write_aggregation_exports(res, tmp, TABLE, manifest=man, compatibility=compat)
         arc = agg.load_candidate_archive(paths["archive"])
         assert arc["manifest"]["product_label"] == "P" and arc["keys"] == KEYS and arc["manifest"]["target"] == TARGET
         comp = agg.archive_component(arc, kind="FAB", window_set="all", construction="per_cell")
@@ -322,9 +323,11 @@ def test_extended_report_contains_the_section_for_live_and_saved_rendering():
 
 def _archive(tmp, rng):
     a = _product_with_clouds(rng, IDS)
-    res = agg.aggregate(agg.cloud_from_product(a, S.decode_manifest(a[S.MANIFEST_KEY])), TABLE, window_sets={"all": None, "opening": (0,)})
-    man = agg.export_manifest(res, product_label="P", condition_labels=["FAB"], target=TARGET)
-    paths = agg.write_aggregation_exports(res, tmp, TABLE, manifest=man)
+    coll = agg.cloud_from_product(a, S.decode_manifest(a[S.MANIFEST_KEY]))
+    res = agg.aggregate(coll, TABLE, window_sets={"all": None, "opening": (0,)})
+    compat = agg.compute_compatibility(res, coll)
+    man = agg.export_manifest(res, product_label="P", condition_labels=["FAB"], target=TARGET, compatibility=compat)
+    paths = agg.write_aggregation_exports(res, tmp, TABLE, manifest=man, compatibility=compat)
     return agg.load_candidate_archive(paths["archive"]), res
 
 
@@ -515,9 +518,11 @@ def test_r1_the_archive_is_bound_to_its_target_condition_and_timing():
         _expect(ValueError, lambda: ndli.representatives_from_spec(spec, unbound, TABLE, PLO, PHI, target=TARGET), "records no target binding")
         # a cross-condition application (the estimator applied to INLB recordings) stays an inspection result
         cross = _product_with_clouds(rng, [(0, c, w) for c in (3, 7) for w in range(4)] + [(1, 5, w) for w in range(4)], kinds=("FAB", "INLB"))
-        r2 = agg.aggregate(agg.cloud_from_product(cross, S.decode_manifest(cross[S.MANIFEST_KEY])), TABLE, window_sets={"all": None})
-        man = agg.export_manifest(r2, product_label="P", condition_labels=["FAB", "INLB"], target=TARGET)
-        paths = agg.write_aggregation_exports(r2, Path(tmp) / "cross", TABLE, manifest=man)
+        coll2 = agg.cloud_from_product(cross, S.decode_manifest(cross[S.MANIFEST_KEY]))
+        r2 = agg.aggregate(coll2, TABLE, window_sets={"all": None})
+        compat2 = agg.compute_compatibility(r2, coll2)
+        man = agg.export_manifest(r2, product_label="P", condition_labels=["FAB", "INLB"], target=TARGET, compatibility=compat2)
+        paths = agg.write_aggregation_exports(r2, Path(tmp) / "cross", TABLE, manifest=man, compatibility=compat2)
         arc2 = agg.load_candidate_archive(paths["archive"])
         inlb = {**spec, "component": [dict(_comp("per_cell", 1.0), condition="INLB")]}
         _expect(ValueError, lambda: ndli.representatives_from_spec(inlb, arc2, TABLE, PLO, PHI, target=TARGET), "cannot enter the native Nuisance DLI of 'FAB'")

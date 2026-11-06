@@ -809,6 +809,35 @@ Component weights must sum to one within 1e-6. Accepted numerical residuals are 
 before storage/sampling; the component weights remain recorded as the scientific selection. Larger errors
 are refused. Every draw is a complete stored row. Legacy unweighted artifacts retain uniform sampling.
 
+**Member weighting within a component.** The constructor selects, per component, how its mass alpha_k is
+spread over its n_k members (`member_weighting`). The default `uniform` gives every member alpha_k / n_k and
+preserves existing specifications. `posterior_rank_median` uses the compatibility scores s that Experiment
+exports for the SGM representatives (below) and constructs a **consensus-weighted empirical distribution**.
+For one SGM per cell,
+
+$$
+p_{kc}=\alpha_k\frac{s_c}{\sum_{d\in C_k}s_d}.
+$$
+
+For cell–window representatives the score is calculated within each cell, and equal total cell mass is
+retained inside the component:
+
+$$
+p_{kcw}=\frac{\alpha_k}{|C_k|}\,\frac{s_{cw}}{\sum_{u\in S_k}s_{cu}}.
+$$
+
+Normalizing all window scores together would alter the cells' total masses according to their score totals;
+that is not this policy. Cell-level and within-cell weighting are alternative constructions and are never
+multiplied together. Valid windows and cells may receive zero probability because their representatives differ
+from the reference population: zero probability is a sampling outcome, not a data-quality classification, and
+it is kept and shown (no floor, no clipping, no removal). Every selected score must be available in the
+matching archive context; a required normalizing sum of zero, an unsupported statistic or grouping, a missing
+score, an unknown policy or an incompatible archive is an explicit refusal, never a fallback to uniform. A
+format-1 candidate archive still supplies a uniform selection; rank weighting requires a CPU regeneration of
+the Experiment report (format 2). The resulting distribution emphasizes agreement among representatives; it
+need not preserve the original proportions of acquisition batches, a consequence to describe when a selection
+is made.
+
 **Reports and interpretation.** For every requested set, Experiment compares normalized marginal empirical
 CDFs and joint projections. Temporal plots show cell-window and position-level SGMs with separately labeled
 source-posterior intervals; matched per-cell plots compare window selections. The report's visible language
@@ -824,6 +853,62 @@ Ranges over representatives use the inverse weighted empirical CDF and describe 
 posterior quantiles retain the existing interpolation in estimator coordinates and transformation to physical
 units. These quantities are not interchangeable credible intervals. The source-uncertainty table names the
 first multi-position set it summarizes; every group's quantiles remain in the archive.
+
+**Posterior compatibility of SGM representatives.** Compatibility diagnostics describe how central an SGM is
+relative to the posterior clouds of its peers. The method compares complete joint vectors in estimator
+coordinates divided by the existing prior widths (for the detector, all six coordinates are log10 and are not
+transformed again). Let v_i be a candidate SGM and v_j the reference group's SGM; the reference contains N_j
+retained samples z_jm (for one SGM per cell, the equal-window mixture of the cell's selected windows; for one
+SGM per cell–window, the window's own cloud). Its distance rank for the candidate is
+
+$$
+R_{ij}=\frac{1}{N_j}\sum_{m=1}^{N_j}\mathbf 1\{d(z_{jm},v_j)>d(v_i,v_j)\},\qquad i\ne j,\qquad
+d(a,b)=\|(a-b)/\Delta\|_2 .
+$$
+
+A rank near one means most reference draws are farther from their own SGM than the candidate is; a rank near
+zero means almost every reference draw is closer. Each reference's own spread supplies the percentile scale,
+and no fixed distance cutoff is introduced. Rows are candidates, columns are reference posteriors, self
+comparisons are excluded by group identity, and the matrix is generally asymmetric. The candidate's score is
+the ordinary median of the non-diagonal row entries,
+
+$$
+s_i=\operatorname{median}_{j\ne i}R_{ij},
+$$
+
+averaging the two middle reference ranks when their number is even (this is distinct from the inverse weighted
+empirical CDF used for representative-distribution summaries). A median score of zero means that a majority of the
+candidate's reference ranks are zero; some references may still assign it a high rank. A score of zero is valid and
+differs from an unavailable score. The rank describes radial centrality, not posterior density, membership in a joint credible
+region, or the probability that an experimental recording is valid.
+
+| Representative | Reference groups | Availability |
+|---|---|---|
+| One SGM per cell | Other included cells, using the same acquisition-window set and condition | At least two included cells |
+| One SGM per cell–window | Other selected windows within the same cell | At least two selected windows |
+| One SGM per window position | Uniform selection remains available; no rank policy is applied | Rank policy not applicable |
+| One SGM for the included dataset | No same-level peer reference | Rank policy not applicable |
+
+For opening-only selection, per-cell scoring remains available across cells, while within-cell window scoring
+is unavailable (`insufficient_peers`: no score, zero references, never a fabricated 0 or 1). Equal vectors or
+equivalent point constructions do not imply identical reference populations or scoring availability, and no
+score is copied between equivalent groups. Experiment reports the matrices, median scores, reference identities
+and coverage with its existing aggregation results, in a compact subsection: a cell-to-cell matrix with an
+aligned median-score strip for each condition and requested window set, a cells-by-window-start-time heat map
+of within-cell median scores when more than one window is selected, a linked atlas containing every cell's
+window-to-window matrix (an across-cell median never replaces the individual matrices), and a scope and
+availability table that counts zero scores as centrality outcomes. All compatibility plots use a common 0–1
+scale, stable identity and time ordering and gray excluded self comparisons; matrix colors do not classify
+raw-data quality. The candidate archive (format 2) stores the scores, statuses, reference counts and the rank
+blocks under the protocol `sgm_distance_rank_v1` beside the unchanged candidate arrays; `aggregation_groups.csv`
+gains the score, status, reference-count and SGM-outside-prior-key columns and `aggregation_compatibility.csv`
+lists every pairwise rank. The reader of the archive requires distinct scientific identities (one group per cell in
+a per_cell context, one per selected window position in a per_cell_window context), derives every eligible reference
+context from those groups and requires one block over exactly that context's peer population, reference draw counts equal to the
+referenced groups' pooled draws and a protocol scale equal to the archive's; a split, trimmed or rescaled archive is
+refused rather than normalized. Experiment displays raw median ranks and never turns them into sampling
+probabilities. Training-prior flags remain separate; physically valid extrapolated values are not clipped or
+assigned zero probability because they lie outside the training prior.
 
 Unrestricted clouds are not clipped. Valid values outside the detector training box remain labeled as
 extrapolations; the artifact records `pool_mode = "unrestricted"` when positive mass lies outside that box.
@@ -863,12 +948,19 @@ are recorded scientific choices. The route has three steps:
 2. **Record the selection.** The analysis script's `--emit-representatives-template --candidate-archive <path>`
    reads the archive on CPU, displays the same representative summaries as Experiment, and emits a skeleton
    with components commented out. The user names the components, their weights, the statistic (`sgm` or `median`),
-   and rationale. Optional `[override.<KEY>]` tables declare physical values and reasons. No production selection
-   is inferred from the skeleton or an illustrative example.
+   the member-weighting policy per component (`uniform`, the default, or `posterior_rank_median`; the skeleton
+   states for every component whether compatibility scores are available) and rationale. Optional
+   `[override.<KEY>]` tables declare physical values and reasons. No production selection is inferred from the
+   skeleton or an illustrative example.
 3. **Validate and build on CPU.** `--build --dry-run` checks archive identity, target binding, component
-   definitions, coverage, weights, and physical values. The build writes the selected complete vectors,
-   probabilities, manifest, and a report with weighted marginal and joint plots using Experiment's plotting
-   functions. It does not load the estimator or repeat neural sampling. Generation calls `require_nuisance_dli`
+   definitions, coverage, weights, member policies, and physical values, and states truthfully how each
+   component's mass reaches its members (positive and zero members, the probability range, the effective number
+   of members). The build writes the selected complete vectors, probabilities, manifest, and a report with the
+   selection table, the stored probabilities beside the equal-member baseline (the same components, masses and
+   overrides with uniform members), the six-parameter CDF comparison of the two, the components view, the joint
+   projections and per-member and per-row CSV exports, using Experiment's plotting functions. The report states
+   the effective number of representatives, 1/sum(p_i^2), with its normalization scope; it is a concentration
+   measure, not a count of independent experiments. It does not load the estimator or repeat neural sampling. Generation calls `require_nuisance_dli`
    to load the chosen artifact; it never rebuilds one. The per-simulation `Nuisance_DLI_Theta_Set` record is written
    later when the biology DLI stage samples the artifact.
 

@@ -87,7 +87,7 @@ from srm_and_sbi_monomer_dimer_alp import detector_parameterization as det
 from srm_and_sbi_monomer_dimer_alp.diagnostics import DiagnosticReporter
 from srm_and_sbi_monomer_dimer_alp.inference_support import resolve_topology
 from srm_and_sbi_monomer_dimer_alp.labeling import LABELING_CONDITIONS
-from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming
+from srm_and_sbi_monomer_dimer_alp.parameterization import PARAMETERS, RunTiming, to_physical
 
 
 def _resolve(total_time_seconds, condition):
@@ -491,10 +491,12 @@ def _build_representatives(args, R, block, spec_dict, art, spec):
               f"{bound.get('condition')} {bound.get('timing_label')} = this run's {target['condition']} {target['timing_label']}).")
         for c in rec["components"]:
             print(f"    component {c['index']}: {c['condition']} / {c['window_set']} / {c['grouping']} / {c['statistic']}: "
-                  f"weight {c['weight']:.4f} over {c['n_members']} member(s) -> {c['member_probability']:.6f} each")
+                  f"weight {c['weight']:.4f} over {c['n_members']} member(s): {_policy_line(c)}")
         print(f"    {rec['n_member_rows']} member rows -> {rec['n_unique_rows']} unique vectors ({len(rec['consolidated'])} consolidated); "
-              f"overrides {list(rec['overrides']) or 'none'}; outside-prior mass {rec['outside_prior_mass']:.4f}")
-        print(f"    would write:\n    {art}  (+ report + weighted marginal/joint figures)")
+              f"{rec['n_zero_probability_rows']} stored row(s) at zero probability; effective rows 1/sum(p^2) = {rec['effective_rows']:.2f} "
+              f"(a concentration measure, not independent experiments); overrides {list(rec['overrides']) or 'none'}; "
+              f"outside-prior mass {rec['outside_prior_mass']:.4f}")
+        print(f"    would write:\n    {art}  (+ report + probability, marginal and joint figures + member/row CSV exports)")
         return
     nu = ndli.build_nuisance_dli(spec_dict, R["imaging_keys"], R["plo"], R["phi"], table=det.DETECTOR_PARAMETERIZATION,
                                  archive=archive, spec_path=spec, target=target)
@@ -503,6 +505,27 @@ def _build_representatives(args, R, block, spec_dict, art, spec):
     print(f"Built Nuisance_DLI (empirical_representatives, {nu.samples.shape[0]} weighted vector(s), "
           f"{len(nu.selection['components'])} component(s), pool_mode={nu.pool_mode}) and saved to:\n    {art}\n"
           f"Analysis (report + figures):\n    {report_dir}")
+
+
+def _member_counts(c):
+    """(positive, zero, effective-members text) of a component record, read from the record (a legacy record without the
+    counts is a positive-mass uniform component); a zero-mass component has no defined effective count."""
+    n = int(c["n_members"])
+    n_pos = int(c.get("n_positive_members", n if float(c.get("weight", 0.0)) > 0 else 0))
+    n_zero = int(c.get("n_zero_members", n - n_pos))
+    eff = c.get("effective_members", n if c.get("member_weighting", "uniform") == "uniform" and float(c.get("weight", 0.0)) > 0 else None)
+    eff_text = "undefined (component mass 0: no member receives probability)" if eff is None else f"{float(eff):.2f}"
+    return n_pos, n_zero, eff_text
+
+
+def _policy_line(c) -> str:
+    """One console line on how a component's mass reached its members (truthful for unequal members and for a zero mass)."""
+    n_pos, n_zero, eff = _member_counts(c)
+    if c.get("member_weighting", "uniform") == "uniform":
+        return f"uniform -> {float(c['member_probability']):.6f} each ({n_pos} positive, {n_zero} zero); effective members {eff}"
+    lo, hi = c["probability_range"]
+    return (f"{c['member_weighting']} -> {n_pos} positive and {n_zero} zero member(s); "
+            f"probabilities {lo:.6f} – {hi:.6f}; effective members {eff} of {c['n_members']}")
 
 
 def _emit_representatives_template(args, R):
@@ -528,6 +551,10 @@ def _emit_representatives_template(args, R):
         print(f"    {row['kind']:9s} {row['window_set']:10s} {row['construction']:20s} {row['n']:4d} " + " ".join(f"{v:12.5g}" for v in med))
     if ref:
         print(f"    {'reference':9s} {'SEL':10s} {'(comparison only)':20s} {1:4d} " + " ".join(f"{ref[k]:12.5g}" for k in keys))
+    print(f"  member_weighting policies: {list(ndli.MEMBER_WEIGHTINGS)} (archive format {archive.get('format_version', 1)}"
+          f"{'; compatibility scores present' if archive.get('compatibility') else '; no compatibility scores'}); posterior_rank_median per component:")
+    for (k, w, c), text in sorted(ndli.component_weighting_availability(archive).items()):
+        print(f"    {k:9s} {w:10s} {c:20s} {text}")
     spec = ndli.spec_path(R["posit_dir"], R["paths"].project_alias, R["timing_label"], nuisance_tag=args.nuisance_tag)
     if spec.exists():
         raise SystemExit(f"Spec exists already; refusing to overwrite it:\n    {spec}\nEdit it, or pass another --nuisance-tag.")
@@ -708,32 +735,59 @@ def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
 
 
 def _report_representatives(reporter, nu, R, archive):
-    """The weighted artifact's record: components and probabilities, consolidation, overrides, the weighted-CDF
-    marginal summary (physical units), and the final weighted marginal and joint figures beside the components."""
-    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import figure_joint_corner, figure_marginal_cdfs
+    """The weighted artifact's record: the selection table (component masses, member policy, positive/zero members, probability
+    range, effective representatives), consolidation, overrides, the weighted-CDF marginal summary (physical units), the
+    stored-probability figure beside the equal-member baseline, the six-parameter CDF comparison of the selected
+    probabilities against that baseline, the components view, the joint projections, and the member/row CSV exports."""
+    import csv
+    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import figure_joint_corner, figure_marginal_cdfs, figure_member_probabilities
     sel = nu.selection; keys = list(nu.parameter_keys); table = det.DETECTOR_PARAMETERIZATION
+    comps = sel["components"]
+    policies = sorted({c.get("member_weighting", "uniform") for c in comps})
+    rank_weighted = any(p != "uniform" for p in policies)
     reporter.check("representative_probabilities_normalized", abs(float(nu.probabilities.sum()) - 1.0) <= ndli.WEIGHT_NORMALIZATION_TOLERANCE,
-                   f"{nu.samples.shape[0]} vectors; total probability {nu.probabilities.sum():.9f}",
-                   note="the stored per-vector probabilities sum to one; every member of component k carries weight_k / n_k.")
-    reporter.table("empirical_representatives: components",
-                   ["component", "source Experiment", "condition", "window set", "grouping", "statistic", "weight", "members", "probability per member"],
-                   [[c["index"], c["source_experiment"], c["condition"], c["window_set"], c["grouping"], c["statistic"], f"{c['weight']:.6f}",
-                     c["n_members"], f"{c['member_probability']:.6f}"] for c in sel["components"]],
+                   f"{nu.samples.shape[0]} vectors; total probability {nu.probabilities.sum():.9f}; {int(np.sum(nu.probabilities == 0))} row(s) at zero",
+                   note="the stored per-vector probabilities sum to one; a component's members carry weight_k / n_k under uniform weighting, or the "
+                        "normalized median compatibility ranks under posterior_rank_median (a zero score is exactly zero probability, kept).")
+    rows = []
+    for c in comps:
+        pol = c.get("member_weighting", "uniform")
+        n_pos, n_zero, eff = _member_counts(c)
+        if pol == "uniform":
+            rng_ = f"{float(c['member_probability']):.6f} each"
+        else:
+            rng_ = f"{c['probability_range'][0]:.6f} – {c['probability_range'][1]:.6f}"
+        rows.append([c["index"], c["source_experiment"], c["condition"], c["window_set"],
+                     f"{agg.display_name(c['grouping'], statistic=c['statistic'], short=True)} (`{c['grouping']}`)", c["statistic"],
+                     f"{c['weight']:.6f}", pol, f"{c['n_members']} / {n_pos} / {n_zero}", rng_, eff])
+    reporter.table("empirical_representatives: selection",
+                   ["component", "source Experiment", "condition", "window set", "grouping", "statistic", "component mass", "member policy",
+                    "members / positive / zero", "member probability (range)", "effective members 1/sum(p^2)"], rows,
                    note=f"rationale: {sel['rationale']} | archive {sel['archive']['path']} (sha256 {sel['archive']['sha256'][:12]}…)"
                         + (f" | NOTE {sel['archive']['coverage_note']}" if sel["archive"].get("coverage_note") else "")
-                        + f" | {sel['n_member_rows']} member rows -> {sel['n_unique_rows']} unique vectors; "
+                        + f" | {sel['n_member_rows']} member rows -> {sel['n_unique_rows']} unique vectors ({sel.get('n_zero_probability_rows', 0)} at zero "
+                        f"probability); effective rows 1/sum(p^2) over the stored rows = {sel.get('effective_rows', float('nan')):.2f}"
+                        + (f" (equal-member baseline {sel['equal_member_baseline']['effective_rows']:.2f})" if sel.get("equal_member_baseline") else "")
+                        + "; the effective number is a concentration measure of the sampling probabilities, within the stated normalization scope, "
+                        "not a count of independent experiments | "
                         + ("the rows are retained joint draws (SGMs)" if sel["is_sampled_rows"] else
-                           "the rows are NOT all original joint draws (a median statistic or an override is involved)"))
+                           "the rows are NOT all original joint draws (a median statistic or an override is involved)")
+                        + ("; the compatibility scores describe the original SGM candidates" if rank_weighted else ""))
     if sel["consolidated"]:
-        reporter.table("empirical_representatives: consolidated duplicates (probabilities added, memberships kept)",
-                       ["unique row", "memberships (component, member)", "probability"],
-                       [[c["row"], ", ".join(f"({m['component']}, {m['member']})" for m in c["memberships"]), f"{c['probability']:.6f}"]
-                        for c in sel["consolidated"]], note="identical vectors selected by several components are stored once with the sum of their probabilities.")
+        reporter.table("empirical_representatives: consolidated duplicates (contributions added, memberships kept)",
+                       ["unique row", "memberships (component, member, contribution)", "probability"],
+                       [[c["row"], ", ".join(f"({m['component']}, {m['member']}, {m.get('contribution', float('nan')):.6f})" for m in c["memberships"]),
+                         f"{c['probability']:.6f}"] for c in sel["consolidated"][:60]],
+                       note="identical vectors selected by several components are stored once with the sum of their contributions; a zero contribution "
+                            "stays a zero contribution of its membership." + (f" {len(sel['consolidated']) - 60} further rows in representatives_rows.csv."
+                                                                               if len(sel["consolidated"]) > 60 else ""))
     if sel["overrides"]:
         reporter.table("empirical_representatives: explicit parameter overrides (applied to every vector; shown, never silent)",
                        ["parameter", "value (physical)", "stored (log10)", "replaced range (log10)", "reason"],
                        [[k, f"{o['value_physical']:.6g}", f"{o['value_stored']:+.4f}", f"[{o['replaced_range_stored'][0]:+.4f}, {o['replaced_range_stored'][1]:+.4f}]", o["reason"]]
-                        for k, o in sel["overrides"].items()], note="a transformed vector is no longer the original joint draw.")
+                        for k, o in sel["overrides"].items()],
+                       note="a transformed vector is no longer the original joint draw" + ("; the compatibility scores describe the original SGMs and were not "
+                                                                                           "recomputed for the transformed rows." if rank_weighted else "."))
     rows = []
     for j, k in enumerate(keys):
         q = [agg.weighted_quantile(nu.samples[:, j], nu.probabilities, p) for p in (0.05, 0.25, 0.5, 0.75, 0.95)]
@@ -743,26 +797,125 @@ def _report_representatives(reporter, nu, R, archive):
                    ["parameter", "median", "IQR", "central 90 % range", "outside-prior mass"], rows,
                    note="empirical dispersion of the selected representatives under their probabilities, not a credible interval; "
                         f"total outside-prior mass {100 * sel['outside_prior_mass']:.1f} %.")
-    series = []
-    if archive is not None:
-        for c in sel["components"]:
-            comp = agg.archive_component(archive, kind=c["condition"], window_set=c["window_set"], construction=c["grouping"], statistic=c["statistic"])
-            series.append({"name": f"component {c['index']}: " + agg.display_name(c["grouping"], statistic=c["statistic"], short=True, n=comp["vectors"].shape[0])
-                                   + f", windows: {c['window_set']}", "role": c["grouping"], "vectors": comp["vectors"]})
-    series.append({"name": f"selected mixture at its recorded probabilities ({nu.samples.shape[0]} vectors)", "role": "mixture", "vectors": nu.samples,
-                   "weights": nu.probabilities})
+    # ---- member and row exports (never hundreds of rows inline) -------------------------------------------------
+    report_dir = reporter.dump_dir
+    base = sel.get("equal_member_baseline")
+    base_p = np.asarray(base["probabilities"], float) if base else nu.probabilities
+    # every membership located in its stored row by the identity the construction recorded (``stored_row``, carried through
+    # consolidation before any override, so rows an override made equal keep their own provenance); a legacy record without
+    # it falls back to an exact vector match
+    row_members = {r: [] for r in range(nu.samples.shape[0])}
+    for c in comps:
+        comp = None
+        for j, mbr in enumerate(c["members"]):
+            contrib = float(mbr.get("probability", c.get("member_probability") or 0.0))
+            r = mbr.get("stored_row")
+            if r is None and archive is not None:
+                if comp is None:
+                    comp = agg.archive_component(archive, kind=c["condition"], window_set=c["window_set"], construction=c["grouping"], statistic=c["statistic"])
+                v = np.asarray(comp["vectors"][j], float).copy()
+                for k, o in (sel.get("overrides") or {}).items():
+                    v[keys.index(k)] = float(o["value_stored"])
+                hits = np.flatnonzero(np.all(nu.samples == v, axis=1))
+                r = int(hits[0]) if hits.size == 1 else None
+            if r is not None:
+                row_members[int(r)].append((c["index"], j, mbr["cell"], mbr["chunk"], contrib))
+    for r, mems in row_members.items():
+        # the contributions were normalized by the component total (one within the 1e-6 tolerance) before storage
+        if mems and not np.isclose(sum(m[4] for m in mems), float(nu.probabilities[r]), rtol=4 * ndli.WEIGHT_NORMALIZATION_TOLERANCE, atol=1e-12):
+            reporter.check("representative_row_provenance", False, f"row {r}: memberships sum to {sum(m[4] for m in mems)!r}, stored probability "
+                           f"{float(nu.probabilities[r])!r}", fatal=False, note="every stored row's contributions must add up to its probability.")
+            break
+    else:
+        complete = all(row_members[r] for r in row_members)
+        reporter.check("representative_row_provenance", complete, f"{sum(len(v) for v in row_members.values())} memberships over {len(row_members)} stored rows"
+                       + ("" if complete else "; some rows have no membership (a legacy record without stored rows)"), fatal=False,
+                       note="every stored row names the members that contributed to it, by recorded identity, and their contributions add up to its probability.")
+    members_csv = rows_csv = None
+    if report_dir is not None:
+        members_csv = report_dir / "representatives_members.csv"
+        with members_csv.open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["component", "member", "condition", "window_set", "grouping", "statistic", "member_weighting", "cell", "chunk", "n_windows",
+                        "sgm_source_cell", "sgm_source_chunk", "sgm_source_draw", "compatibility_score", "compatibility_status", "compatibility_n_references",
+                        "contribution", "stored_row"])
+            for c in comps:
+                for j, mbr in enumerate(c["members"]):
+                    cp = mbr.get("compatibility") or {}
+                    w.writerow([c["index"], j, c["condition"], c["window_set"], c["grouping"], c["statistic"], c.get("member_weighting", "uniform"),
+                                mbr["cell"], mbr["chunk"], mbr["n_windows"], mbr["sgm_source"]["cell"], mbr["sgm_source"]["chunk"], mbr["sgm_source"]["draw_index"],
+                                "" if cp.get("score") is None else repr(float(cp["score"])), cp.get("status", ""), cp.get("n_references", ""),
+                                repr(float(mbr.get("probability", c.get("member_probability") or 0.0))), "" if mbr.get("stored_row") is None else int(mbr["stored_row"])])
+        rows_csv = report_dir / "representatives_rows.csv"
+        phys = to_physical(nu.samples, table)
+        with rows_csv.open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["row", "probability", "equal_member_baseline_probability", "memberships (component, member, cell, chunk, contribution)"]
+                       + [f"{k}_stored_log10" for k in keys] + [f"{k}_physical" for k in keys])
+            for r in range(nu.samples.shape[0]):
+                txt = "; ".join(f"({ci}, {j}, {cell}, {chunk}, {contrib:.6g})" for ci, j, cell, chunk, contrib in row_members[r])
+                w.writerow([r, repr(float(nu.probabilities[r])), repr(float(base_p[r])), txt] + [repr(float(v)) for v in nu.samples[r]]
+                           + [repr(float(v)) for v in phys[r]])
+    reporter.prose("empirical_representatives: exports",
+                   f"Per-member record (identities, compatibility score, status, references, contribution, stored row): `representatives_members.csv`; "
+                   f"per stored row (probability, equal-member baseline probability, memberships by recorded identity, the stored estimator "
+                   f"coordinates `<key>_stored_log10` and the physical values `<key>_physical`): `representatives_rows.csv`; both beside this report. "
+                   f"Member policies in this artifact: {policies}." + (" The equal-member baseline uses the same components, component masses, duplicate "
+                                                                       "consolidation and overrides with uniform members; it isolates the member weighting."
+                                                                       if rank_weighted else " Every component is uniform, so the stored probabilities ARE the "
+                                                                                             "equal-member distribution."))
+    # ---- figures ---------------------------------------------------------------------------------------------------
     ref_p, ref = _reference_physical(R)
+    cond = sel["archive"].get("target", {}).get("condition", "")
+    single_cells = (len(comps) == 1 and comps[0]["grouping"] == "per_cell" and not sel["consolidated"] and not sel["overrides"]
+                    and nu.samples.shape[0] == comps[0]["n_members"])
+    view = np.arange(nu.samples.shape[0])                      # the plotted order only; artifact rows and probabilities are untouched
+    if single_cells and all(len(row_members[r]) == 1 for r in row_members):
+        cells_of_rows = [int(row_members[r][0][2]) for r in range(nu.samples.shape[0])]
+        view = np.argsort(cells_of_rows, kind="stable")
+        labels = [str(cells_of_rows[r]) for r in view]
+        xlabel = f"source cell in numeric order ({agg.display_name('per_cell', short=True)}, windows: {comps[0]['window_set']})"
+    else:
+        labels = [str(r) for r in view]; xlabel = "stored row (memberships in representatives_rows.csv)"
+    scope_p = f"{cond} · {nu.samples.shape[0]} stored rows from {len(comps)} component(s); policies {policies}"
+    reporter.save_figure("representatives_probabilities",
+                         figure_member_probabilities(labels, nu.probabilities[view], base_p[view], title="Stored sampling probabilities versus the equal-member baseline",
+                                                     subtitle=scope_p, xlabel=xlabel),
+                         caption=f"{scope_p}. Black dots: the probability actually stored for each row of the artifact (what production samples); gray bars: the "
+                                 f"equal-member baseline (same components, masses and overrides, uniform members). Red crosses mark rows at exactly zero: a "
+                                 f"sampling outcome of the selected policy, not a data-quality verdict. These are probabilities, not Experiment's raw ranks.")
+    series = [{"name": f"selected probabilities ({nu.samples.shape[0]} stored rows; policies {policies})", "role": "mixture", "vectors": nu.samples,
+               "weights": nu.probabilities}]
+    if rank_weighted:
+        series.append({"name": "equal-member baseline (same components, masses and overrides; uniform members)", "role": "per_cell_window",
+                       "vectors": nu.samples, "weights": base_p, "style": dict(color="0.45", marker="s", lw=1.4)})
     if ref is not None:
         series.append({"name": agg.display_name("reference", short=True, reference_name=ref["name"]), "role": "reference", "vectors": ref["log10"][None, :]})
-    scope = (f"{sel['archive'].get('target', {}).get('condition', '')} · selected mixture of {nu.samples.shape[0]} vectors from {len(sel['components'])} component(s); "
-             "components at equal member weight, the mixture at its recorded probabilities; a one-member series is a reference line").strip(" ·")
-    reporter.save_figure("representatives_marginals", figure_marginal_cdfs(series, table, title="Selected representative distribution: weighted marginal CDFs", subtitle=scope),
-                         caption="Weighted empirical CDFs of the selected mixture beside its components (each normalized to unit mass) and the reference, physical "
-                                 "units (the fraction of a series' vectors at or below the x value). A component selected with the marginal-median statistic is "
-                                 "labeled as a marginal-median vector, never as an SGM. Dotted red lines are the training-prior bounds.")
-    reporter.save_figure("representatives_joint", figure_joint_corner(series, table, title="Selected representative distribution: joint projections", subtitle=scope),
-                         caption="Pairwise projections of the selected vectors (marker size follows the recorded probability) beside the components and the reference; "
-                                 "each point is one complete vector. Dotted red lines are the training-prior bounds.")
+    scope = (f"{cond} · selected distribution of {nu.samples.shape[0]} stored rows from {len(comps)} component(s); policies {policies}"
+             + ("; against the equal-member baseline" if rank_weighted else "") + "; a one-member series is a reference line").strip(" ·")
+    reporter.save_figure("representatives_marginals", figure_marginal_cdfs(series, table, title="Selected probabilities versus equal member weighting: marginal CDFs", subtitle=scope),
+                         caption="Weighted empirical CDFs (physical units; the fraction of a series' mass at or below the x value) of the selected distribution at its "
+                                 "stored probabilities" + (", the equal-member baseline built from the same components, component masses, duplicate consolidation and "
+                                                           "overrides with uniform members (the comparison isolates the member weighting)" if rank_weighted else
+                                                           " (every component uniform, so this is the equal-member distribution itself)")
+                                 + " and the fixed reference. Summary numbers use the inverse weighted empirical CDF. Dotted red lines are the training-prior bounds.")
+    comp_series = []
+    if archive is not None:
+        for c in comps:
+            comp = agg.archive_component(archive, kind=c["condition"], window_set=c["window_set"], construction=c["grouping"], statistic=c["statistic"])
+            comp_series.append({"name": f"component {c['index']}: " + agg.display_name(c["grouping"], statistic=c["statistic"], short=True, n=comp["vectors"].shape[0])
+                                        + f", windows: {c['window_set']} (equal member weight)", "role": c["grouping"], "vectors": comp["vectors"]})
+    comp_series.append(series[0])
+    if ref is not None:
+        comp_series.append(series[-1])
+    scope_c = (f"{cond} · the components at equal member weight beside the selected distribution at its stored probabilities; a one-member series is a reference line")
+    reporter.save_figure("representatives_components", figure_marginal_cdfs(comp_series, table, title="Selected distribution beside its components: marginal CDFs", subtitle=scope_c),
+                         caption="Each component's representatives at equal member weight (normalized to unit mass) beside the selected distribution and the reference. "
+                                 "A component selected with the marginal-median statistic is labeled as a marginal-median vector, never as an SGM. Dotted red lines are "
+                                 "the training-prior bounds.")
+    reporter.save_figure("representatives_joint", figure_joint_corner(comp_series, table, title="Selected representative distribution: joint projections", subtitle=scope_c),
+                         caption="Pairwise projections of the selected vectors (marker size follows the stored probability; a zero-probability row is drawn at the "
+                                 "smallest size) beside the components and the reference; each point is one complete vector. Dotted red lines are the training-prior bounds.")
 
 
 def _migrate_pool_labels(args, R):

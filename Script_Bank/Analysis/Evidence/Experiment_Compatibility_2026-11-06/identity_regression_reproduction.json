@@ -1,0 +1,20 @@
+{
+  "per_cell": {
+    "construction": "per_cell",
+    "changed_field": "cell",
+    "candidate_groups": 60,
+    "distinct_ids_before": 60,
+    "distinct_ids_after": 59,
+    "accepted": false,
+    "error": "AggregationError: /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/duplicate_cell_identity.npz: the context FAB/all/per_cell holds 60 groups over 59 distinct cells (duplicated cell identities [0]); one representative per distinct cell is required."
+  },
+  "per_cell_window": {
+    "construction": "per_cell_window",
+    "changed_field": "chunk",
+    "candidate_groups": 10,
+    "distinct_ids_before": 10,
+    "distinct_ids_after": 9,
+    "accepted": false,
+    "error": "AggregationError: /home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/duplicate_chunk_identity.npz: the context FAB/all/per_cell_window cell 0 holds 10 groups over 9 distinct window positions (duplicated window position identities [0]); one representative per distinct window position is required."
+  }
+}

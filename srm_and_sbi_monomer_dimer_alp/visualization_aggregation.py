@@ -324,3 +324,125 @@ def figure_window_selection(per_cell_by_set, table, *, reference=None, global_by
     _titles(fig, title, subtitle)
     fig.tight_layout(rect=(0, 0.14, 1, 0.95))
     return fig
+
+
+# ---- posterior compatibility (Experiment) and member probabilities (Nuisance DLI constructor) ----------------------
+# Every compatibility figure shares one 0–1 color scale for the distance rank, gray for the excluded self comparison,
+# stable identity/time ordering on both axes and the candidate/reference orientation in its axis labels. Experiment's
+# strips and heat maps show RAW median ranks, never sampling probabilities; the constructor's probability figure shows
+# the actual stored row probabilities beside the equal-member baseline.
+RANK_LABEL = "Distance rank (higher = closer to reference SGM)"
+SCORE_LABEL = "Median compatibility rank"
+SELF_COLOR = "0.78"
+
+
+def _rank_cmap():
+    import matplotlib
+    cmap = matplotlib.colormaps["viridis"].copy()
+    cmap.set_bad(SELF_COLOR)
+    return cmap
+
+
+def _id_fontsize(n):
+    return 5 if n > 40 else (6.5 if n > 20 else 8)
+
+
+def figure_compatibility_cells(ranks, cell_ids, scores, *, title="", subtitle=""):
+    """The cell-to-cell distance-rank matrix (rows: candidate cell; columns: reference cell; stable numeric cell order
+    on both axes, every cell retained) with a narrow aligned strip of each row's median compatibility rank on the same
+    0–1 scale (a raw score, not a sampling probability). Self comparisons are gray (NaN)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    R = np.asarray(ranks, float); n = R.shape[0]
+    labels = [str(c) for c in cell_ids]; fs = _id_fontsize(n)
+    fig = Figure(figsize=(11.6, 8.4))
+    # matrix, the aligned score strip, then the colorbar at the far right (its tick labels never cross the strip)
+    gs = fig.add_gridspec(1, 3, width_ratios=[20, 5.5, 0.8], wspace=0.12, left=0.07, right=0.9, top=0.9, bottom=0.1)
+    ax = fig.add_subplot(gs[0, 0]); sx = fig.add_subplot(gs[0, 1], sharey=ax); cax = fig.add_subplot(gs[0, 2])
+    im = ax.imshow(R, vmin=0, vmax=1, cmap=_rank_cmap(), aspect="auto", origin="upper", interpolation="nearest")
+    ax.set_xticks(range(n)); ax.set_xticklabels(labels, fontsize=fs, rotation=90)
+    ax.set_yticks(range(n)); ax.set_yticklabels(labels, fontsize=fs)
+    ax.set_xlabel("Reference cell"); ax.set_ylabel("Candidate cell")
+    fig.colorbar(im, cax=cax, label=RANK_LABEL)
+    s = np.asarray(scores, float)
+    sx.barh(np.arange(n), np.where(np.isnan(s), 0.0, s), color="0.3", height=0.8)
+    for i in np.flatnonzero(s == 0):
+        sx.plot([0.01], [i], marker="|", color="tab:red", ms=6, lw=0)
+    sx.set_xlim(0, 1); sx.set_xlabel(f"{SCORE_LABEL}\n(0–1; a raw score, not a sampling probability)", fontsize=8)
+    sx.tick_params(axis="y", labelleft=False); sx.grid(alpha=0.25, axis="x")
+    sx.set_title("row median over the other cells\n(red tick = exactly zero)", fontsize=8.5)
+    _titles(fig, title, subtitle)
+    return fig
+
+
+def figure_compatibility_windows(scores, cell_ids, times, *, title="", subtitle="", window_seconds=None):
+    """Cells (rows, stable order) by selected window start times (columns): the within-cell median compatibility rank
+    of each cell–window SGM against the other selected windows of the same cell, on the shared 0–1 scale. Zeros stay
+    visible (dark); an unavailable score would be gray."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    S = np.asarray(scores, float); C, W = S.shape
+    fig = Figure(figsize=(8.0, max(4.8, 0.115 * C + 2.6)))
+    ax = fig.add_subplot(111)
+    im = ax.imshow(S, vmin=0, vmax=1, cmap=_rank_cmap(), aspect="auto", interpolation="nearest")
+    ax.set_xticks(range(W)); ax.set_xticklabels([f"{float(t):g}" for t in times], fontsize=8)
+    ax.set_yticks(range(C)); ax.set_yticklabels([str(c) for c in cell_ids], fontsize=_id_fontsize(C))
+    ax.set_xlabel(f"start of the selected {float(window_seconds):g} s window (s)" if window_seconds else "start of the selected window (s)")
+    ax.set_ylabel("cell (candidate and reference windows belong to this cell)")
+    fig.colorbar(im, ax=ax, label=f"{SCORE_LABEL} (within the cell; 0–1)")
+    _titles(fig, title, subtitle)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    return fig
+
+
+def figure_compatibility_atlas_page(panels, times, *, title="", subtitle="", ncols=3, nrows=4):
+    """One contact sheet of within-cell window-to-window matrices (``panels``: ``[(cell_id, (W, W) ranks), ...]``, at most
+    ``ncols * nrows``), each titled by its cell; candidate and reference axes are window start times; shared 0–1 color
+    scale; gray self comparisons."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(3.7 * ncols + 1.4, 3.5 * nrows + 1.3))
+    axes = fig.subplots(nrows, ncols, squeeze=False).ravel()
+    fig.subplots_adjust(left=0.07, right=0.88, top=0.9, bottom=0.07, hspace=0.55, wspace=0.4)
+    lab = [f"{float(t):g}" for t in times]; W = len(lab); im = None
+    for ax, (cell, R) in zip(axes, panels):
+        im = ax.imshow(np.asarray(R, float), vmin=0, vmax=1, cmap=_rank_cmap(), aspect="equal", interpolation="nearest")
+        ax.set_title(f"cell {cell}", fontsize=10)
+        ax.set_xticks(range(W)); ax.set_xticklabels(lab, fontsize=7, rotation=90)
+        ax.set_yticks(range(W)); ax.set_yticklabels(lab, fontsize=7)
+        ax.set_xlabel("reference window start (s)", fontsize=8); ax.set_ylabel("candidate window start (s)", fontsize=8)
+    for ax in axes[len(panels):]:
+        ax.set_visible(False)
+    if im is not None:
+        cax = fig.add_axes([0.905, 0.25, 0.015, 0.5])
+        fig.colorbar(im, cax=cax, label=RANK_LABEL)
+    _titles(fig, title, subtitle)
+    return fig
+
+
+def figure_member_probabilities(labels, selected, baseline, *, title="", subtitle="", xlabel="member",
+                                selected_name="stored sampling probability (selected policy)",
+                                baseline_name="equal-member baseline (same components, masses and overrides)"):
+    """The constructor's probability figure: the actual stored row probabilities (black dots) beside the equal-member
+    baseline (gray bars) for every row, zero probabilities marked (a sampling outcome, not a data-quality verdict)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    sel = np.asarray(selected, float); base = np.asarray(baseline, float); n = sel.size; x = np.arange(n)
+    fig = Figure(figsize=(max(7.5, 0.17 * n + 2.5), 5.2))
+    ax = fig.add_subplot(111)
+    ax.bar(x, base, width=0.8, color="0.8", label=baseline_name)
+    ax.plot(x, sel, "o", color="k", ms=4, label=selected_name)
+    zero = np.flatnonzero(sel == 0)
+    if zero.size:
+        ax.plot(zero, np.zeros(zero.size), "x", color="tab:red", ms=7, label=f"zero probability ({zero.size}; a sampling outcome, not a data-quality verdict)")
+    ax.set_xticks(x); ax.set_xticklabels([str(v) for v in labels], rotation=90, fontsize=_id_fontsize(n))
+    ax.set_xlabel(xlabel); ax.set_ylabel("sampling probability of the stored row"); ax.set_ylim(bottom=0); ax.grid(alpha=0.2, axis="y")
+    handles, labels_ = ax.get_legend_handles_labels()
+    fig.legend(handles, labels_, loc="lower center", ncol=1, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.0))
+    _titles(fig, title, subtitle)
+    fig.tight_layout(rect=(0, 0.16, 1, 0.94))
+    return fig

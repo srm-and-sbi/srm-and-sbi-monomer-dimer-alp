@@ -57,11 +57,35 @@ choices once: which windows are included, and which samples are pooled; `opening
 per-cell-window and per-position equal global, and the opening figures name these equivalences. It links
 these supporting files in its own output directory:
 
-- `aggregation_candidates.npz`: group vectors, quantiles, identities, methods, source contract, and target binding.
-- `aggregation_groups.csv`: each group's physical values and source draw identity.
+- `aggregation_candidates.npz` (format 2): group vectors, quantiles, identities, methods, source contract, target
+  binding, and the posterior-compatibility data (per-group median score, status and reference count; the
+  rank-matrix blocks; the protocol `sgm_distance_rank_v1`).
+- `aggregation_groups.csv`: each group's physical values, source draw identity, compatibility score, status,
+  reference count and the keys on which the SGM itself lies outside the training prior.
 - `aggregation_comparison.csv`: representative-distribution summaries by grouping, set, statistic, and parameter.
-- `aggregation_manifest.json`: source identities and checksums, coverage, methods, and archive checksum.
-- `figures/aggregation_*`: the figures embedded in the report.
+- `aggregation_compatibility.csv`: every pairwise distance rank (candidate, reference, reference draws, rank).
+- `aggregation_manifest.json`: source identities and checksums, coverage, methods, the compatibility block map,
+  and archive checksum.
+- `figures/aggregation_*`: the figures embedded in the report, including the compatibility cell matrix with its
+  score strip and the window-score overview per condition and window set.
+- `compatibility/<condition>/<set>/windows/index.md`: the complete atlas of every cell's window-to-window matrix,
+  twelve cells per page, linked once from the report.
+
+**Posterior compatibility.** The subsection "Posterior compatibility of SGM representatives" reports, for one SGM
+per cell and one SGM per cell–window, how central each SGM is relative to the posterior clouds of its peers: the
+distance rank R_ij (the share of reference j's retained draws strictly farther from reference j's own SGM than the
+candidate SGM is, distances in estimator coordinates divided by the prior widths; rows candidates, columns
+references, self comparison excluded by identity, generally asymmetric) and the candidate's score, the ordinary
+median of its row over the other references. References are the other included cells of the same condition and
+window set (each its equal-window cloud mixture) or the other selected windows of the same cell. A median score of
+zero means that a majority of the candidate's reference ranks are zero; some references may still assign it a high
+rank. A zero score is a valid centrality outcome of a valid recording and differs from an unavailable score (a
+singleton reference set, `insufficient_peers`); it is not a data-quality classification. The archive reader checks
+the complete reference context of every block (one block per eligible context over exactly its peer population,
+reference draw counts equal to the referenced groups' pooled draws, the protocol scale equal to the archive's) and
+refuses an archive whose blocks were split, trimmed or rescaled. Under `opening` the per-cell score exists while
+the within-cell window score does not, although the vectors coincide. Experiment reports raw median ranks only;
+the definitions and equations are in DETECTOR_WORKFLOW.md §7.2.
 
 The source-uncertainty table names the first requested multi-position set it summarizes. The archive retains
 quantiles for every other group. Ranges over representatives describe empirical dispersion, not posterior
@@ -124,9 +148,13 @@ MACHINE_PROFILE=mars_pc python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_AL
     --emit-representatives-template --candidate-archive /path/to/aggregation_candidates.npz --dry-run
 ```
 
-Remove `--dry-run` to emit the skeleton. It lists every available component as a commented table and leaves
-`rationale` empty. It cannot be built until the selection is filled. An existing spec is refused, so use a
-separate tag for another construction. The generated provenance and source checksum identify the archive.
+Remove `--dry-run` to emit the skeleton. It lists every available component as a commented table, with a
+commented `member_weighting = "uniform"` line stating for each component whether `posterior_rank_median` is
+available (compatibility scores computed for all members and normalizable under the constructor's own rules;
+unavailable with the reason, including a computed but all-zero normalizer; or not applicable to the grouping), and
+leaves `rationale` empty. The console prints the same availability. It cannot be built until the
+selection is filled. An existing spec is refused, so use a separate tag for another construction. The generated
+provenance and source checksum identify the archive.
 
 ## 4. Fill the scientific selection
 
@@ -144,11 +172,29 @@ The spec uses the following fields:
 | `[[component]].grouping` | One of the four grouping IDs above |
 | `[[component]].statistic` | `"sgm"` by default, or explicitly `"median"` |
 | `[[component]].weight` | Non-negative component mass; all component weights sum to one |
+| `[[component]].member_weighting` | `"uniform"` (default: every member receives alpha_k / n_k) or `"posterior_rank_median"` (consensus weighting from Experiment's compatibility scores; requires `statistic = "sgm"`, grouping `per_cell` or `per_cell_window`, and a format-2 archive) |
 | `[override.<KEY>].value` and `.reason` | Optional explicit physical value and the recorded justification for applying it to every vector |
 
 A single component with weight one is a valid choice. If component k has weight alpha_k and n_k members,
-each member receives probability alpha_k / n_k. Uniform concatenation of differently sized collections
-would give larger collections more mass solely because of their row counts; this is not the rule used here.
+uniform weighting gives each member probability alpha_k / n_k. Uniform concatenation of differently sized
+collections would give larger collections more mass solely because of their row counts; this is not the rule
+used here.
+
+Under `posterior_rank_median`, a member's probability is proportional to the median compatibility rank s of its
+SGM. For one SGM per cell, p = alpha_k s_c / sum of the component's cell scores. For one SGM per cell–window, the
+score is normalized within each cell and every included cell keeps the equal mass alpha_k / |C_k|: p = (alpha_k /
+|C_k|) s_cw / sum of that cell's selected-window scores. Normalizing all window scores in one step would give
+recordings with larger score totals more mass; that is not this policy, and cell-level and within-cell weights
+are never multiplied together. A zero score is exactly zero probability: the member stays in the record and the
+exports, nothing is floored, clipped or removed, and the report counts the zero rows as sampling outcomes of the
+selected policy, not as defective recordings. A component whose every score is zero, or any included cell whose
+every selected-window score is zero, is refused rather than dropped or redistributed; an unknown policy, a missing
+or unavailable score (a singleton reference set), a marginal-median statistic or an unsupported grouping are
+explicit errors with no fallback to uniform. A format-1 archive (written before the compatibility data) still
+supplies a uniform selection; rank weighting needs the CPU regeneration of the Experiment report. The scores
+describe the original SGM candidates; explicit overrides transform the stored rows afterwards and are shown. The
+consensus-weighted distribution need not preserve the original proportions of acquisition batches; that is a
+consequence to describe, not an automatic reason to reject a selection.
 
 Components reuse observations. Combining them changes the probability assigned to representative states,
 not the amount of independent experimental evidence. Adding a global representative places a point mass at
@@ -180,16 +226,33 @@ MACHINE_PROFILE=mars_pc python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_AL
     --condition FAB --total-time-seconds 2.0 --nuisance-tag STUDY --build --dry-run
 ```
 
-The preview validates the selected archive, target, components, weights, and physical values, and lists the
-vectors and output paths. It performs CPU calculations but neither neural sampling nor an artifact write.
-Remove `--dry-run` for the reviewed build. This step also uses CPU only.
+The preview validates the selected archive, target, components, weights, member policies, and physical values,
+and lists the vectors and output paths. For every component it states how its mass reaches its members: under
+uniform weighting the probability each member receives; under rank weighting the positive and zero member counts,
+the probability range and the effective number of members. A component of mass zero is valid under either policy:
+it stays in the provenance with no positive member and an explicitly undefined effective count. It performs CPU
+calculations but neither neural sampling nor an artifact write. Remove `--dry-run` for the reviewed build. This step also uses CPU only.
 
 The output paths follow the active machine profile, under `Posit`:
 
 - `<alias>_<timing>_<TAG>_Nuisance_DLI_Spec.toml`: the selection and rationale.
 - `<alias>_<timing>_<TAG>_Nuisance_DLI.npz`: vectors, probabilities, parameter keys, and construction record.
-- `<alias>_<timing>_<TAG>_Nuisance_DLI_Analysis/report.md`: components, normalization, memberships, overrides,
-  weighted marginal summaries, and final marginal/joint comparisons with the components and SEL.
+- `<alias>_<timing>_<TAG>_Nuisance_DLI_Analysis/report.md`: the selection table (source archive and checksum,
+  condition, window set, grouping, SGM statistic, component mass, member policy, members / positive / zero, the
+  member probability range and the effective number of representatives 1/sum(p_i^2) with its normalization scope,
+  a concentration measure and not a count of independent experiments), consolidation, overrides, the weighted
+  marginal summary, the stored sampling probabilities beside the equal-member baseline (`representatives_probabilities`;
+  labeled by source cell for a single non-duplicated per-cell selection, otherwise by stored row), the six-parameter
+  CDF comparison of the selected probabilities against that baseline (`representatives_marginals`; the baseline uses
+  the same components, component masses, duplicate consolidation and overrides with uniform members, so the
+  comparison isolates the member weighting), the components view (`representatives_components`) and the joint
+  projections (`representatives_joint`), beside `representatives_members.csv` (per member: identities, score,
+  status, references, contribution, stored row) and `representatives_rows.csv` (per stored row: probability,
+  baseline probability, memberships by the recorded stored-row identity, the stored estimator coordinates
+  `<key>_stored_log10` and the physical values `<key>_physical`). Every stored row keeps its memberships even when
+  an override makes distinct rows identical; the report checks that the contributions add up to each row's
+  probability. Experiment's strips and heat maps display raw median ranks; only this
+  report displays adopted probabilities.
 
 The artifact stores the six imaging coordinates in log10. `pool_mode` records `unrestricted` when positive
 probability mass lies outside the detector training box; support is not clipped. The NumPy-only sampler
@@ -226,9 +289,10 @@ the current detector does not infer camera gain or conversion as part of this si
 ## 7. Project state and sources
 
 The Fab and InlB SEL artifacts are built fixed references. The empirical construction was validated on saved
-draws for Fab cells 26 and 4 and InlB cells 11 and 42; its illustrative build is an interface example, not a
-production selection. The acquisition period, construction or mixture, weights, statistic, and bleaching
-treatment remain open. The InlB external catalog cross-check and full-cohort draw collection also remain pending.
+draws for Fab cells 26 and 4 and InlB cells 11 and 42 and on the complete cohorts (60 cells, 600 windows per
+condition; review copies `COHORT60PLOTS` without and `COHORT60RANKS` with the compatibility data); its
+illustrative builds are interface examples, not production selections. The acquisition period, construction or
+mixture, weights, statistic, whether to enable consensus weighting, and the bleaching treatment remain open.
 
 The corrected review reports carry the label `PILOT2CELLSR1`; earlier `PILOT2CELLS` reports are historical.
 Their scientific candidate arrays agree. Both sets remain on disk unless a deletion is explicitly authorized.
@@ -239,3 +303,5 @@ Scientific and execution records:
 - [PROJECT_CONTEXT.md §3](../../PROJECT_CONTEXT.md#3-inference-pipeline-two-stage-architecture): the two-workflow scientific context.
 - [VALIDATION.md](../../VALIDATION.md): pipeline checks, including the artifact smoke-test stand-in.
 - [Implementation evidence](Evidence/Experiment_Aggregation_2026-11-05/COMPLETION_NOTE.md): measured costs, validation, review corrections, and output index.
+- [Full-cohort collection evidence](Evidence/Experiment_Aggregation_Cohort_2026-11-05/COMPLETION_NOTE.md): the 116 cohort collections and the complete-cohort reports.
+- [Compatibility and member-weighting evidence](Evidence/Experiment_Compatibility_2026-11-06/COMPLETION_NOTE.md): the regenerated `COHORT60RANKS` reports, the full-data oracle comparison, the illustrative rank-weighted build.

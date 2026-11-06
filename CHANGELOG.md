@@ -5,6 +5,76 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.47 - 2026-11-06
+
+Experiment reports the posterior compatibility of its SGM representatives; the Nuisance DLI constructor gains the
+explicit member-weighting policy `posterior_rank_median`. No change to the SGM calculation, the equal-window
+pooling, the candidate vectors, the quantile conventions, the estimators, the priors or the artifact format;
+existing uniform specifications and artifacts behave exactly as before.
+
+- **Shared rank primitive (`experiment_aggregation.reference_distance_ranks`).** The share of a reference
+  posterior's retained draws strictly farther from the reference's own SGM than a candidate vector, distances in
+  estimator coordinates divided by the prior widths, float64, one sorted pass per reference with an empirical-CDF
+  lookup. The draws companion's joint-depth table now calls it (its `joint_depth.csv` contract and values are
+  unchanged).
+- **Compatibility in Experiment (`compute_compatibility`).** For every condition and requested window set, the
+  cell-to-cell rank matrix (each reference the other cell's equal-window cloud mixture with that cell's SGM) and
+  one window-to-window matrix per cell (the other selected windows of the same cell); rows candidates, columns
+  references, self comparison excluded by group identity; the score is the ordinary median of the off-diagonal
+  row. Statuses `computed`, `insufficient_peers` (a singleton reference set: no score, zero references, never a
+  fabricated 0 or 1) and `not_applicable` (per-position and dataset vectors); a zero score is a valid centrality
+  outcome distinct from a missing one. The opening per-cell alias is scored across cells while the opening
+  per-cell-window group is unavailable; no score is copied between equivalent groups. Experiment reports raw
+  median ranks only.
+- **Report subsection, figures and atlas.** "Posterior compatibility of SGM representatives": the definition, a
+  scope and availability table with zero counts labeled as centrality outcomes, the cell matrix with an aligned
+  median-score strip (`aggregation_<cond>_<set>_compatibility_cells.png`), the cells-by-window-start heat map of
+  within-cell scores (`..._compatibility_windows.png`; a singleton set states that no window score exists instead
+  of drawing artificial zeros), and the complete linked atlas `compatibility/<cond>/<set>/windows/index.md` with
+  every cell's matrix, twelve cells per page. One 0–1 color scale, gray self comparisons, stable identity and time
+  ordering. The written archive is read back through the constructor's reader as a report check.
+- **Candidate archive format 2.** The v1 arrays, row order and identities are unchanged; added
+  `compatibility_score`, `compatibility_n_references`, `compatibility_status`, `sgm_outside_prior_keys` and the
+  rank-matrix blocks (`compatibility_block_<b>_{group_index,ranks,reference_draws}`) mapped by the manifest's
+  `compatibility` section under the protocol `sgm_distance_rank_v1`. `aggregation_groups.csv` gains the score,
+  status, reference-count and outside-prior-key columns; `aggregation_compatibility.csv` lists every pairwise
+  rank. The reader accepts formats 1 and 2 and validates the format-2 data against the archive's own groups: every
+  eligible reference context (derived from the candidate groups, whose scientific identities must be distinct: one
+  group per cell in a per_cell context with chunk -1, one group per selected window position in a per_cell_window
+  context) must hold one block over exactly its peer population, reference draw counts must equal the referenced
+  groups' pooled draws, the protocol scale must equal the
+  archive's and the contract's, identities and counts must be integers (never coerced), diagonals masked, ranks in
+  [0, 1], stored scores equal to the row medians, singleton contexts `insufficient_peers`; an old reader refuses a
+  format-2 archive.
+- **Member weighting (`detector_nuisance_dli`).** The optional `[[component]].member_weighting` (`uniform`, the
+  default; `posterior_rank_median`): per_cell members receive weight × score / sum of scores; per_cell_window
+  members keep equal cell mass weight / |C| and are normalized within each cell, never in one step over all
+  windows and never multiplied by cell-level ranks. A zero score is exactly zero probability, kept and shown;
+  an all-zero component or cell, a missing or unavailable score, a marginal-median statistic, an unsupported
+  grouping, an unknown policy or a format-1 archive is refused with no fallback. Scores are read through each
+  member's identity. The selection record carries per-member scores, statuses, contributions, normalizers, zero
+  counts, the effective numbers with their scopes, each member's stored row (carried by identity through
+  consolidation, so rows an override makes identical keep their provenance) and, for a rank-weighted selection, the
+  equal-member baseline aligned to the stored rows; a component of mass zero is valid under either policy (no
+  positive member, an undefined effective count); legacy records with one scalar `member_probability` still load.
+  The template states per component whether the policy is available and normalizable (a computed but all-zero
+  normalizer is advertised as unavailable while its zero scores remain valid diagnostics).
+- **Constructor dry-run and report.** The dry-run states truthfully how each component's mass reaches its members
+  (positive and zero members, an undefined effective count for a zero mass). The report's selection table (the
+  `statistic` column, since a marginal-median component is not an SGM), the stored probabilities beside the
+  equal-member baseline (`representatives_probabilities`; a single per-cell selection is plotted in numeric cell
+  order), the six-parameter CDF comparison against that baseline (`representatives_marginals`), the components view
+  (`representatives_components`), the joint projections, the row-provenance check and the exports
+  `representatives_members.csv` / `representatives_rows.csv` (stored log10 coordinates and physical values both
+  labeled).
+- **Tests and documentation.** `tests/test_experiment_compatibility.py` (13 tests, including the review's regressions:
+  reference-context refusals, zero-mass components under both policies, override collisions); the aggregation tests
+  pass the compatibility result to the exports. DETECTOR_WORKFLOW.md §7.2–§7.3, the two analysis companions,
+  PROJECT_CONTEXT.md and VALIDATION.md (324 tests over 39 files). The complete-cohort reports were regenerated on
+  the CPU under the review labels `COHORT60RANKS` and, after the review corrections, `COHORT60RANKSR2`, and
+  compared with the independent full-data review calculation
+  (`Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/`).
+
 ## 0.1.46 - 2026-11-05
 
 The Experiment report's aggregation section and its six figures speak the project's own language and state

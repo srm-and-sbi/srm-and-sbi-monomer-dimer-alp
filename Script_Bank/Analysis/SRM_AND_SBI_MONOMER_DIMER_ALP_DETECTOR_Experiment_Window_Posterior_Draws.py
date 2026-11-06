@@ -69,6 +69,7 @@ from SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment_Window_Posterior_Review i
 from srm_and_sbi_monomer_dimer_alp import __version__ as PACKAGE_VERSION                    # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import artifacts, provenance                              # noqa: E402
 from srm_and_sbi_monomer_dimer_alp import artifact_schema as schema                          # noqa: E402
+from srm_and_sbi_monomer_dimer_alp import experiment_aggregation as agg                      # noqa: E402
 from srm_and_sbi_monomer_dimer_alp.evaluation import (QUANTILE_LEVELS, draw_label, posterior_summary,   # noqa: E402
                                                       prior_scale, sample_geometric_median)
 from srm_and_sbi_monomer_dimer_alp.experiment_support import preflight_recordings, read_cell_chunks      # noqa: E402
@@ -266,11 +267,14 @@ def main(argv=None):
         for a in range(D):
             for b in range(a + 1, D):
                 corr_rows.append([ctx["condition"], c, w, keys[a], keys[b], pear[a, b], spear[a, b], pear_phys[a, b]])
-        # joint depth: distance to the window's SGM in prior-scaled estimator coordinates
-        zs = (z - fsgm[i]) / sgm_scale; d_draws = np.sqrt((zs ** 2).sum(axis=1))
-        for name, vec in (("SEL", sel["log10"]), ("source MAP", S["source_map_estimate"][i]), ("source SGM", S["source_posterior_sgm"][i]), ("fresh median vector", fq[i, :, 2])):
+        # joint depth: distance to the window's SGM in prior-scaled estimator coordinates, and the share of draws strictly
+        # farther than the reference (the shared distance rank of experiment_aggregation.reference_distance_ranks, the same
+        # definition Experiment's compatibility diagnostics use; the output contract of joint_depth.csv is unchanged)
+        refs = (("SEL", sel["log10"]), ("source MAP", S["source_map_estimate"][i]), ("source SGM", S["source_posterior_sgm"][i]), ("fresh median vector", fq[i, :, 2]))
+        ranks = agg.reference_distance_ranks(z, fsgm[i], np.asarray([v for _, v in refs], float), sgm_scale)
+        for (name, vec), rank in zip(refs, ranks):
             d_ref = float(np.sqrt((((vec - fsgm[i]) / sgm_scale) ** 2).sum()))
-            depth_rows.append([ctx["condition"], c, w, name, d_ref, float(np.mean(d_draws > d_ref)), int(np.all((fq[i, :, 0] <= vec) & (vec <= fq[i, :, 4])))])
+            depth_rows.append([ctx["condition"], c, w, name, d_ref, float(rank), int(np.all((fq[i, :, 0] <= vec) & (vec <= fq[i, :, 4])))])
     write_csv(out_dir / "window_summaries.csv",
               ["condition", "cell", "chunk", "start_frame", "stop_frame_exclusive", "start_seconds", "stop_seconds", "parameter", "unit", "sel",
                "fresh_q05", "fresh_q25", "fresh_median", "fresh_q75", "fresh_q95", "fresh_width50", "fresh_width90", "fresh_sgm",
@@ -359,7 +363,9 @@ def main(argv=None):
                          [[r[2], r[3], f"{r[4]:.3f}", f"{r[5]:.3f}", "yes" if r[6] else "no"] for r in depth_rows if r[1] == c]), "",
                 "The share of draws farther from the window's SGM than the reference is a distance rank relative to the SGM in prior-scaled estimator coordinates: near 1 means "
                 "most draws lie farther from the SGM than the reference does; near 0 means almost every draw is closer to the SGM than the reference is. It is a distance rank, "
-                "not a posterior-density or joint-credible-region statement.", "",
+                "not a posterior-density or joint-credible-region statement. The same definition (strict comparison, prior-width scale; "
+                "`experiment_aggregation.reference_distance_ranks`) is the rank of the Experiment report's posterior-compatibility diagnostics; this companion "
+                "places fixed reference vectors in one window's cloud, the official report compares the SGM representatives of groups with one another.", "",
                 f"### Cell {c}: within-window correlations (Pearson, estimator coordinates), chunks {JOINT_CHUNKS}", ""]
         for w in JOINT_CHUNKS:
             P_ = corr_store[(c, w)]["pearson_estimator"]; Sp = corr_store[(c, w)]["spearman"]

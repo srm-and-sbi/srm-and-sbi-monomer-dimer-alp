@@ -1,0 +1,15 @@
+# Illustrative empirical_representatives spec for the 0.1.47 implementation checkpoint: NOT a production selection.
+[block]
+posterior_sample_pool_choice = "empirical_representatives"
+candidate_archive = "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment_COHORT60RANKSR2/aggregation_candidates.npz"
+candidate_archive_sha256 = "a24f973dfb891458dab80474f0de110f231de65af8c24ceff65417d00d704ef1"
+rationale = "Illustrative interface example: one SGM per cell over all ten 2 s windows with consensus (median-rank) member weighting, to show the dry-run, the report and the exports. No acquisition period, construction, weighting or treatment is selected by this file."
+
+[[component]]
+source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A"
+condition = "FAB"
+window_set = "all"
+grouping = "per_cell"
+statistic = "sgm"
+weight = 1.0
+member_weighting = "posterior_rank_median"

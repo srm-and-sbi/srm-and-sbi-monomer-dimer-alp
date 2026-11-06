@@ -1184,6 +1184,7 @@ HPC job, or production selection is required:
 
 ```bash
 MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_experiment_aggregation.py
+MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_experiment_compatibility.py
 MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_hpc_submit_forwarding.py
 MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_selection_user.py
 MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_contract_enforcement.py
@@ -1192,7 +1193,11 @@ MACHINE_PROFILE=mars_pc PYTHONPATH=. python tests/test_contract_enforcement.py
 The aggregation checks cover the four constructions and window sets, complete requested coverage
 against the declared geometry, identities belonging to the source product, compatible preprocessing
 and checkpoint contracts, single-process versus merged-shard results, exact draw identities, and
-the existing Experiment report's extended section. They also check target binding, physical-domain
+the existing Experiment report's extended section. The compatibility checks cover the distance-rank
+primitive, the reference scopes, zero against missing scores, the format-2 archive and the
+`posterior_rank_median` member weighting with its equal-member baseline; the full-data oracle
+comparison against the independent review calculation is recorded in
+`Script_Bank/Analysis/Evidence/Experiment_Compatibility_2026-11-06/`. They also check target binding, physical-domain
 refusals, probability normalization and sampling, inverse-CDF representative summaries, duplicate
 memberships, serialization, and the legacy uniform sampler. The forwarding checks use a fake
 scheduler and interpreter, so comma-bearing window selections reach the worker and merge unchanged
@@ -1273,6 +1278,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_embedding_probe.py` | 3 | the embedding probe's arithmetic: a linear signal is recovered, an absent parameter scores no better than the null, the split is disjoint, the report is written |
 | `tests/test_estimator_scorecard.py` | 6 | the estimator scorecard on synthetic, schema-valid records: alignment by identifier, the recovery, coverage and paired log-density numbers, the flags |
 | `tests/test_experiment_aggregation.py` | 17 | the four representative constructions and named window sets; the visible labels, window-set phrases, scope lines and the Data scope table; source and coverage guards; existing Experiment report integration; saved pilot reproduction; target binding; weighted empirical artifacts, physical domains, normalization, and consistent median summaries |
+| `tests/test_experiment_compatibility.py` | 13 | posterior compatibility of the SGM representatives: the shared distance-rank primitive on hand-countable clouds and against the draws companion's direct count; self exclusion by identity; two mutually supporting distant windows (nonzero mean rank, zero median, zero probability, never sampled); missing scores against valid zeros and the constructor's refusals; reference scopes (other windows of the same cell, other cells of the same condition and set, named sets, no cross-condition contamination); opening aliases with their own availability; pool invariance; the format-2 archive round trip, legacy format 1, malformed data; the hierarchical normalization (equal cell mass); mixtures, duplicates, overrides, the equal-member baseline, the artifact record; the Experiment report subsection, figures and atlas for live and saved rendering; the reader's reference-context refusals (split, trimmed or rescaled archives, fractional identities, duplicated cell or window identities, missing or foreign blocks); zero-mass components under both policies in the dry-run and the report; override collisions with complete row provenance |
 | `tests/test_experiment_comparison.py` | 5 | the Experiment comparison on synthetic products: alignment by identifier, the location, prior-box shares and discrepancy numbers of the three point estimates |
 | `tests/test_fleet_sync.py` | 10 | the fleet sync: every failure status propagates, and a live sync counts as a success only after the content verification |
 | `tests/test_gradient_accumulation.py` | 6 | gradient accumulation to a fixed global batch: the step resolution and the equivalence with a whole-group batch |
@@ -1303,7 +1309,7 @@ files; a new or removed test file changes this table and the changelog entry of 
 | `tests/test_weights_initialized_phase.py` | 6 | the weights-initialized phase: an artifact restores every weight and buffer of a compiled-layout network and its losses; field-by-field refusal of a mismatched artifact; a fresh optimizer, rate, patience and counters with the global epoch continued; a resumed phase keeps its schedule and refuses another patience; the runner's refusals; the HPC forwarding |
 | `tests/test_window_start_composition.py` | 12 | the window-start composition: the reference population, the allocation, the placement census, conservation, rounding ties, the refusal of out-of-range inputs |
 
-Total: 311 tests over 38 files.
+Total: 324 tests over 39 files.
 
 ## 4. Troubleshooting
 

@@ -1637,9 +1637,12 @@ rather than a single monolithic support file. The modules and their roles:
   through one implementation.
 - **`detector_nuisance_dli.py`** — the `Nuisance_DLI` calibrated-imaging
   nuisance: the artifact format, the weighted `empirical_representatives`
-  construction from Experiment candidates, target/physical-domain checks,
-  whole-vector sampling, and the require-gate through which biology DLI loads
-  it. Historical unweighted constructions remain readable.
+  construction from Experiment candidates with its per-component member
+  weighting (`uniform`, or `posterior_rank_median` from Experiment's
+  compatibility scores, with equal cell mass for cell–window members and
+  zero probabilities kept), target/physical-domain checks, whole-vector
+  sampling, and the require-gate through which biology DLI loads it.
+  Historical unweighted constructions remain readable.
 - **`experiment_support.py`** — the workflow-agnostic real-recording machinery:
   loading, windowing, and preparing experimental microscopy videos, and the one
   definition of the condition names (`condition_display`, and `kind_label`, which
@@ -1649,15 +1652,22 @@ rather than a single monolithic support file. The modules and their roles:
 - **`experiment_aggregation.py`** — shared aggregation of retained window
   posteriors into per-cell, per-position, global, and per-cell-window
   representative collections. It checks source contracts and coverage, keeps
-  SGM and marginal-median vectors distinct, exports the candidate archive, and
-  adds the aggregation section to the existing Experiment report. Saved-result
-  regeneration calls the same reporting function on CPU; it performs no
-  neural sampling. Detector candidates feed the separate nuisance-selection
-  analysis; biology uses the same grouping and reporting utilities.
-- **`visualization_aggregation.py`** — marginal CDF, joint, temporal, and
-  window-selection plots for the Experiment report, reused for the final
-  weighted nuisance distribution. Representative dispersion and input-posterior
-  uncertainty have separate labels.
+  SGM and marginal-median vectors distinct, computes the posterior
+  compatibility of the SGM representatives (the shared distance-rank
+  primitive `reference_distance_ranks`, the cross-posterior rank matrices and
+  their median scores, with explicit availability statuses), exports the
+  format-2 candidate archive, and adds the aggregation section with its
+  compatibility subsection and atlas to the existing Experiment report.
+  Saved-result regeneration calls the same reporting function on CPU; it
+  performs no neural sampling. Detector candidates feed the separate
+  nuisance-selection analysis; biology uses the same grouping and reporting
+  utilities.
+- **`visualization_aggregation.py`** — marginal CDF, joint, temporal,
+  window-selection and compatibility plots (cell matrix with score strip,
+  window-score overview, atlas pages) for the Experiment report, reused for
+  the final weighted nuisance distribution together with the member-probability
+  figure. Representative dispersion and input-posterior uncertainty have
+  separate labels; raw ranks and adopted probabilities are never confused.
 - **`inference_network.py`** — the network architecture (§6): positional
   encoding, attention block, temporal transformer, and the 3D-CNN video encoder.
 - **`inference_support.py`** — the training pipeline: the video dataset (with
@@ -2148,8 +2158,12 @@ posteriors' uncertainty. A complete shard merge precedes these calculations.
 saved products, optionally joining compatible retained collections through
 `--cloud-sources`; coverage and sampling provenance are explicit. This
 experimental grouping is a separate scientific question from recovery against
-known synthetic truth. The Nuisance DLI analysis subsequently selects and
-weights detector representatives; it does not repeat neural inference.
+known synthetic truth. The report also states each SGM representative's
+posterior compatibility (the median of its cross-posterior distance ranks
+against its peers' clouds), a raw centrality score that is never a sampling
+probability in Experiment. The Nuisance DLI analysis subsequently selects and
+weights detector representatives, uniformly or by those scores; it does not
+repeat neural inference.
 
 Both stages compute and store **three point estimates** for every observation —
 the numerical MAP candidate (`map_estimate`), the marginal median of the draws
