@@ -1265,10 +1265,12 @@ format-3 archives with the rank coordinate space `spatial_brightness`). The sele
   estimator keeps its classification as a biased cross-check (its raw-frame pipeline is distinct from the
   localization-table derivation), and the recorded bias findings stand.
 
-The InlB artifact carries 93.9 % of its mass above the PSF-width prior edge (`mu_r`), 19.7 % below the brightness edge
-and 7.1 % above the brightness-spread edge; Fab 5.6 % and 12.8 % on `mu_r` and `mu_pc`. These shares restate, for a
-population, the extrapolation acknowledged in the `SEL` record; the artifact records them as outside-prior mass and
-production samples the rows as stored, with no clipping and no zero probability for lying outside the training prior.
+The InlB artifact carries 93.9 % of its mass above the PSF-width prior edge (`mu_r`), 18.2 % below the brightness edge
+and 6.6 % above the brightness-spread edge. For Fab, 3.7 % lies above the `mu_r` edge and 13.7 % below the `mu_pc` edge;
+17.3 % lies outside on at least one coordinate. These shares describe the adopted four-coordinate weighting (the
+artifacts' recorded `outside_prior_by_key` and `outside_prior_mass`) and restate, for a population, the extrapolation
+acknowledged in the `SEL` record; production samples the stored rows without clipping or excluding them for exceeding a
+training-prior bound.
 The `SEL` artifacts, their values and their decision record above are unchanged and remain the fixed references
 displayed by Experiment and the sensitivity scenarios. The biology generation selects the artifact with the tag
 `RANK4` (`--nuisance-tag`, dispatcher `NUISANCE_TAG`), and every consumer records the selected artifact's identity.
