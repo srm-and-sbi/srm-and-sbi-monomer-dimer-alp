@@ -628,6 +628,10 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     except agg.AggregationError as exc:
         raise SystemExit(f"--aggregation-window-sets: {exc}")
     dump_samples = bool(args.dump_posterior_samples or aggregation_on)
+    try:
+        rank_spaces = agg.parse_rank_spaces(getattr(args, "compatibility_coordinates", None), spec.parameter_keys) if aggregation_on else {}
+    except agg.AggregationError as exc:
+        raise SystemExit(f"--compatibility-coordinates: {exc}")
     review_label = _review_label(args)
 
     # Video geometry: model-length windows stepped across each long recording.
@@ -700,6 +704,8 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
              f"{'required by the aggregation' if aggregation_on else '--dump-posterior-samples'})" if dump_samples else "   (--no-aggregation, no --dump-posterior-samples)"))
     print(f"  aggregation               : {'on: window sets ' + ', '.join(f'{k}=' + ('all' if v is None else str(list(v))) for k, v in window_sets.items()) if aggregation_on else 'OFF (--no-aggregation: legacy report, no candidate collections)'}")
     print(f"  reference vector          : " + (f"Nuisance_DLI tag {args.reference_nuisance_tag} (displayed as a historical comparison; absent = none)" if aggregation_on and args.reference_nuisance_tag else "none"))
+    if aggregation_on:
+        print("  compatibility rank spaces : all (every coordinate)" + "".join(f"; {k} = {', '.join(v)}" for k, v in rank_spaces.items()))
     if args.regenerate_report:
         print(f"  --regenerate-report       : CPU re-rendering of the saved product; review label {review_label}; retained clouds from "
               + (args.cloud_sources if args.cloud_sources else "the product itself (if stored)"))
@@ -775,7 +781,7 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
         return agg.AggregationRequest(window_sets=window_sets, enabled=aggregation_on, clouds=clouds, reference=reference,
                                       coverage_note=coverage_note, window_seconds=float(window_seconds),
                                       product_label=f"{paths.project_alias}_{product_label}", source_clouds_note=source_note,
-                                      target=target_binding)
+                                      target=target_binding, rank_spaces=rank_spaces)
 
     # --regenerate-report: CPU re-rendering of the SAVED product (no estimation, no GPU) through the same
     # writer, into a review copy named by --review-label; the adopted report and arrays stay untouched.
@@ -1115,6 +1121,14 @@ def build_experiment_parser() -> argparse.ArgumentParser:
              "window), NAME=a-b (a range of positions) or NAME=a+b+c (a list). Every construction (per_cell, "
              f"per_window_position, global, per_cell_window) is computed for every set. Default '{agg.DEFAULT_WINDOW_SETS}'. "
              "Enabling the aggregation retains the summary clouds already drawn (posterior_samples_cloud).",
+    )
+    parser.add_argument(
+        "--compatibility-coordinates", default=None,
+        help="Additional rank coordinate spaces of the posterior-compatibility subsection: 'LABEL=key,key[;LABEL2=...]' "
+             "(lowercase labels; keys of the parameter table; a proper subset). The primary space 'all' (every coordinate) is "
+             "always computed; each additional space restricts the SAME candidates, reference SGMs and clouds to its keys and is "
+             "stored beside it in the candidate archive (format 3), the CSV exports and the report. The Nuisance DLI constructor "
+             "selects a space by its keys (rank_coordinates). Default: none.",
     )
     parser.add_argument(
         "--no-aggregation", action="store_true",

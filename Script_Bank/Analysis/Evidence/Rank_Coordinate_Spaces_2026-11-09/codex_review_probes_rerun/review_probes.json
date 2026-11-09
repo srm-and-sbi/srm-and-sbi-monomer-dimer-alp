@@ -1,0 +1,337 @@
+{
+  "availability": {
+    "availability": "rank space all (a, b, c): available, compatibility scores computed for 12/12 members and normalizable; rank space a_only (a): unavailable: compatibility scores computed for 12/12 members, but the policy cannot be normalized (cell 0: every selected-window score is zero (sum 0.0) in rank space 'a_only'); the computed zero scores remain valid diagnostics",
+    "spaces": {
+      "all": {
+        "accepted": true,
+        "total": 0.9999999999999998
+      },
+      "a_only": {
+        "accepted": false,
+        "reason": "component: cell 0: every selected-window score is zero (sum 0.0) in rank space 'a_only'; the selection is refused rather than dropping the cell or redistributing its mass (no uniform fallback, no floor)."
+      }
+    }
+  },
+  "hpc_forwarding": {
+    "SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Experiment.sh": {
+      "exit_code": 0,
+      "calls": [
+        [
+          "-u",
+          "/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py",
+          "--condition",
+          "FAB",
+          "--kinds",
+          "FAB",
+          "--max-cells",
+          "0",
+          "--pool-mode",
+          "bounded",
+          "--total-time-seconds",
+          "2.0",
+          "--compatibility-coordinates",
+          "spatial_brightness=mu_r,sigma_r,mu_pc,sigma_pc"
+        ],
+        [
+          "-u",
+          "/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_Experiment.py",
+          "--condition",
+          "FAB",
+          "--kinds",
+          "FAB",
+          "--max-cells",
+          "0",
+          "--pool-mode",
+          "bounded",
+          "--total-time-seconds",
+          "2.0",
+          "--compatibility-coordinates",
+          "spatial_brightness=mu_r,sigma_r,mu_pc,sigma_pc",
+          "--merge"
+        ]
+      ],
+      "rank_option_forwarded": true
+    },
+    "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Experiment.sh": {
+      "exit_code": 0,
+      "calls": [
+        [
+          "-u",
+          "/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment.py",
+          "--condition",
+          "FAB",
+          "--kinds",
+          "FAB",
+          "--max-cells",
+          "0",
+          "--pool-mode",
+          "bounded",
+          "--total-time-seconds",
+          "2.0",
+          "--compatibility-coordinates",
+          "spatial_brightness=mu_r,sigma_r,mu_pc,sigma_pc"
+        ],
+        [
+          "-u",
+          "/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/srm-and-sbi-monomer-dimer-alp/Script_Bank/Prime/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Experiment.py",
+          "--condition",
+          "FAB",
+          "--kinds",
+          "FAB",
+          "--max-cells",
+          "0",
+          "--pool-mode",
+          "bounded",
+          "--total-time-seconds",
+          "2.0",
+          "--compatibility-coordinates",
+          "spatial_brightness=mu_r,sigma_r,mu_pc,sigma_pc",
+          "--merge"
+        ]
+      ],
+      "rank_option_forwarded": true
+    }
+  },
+  "cohorts": {
+    "FAB": {
+      "groups": 793,
+      "spaces": {
+        "all": {
+          "n": 600,
+          "zero": 0,
+          "effective_rows": 572.5249243943646,
+          "cell_mass_range": [
+            0.016666666666666663,
+            0.016666666666666673
+          ],
+          "window_mass": {
+            "0": 0.05100921959498238,
+            "1": 0.08867337574110995,
+            "2": 0.10133124813696065,
+            "3": 0.10702862612774548,
+            "4": 0.11019643450290628,
+            "5": 0.11086479767825044,
+            "6": 0.10778722136995482,
+            "7": 0.10798981401810337,
+            "8": 0.10759788113403194,
+            "9": 0.10752138169595464
+          },
+          "zero_by_window": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0,
+            "8": 0,
+            "9": 0
+          }
+        },
+        "spatial_brightness": {
+          "n": 600,
+          "zero": 1,
+          "effective_rows": 483.5508973032454,
+          "cell_mass_range": [
+            0.016666666666666663,
+            0.01666666666666667
+          ],
+          "window_mass": {
+            "0": 0.01268187895050532,
+            "1": 0.053893051208338226,
+            "2": 0.08711805060382846,
+            "3": 0.11140507489938206,
+            "4": 0.1242607659808874,
+            "5": 0.1299576793595705,
+            "6": 0.1271746656494897,
+            "7": 0.12017366707320394,
+            "8": 0.11863633934173626,
+            "9": 0.11469882693305819
+          },
+          "zero_by_window": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 1,
+            "7": 0,
+            "8": 0,
+            "9": 0
+          }
+        }
+      },
+      "four_score_higher_than_six": 3,
+      "four_score_lower_than_six": 597,
+      "four_score_equal_to_six": 0,
+      "proposal_overrides": {
+        "all": {
+          "prob_photo_bleach": {
+            "value_physical": 0.05,
+            "value_stored": -1.3010299956639813,
+            "reason": "empirically anchored declared per-dye bleaching probability over the fixed 100-frame reference interval: the measured whole-recording fluorescence decline of the sixty MET-FAB recordings over 20 s (0.054 to 0.057 per 100-frame interval, record ..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW), rounded as a working value and selected on 2026-10-01 (DETECTOR_WORKFLOW.md sec. 7.6). The estimator's own coordinate (median 0.093, MAP 0.148) is not retained: it does not recover the parameter on synthetic videos (r 0.06). Assumptions: ideal independent dyes of stationary mean brightness; the decline is not single-exponential, emitters leaving the field and label exchange are not separable from bleaching.",
+            "replaced_range_stored": [
+              -1.2691277265548706,
+              -0.7120048403739929
+            ],
+            "replaced_rows": 600
+          },
+          "lambda_rate": {
+            "value_physical": 8.0,
+            "value_stored": 0.9030899869919435,
+            "reason": "declared working value, rounded from the adopted Fab detector estimator C128V42A (median 8.096 per second over the 600 per-window posterior medians, MAP 8.204, SGM 7.884; window spread 0.07 dex); the parameter is only partially recovered on synthetic videos (MAE 0.217 dex, r 0.49), so its per-window SGM coordinates are not retained and its digits are not kept; the localization-autocorrelation anchor about 5 (DETECTOR_WORKFLOW.md sec. 6.5) is 0.21 dex below and nothing on the recordings decides between them. Same value and basis as the SEL selection_user record (sec. 7.6).",
+            "replaced_range_stored": [
+              0.6337066292762756,
+              0.978672981262207
+            ],
+            "replaced_rows": 600
+          }
+        },
+        "spatial_brightness": {
+          "prob_photo_bleach": {
+            "value_physical": 0.05,
+            "value_stored": -1.3010299956639813,
+            "reason": "empirically anchored declared per-dye bleaching probability over the fixed 100-frame reference interval: the measured whole-recording fluorescence decline of the sixty MET-FAB recordings over 20 s (0.054 to 0.057 per 100-frame interval, record ..._20S_50FPS_Direct_Fluorescence_Loss_Experiment_RAW), rounded as a working value and selected on 2026-10-01 (DETECTOR_WORKFLOW.md sec. 7.6). The estimator's own coordinate (median 0.093, MAP 0.148) is not retained: it does not recover the parameter on synthetic videos (r 0.06). Assumptions: ideal independent dyes of stationary mean brightness; the decline is not single-exponential, emitters leaving the field and label exchange are not separable from bleaching.",
+            "replaced_range_stored": [
+              -1.2691277265548706,
+              -0.7120048403739929
+            ],
+            "replaced_rows": 600
+          },
+          "lambda_rate": {
+            "value_physical": 8.0,
+            "value_stored": 0.9030899869919435,
+            "reason": "declared working value, rounded from the adopted Fab detector estimator C128V42A (median 8.096 per second over the 600 per-window posterior medians, MAP 8.204, SGM 7.884; window spread 0.07 dex); the parameter is only partially recovered on synthetic videos (MAE 0.217 dex, r 0.49), so its per-window SGM coordinates are not retained and its digits are not kept; the localization-autocorrelation anchor about 5 (DETECTOR_WORKFLOW.md sec. 6.5) is 0.21 dex below and nothing on the recordings decides between them. Same value and basis as the SEL selection_user record (sec. 7.6).",
+            "replaced_range_stored": [
+              0.6337066292762756,
+              0.978672981262207
+            ],
+            "replaced_rows": 600
+          }
+        }
+      }
+    },
+    "INLB": {
+      "groups": 793,
+      "spaces": {
+        "all": {
+          "n": 600,
+          "zero": 4,
+          "effective_rows": 507.7263567702496,
+          "cell_mass_range": [
+            0.016666666666666663,
+            0.01666666666666667
+          ],
+          "window_mass": {
+            "0": 0.034134614390930434,
+            "1": 0.07365478806894012,
+            "2": 0.09391115060004124,
+            "3": 0.11336004099870473,
+            "4": 0.12189480499830688,
+            "5": 0.11784153747205121,
+            "6": 0.12084790923179874,
+            "7": 0.1144031005054225,
+            "8": 0.10665828173151633,
+            "9": 0.10329377200228779
+          },
+          "zero_by_window": {
+            "0": 1,
+            "1": 1,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0,
+            "8": 1,
+            "9": 1
+          }
+        },
+        "spatial_brightness": {
+          "n": 600,
+          "zero": 24,
+          "effective_rows": 380.0517048582568,
+          "cell_mass_range": [
+            0.016666666666666663,
+            0.01666666666666667
+          ],
+          "window_mass": {
+            "0": 0.011580066956469105,
+            "1": 0.047271338662813904,
+            "2": 0.0813481033898126,
+            "3": 0.11431240121371262,
+            "4": 0.12104071479736933,
+            "5": 0.14933244933903364,
+            "6": 0.13291633045270038,
+            "7": 0.12613288927537655,
+            "8": 0.11588294874425537,
+            "9": 0.10018275716845648
+          },
+          "zero_by_window": {
+            "0": 15,
+            "1": 2,
+            "2": 0,
+            "3": 0,
+            "4": 1,
+            "5": 1,
+            "6": 1,
+            "7": 0,
+            "8": 1,
+            "9": 3
+          }
+        }
+      },
+      "four_score_higher_than_six": 11,
+      "four_score_lower_than_six": 585,
+      "four_score_equal_to_six": 4,
+      "proposal_overrides": {
+        "all": {
+          "prob_photo_bleach": {
+            "value_physical": 0.05,
+            "value_stored": -1.3010299956639813,
+            "reason": "declared shared-rate assumption: the same dye, illumination, camera settings and 100-frame reference interval as MET-FAB, so the Fab empirically anchored value 0.05 is adopted as the practical baseline in the absence of an InlB decline analysis (the lead, 2026-10-27; DETECTOR_WORKFLOW.md sec. 7.6). The estimator's own coordinate (median 0.100, MAP 0.120) is not retained: it does not recover the parameter (r 0.02). No measurement on the InlB recordings supports the value.",
+            "replaced_range_stored": [
+              -1.3055680990219116,
+              -0.9276899099349976
+            ],
+            "replaced_rows": 600
+          },
+          "lambda_rate": {
+            "value_physical": 2.0,
+            "value_stored": 0.3010299956639812,
+            "reason": "declared working value, rounded from the adopted InlB detector estimator C128V42AP3LR32 (median 2.283 per second over the 600 per-window posterior medians, MAP 2.664, SGM 2.376; window spread 0.36 dex); partially recovered on synthetic videos (MAE 0.206 dex, r 0.53), so its per-window SGM coordinates are not retained and its digits are not kept; no InlB localization anchor exists. Same value and basis as the SEL selection_user record (sec. 7.6); Fab's 8 remains the shared-rate sensitivity scenario.",
+            "replaced_range_stored": [
+              0.07608678936958313,
+              1.6189610958099365
+            ],
+            "replaced_rows": 600
+          }
+        },
+        "spatial_brightness": {
+          "prob_photo_bleach": {
+            "value_physical": 0.05,
+            "value_stored": -1.3010299956639813,
+            "reason": "declared shared-rate assumption: the same dye, illumination, camera settings and 100-frame reference interval as MET-FAB, so the Fab empirically anchored value 0.05 is adopted as the practical baseline in the absence of an InlB decline analysis (the lead, 2026-10-27; DETECTOR_WORKFLOW.md sec. 7.6). The estimator's own coordinate (median 0.100, MAP 0.120) is not retained: it does not recover the parameter (r 0.02). No measurement on the InlB recordings supports the value.",
+            "replaced_range_stored": [
+              -1.3055680990219116,
+              -0.9276899099349976
+            ],
+            "replaced_rows": 600
+          },
+          "lambda_rate": {
+            "value_physical": 2.0,
+            "value_stored": 0.3010299956639812,
+            "reason": "declared working value, rounded from the adopted InlB detector estimator C128V42AP3LR32 (median 2.283 per second over the 600 per-window posterior medians, MAP 2.664, SGM 2.376; window spread 0.36 dex); partially recovered on synthetic videos (MAE 0.206 dex, r 0.53), so its per-window SGM coordinates are not retained and its digits are not kept; no InlB localization anchor exists. Same value and basis as the SEL selection_user record (sec. 7.6); Fab's 8 remains the shared-rate sensitivity scenario.",
+            "replaced_range_stored": [
+              0.07608678936958313,
+              1.6189610958099365
+            ],
+            "replaced_rows": 600
+          }
+        }
+      }
+    }
+  }
+}

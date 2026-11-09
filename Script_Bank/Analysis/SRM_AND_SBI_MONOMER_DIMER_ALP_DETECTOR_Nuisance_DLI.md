@@ -57,13 +57,17 @@ choices once: which windows are included, and which samples are pooled; `opening
 per-cell-window and per-position equal global, and the opening figures name these equivalences. It links
 these supporting files in its own output directory:
 
-- `aggregation_candidates.npz` (format 2): group vectors, quantiles, identities, methods, source contract, target
+- `aggregation_candidates.npz` (format 3): group vectors, quantiles, identities, methods, source contract, target
   binding, and the posterior-compatibility data (per-group median score, status and reference count; the
-  rank-matrix blocks; the protocol `sgm_distance_rank_v1`).
+  rank-matrix blocks; the protocol `sgm_distance_rank_v1`) of the primary rank space `all` (every coordinate) and
+  of every additional rank coordinate space Experiment was asked for (`compatibility_<label>_*`, manifest section
+  `compatibility.rank_spaces` with each space's coordinates and restricted scale).
 - `aggregation_groups.csv`: each group's physical values, source draw identity, compatibility score, status,
-  reference count and the keys on which the SGM itself lies outside the training prior.
+  reference count and the keys on which the SGM itself lies outside the training prior; one further
+  score/status/reference-count triple per additional rank space.
 - `aggregation_comparison.csv`: representative-distribution summaries by grouping, set, statistic, and parameter.
-- `aggregation_compatibility.csv`: every pairwise distance rank (candidate, reference, reference draws, rank).
+- `aggregation_compatibility.csv`: every pairwise distance rank (candidate, reference, reference draws, rank) of
+  the primary space; `aggregation_compatibility_<label>.csv` the same for an additional space.
 - `aggregation_manifest.json`: source identities and checksums, coverage, methods, the compatibility block map,
   and archive checksum.
 - `figures/aggregation_*`: the figures embedded in the report, including the compatibility cell matrix with its
@@ -127,10 +131,11 @@ The label does not change the estimator tag. InlB uses `--condition INLB --artif
 The biology Experiment entry point shares the reporting implementation, but only detector candidates feed
 this imaging artifact.
 
-On HPC, `AGGREGATION_WINDOW_SETS` carries the same comma-separated grammar. Both submitters export it via
-the environment and `ALL`, following the same comma-safe rule as `KINDS`; they do not insert the value into
-Slurm's comma-delimited explicit export list. `NO_AGGREGATION=1` selects the legacy report and
-`REFERENCE_NUISANCE_TAG` selects a displayed fixed reference. Workers and merge receive the same settings.
+On HPC, `AGGREGATION_WINDOW_SETS` carries the same comma-separated grammar and `COMPATIBILITY_COORDINATES` the
+rank coordinate spaces (`LABEL=key,key[;LABEL2=...]`). Both submitters export them via the environment and `ALL`,
+following the same comma-safe rule as `KINDS`; they do not insert the values into Slurm's comma-delimited explicit
+export list, and each launcher appends each value as one quoted argument. `NO_AGGREGATION=1` selects the legacy
+report and `REFERENCE_NUISANCE_TAG` selects a displayed fixed reference. Workers and merge receive the same settings.
 
 ## 3. Emit a selection specification
 
@@ -150,9 +155,10 @@ MACHINE_PROFILE=mars_pc python Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_AL
 
 Remove `--dry-run` to emit the skeleton. It lists every available component as a commented table, with a
 commented `member_weighting = "uniform"` line stating for each component whether `posterior_rank_median` is
-available (compatibility scores computed for all members and normalizable under the constructor's own rules;
-unavailable with the reason, including a computed but all-zero normalizer; or not applicable to the grouping), and
-leaves `rationale` empty. The console prints the same availability. It cannot be built until the
+available, evaluated separately for every rank coordinate space the archive holds (per space: compatibility scores
+computed for all members and normalizable under the constructor's own rules with that space's coordinates;
+unavailable with the reason, including a computed but all-zero normalizer; a space's availability never stands in
+for another's; or not applicable to the grouping), and leaves `rationale` empty. The console prints the same availability. It cannot be built until the
 selection is filled. An existing spec is refused, so use a separate tag for another construction. The generated
 provenance and source checksum identify the archive.
 
@@ -172,7 +178,8 @@ The spec uses the following fields:
 | `[[component]].grouping` | One of the four grouping IDs above |
 | `[[component]].statistic` | `"sgm"` by default, or explicitly `"median"` |
 | `[[component]].weight` | Non-negative component mass; all component weights sum to one |
-| `[[component]].member_weighting` | `"uniform"` (default: every member receives alpha_k / n_k) or `"posterior_rank_median"` (consensus weighting from Experiment's compatibility scores; requires `statistic = "sgm"`, grouping `per_cell` or `per_cell_window`, and a format-2 archive) |
+| `[[component]].member_weighting` | `"uniform"` (default: every member receives alpha_k / n_k) or `"posterior_rank_median"` (consensus weighting from Experiment's compatibility scores; requires `statistic = "sgm"`, grouping `per_cell` or `per_cell_window`, and a format-2 or later archive) |
+| `[[component]].rank_coordinates` | Optional, with `posterior_rank_median` only: the parameter keys of the archive rank space that supplies the scores (default: every coordinate, the space `all`); the archive must hold a space over exactly those keys |
 | `[override.<KEY>].value` and `.reason` | Optional explicit physical value and the recorded justification for applying it to every vector |
 
 A single component with weight one is a valid choice. If component k has weight alpha_k and n_k members,
@@ -195,6 +202,15 @@ supplies a uniform selection; rank weighting needs the CPU regeneration of the E
 describe the original SGM candidates; explicit overrides transform the stored rows afterwards and are shown. The
 consensus-weighted distribution need not preserve the original proportions of acquisition batches; that is a
 consequence to describe, not an automatic reason to reject a selection.
+
+The scores come from one rank coordinate space of the archive. By default they are the ranks over every
+coordinate (the space `all`); `rank_coordinates` names a list of parameter keys and selects the archive space over
+exactly those keys (Experiment's `--compatibility-coordinates`), and a space the archive does not hold is refused
+with the available spaces named. The relation to the overrides is recorded and reported: when the ranked
+coordinates include an overridden coordinate, disagreement in that coordinate entered the member weights although
+the final vectors no longer carry it (stated, not corrected); when the ranked coordinates are exactly the retained
+ones, the weights rest on the coordinates the final vectors carry. The equal-member baseline does not depend on
+the space.
 
 Components reuse observations. Combining them changes the probability assigned to representative states,
 not the amount of independent experimental evidence. Adding a global representative places a point mass at
@@ -242,12 +258,15 @@ The output paths follow the active machine profile, under `Posit`:
   member probability range and the effective number of representatives 1/sum(p_i^2) with its normalization scope,
   a concentration measure and not a count of independent experiments), consolidation, overrides, the weighted
   marginal summary, the stored sampling probabilities beside the equal-member baseline (`representatives_probabilities`;
-  labeled by source cell for a single non-duplicated per-cell selection, otherwise by stored row), the six-parameter
+  a cell-by-window grid of each row's share of its cell's mass with the cell masses beside it for a single
+  non-duplicated selection of one SGM per cell and window, labeled by source cell for a single non-duplicated
+  per-cell selection, otherwise by stored row), the six-parameter
   CDF comparison of the selected probabilities against that baseline (`representatives_marginals`; the baseline uses
   the same components, component masses, duplicate consolidation and overrides with uniform members, so the
   comparison isolates the member weighting), the components view (`representatives_components`) and the joint
-  projections (`representatives_joint`), beside `representatives_members.csv` (per member: identities, score,
-  status, references, contribution, stored row) and `representatives_rows.csv` (per stored row: probability,
+  projections (`representatives_joint`), beside `representatives_members.csv` (per member: identities, the
+  primary-space score, status and references, the rank space and the score the policy used, contribution, stored
+  row) and `representatives_rows.csv` (per stored row: probability,
   baseline probability, memberships by the recorded stored-row identity, the stored estimator coordinates
   `<key>_stored_log10` and the physical values `<key>_physical`). Every stored row keeps its memberships even when
   an override makes distinct rows identical; the report checks that the contributions add up to each row's
@@ -305,3 +324,5 @@ Scientific and execution records:
 - [Implementation evidence](Evidence/Experiment_Aggregation_2026-11-05/COMPLETION_NOTE.md): measured costs, validation, review corrections, and output index.
 - [Full-cohort collection evidence](Evidence/Experiment_Aggregation_Cohort_2026-11-05/COMPLETION_NOTE.md): the 116 cohort collections and the complete-cohort reports.
 - [Compatibility and member-weighting evidence](Evidence/Experiment_Compatibility_2026-11-06/COMPLETION_NOTE.md): the regenerated `COHORT60RANKS` reports, the full-data oracle comparison, the illustrative rank-weighted build.
+- [Rank coordinate spaces evidence](Evidence/Rank_Coordinate_Spaces_2026-11-09/COMPLETION_NOTE.md): the `COHORT60RANKSR3` regenerations with the four-coordinate space, the independent plain-counting oracle, the comparison of the two weightings.
+- [Production selection RANK4](Evidence/Nuisance_DLI_RANK4_2026-11-09/COMPLETION_NOTE.md): the production `empirical_representatives` artifacts of both conditions (decision record in DETECTOR_WORKFLOW.md sec. 7.6): specs, CLI dry-runs and builds, loader validation against the reviewed proposal, report copies.

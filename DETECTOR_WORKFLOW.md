@@ -834,9 +834,21 @@ it is kept and shown (no floor, no clipping, no removal). Every selected score m
 matching archive context; a required normalizing sum of zero, an unsupported statistic or grouping, a missing
 score, an unknown policy or an incompatible archive is an explicit refusal, never a fallback to uniform. A
 format-1 candidate archive still supplies a uniform selection; rank weighting requires a CPU regeneration of
-the Experiment report (format 2). The resulting distribution emphasizes agreement among representatives; it
+the Experiment report (format 2 or later). The resulting distribution emphasizes agreement among representatives; it
 need not preserve the original proportions of acquisition batches, a consequence to describe when a selection
 is made.
+
+**Rank coordinates and overrides.** The scores a component weights with come from one rank coordinate space
+of the archive (`rank_coordinates`, a list of parameter keys; the default is every coordinate, the primary space
+`all`). When a selection overrides coordinates, the ranks of the primary space still contain disagreement in
+those coordinates although the final vectors no longer carry them; the record states per component which ranked
+coordinates were overridden and, for the whole artifact, whether every rank-weighted component's coordinates are
+disjoint from the overrides, and the report repeats it. Naming the retained coordinates as `rank_coordinates`
+(for example the four spatial and brightness coordinates when bleaching and flicker are overridden) makes the
+member weights rest on exactly the coordinates the final vectors carry; the archive must then hold a rank space
+over exactly those keys (an Experiment regeneration with `--compatibility-coordinates`), and a missing space is a
+refusal that names the available spaces, never an approximation from another space. The equal-member baseline
+does not depend on the space.
 
 **Reports and interpretation.** For every requested set, Experiment compares normalized marginal empirical
 CDFs and joint projections. Temporal plots show cell-window and position-level SGMs with separately labeled
@@ -910,6 +922,20 @@ refused rather than normalized. Experiment displays raw median ranks and never t
 probabilities. Training-prior flags remain separate; physically valid extrapolated values are not clipped or
 assigned zero probability because they lie outside the training prior.
 
+**Rank coordinate spaces.** The distances above run over every parameter coordinate (the primary rank space
+`all`). Experiment can rank the same candidates, reference SGMs and reference clouds over a declared subset of the
+coordinates as well (`--compatibility-coordinates LABEL=key,key[;LABEL2=...]`, lowercase labels, a proper subset of
+the parameter keys): the groups, the SGMs, the reference populations and the statuses are identical across
+spaces, only the metric changes, with the scale restricted to the chosen coordinates, so a space that excludes a
+parameter is blind to disagreement in that parameter. Each additional space has its own scores, statuses, figures
+and atlas (`compatibility/<condition>/<set>/windows_<label>/`), its own `aggregation_compatibility_<label>.csv`
+and score, status and reference-count columns in `aggregation_groups.csv`, and its own arrays
+(`compatibility_<label>_*`) and manifest section (`compatibility.rank_spaces`, coordinates, protocol with the
+restricted scale, block map) in the candidate archive, whose format is 3; the primary space's arrays and files
+keep their format-2 names and content. The reader validates every space under the same context rules and
+additionally its declared coordinates and restricted scale, and accepts formats 1, 2 and 3. The constructor
+selects a space by its coordinates (`rank_coordinates`, above).
+
 Unrestricted clouds are not clipped. Valid values outside the detector training box remain labeled as
 extrapolations; the artifact records `pool_mode = "unrestricted"` when positive mass lies outside that box.
 Explicit selections and final vectors must still respect physical domains, including a bleaching probability
@@ -949,7 +975,8 @@ are recorded scientific choices. The route has three steps:
    reads the archive on CPU, displays the same representative summaries as Experiment, and emits a skeleton
    with components commented out. The user names the components, their weights, the statistic (`sgm` or `median`),
    the member-weighting policy per component (`uniform`, the default, or `posterior_rank_median`; the skeleton
-   states for every component whether compatibility scores are available) and rationale. Optional
+   states for every component whether compatibility scores are available and which rank spaces the archive
+   holds), optionally the rank coordinates of a rank-weighted component, and rationale. Optional
    `[override.<KEY>]` tables declare physical values and reasons. No production selection is inferred from the
    skeleton or an illustrative example.
 3. **Validate and build on CPU.** `--build --dry-run` checks archive identity, target binding, component
@@ -1016,10 +1043,11 @@ estimator format; both workflows write and read it, and the run-identity table o
 
 ### 7.6 The working imaging vector: sources, selected values and limitations
 
-**Historical fixed-scenario record.** This subsection preserves the decisions and evidence behind `REF`,
-`SEL`, and their variants. The built `SEL` artifacts are the fixed references shown by Experiment. The
-active representative-based procedure is in §7.2–§7.3; its production selection has not been made. Historical
-selections below do not automatically supply the weights or parameter treatment of an empirical artifact.
+**Fixed-scenario record and the production selection.** This subsection preserves the decisions and evidence
+behind `REF`, `SEL`, and their variants, and records the production selection `RANK4` of 2026-11-09 (below, after
+the `SEL` record). The built `SEL` artifacts are the fixed references shown by Experiment. The active
+representative-based procedure is in §7.2–§7.3; `RANK4` is its production selection. Historical selections do not
+automatically supply the weights or parameter treatment of an empirical artifact.
 
 The biology reference run conditions on one fixed imaging vector, chosen explicitly from the sources that the
 synthetic benchmarks of §6.9, §9.6 and §9.7 rank, and applied to the experimental recordings, which have no
@@ -1204,6 +1232,48 @@ sensitivity artifacts are built afterwards, one coordinate each, and the biology
 conditions follows under these tags, Fab first, the sensitivity runs after the reference runs. Imaging
 development stays closed unless a sensitivity scenario or other material evidence threatens a
 reaction-diffusion conclusion (§9.10).
+
+**The production `Nuisance_DLI` decision record (2026-11-09): `RANK4`.** The biology generation of both conditions
+draws its imaging vectors from the weighted empirical artifacts `..._FAB_2S_50FPS_RANK4_Nuisance_DLI` and
+`..._INLB_2S_50FPS_RANK4_Nuisance_DLI` (§7.2–§7.3), built on the CPU from the complete-cohort candidate archives of
+the adopted detector estimators (`C128V42A`, `C128V42AP3LR32`; sixty recordings per condition, ten 2 s windows each;
+format-3 archives with the rank coordinate space `spatial_brightness`). The selection, adopted after review:
+
+- one SGM representative per cell and 2 s window over all ten windows, 600 vectors per condition, so that the
+  between-cell and the within-recording variation of the effective imaging conditions across the whole acquisition
+  both enter the simulated population; one complete vector is sampled per synthetic video and held fixed during it;
+- equal total mass per cell (1/60) and, within a cell, `posterior_rank_median` weights from the median
+  cross-posterior distance ranks computed over the four retained coordinates `mu_r`, `sigma_r`, `mu_pc` and `sigma_pc`
+  (`rank_coordinates`), so the weights rest on exactly the coordinates the final vectors carry; a majority-zero window
+  receives exactly zero probability (FAB one row, InlB twenty-four, thirteen of them the opening window), which is a
+  sampling outcome of the consensus policy and no statement about the recordings; the effective number of rows is
+  483.6 (FAB) and 380.1 (InlB) against 600 at equal weights, a concentration measure and not a count of independent
+  experiments. The opening window's total mass falls from 10 % to about 1.2 % in both conditions: a within-cell
+  consensus rank under a monotone within-recording trend penalizes the ends of the trend, and no opening-window
+  exception is made;
+- `prob_photo_bleach` overridden to 0.05 in both conditions under the condition-specific rationale of the `SEL` record
+  (empirically anchored for Fab, declared for InlB);
+- `lambda_rate` overridden to 5.1 per second (Fab) and 4.7 (InlB): the condition-specific localization-table
+  references of the committed derivation (shape-matched ln-brightness autocorrelation of the S-BSST712 tables,
+  `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Flicker_Rate_Derivation.md`), similar within the reported
+  cell-to-cell scatter, used as empirically anchored working overrides under the single-emitter model. Their agreement
+  does not establish unbiased per-dye recovery; observation-chain effects and the single-dye approximation remain
+  limitations; the agreement across conditions is supporting evidence, not a physical requirement or an accuracy test.
+  The selection uses the existing derivation as a qualified anchor in place of the neural `SEL` values 8 and 2, which
+  remain documented alternatives; it is a selection from existing evidence, not a new measurement, not a validation of
+  the derivation and not a demonstration that it improves reaction-diffusion recovery. The raw-video direct flicker
+  estimator keeps its classification as a biased cross-check (its raw-frame pipeline is distinct from the
+  localization-table derivation), and the recorded bias findings stand.
+
+The InlB artifact carries 93.9 % of its mass above the PSF-width prior edge (`mu_r`), 19.7 % below the brightness edge
+and 7.1 % above the brightness-spread edge; Fab 5.6 % and 12.8 % on `mu_r` and `mu_pc`. These shares restate, for a
+population, the extrapolation acknowledged in the `SEL` record; the artifact records them as outside-prior mass and
+production samples the rows as stored, with no clipping and no zero probability for lying outside the training prior.
+The `SEL` artifacts, their values and their decision record above are unchanged and remain the fixed references
+displayed by Experiment and the sensitivity scenarios. The biology generation selects the artifact with the tag
+`RANK4` (`--nuisance-tag`, dispatcher `NUISANCE_TAG`), and every consumer records the selected artifact's identity.
+Evidence: `Script_Bank/Analysis/Evidence/Nuisance_DLI_RANK4_2026-11-09/` (specs, CLI dry-runs and builds, loader
+validation against the reviewed proposal, report copies) and the rank-space evidence folder beside it.
 
 **Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
 full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the

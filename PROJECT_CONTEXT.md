@@ -1639,8 +1639,8 @@ rather than a single monolithic support file. The modules and their roles:
   nuisance: the artifact format, the weighted `empirical_representatives`
   construction from Experiment candidates with its per-component member
   weighting (`uniform`, or `posterior_rank_median` from Experiment's
-  compatibility scores, with equal cell mass for cell–window members and
-  zero probabilities kept), target/physical-domain checks, whole-vector
+  compatibility scores in a selected rank coordinate space, with equal cell
+  mass for cell–window members and zero probabilities kept), target/physical-domain checks, whole-vector
   sampling, and the require-gate through which biology DLI loads it.
   Historical unweighted constructions remain readable.
 - **`experiment_support.py`** — the workflow-agnostic real-recording machinery:
@@ -1655,8 +1655,9 @@ rather than a single monolithic support file. The modules and their roles:
   SGM and marginal-median vectors distinct, computes the posterior
   compatibility of the SGM representatives (the shared distance-rank
   primitive `reference_distance_ranks`, the cross-posterior rank matrices and
-  their median scores, with explicit availability statuses), exports the
-  format-2 candidate archive, and adds the aggregation section with its
+  their median scores, with explicit availability statuses, over every
+  coordinate and over any declared rank coordinate space), exports the
+  format-3 candidate archive, and adds the aggregation section with its
   compatibility subsection and atlas to the existing Experiment report.
   Saved-result regeneration calls the same reporting function on CPU; it
   performs no neural sampling. Detector candidates feed the separate
@@ -1666,7 +1667,7 @@ rather than a single monolithic support file. The modules and their roles:
   window-selection and compatibility plots (cell matrix with score strip,
   window-score overview, atlas pages) for the Experiment report, reused for
   the final weighted nuisance distribution together with the member-probability
-  figure. Representative dispersion and input-posterior uncertainty have
+  figures (per row, or a cell-by-window grid). Representative dispersion and input-posterior uncertainty have
   separate labels; raw ranks and adopted probabilities are never confused.
 - **`inference_network.py`** — the network architecture (§6): positional
   encoding, attention block, temporal transformer, and the 3D-CNN video encoder.

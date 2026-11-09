@@ -18,6 +18,8 @@
 # Overridable via --export: CONDITION (FAB|INLB, required), KINDS (default = CONDITION), MAX_CELLS (0=all),
 #   CHUNK_STEP (seconds; unset -> model-window default, non-overlapping), POOL_MODE, TOTAL_TIME,
 #   AGGREGATION_WINDOW_SETS (named window sets of the experimental aggregation; default all,opening),
+#   COMPATIBILITY_COORDINATES (additional rank coordinate spaces of the posterior-compatibility subsection,
+#     'LABEL=key,key[;LABEL2=...]'; default none: the all-coordinate space alone),
 #   NO_AGGREGATION (1 = legacy report without the aggregation section and without cloud retention),
 #   REFERENCE_NUISANCE_TAG (the fixed reference artifact shown in the aggregation section; default SEL),
 #   SRM_AND_SBI_GPUS (cap the GPUs used; default = all allocated),
@@ -134,15 +136,20 @@ EXP_ARGS=( --condition "$CONDITION" --kinds "$KINDS" --max-cells "$MAX_CELLS"
 # merge. AGGREGATION_WINDOW_SETS names other sets (e.g. 'all,opening,late=5-9'); NO_AGGREGATION=1 is the
 # explicit legacy report (no retention unless --dump-posterior-samples is passed via EXTRA);
 # REFERENCE_NUISANCE_TAG names the fixed reference artifact shown for comparison (detector; default SEL).
+# COMPATIBILITY_COORDINATES names additional rank coordinate spaces of the compatibility subsection
+# ('LABEL=key,key[;LABEL2=...]'; comma- and semicolon-bearing, so it rides the exported environment via ALL
+# like AGGREGATION_WINDOW_SETS and is appended as ONE quoted argument).
 # The same EXP_ARGS reach every rank and the merge, so the setting is consistent by construction.
 AGGREGATION_WINDOW_SETS="${AGGREGATION_WINDOW_SETS:-}"
+COMPATIBILITY_COORDINATES="${COMPATIBILITY_COORDINATES:-}"
 NO_AGGREGATION="${NO_AGGREGATION:-0}"
 REFERENCE_NUISANCE_TAG="${REFERENCE_NUISANCE_TAG:-}"
 [ -n "$AGGREGATION_WINDOW_SETS" ] && EXP_ARGS+=( --aggregation-window-sets "$AGGREGATION_WINDOW_SETS" )
+[ -n "$COMPATIBILITY_COORDINATES" ] && EXP_ARGS+=( --compatibility-coordinates "$COMPATIBILITY_COORDINATES" )
 [ "$NO_AGGREGATION" = "1" ] && EXP_ARGS+=( --no-aggregation )
 [ -n "$REFERENCE_NUISANCE_TAG" ] && EXP_ARGS+=( --reference-nuisance-tag "$REFERENCE_NUISANCE_TAG" )
 
-echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} aggregation=${NO_AGGREGATION/1/off}${AGGREGATION_WINDOW_SETS:+ sets=$AGGREGATION_WINDOW_SETS} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
+echo "=== Experiment | kinds=${KINDS} max_cells=${MAX_CELLS} chunk_step=${CHUNK_STEP:-window-default} aggregation=${NO_AGGREGATION/1/off}${AGGREGATION_WINDOW_SETS:+ sets=$AGGREGATION_WINDOW_SETS}${COMPATIBILITY_COORDINATES:+ rank_spaces=$COMPATIBILITY_COORDINATES} pool=${POOL_MODE} time=${TOTAL_TIME}s tag=${ARTIFACT_TAG:-none} nodes=${NNODES} gpus_per_node=${GPUS} world_size=$((NNODES * GPUS)) seed=None | node $(hostname) ==="
 
 # The sharded stages are embarrassingly parallel: every rank draws its own share and writes
 # its own shard, and one --merge pass combines them. They are therefore launched as plain

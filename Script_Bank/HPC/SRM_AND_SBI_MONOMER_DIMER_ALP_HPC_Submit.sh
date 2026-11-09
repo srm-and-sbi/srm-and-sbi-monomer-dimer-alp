@@ -41,7 +41,7 @@
 #                   new weights-initialized phase from that product tag's estimator,
 #                   with ARTIFACT_TAG naming the phase, never with RESURRECT)
 #     evaluation  : CONDITION EVAL_TASKS POOL_MODE TOTAL_TIME
-#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME AGGREGATION_WINDOW_SETS NO_AGGREGATION REFERENCE_NUISANCE_TAG
+#     experiment  : CONDITION KINDS MAX_CELLS CHUNK_STEP POOL_MODE TOTAL_TIME AGGREGATION_WINDOW_SETS COMPATIBILITY_COORDINATES NO_AGGREGATION REFERENCE_NUISANCE_TAG
 #
 # sbatch-level overrides (env, optional -- unset = the stage script's baked #SBATCH):
 #   PART      CPU partition for Simulation (its baked --partition is a placeholder,
@@ -70,7 +70,8 @@
 # ("{duration}S_50FPS", duration via %g: 2.0 -> 2, 5.0 -> 5, 2.5 -> 2.5; FPS pinned 50).
 # The KINDS comma-split trap (Slurm splits --export on commas) is avoided by carrying
 # KINDS through the exported environment via ALL, never inside the explicit --export;
-# AGGREGATION_WINDOW_SETS (comma-separated by grammar) is carried the same way.
+# AGGREGATION_WINDOW_SETS (comma-separated by grammar) and COMPATIBILITY_COORDINATES (comma- and semicolon-bearing
+# rank coordinate spaces, 'LABEL=key,key[;LABEL2=...]') are carried the same way.
 #
 # Examples (all DRY-RUN by default -- print the sbatch line, submit nothing):
 #   bash .../Submit.sh inference CONDITION=FAB TOTAL_TIME=5.0 TRAIN_TASKS=400 TEST_TASKS=100 EPOCHS=25
@@ -203,6 +204,8 @@ case "$STAGE" in
     # AGGREGATION_WINDOW_SETS is comma-separated by its grammar (e.g. all,opening,late=5-9), so like KINDS it
     # rides the exported environment via ALL and never enters the comma-split explicit --export list.
     if [ -n "${AGGREGATION_WINDOW_SETS:-}" ]; then export AGGREGATION_WINDOW_SETS; KINDS_NOTE="${KINDS_NOTE:+$KINDS_NOTE; }AGGREGATION_WINDOW_SETS=$AGGREGATION_WINDOW_SETS (carried via ALL, comma-safe)"; fi
+    # COMPATIBILITY_COORDINATES ('LABEL=key,key[;LABEL2=...]') carries commas and semicolons, so it rides ALL as well
+    if [ -n "${COMPATIBILITY_COORDINATES:-}" ]; then export COMPATIBILITY_COORDINATES; KINDS_NOTE="${KINDS_NOTE:+$KINDS_NOTE; }COMPATIBILITY_COORDINATES=$COMPATIBILITY_COORDINATES (carried via ALL, comma-safe)"; fi
     # KINDS may be multi-value (FAB,INLB, a deliberate cross-condition application); Slurm splits --export on commas, so carry
     # it via the exported environment (ALL) rather than the explicit --export list.
     if [ -n "${KINDS:-}" ]; then export KINDS; KINDS_NOTE="${KINDS_NOTE:+$KINDS_NOTE; }KINDS=$KINDS (carried via ALL, comma-safe)"; fi

@@ -115,6 +115,7 @@ WEIGHT_NORMALIZATION_TOLERANCE = 1e-6
 # statistic, an unsupported grouping or a format-1 archive is an explicit error, never a fallback to uniform.
 MEMBER_WEIGHTINGS = ("uniform", "posterior_rank_median")
 RANK_WEIGHTED_GROUPINGS = ("per_cell", "per_cell_window")
+RANK_SPACE_ALL = "all"      # the archive's primary rank coordinate space (every parameter coordinate); experiment_aggregation.RANK_SPACE_ALL
 # Parameters whose physical domain is a probability (0, 1): the per-dye bleaching probability. An explicit
 # selection or override of such a parameter, and every final vector of an explicitly selected artifact
 # (selection_user, empirical_representatives), must respect it; a physically valid value outside the TRAINING
@@ -1043,7 +1044,10 @@ def emit_representatives_template(path, archive, *, provenance=None, reference=N
         "# median cross-posterior distance rank Experiment exported for its SGM; per_cell normalizes over",
         "# the component's cells, per_cell_window keeps equal cell mass alpha_k / |C| and normalizes within",
         "# each cell; a zero score is exactly zero probability, kept and shown; an all-zero normalizer is",
-        "# refused; requires statistic \"sgm\", grouping per_cell or per_cell_window and a format-2 archive).",
+        "# refused; requires statistic \"sgm\", grouping per_cell or per_cell_window and a format-2 or later archive).",
+        "# `rank_coordinates` (optional, with posterior_rank_median only) names the parameter keys whose",
+        "# rank space of the archive supplies the scores (default: every coordinate, the space \"all\"); the",
+        "# archive must hold a space over exactly those keys (Experiment --compatibility-coordinates).",
         "# Exact duplicate vectors are consolidated by adding their probabilities (memberships kept).",
         "# `statistic` is \"sgm\" (a retained joint draw; the default) or \"median\" (the marginal-median",
         "# vector of the group, a coordinate-wise composite, never a sampled row). `rationale` records",
@@ -1083,8 +1087,13 @@ def emit_representatives_template(path, archive, *, provenance=None, reference=N
 
 
 def component_weighting_availability(archive) -> dict:
-    """Per (condition, window set, grouping) of an archive, one sentence on whether ``posterior_rank_median`` can be
-    selected: the computed-score count over the members, the unavailable reason, or 'not applicable'."""
+    """Per (condition, window set, grouping) of an archive, one statement on whether ``posterior_rank_median`` can be
+    selected, evaluated SEPARATELY for every rank coordinate space the archive holds (``rank space <label> (<keys>):
+    ...`` clauses joined by '; '): per space the computed-score count over the members and, when every score is
+    computed, whether the constructor's own normalization of that space's scores succeeds (``member_probabilities``
+    with that space's coordinates); the unavailable reason otherwise (missing scores, or computed scores that cannot be
+    normalized, the computed zeros remaining valid diagnostics). A space's availability never stands in for another's.
+    Groupings without a rank policy and format-1 archives keep their single statements."""
     a = archive["arrays"]; compat = archive.get("compatibility")
     out = {}
     for k, w, c, i in zip(a["kind"], a["window_set"], a["construction"], range(a["kind"].shape[0])):
@@ -1095,27 +1104,34 @@ def component_weighting_availability(archive) -> dict:
         c = key[2]
         if c not in RANK_WEIGHTED_GROUPINGS:
             text[key] = "not applicable to this grouping (uniform only)"
-        elif compat is None:
+            continue
+        if compat is None:
             text[key] = "unavailable: archive format 1 without compatibility scores (regenerate the Experiment report on the CPU)"
-        else:
-            st = [compat["by_group"][int(i)]["status"] for i in idx]
+            continue
+        from .experiment_aggregation import archive_component
+        comp = archive_component(archive, kind=key[0], window_set=key[1], construction=c)
+        spaces = compat.get("spaces") or {RANK_SPACE_ALL: {**compat, "coordinates": list(archive["keys"])}}
+        clauses = []
+        for lab, sp in spaces.items():
+            head = f"rank space {lab} ({', '.join(sp['coordinates'])}): "
+            st = [sp["by_group"][int(i)]["status"] for i in idx]
             n_ok = sum(1 for s in st if s == "computed")
             if n_ok != len(st):
                 reasons = sorted(set(s for s in st if s != "computed"))
-                text[key] = f"unavailable: {len(st) - n_ok}/{len(st)} members without a computed score ({', '.join(reasons)}; " \
-                            f"a singleton reference set has no score)"
+                clauses.append(head + f"unavailable: {len(st) - n_ok}/{len(st)} members without a computed score ({', '.join(reasons)}; "
+                                      f"a singleton reference set has no score)")
                 continue
-            # scores computed is not the same as normalizable: apply the constructor's own normalization rules
-            from .experiment_aggregation import archive_component
+            # scores computed is not the same as normalizable: apply the constructor's own normalization rules to THIS space
             try:
-                member_probabilities("posterior_rank_median", 1.0, archive_component(archive, kind=key[0], window_set=key[1], construction=c),
-                                     where="availability")
+                member_probabilities("posterior_rank_median", 1.0, comp, where="availability",
+                                     rank_coordinates=None if lab == RANK_SPACE_ALL else list(sp["coordinates"]))
             except ValueError as exc:
                 reason = str(exc).split(": ", 1)[-1].split(";")[0]
-                text[key] = (f"unavailable: compatibility scores computed for {n_ok}/{len(st)} members, but the policy cannot be normalized "
-                             f"({reason}); the computed zero scores remain valid diagnostics")
+                clauses.append(head + f"unavailable: compatibility scores computed for {n_ok}/{len(st)} members, but the policy cannot be "
+                                      f"normalized ({reason}); the computed zero scores remain valid diagnostics")
                 continue
-            text[key] = f"available, compatibility scores computed for {n_ok}/{len(st)} members and normalizable"
+            clauses.append(head + f"available, compatibility scores computed for {n_ok}/{len(st)} members and normalizable")
+        text[key] = "; ".join(clauses)
     return text
 
 
@@ -1152,6 +1168,14 @@ def _validate_representatives_block(spec, imaging_keys, where, table=None):
             if c.get("grouping") not in RANK_WEIGHTED_GROUPINGS:
                 raise ValueError(f"{where}: [[component]] {i}: member_weighting 'posterior_rank_median' is available for groupings "
                                  f"{RANK_WEIGHTED_GROUPINGS} only; {c.get('grouping')!r} carries no rank score (select 'uniform').")
+        rc = c.get("rank_coordinates")
+        if rc is not None:
+            if mw != "posterior_rank_median":
+                raise ValueError(f"{where}: [[component]] {i}: rank_coordinates applies to member_weighting 'posterior_rank_median' only "
+                                 f"(uniform members carry no rank); remove it or select the rank policy.")
+            if not isinstance(rc, list) or not rc or any(str(k) not in imaging_keys for k in rc) or len({str(k) for k in rc}) != len(rc):
+                raise ValueError(f"{where}: [[component]] {i}: rank_coordinates must be a non-empty list of distinct parameter keys from "
+                                 f"{list(imaging_keys)}; got {rc!r}.")
         try:
             w = float(c.get("weight"))
         except (TypeError, ValueError):
@@ -1210,39 +1234,63 @@ def check_archive_target(archive, target, *, where="candidate archive"):
     return dict(bound)
 
 
-def member_probabilities(policy, weight, comp, *, where="component"):
+def resolve_rank_space(comp, rank_coordinates, *, where="component"):
+    """The archive rank space a component weights with: ``(label, coordinates)``. ``rank_coordinates`` None, or every
+    parameter key, selects the primary space ``all``; otherwise the archive must hold a space over exactly those keys (in
+    table order), else the selection is refused and the available spaces are named."""
+    keys = [str(k) for k in (comp.get("parameter_keys") or [])]
+    spaces = {str(lab): [str(k) for k in ks] for lab, ks in (comp.get("rank_spaces") or {}).items()}
+    if not spaces:
+        spaces = {RANK_SPACE_ALL: keys}
+    if rank_coordinates is None or (keys and sorted(str(k) for k in rank_coordinates) == sorted(keys)):
+        return RANK_SPACE_ALL, spaces.get(RANK_SPACE_ALL, keys)
+    wanted = [k for k in keys if k in {str(c) for c in rank_coordinates}]
+    for lab, ks in spaces.items():
+        if ks == wanted:
+            return lab, ks
+    raise ValueError(f"{where}: no rank coordinate space of the archive runs over {wanted}; the archive holds {spaces}. Regenerate the "
+                     f"Experiment report with --compatibility-coordinates <label>={','.join(wanted)} (CPU) and name that archive; nothing "
+                     f"is approximated from another space.")
+
+
+def member_probabilities(policy, weight, comp, *, where="component", rank_coordinates=None):
     """The member contributions of ONE component under ``policy`` (see ``MEMBER_WEIGHTINGS``): ``(probabilities (n,),
     normalizers, scores (n,) or None)``. ``comp`` is :func:`experiment_aggregation.archive_component`'s result; the
-    scores are read through each member's identity record (``compatibility``), never by archive position. Refusals:
-    a format-1 archive or missing compatibility data; any member whose score is not ``computed``; an all-zero
-    normalizer (the whole component for per_cell; any included cell for per_cell_window). A zero score keeps the member
-    with exactly zero probability."""
+    scores are read through each member's identity record (``compatibility_by_space`` for the selected rank space,
+    :func:`resolve_rank_space`; None = the primary space ``all``), never by archive position. Refusals: a format-1
+    archive or missing compatibility data; a rank space the archive does not hold; any member whose score is not
+    ``computed``; an all-zero normalizer (the whole component for per_cell; any included cell for per_cell_window). A
+    zero score keeps the member with exactly zero probability."""
     idents = comp["identities"]; n = len(idents)
     if policy == "uniform":
         return np.full(n, float(weight) / n), {"scope": "component", "rule": "weight / n_members", "n_members": n}, None
     if policy != "posterior_rank_median":
         raise ValueError(f"{where}: unknown member_weighting {policy!r}; policies are {MEMBER_WEIGHTINGS}.")
     if not comp.get("compatibility_available"):
-        raise ValueError(f"{where}: member_weighting 'posterior_rank_median' needs the compatibility scores of a format-2 candidate archive; "
-                         f"this archive is format {comp.get('archive_format_version')} without them. Regenerate the Experiment report on the "
-                         f"CPU (--regenerate-report --review-label <TOKEN>, with --cloud-sources when the product stores no clouds) and "
+        raise ValueError(f"{where}: member_weighting 'posterior_rank_median' needs the compatibility scores of a format-2 (or later) candidate "
+                         f"archive; this archive is format {comp.get('archive_format_version')} without them. Regenerate the Experiment report "
+                         f"on the CPU (--regenerate-report --review-label <TOKEN>, with --cloud-sources when the product stores no clouds) and "
                          f"name the regenerated archive.")
-    bad = [(d["cell"], d["chunk"], (d.get("compatibility") or {}).get("status")) for d in idents
-           if (d.get("compatibility") or {}).get("status") != "computed"]
+    label, coords = resolve_rank_space(comp, rank_coordinates, where=where)
+    def score_of(d):
+        by = d.get("compatibility_by_space")
+        return (by or {}).get(label) if by is not None else (d.get("compatibility") if label == RANK_SPACE_ALL else None)
+    bad = [(d["cell"], d["chunk"], (score_of(d) or {}).get("status")) for d in idents if (score_of(d) or {}).get("status") != "computed"]
     if bad:
-        raise ValueError(f"{where}: {len(bad)} member(s) carry no computed compatibility score (cell, chunk, status): {bad[:6]}"
-                         f"{' …' if len(bad) > 6 else ''}. A singleton reference set has no score; select 'uniform' for this component "
+        raise ValueError(f"{where}: {len(bad)} member(s) carry no computed compatibility score in rank space {label!r} (cell, chunk, status): "
+                         f"{bad[:6]}{' …' if len(bad) > 6 else ''}. A singleton reference set has no score; select 'uniform' for this component "
                          f"or a selection with peers. Nothing falls back silently.")
-    s = np.asarray([float(d["compatibility"]["score"]) for d in idents], float)
+    s = np.asarray([float(score_of(d)["score"]) for d in idents], float)
     if not np.all(np.isfinite(s)) or np.any(s < 0):
         raise ValueError(f"{where}: the compatibility scores must be finite and non-negative; got {s.tolist()[:6]}.")
+    space = {"rank_space": label, "rank_coordinates": list(coords)}
     if comp["construction"] == "per_cell":
         tot = float(s.sum())
         if tot <= 0:
-            raise ValueError(f"{where}: every per-cell score of this component is zero (sum {tot}); the selection cannot be normalized "
-                             f"and is refused (no uniform fallback, no floor).")
+            raise ValueError(f"{where}: every per-cell score of this component is zero (sum {tot}) in rank space {label!r}; the selection cannot "
+                             f"be normalized and is refused (no uniform fallback, no floor).")
         return float(weight) * s / tot, {"scope": "component", "rule": "weight * score / sum of the component's scores",
-                                         "sum_of_scores": tot, "n_members": n}, s
+                                         "sum_of_scores": tot, "n_members": n, **space}, s
     if comp["construction"] != "per_cell_window":
         raise ValueError(f"{where}: member_weighting 'posterior_rank_median' is available for {RANK_WEIGHTED_GROUPINGS} only.")
     cells = sorted({int(d["cell"]) for d in idents}); C = len(cells)
@@ -1251,11 +1299,11 @@ def member_probabilities(policy, weight, comp, *, where="component"):
         idx = [j for j, d in enumerate(idents) if int(d["cell"]) == c]
         tot = float(s[idx].sum()); sums[str(c)] = tot
         if tot <= 0:
-            raise ValueError(f"{where}: cell {c}: every selected-window score is zero (sum {tot}); the selection is refused rather than "
-                             f"dropping the cell or redistributing its mass (no uniform fallback, no floor).")
+            raise ValueError(f"{where}: cell {c}: every selected-window score is zero (sum {tot}) in rank space {label!r}; the selection is "
+                             f"refused rather than dropping the cell or redistributing its mass (no uniform fallback, no floor).")
         p[idx] = (float(weight) / C) * s[idx] / tot
     return p, {"scope": "within each cell", "rule": "(weight / n_cells) * score / sum of that cell's selected-window scores",
-               "n_cells": C, "cell_mass": float(weight) / C, "sum_of_scores_by_cell": sums, "n_members": n}, s
+               "n_cells": C, "cell_mass": float(weight) / C, "sum_of_scores_by_cell": sums, "n_members": n, **space}, s
 
 
 def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, spec_path=None, target=None, force_uniform=False):
@@ -1308,7 +1356,8 @@ def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, sp
         comp = archive_component(archive, kind=str(c["condition"]), window_set=str(c["window_set"]),
                                  construction=str(c["grouping"]), statistic=stat)
         n = comp["vectors"].shape[0]
-        p_members, normalizers, scores = member_probabilities(policy, w, comp, where=f"[[component]] {i}")
+        p_members, normalizers, scores = member_probabilities(policy, w, comp, where=f"[[component]] {i}",
+                                                              rank_coordinates=None if force_uniform else c.get("rank_coordinates"))
         if abs(float(p_members.sum()) - float(w)) > 1e-9:
             raise ValueError(f"[[component]] {i}: member contributions sum to {p_members.sum()!r}, not the component mass {w!r}.")
         members = []
@@ -1329,6 +1378,10 @@ def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, sp
                              "score_source": None if scores is None else {"protocol": ((archive.get("compatibility") or {}).get("protocol") or {}).get("name"),
                                                                            "statistic_scored": "sgm", "note": "the scores describe the original SGM "
                                                                            "candidates; explicit overrides transform the stored rows afterwards"},
+                             "rank_space": None if scores is None else normalizers.get("rank_space"),
+                             "rank_coordinates": None if scores is None else list(normalizers.get("rank_coordinates") or []),
+                             "rank_coordinates_overridden": None,       # filled once the overrides are read
+                             "rank_coordinates_declared": None if scores is None else c.get("rank_coordinates"),
                              "window_set_chunks": m.get("window_sets", {}).get(str(c["window_set"])),
                              "members": members, "is_sampled_rows": stat == "sgm"})
     V = np.asarray(vectors, dtype=float); P = np.asarray(probs, dtype=float)
@@ -1343,6 +1396,9 @@ def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, sp
     consolidated = [{"row": int(u), "memberships": g, "probability": float(probabilities[u])} for u, g in enumerate(groups) if len(g) > 1]
     rank_weighted = any(cr["member_weighting"] != "uniform" for cr in comp_records)
     overrides, over = {}, (spec.get("override", {}) or {})
+    for cr in comp_records:
+        if cr["member_weighting"] != "uniform":
+            cr["rank_coordinates_overridden"] = [k for k in (cr["rank_coordinates"] or []) if k in over]
     final = uniq.copy()
     for k, row in over.items():
         j = keys.index(k); e = table[j]
@@ -1379,6 +1435,11 @@ def representatives_from_spec(spec, archive, table, prior_low, prior_high, *, sp
               "effective_rows_scope": "1 / sum(p^2) over the stored (consolidated) rows of the whole artifact; a concentration measure of the "
                                       "sampling probabilities, not a count of independent experiments and not a calibrated uncertainty",
               "overrides": overrides,
+              "rank_spaces_used": sorted({cr["rank_space"] for cr in comp_records if cr["rank_space"]}),
+              # True when every rank-weighted component's coordinates exclude every overridden key (the weights then rest only on
+              # coordinates the final vectors carry); False when an overridden coordinate entered the ranks; None without rank weighting
+              "rank_coordinates_disjoint_from_overrides": (None if not rank_weighted else
+                                                           all(not cr["rank_coordinates_overridden"] for cr in comp_records if cr["member_weighting"] != "uniform")),
               "is_sampled_rows": bool(all(c["is_sampled_rows"] for c in comp_records) and not overrides),
               "outside_prior_mass": float(probabilities[outside_rows].sum()),
               "outside_prior_by_key": {k: float(probabilities[(final[:, j] < lo[j]) | (final[:, j] > hi[j])].sum()) for j, k in enumerate(keys)},

@@ -1,0 +1,87 @@
+{
+  "FAB": {
+    "artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_RANK4_Nuisance_DLI.npz",
+    "sha256": "3b89edab3bb4498abfaf5a54c2fdf31e85f8ac5eff110c8a3a95a83bbb59c801",
+    "rows": 600,
+    "keys": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc",
+      "prob_photo_bleach",
+      "lambda_rate"
+    ],
+    "pool_mode": "unrestricted",
+    "choice": "empirical_representatives",
+    "probabilities_identical_to_final_proposal": true,
+    "samples_identical_to_final_proposal": true,
+    "overrides": {
+      "prob_photo_bleach": 0.05,
+      "lambda_rate": 5.1
+    },
+    "overrides_identical_to_final_proposal": true,
+    "rank_spaces_used": [
+      "spatial_brightness"
+    ],
+    "rank_coordinates": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc"
+    ],
+    "rank_coordinates_disjoint_from_overrides": true,
+    "effective_rows": 483.5508973032454,
+    "zero_rows": 1,
+    "outside_prior_mass": 0.17272781037155832,
+    "archive_sha256": "5fe7091bef07ce75a4659d322c1c5072c33cfa6ed592aa27038ecf3df5f037ce",
+    "archive_identical_to_final_proposal": true,
+    "spec_path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_RANK4_Nuisance_DLI_Spec.toml",
+    "probability_sum": 1.0,
+    "sampled_rows_are_stored_rows": true,
+    "sampled_zero_rows_never_drawn": true,
+    "ok": true
+  },
+  "INLB": {
+    "artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_RANK4_Nuisance_DLI.npz",
+    "sha256": "50a7678ea858aa10f5df950f70d4301278059a10981c208ca3b0996245e661c8",
+    "rows": 600,
+    "keys": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc",
+      "prob_photo_bleach",
+      "lambda_rate"
+    ],
+    "pool_mode": "unrestricted",
+    "choice": "empirical_representatives",
+    "probabilities_identical_to_final_proposal": true,
+    "samples_identical_to_final_proposal": true,
+    "overrides": {
+      "prob_photo_bleach": 0.05,
+      "lambda_rate": 4.7
+    },
+    "overrides_identical_to_final_proposal": true,
+    "rank_spaces_used": [
+      "spatial_brightness"
+    ],
+    "rank_coordinates": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc"
+    ],
+    "rank_coordinates_disjoint_from_overrides": true,
+    "effective_rows": 380.0517048582569,
+    "zero_rows": 24,
+    "outside_prior_mass": 0.9386214438837415,
+    "archive_sha256": "edb630d06832a49e5fc82626a0d55a360b0f540dcb6e95492232668704e1f401",
+    "archive_identical_to_final_proposal": true,
+    "spec_path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_RANK4_Nuisance_DLI_Spec.toml",
+    "probability_sum": 1.0,
+    "sampled_rows_are_stored_rows": true,
+    "sampled_zero_rows_never_drawn": true,
+    "ok": true
+  },
+  "all_ok": true
+}

@@ -524,8 +524,13 @@ def _policy_line(c) -> str:
     if c.get("member_weighting", "uniform") == "uniform":
         return f"uniform -> {float(c['member_probability']):.6f} each ({n_pos} positive, {n_zero} zero); effective members {eff}"
     lo, hi = c["probability_range"]
+    space = ""
+    if c.get("rank_space"):
+        over = c.get("rank_coordinates_overridden") or []
+        space = (f"; rank space {c['rank_space']} ({', '.join(c.get('rank_coordinates') or [])})"
+                 + (f"; ranked coordinates later overridden: {', '.join(over)}" if over else "; no ranked coordinate is overridden"))
     return (f"{c['member_weighting']} -> {n_pos} positive and {n_zero} zero member(s); "
-            f"probabilities {lo:.6f} – {hi:.6f}; effective members {eff} of {c['n_members']}")
+            f"probabilities {lo:.6f} – {hi:.6f}; effective members {eff} of {c['n_members']}{space}")
 
 
 def _emit_representatives_template(args, R):
@@ -734,13 +739,29 @@ def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
     return report_dir
 
 
+def _rank_override_statement(sel) -> str:
+    """One sentence on whether the ranked coordinates and the overridden coordinates are disjoint (the record's own flag)."""
+    flag = sel.get("rank_coordinates_disjoint_from_overrides")
+    if not sel.get("overrides"):
+        return " | no coordinate is overridden, so the ranks rest on the coordinates the final vectors carry"
+    if flag is None:
+        return ""
+    if flag:
+        return (" | the ranked coordinates exclude every overridden coordinate (" + ", ".join(sel["overrides"]) + "), so the member weights rest "
+                "only on coordinates the final vectors carry")
+    over = sorted({k for c in sel["components"] for k in (c.get("rank_coordinates_overridden") or [])})
+    return (f" | the ranked coordinates include overridden coordinate(s) {', '.join(over)}: those coordinates entered the member weights but not "
+            f"the final vectors (stated, not corrected; select rank_coordinates without them for weights that rest on the retained coordinates only)")
+
+
 def _report_representatives(reporter, nu, R, archive):
     """The weighted artifact's record: the selection table (component masses, member policy, positive/zero members, probability
     range, effective representatives), consolidation, overrides, the weighted-CDF marginal summary (physical units), the
     stored-probability figure beside the equal-member baseline, the six-parameter CDF comparison of the selected
     probabilities against that baseline, the components view, the joint projections, and the member/row CSV exports."""
     import csv
-    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import figure_joint_corner, figure_marginal_cdfs, figure_member_probabilities
+    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import (figure_joint_corner, figure_marginal_cdfs, figure_member_probabilities,
+                                                                           figure_member_probability_grid)
     sel = nu.selection; keys = list(nu.parameter_keys); table = det.DETECTOR_PARAMETERIZATION
     comps = sel["components"]
     policies = sorted({c.get("member_weighting", "uniform") for c in comps})
@@ -757,9 +778,10 @@ def _report_representatives(reporter, nu, R, archive):
             rng_ = f"{float(c['member_probability']):.6f} each"
         else:
             rng_ = f"{c['probability_range'][0]:.6f} – {c['probability_range'][1]:.6f}"
+        pol_text = pol if pol == "uniform" or not c.get("rank_space") else f"{pol} in rank space `{c['rank_space']}` ({', '.join(c.get('rank_coordinates') or [])})"
         rows.append([c["index"], c["source_experiment"], c["condition"], c["window_set"],
                      f"{agg.display_name(c['grouping'], statistic=c['statistic'], short=True)} (`{c['grouping']}`)", c["statistic"],
-                     f"{c['weight']:.6f}", pol, f"{c['n_members']} / {n_pos} / {n_zero}", rng_, eff])
+                     f"{c['weight']:.6f}", pol_text, f"{c['n_members']} / {n_pos} / {n_zero}", rng_, eff])
     reporter.table("empirical_representatives: selection",
                    ["component", "source Experiment", "condition", "window set", "grouping", "statistic", "component mass", "member policy",
                     "members / positive / zero", "member probability (range)", "effective members 1/sum(p^2)"], rows,
@@ -772,7 +794,8 @@ def _report_representatives(reporter, nu, R, archive):
                         "not a count of independent experiments | "
                         + ("the rows are retained joint draws (SGMs)" if sel["is_sampled_rows"] else
                            "the rows are NOT all original joint draws (a median statistic or an override is involved)")
-                        + ("; the compatibility scores describe the original SGM candidates" if rank_weighted else ""))
+                        + ("; the compatibility scores describe the original SGM candidates" if rank_weighted else "")
+                        + (_rank_override_statement(sel) if rank_weighted else ""))
     if sel["consolidated"]:
         reporter.table("empirical_representatives: consolidated duplicates (contributions added, memberships kept)",
                        ["unique row", "memberships (component, member, contribution)", "probability"],
@@ -838,13 +861,14 @@ def _report_representatives(reporter, nu, R, archive):
             w = csv.writer(fh)
             w.writerow(["component", "member", "condition", "window_set", "grouping", "statistic", "member_weighting", "cell", "chunk", "n_windows",
                         "sgm_source_cell", "sgm_source_chunk", "sgm_source_draw", "compatibility_score", "compatibility_status", "compatibility_n_references",
-                        "contribution", "stored_row"])
+                        "rank_space", "score_used", "contribution", "stored_row"])
             for c in comps:
                 for j, mbr in enumerate(c["members"]):
                     cp = mbr.get("compatibility") or {}
                     w.writerow([c["index"], j, c["condition"], c["window_set"], c["grouping"], c["statistic"], c.get("member_weighting", "uniform"),
                                 mbr["cell"], mbr["chunk"], mbr["n_windows"], mbr["sgm_source"]["cell"], mbr["sgm_source"]["chunk"], mbr["sgm_source"]["draw_index"],
                                 "" if cp.get("score") is None else repr(float(cp["score"])), cp.get("status", ""), cp.get("n_references", ""),
+                                c.get("rank_space") or "", "" if mbr.get("score_used") is None else repr(float(mbr["score_used"])),
                                 repr(float(mbr.get("probability", c.get("member_probability") or 0.0))), "" if mbr.get("stored_row") is None else int(mbr["stored_row"])])
         rows_csv = report_dir / "representatives_rows.csv"
         phys = to_physical(nu.samples, table)
@@ -857,7 +881,8 @@ def _report_representatives(reporter, nu, R, archive):
                 w.writerow([r, repr(float(nu.probabilities[r])), repr(float(base_p[r])), txt] + [repr(float(v)) for v in nu.samples[r]]
                            + [repr(float(v)) for v in phys[r]])
     reporter.prose("empirical_representatives: exports",
-                   f"Per-member record (identities, compatibility score, status, references, contribution, stored row): `representatives_members.csv`; "
+                   f"Per-member record (identities, the primary-space compatibility score, status and references, the rank space and the score used "
+                   f"by the policy, contribution, stored row): `representatives_members.csv`; "
                    f"per stored row (probability, equal-member baseline probability, memberships by recorded identity, the stored estimator "
                    f"coordinates `<key>_stored_log10` and the physical values `<key>_physical`): `representatives_rows.csv`; both beside this report. "
                    f"Member policies in this artifact: {policies}." + (" The equal-member baseline uses the same components, component masses, duplicate "
@@ -877,13 +902,41 @@ def _report_representatives(reporter, nu, R, archive):
         xlabel = f"source cell in numeric order ({agg.display_name('per_cell', short=True)}, windows: {comps[0]['window_set']})"
     else:
         labels = [str(r) for r in view]; xlabel = "stored row (memberships in representatives_rows.csv)"
-    scope_p = f"{cond} · {nu.samples.shape[0]} stored rows from {len(comps)} component(s); policies {policies}"
-    reporter.save_figure("representatives_probabilities",
-                         figure_member_probabilities(labels, nu.probabilities[view], base_p[view], title="Stored sampling probabilities versus the equal-member baseline",
-                                                     subtitle=scope_p, xlabel=xlabel),
-                         caption=f"{scope_p}. Black dots: the probability actually stored for each row of the artifact (what production samples); gray bars: the "
-                                 f"equal-member baseline (same components, masses and overrides, uniform members). Red crosses mark rows at exactly zero: a "
-                                 f"sampling outcome of the selected policy, not a data-quality verdict. These are probabilities, not Experiment's raw ranks.")
+    spaces_used = sorted({f"{c['rank_space']} ({', '.join(c.get('rank_coordinates') or [])})" for c in comps if c.get("rank_space")})
+    scope_p = (f"{cond} · {nu.samples.shape[0]} stored rows from {len(comps)} component(s); policies {policies}"
+               + (f"; rank space {', '.join(spaces_used)}" if spaces_used else ""))
+    single_cw = (len(comps) == 1 and comps[0]["grouping"] == "per_cell_window" and not sel["consolidated"]
+                 and nu.samples.shape[0] == comps[0]["n_members"] and all(len(row_members[r]) == 1 for r in row_members))
+    if single_cw:
+        # one SGM per cell and window: the cell-by-window grid (rows cells, columns window start times) instead of 600 unreadable bars
+        cw = {(int(row_members[r][0][2]), int(row_members[r][0][3])): r for r in row_members}
+        cells_g = sorted({c for c, _ in cw}); chunks_g = sorted({w for _, w in cw})
+        geom = (sel["archive"].get("target") or {})
+        wsec = geom.get("window_seconds"); nfr = geom.get("n_frames")
+        step_s = None
+        try:
+            step_frames = (archive["manifest"].get("contract") or {}).get("window_geometry", {}).get("step_frames") if archive is not None else None
+            step_s = float(wsec) * float(step_frames) / float(nfr) if (wsec and nfr and step_frames) else None
+        except (TypeError, ValueError):
+            step_s = None
+        times_g = [w * step_s if step_s else w for w in chunks_g]
+        Pg = np.asarray([[nu.probabilities[cw[(c, w)]] if (c, w) in cw else np.nan for w in chunks_g] for c in cells_g], float)
+        Bg = np.asarray([[base_p[cw[(c, w)]] if (c, w) in cw else np.nan for w in chunks_g] for c in cells_g], float)
+        reporter.save_figure("representatives_probabilities",
+                             figure_member_probability_grid(cells_g, times_g, Pg, Bg, title="Stored sampling probabilities by cell and window",
+                                                            subtitle=scope_p, window_seconds=wsec),
+                             caption=f"{scope_p}. Left: each stored row's probability as a share of its cell's total mass (rows: source cells in numeric order; "
+                                     f"columns: window start{' times in seconds' if step_s else ' positions'}); under the equal-member baseline every share "
+                                     f"would be 1/{len(chunks_g)}. Red crosses mark rows at exactly zero: a sampling outcome of the selected policy, not a "
+                                     f"data-quality verdict. Right: the cell masses (black) against the equal-member baseline (gray bars); equal cell mass is "
+                                     f"the policy's rule. These are probabilities, not Experiment's raw ranks; the per-row values are in representatives_rows.csv.")
+    else:
+        reporter.save_figure("representatives_probabilities",
+                             figure_member_probabilities(labels, nu.probabilities[view], base_p[view], title="Stored sampling probabilities versus the equal-member baseline",
+                                                         subtitle=scope_p, xlabel=xlabel),
+                             caption=f"{scope_p}. Black dots: the probability actually stored for each row of the artifact (what production samples); gray bars: the "
+                                     f"equal-member baseline (same components, masses and overrides, uniform members). Red crosses mark rows at exactly zero: a "
+                                     f"sampling outcome of the selected policy, not a data-quality verdict. These are probabilities, not Experiment's raw ranks.")
     series = [{"name": f"selected probabilities ({nu.samples.shape[0]} stored rows; policies {policies})", "role": "mixture", "vectors": nu.samples,
                "weights": nu.probabilities}]
     if rank_weighted:

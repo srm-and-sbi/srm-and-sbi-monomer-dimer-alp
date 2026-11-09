@@ -780,6 +780,48 @@ COMPATIBILITY_REFERENCE = {"per_cell": "the other included cells of the same con
                                               "one window's own cloud",
                            "per_window_position": "no rank policy in this scope (uniform selection remains available)",
                            "global": "no same-level peer (uniform selection remains available)"}
+RANK_SPACE_ALL = "all"               # the primary space: every parameter coordinate (the format-2 arrays)
+_SPACE_LABEL = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def parse_rank_spaces(spec, keys) -> dict:
+    """Parse ``--compatibility-coordinates``: ``LABEL=key,key[;LABEL=key,...]`` into an ordered ``{label: (keys in
+    table order)}`` of ADDITIONAL rank coordinate spaces. A label is lowercase ``[a-z][a-z0-9_]*`` and never
+    ``all`` (the primary space, always computed); every key must be a parameter key, named once; a space must
+    hold at least one key and not every key (that is ``all``). Empty or None = no additional space."""
+    spaces = {}
+    if spec is None or not str(spec).strip():
+        return spaces
+    keys = [str(k) for k in keys]
+    for item in str(spec).split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise AggregationError(f"rank space {item!r}: expected LABEL=key,key,...")
+        label, names = item.split("=", 1)
+        label = label.strip()
+        if not _SPACE_LABEL.match(label) or label == RANK_SPACE_ALL:
+            raise AggregationError(f"rank space label {label!r} must match [a-z][a-z0-9_]* and differ from {RANK_SPACE_ALL!r}.")
+        if label in spaces:
+            raise AggregationError(f"rank space {label!r} is declared twice.")
+        chosen = [n.strip() for n in names.split(",") if n.strip()]
+        unknown = [n for n in chosen if n not in keys]
+        if unknown:
+            raise AggregationError(f"rank space {label!r}: unknown parameter keys {unknown}; keys are {keys}.")
+        if len(set(chosen)) != len(chosen):
+            raise AggregationError(f"rank space {label!r}: a key is named twice ({chosen}).")
+        ordered = tuple(k for k in keys if k in chosen)
+        if not ordered or len(ordered) == len(keys):
+            raise AggregationError(f"rank space {label!r} must hold at least one and fewer than all {len(keys)} keys "
+                                   f"(every key is the primary space {RANK_SPACE_ALL!r}).")
+        spaces[label] = ordered
+    return spaces
+
+
+def _key_indices(keys, coordinates) -> np.ndarray:
+    keys = [str(k) for k in keys]
+    return np.asarray([keys.index(str(c)) for c in coordinates], np.int64)
 
 
 def reference_distance_ranks(reference_cloud, reference_sgm, candidates, scale) -> np.ndarray:
@@ -826,20 +868,26 @@ class CompatibilityResult:
     n_references: np.ndarray   # (n_groups,) int
     status: np.ndarray         # (n_groups,) one of COMPATIBILITY_STATUSES
     seconds: float = 0.0
+    label: str = RANK_SPACE_ALL          # the rank coordinate space: "all" or a declared subset label
+    coordinates: tuple = None            # the parameter keys the distances were computed over (table order)
+    key_indices: tuple = None            # their positions in the parameter table
 
     def of(self, i) -> dict:
         s = float(self.score[i])
         return {"score": None if np.isnan(s) else s, "n_references": int(self.n_references[i]), "status": str(self.status[i])}
 
 
-def compatibility_protocol(scale) -> dict:
-    """The protocol record bound into the archive manifest (what the stored ranks and scores mean)."""
-    return {"name": COMPATIBILITY_PROTOCOL,
+def compatibility_protocol(scale, *, coordinates=None) -> dict:
+    """The protocol record bound into the archive manifest (what the stored ranks and scores mean). ``coordinates``
+    names the parameter keys the distances run over (``scale`` holds their prior widths, in the same order)."""
+    return {"name": COMPATIBILITY_PROTOCOL, "coordinates": None if coordinates is None else [str(k) for k in coordinates],
             "rank": "share of the reference's retained draws strictly farther from the reference's own SGM than the candidate "
                     "SGM (comparison '>', empirical-CDF lookup with searchsorted side='right'); rows = candidates, columns = "
                     "references, self reference excluded by group identity (NaN diagonal); generally asymmetric",
-            "metric": "estimator coordinates divided by the prior widths (sgm_scale); coordinates are stored as the estimator "
-                      "declares them (log10 for a log row) and are not transformed again", "sgm_scale": [float(v) for v in scale],
+            "metric": "estimator coordinates divided by the prior widths (sgm_scale), over the listed coordinates only (every "
+                      "parameter key in the primary space 'all'; a declared subset in an additional rank space); coordinates are "
+                      "stored as the estimator declares them (log10 for a log row) and are not transformed again",
+            "sgm_scale": [float(v) for v in scale],
             "score": "ordinary sample median of the candidate's off-diagonal row (two middle ranks averaged when even); raw, not "
                      "normalized across candidates; a computed zero is a valid outcome distinct from a missing score",
             "reference_populations": dict(COMPATIBILITY_REFERENCE), "statuses": list(COMPATIBILITY_STATUSES),
@@ -850,16 +898,23 @@ def compatibility_protocol(scale) -> dict:
             "precision": "float64"}
 
 
-def _rank_block(result, coll, kind, set_name, construction, cell, group_indices, pools, scale, out) -> CompatibilityBlock:
-    """Fill one block: every reference pool scores every candidate SGM of the block; writes score/references/status."""
+def _rank_block(result, coll, kind, set_name, construction, cell, group_indices, pools, scale, out, idx=None) -> CompatibilityBlock:
+    """Fill one block: every reference pool scores every candidate SGM of the block; writes score/references/status.
+    ``idx`` (coordinate positions) projects the candidates, the reference SGMs and the clouds onto a rank space; ``scale``
+    is already restricted to it."""
     score, n_ref, status = out
     gi = np.asarray(group_indices, np.int64); n = gi.size
     cand = np.asarray([result.groups[i].sgm_log10 for i in gi], np.float64)
+    if idx is not None:
+        cand = cand[:, idx]
     ranks = np.full((n, n), np.nan); draws = np.zeros(n, np.int64)
     for j in range(n):
         flat = _flat_pool(coll, pools[j])
         draws[j] = flat.shape[0]
-        col = reference_distance_ranks(flat, result.groups[int(gi[j])].sgm_log10, cand, scale)
+        ref_sgm = np.asarray(result.groups[int(gi[j])].sgm_log10, np.float64)
+        if idx is not None:
+            flat = np.asarray(flat, np.float64)[:, idx]; ref_sgm = ref_sgm[idx]
+        col = reference_distance_ranks(flat, ref_sgm, cand, scale)
         col[j] = np.nan                                   # the self reference, excluded by identity (never by vector equality)
         ranks[:, j] = col
     for a, i in enumerate(gi):
@@ -869,16 +924,33 @@ def _rank_block(result, coll, kind, set_name, construction, cell, group_indices,
                               ranks=ranks, reference_draws=draws)
 
 
-def compute_compatibility(result: AggregationResult, coll: CloudCollection) -> CompatibilityResult:
+def compute_compatibility(result: AggregationResult, coll: CloudCollection, *, coordinates=None, label=RANK_SPACE_ALL) -> CompatibilityResult:
     """The compatibility matrices and median scores of every rank-scored group of an aggregation, from the SAME
     validated clouds the groups were built from (call after :func:`aggregate` and :func:`verify_members`). One
     per_cell block per (condition, window set) when at least two cells are included; one per_cell_window block per
-    (condition, window set, cell) when at least two windows are selected; nothing else is scored."""
+    (condition, window set, cell) when at least two windows are selected; nothing else is scored. ``coordinates``
+    (parameter keys, any order; None = every key) restricts the distances to a rank coordinate space named ``label``:
+    the candidates, the reference SGMs and the reference clouds are projected onto those keys and the scale is their
+    prior widths; the groups, the SGMs and the reference populations are exactly those of the primary space."""
     t0 = time.time()
     n_groups = len(result.groups)
     score = np.full(n_groups, np.nan); n_ref = np.zeros(n_groups, np.int64)
     status = np.array(["not_applicable"] * n_groups, dtype=object)
-    scale = np.asarray(result.scale, np.float64)
+    keys = [str(k) for k in result.keys]
+    if coordinates is None:
+        coords, idx = tuple(keys), None
+        scale = np.asarray(result.scale, np.float64)
+    else:
+        if label == RANK_SPACE_ALL and sorted(str(c) for c in coordinates) != sorted(keys):
+            raise AggregationError(f"rank space {RANK_SPACE_ALL!r} is every coordinate; a subset needs its own label.")
+        unknown = [str(c) for c in coordinates if str(c) not in keys]
+        if unknown or not len(coordinates):
+            raise AggregationError(f"rank space {label!r}: coordinates {list(coordinates)} are not parameter keys {keys}.")
+        coords = tuple(k for k in keys if k in {str(c) for c in coordinates})
+        idx = _key_indices(keys, coords)
+        scale = np.asarray(result.scale, np.float64)[idx]
+        if len(coords) == len(keys):
+            idx = None
     index = {(g.construction, g.window_set, g.kind, int(g.cell), int(g.chunk)): i for i, g in enumerate(result.groups)}
     rows_of = {(int(coll.kind_index[r]), int(coll.cell[r]), int(coll.chunk[r])): int(r) for r in range(coll.n_windows)}
     blocks = []
@@ -892,16 +964,23 @@ def compute_compatibility(result: AggregationResult, coll: CloudCollection) -> C
                 status[i] = "insufficient_peers"
             if len(cells) >= 2:
                 pools = [np.asarray([rows_of[(ki, c, w)] for w in chunks]) for c in cells]
-                blocks.append(_rank_block(result, coll, kind, set_name, "per_cell", -1, gi, pools, scale, (score, n_ref, status)))
+                blocks.append(_rank_block(result, coll, kind, set_name, "per_cell", -1, gi, pools, scale, (score, n_ref, status), idx))
             for c in cells:
                 gi = [index[("per_cell_window", set_name, kind, c, w)] for w in chunks]
                 for i in gi:
                     status[i] = "insufficient_peers"
                 if len(chunks) >= 2:
                     pools = [np.asarray([rows_of[(ki, c, w)]]) for w in chunks]
-                    blocks.append(_rank_block(result, coll, kind, set_name, "per_cell_window", c, gi, pools, scale, (score, n_ref, status)))
+                    blocks.append(_rank_block(result, coll, kind, set_name, "per_cell_window", c, gi, pools, scale, (score, n_ref, status), idx))
     return CompatibilityResult(blocks=blocks, score=score, n_references=n_ref, status=np.asarray(status.tolist(), dtype=str),
-                               seconds=time.time() - t0)
+                               seconds=time.time() - t0, label=str(label), coordinates=coords,
+                               key_indices=tuple(int(i) for i in (_key_indices(keys, coords) if idx is None else idx)))
+
+
+def compute_rank_spaces(result: AggregationResult, coll: CloudCollection, spaces) -> list:
+    """The additional rank coordinate spaces (``{label: coordinates}``, see :func:`parse_rank_spaces`), each a
+    :class:`CompatibilityResult` over the same groups and reference populations as the primary space."""
+    return [compute_compatibility(result, coll, coordinates=coords, label=label) for label, coords in (spaces or {}).items()]
 
 
 def sgm_outside_prior_keys(result: AggregationResult) -> list:
@@ -917,48 +996,93 @@ def sgm_outside_prior_keys(result: AggregationResult) -> list:
 # =============================================================================
 # Exports
 # =============================================================================
-ARCHIVE_FORMAT_VERSION = 2          # v2: compatibility scores, statuses, rank-matrix blocks and the protocol beside v1's arrays
-SUPPORTED_ARCHIVE_FORMATS = (1, 2)  # a v1 archive (no compatibility data) still supplies a uniform selection
+ARCHIVE_FORMAT_VERSION = 3             # v2: compatibility scores, statuses, rank-matrix blocks and the protocol beside v1's arrays;
+                                       # v3: additional rank coordinate spaces (a declared key subset each) beside v2's arrays, unchanged
+SUPPORTED_ARCHIVE_FORMATS = (1, 2, 3)  # a v1 archive (no compatibility data) still supplies a uniform selection
 ARCHIVE_NAME = "aggregation_candidates.npz"
 
 
-def _block_name(b) -> str:
-    return f"compatibility_block_{b}"
+def _space_prefix(label=RANK_SPACE_ALL) -> str:
+    return "compatibility" if str(label) == RANK_SPACE_ALL else f"compatibility_{label}"
 
 
-def compatibility_manifest(result: AggregationResult, compatibility: CompatibilityResult) -> dict:
-    """The ``compatibility`` section of the archive manifest: the protocol, the block map (which arrays hold which
-    matrix, with the block's condition, window set, construction and cell context) and per-status counts. The
-    protocol is bound to the archive's own target, checkpoint, coverage, input conversion and source hashes
-    through the manifest that carries this section."""
+def _block_name(b, label=RANK_SPACE_ALL) -> str:
+    return f"{_space_prefix(label)}_block_{b}"
+
+
+def _space_arrays(compatibility: CompatibilityResult) -> dict:
+    """The archive arrays of one rank space (the primary space keeps the format-2 names)."""
+    p = _space_prefix(compatibility.label)
+    out = {f"{p}_score": np.asarray(compatibility.score, np.float64),
+           f"{p}_n_references": np.asarray(compatibility.n_references, np.int64),
+           f"{p}_status": np.asarray(compatibility.status, dtype=str)}
+    for b, blk in enumerate(compatibility.blocks):
+        name = _block_name(b, compatibility.label)
+        out[f"{name}_group_index"] = np.asarray(blk.group_index, np.int64)
+        out[f"{name}_ranks"] = np.asarray(blk.ranks, np.float64)
+        out[f"{name}_reference_draws"] = np.asarray(blk.reference_draws, np.int64)
+    return out
+
+
+def _space_section(result: AggregationResult, compatibility: CompatibilityResult) -> dict:
+    """One rank space's manifest section: protocol (with its coordinates and restricted scale), array names, block map, counts."""
+    label = compatibility.label; p = _space_prefix(label)
+    coords = tuple(compatibility.coordinates or [str(k) for k in result.keys])
+    idx = _key_indices(result.keys, coords)
+    scale = np.asarray(result.scale, np.float64)[idx]
     counts = {s: int(np.sum(compatibility.status == s)) for s in COMPATIBILITY_STATUSES}
     zero = int(np.sum((compatibility.status == "computed") & (compatibility.score == 0.0)))
     blocks = []
     for b, blk in enumerate(compatibility.blocks):
-        name = _block_name(b)
+        name = _block_name(b, label)
         blocks.append({"index": b, "kind": blk.kind, "window_set": blk.window_set, "construction": blk.construction,
                        "cell": int(blk.cell), "n_groups": int(blk.group_index.size),
                        "arrays": {"group_index": f"{name}_group_index", "ranks": f"{name}_ranks", "reference_draws": f"{name}_reference_draws"},
                        "orientation": "rows = candidates, columns = references, both in group_index order; diagonal NaN"})
-    return {"protocol": compatibility_protocol(result.scale), "arrays": {"score": "compatibility_score", "n_references": "compatibility_n_references",
-                                                                        "status": "compatibility_status", "sgm_outside_prior_keys": "sgm_outside_prior_keys"},
-            "blocks": blocks, "status_counts": counts, "n_zero_scores": zero, "seconds": round(float(compatibility.seconds), 3),
+    return {"label": str(label), "coordinates": list(coords), "key_indices": [int(i) for i in idx],
+            "protocol": compatibility_protocol(scale, coordinates=coords),
+            "arrays": {"score": f"{p}_score", "n_references": f"{p}_n_references", "status": f"{p}_status"},
+            "blocks": blocks, "status_counts": counts, "n_zero_scores": zero, "seconds": round(float(compatibility.seconds), 3)}
+
+
+def compatibility_manifest(result: AggregationResult, compatibility: CompatibilityResult, rank_spaces=()) -> dict:
+    """The ``compatibility`` section of the archive manifest: the primary space's protocol, block map (which arrays hold
+    which matrix, with the block's condition, window set, construction and cell context) and per-status counts (the
+    format-2 fields, unchanged), plus ``rank_spaces``: every space of the archive by label (the primary space ``all``
+    over every parameter key first, then each additional declared subset) with its coordinates, protocol, arrays, blocks
+    and counts. The protocols are bound to the archive's own target, checkpoint, coverage, input conversion and source
+    hashes through the manifest that carries this section."""
+    if compatibility.label != RANK_SPACE_ALL:
+        raise AggregationError(f"the primary compatibility result must be the space {RANK_SPACE_ALL!r}; got {compatibility.label!r}.")
+    labels = [c.label for c in rank_spaces]
+    if RANK_SPACE_ALL in labels or len(set(labels)) != len(labels):
+        raise AggregationError(f"additional rank spaces need distinct labels other than {RANK_SPACE_ALL!r}; got {labels}.")
+    primary = _space_section(result, compatibility)
+    spaces = {RANK_SPACE_ALL: {k: v for k, v in primary.items() if k not in ("protocol", "blocks")}}
+    spaces[RANK_SPACE_ALL]["protocol_and_blocks"] = "the compatibility section's own protocol and blocks (the format-2 fields)"
+    for c in rank_spaces:
+        if c.score.shape != compatibility.score.shape:
+            raise AggregationError(f"rank space {c.label!r} does not cover the archive's groups.")
+        spaces[c.label] = _space_section(result, c)
+    return {"protocol": primary["protocol"], "arrays": {**primary["arrays"], "sgm_outside_prior_keys": "sgm_outside_prior_keys"},
+            "blocks": primary["blocks"], "status_counts": primary["status_counts"], "n_zero_scores": primary["n_zero_scores"],
+            "seconds": primary["seconds"], "rank_spaces": spaces,
             "bound_to": "the target, contract (checkpoint, keys, scale, geometry, draws, pool mode, input conversion), coverage "
                         "and sources recorded in this manifest"}
 
 
 def export_manifest(result: AggregationResult, *, product_label, condition_labels, reference=None, coverage_note="",
                     product_manifest=None, n_product_cells=None, n_product_windows=None, extra=None, target=None,
-                    compatibility: CompatibilityResult = None) -> dict:
+                    compatibility: CompatibilityResult = None, rank_spaces=()) -> dict:
     """``target`` binds the archive to the Experiment it came from (``project_alias``, ``condition`` = the run's
     condition, ``timing_label``, ``window_seconds``, ``n_frames``, the estimator tag); a Nuisance DLI built from
     the archive must name the same target, so a cross-condition application never becomes another condition's
-    native nuisance by accident. ``compatibility`` (required for the format-2 archive) adds the protocol and the
-    block map of the rank matrices."""
+    native nuisance by accident. ``compatibility`` (required) adds the protocol and the block map of the primary
+    rank matrices; ``rank_spaces`` the additional rank coordinate spaces (:func:`compute_rank_spaces`)."""
     if compatibility is None:
-        raise AggregationError("export_manifest: the format-2 archive carries the compatibility result (compute_compatibility).")
+        raise AggregationError("export_manifest: the candidate archive carries the compatibility result (compute_compatibility).")
     return {
-        "compatibility": compatibility_manifest(result, compatibility),
+        "compatibility": compatibility_manifest(result, compatibility, rank_spaces),
         "archive_format_version": ARCHIVE_FORMAT_VERSION, "stage": "experiment_aggregation", "product_label": product_label,
         "target": None if target is None else dict(target),
         "condition_labels": list(condition_labels), "constructions": list(CONSTRUCTIONS),
@@ -1035,26 +1159,25 @@ def _disclosed_differences(sources) -> dict:
 
 
 def write_aggregation_exports(result: AggregationResult, out_dir, table, *, manifest: dict, compatibility: CompatibilityResult,
-                              reference=None) -> dict:
-    """Write the candidate archive (format 2: v1's arrays unchanged in content and row order, plus the compatibility
-    scores, statuses, SGM-outside-prior keys and the rank-matrix blocks the manifest maps), ``aggregation_groups.csv``
-    (v1's columns plus score, status, references and outside-prior keys), ``aggregation_comparison.csv``,
-    ``aggregation_compatibility.csv`` (one row per off-diagonal candidate/reference pair) and the manifest into
+                              reference=None, rank_spaces=()) -> dict:
+    """Write the candidate archive (format 3: v1's arrays unchanged in content and row order, v2's compatibility
+    scores, statuses, SGM-outside-prior keys and rank-matrix blocks of the primary space, plus one array set per
+    additional rank coordinate space, ``compatibility_<label>_*``), ``aggregation_groups.csv`` (v1's columns plus score,
+    status, references and outside-prior keys, then one score/status/references triple per additional space),
+    ``aggregation_comparison.csv``, ``aggregation_compatibility.csv`` (one row per off-diagonal candidate/reference pair
+    of the primary space) and ``aggregation_compatibility_<label>.csv`` per additional space, and the manifest into
     ``out_dir``; return their paths."""
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     G = result.groups; D = len(result.keys); Q = len(result.levels)
-    if compatibility is None or compatibility.score.shape != (len(G),):
-        raise AggregationError("write_aggregation_exports: a compatibility result over exactly the archive's groups is required.")
+    if compatibility is None or compatibility.score.shape != (len(G),) or compatibility.label != RANK_SPACE_ALL:
+        raise AggregationError("write_aggregation_exports: the primary ('all') compatibility result over exactly the archive's groups is required.")
+    for c in rank_spaces:
+        if c.score.shape != (len(G),) or c.label == RANK_SPACE_ALL:
+            raise AggregationError(f"write_aggregation_exports: rank space {c.label!r} must cover the archive's groups under its own label.")
     outside_keys = sgm_outside_prior_keys(result)
-    compat_arrays = {"compatibility_score": np.asarray(compatibility.score, np.float64),
-                     "compatibility_n_references": np.asarray(compatibility.n_references, np.int64),
-                     "compatibility_status": np.asarray(compatibility.status, dtype=str),
-                     "sgm_outside_prior_keys": np.asarray(outside_keys, dtype=str)}
-    for b, blk in enumerate(compatibility.blocks):
-        name = _block_name(b)
-        compat_arrays[f"{name}_group_index"] = np.asarray(blk.group_index, np.int64)
-        compat_arrays[f"{name}_ranks"] = np.asarray(blk.ranks, np.float64)
-        compat_arrays[f"{name}_reference_draws"] = np.asarray(blk.reference_draws, np.int64)
+    compat_arrays = {**_space_arrays(compatibility), "sgm_outside_prior_keys": np.asarray(outside_keys, dtype=str)}
+    for c in rank_spaces:
+        compat_arrays.update(_space_arrays(c))
     arrays = dict(
         **compat_arrays,
         construction=np.asarray([g.construction for g in G]), window_set=np.asarray([g.window_set for g in G]),
@@ -1089,16 +1212,20 @@ def write_aggregation_exports(result: AggregationResult, out_dir, table, *, mani
                     "sgm_source_cell", "sgm_source_chunk", "sgm_source_draw", "sgm_source_label", "outside_box_fraction"]
                    + [f"sgm_{k}" for k in result.keys] + [f"median_{k}" for k in result.keys]
                    + [f"q05_{k}" for k in result.keys] + [f"q95_{k}" for k in result.keys]
-                   + ["compatibility_score", "compatibility_status", "compatibility_n_references", "sgm_outside_prior_keys"])
+                   + ["compatibility_score", "compatibility_status", "compatibility_n_references", "sgm_outside_prior_keys"]
+                   + [f"{col}_{c.label}" for c in rank_spaces for col in ("compatibility_score", "compatibility_status", "compatibility_n_references")])
         for i, g in enumerate(G):
             sgm_p = to_physical(g.sgm_log10, table); med_p = to_physical(g.median_log10, table)
             q05 = to_physical(g.quantiles_log10[:, 0], table); q95 = to_physical(g.quantiles_log10[:, -1], table)
             sc = float(compatibility.score[i])
+            extra = []
+            for c in rank_spaces:
+                s_ = float(c.score[i]); extra += ["" if np.isnan(s_) else repr(s_), str(c.status[i]), int(c.n_references[i])]
             w.writerow([g.kind, g.window_set, g.construction, g.cell, g.chunk, len(g.members), g.n_draws, g.sgm_method, g.equivalent_to,
                         g.sgm_source["cell"], g.sgm_source["chunk"], g.sgm_source["draw_index"], g.sgm_source["source_label"],
                         f"{g.outside_box_fraction:.6f}"] + [repr(float(v)) for v in sgm_p] + [repr(float(v)) for v in med_p]
                        + [repr(float(v)) for v in q05] + [repr(float(v)) for v in q95]
-                       + ["" if np.isnan(sc) else repr(sc), str(compatibility.status[i]), int(compatibility.n_references[i]), outside_keys[i]])
+                       + ["" if np.isnan(sc) else repr(sc), str(compatibility.status[i]), int(compatibility.n_references[i]), outside_keys[i]] + extra)
     comparison_csv = out_dir / "aggregation_comparison.csv"
     with comparison_csv.open("w", newline="") as fh:
         w = csv.writer(fh)
@@ -1107,25 +1234,31 @@ def write_aggregation_exports(result: AggregationResult, out_dir, table, *, mani
                     "reference_physical", "median_vs_reference_percent", "median_vs_reference_dex"])
         for row in comparison_rows(result, table, reference=reference):
             w.writerow(row)
+    def write_pairs(path, comp):
+        with path.open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["kind", "window_set", "construction", "cell_context", "candidate_group", "candidate_cell", "candidate_chunk",
+                        "reference_group", "reference_cell", "reference_chunk", "reference_draws", "rank"])
+            for blk in comp.blocks:
+                ctx = "" if blk.cell < 0 else int(blk.cell)
+                for a, i in enumerate(blk.group_index):
+                    gi = G[int(i)]
+                    for b, j in enumerate(blk.group_index):
+                        if a == b:
+                            continue
+                        gj = G[int(j)]
+                        w.writerow([blk.kind, blk.window_set, blk.construction, ctx, int(i), gi.cell, gi.chunk, int(j), gj.cell, gj.chunk,
+                                    int(blk.reference_draws[b]), repr(float(blk.ranks[a, b]))])
     compatibility_csv = out_dir / "aggregation_compatibility.csv"
-    with compatibility_csv.open("w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["kind", "window_set", "construction", "cell_context", "candidate_group", "candidate_cell", "candidate_chunk",
-                    "reference_group", "reference_cell", "reference_chunk", "reference_draws", "rank"])
-        for blk in compatibility.blocks:
-            ctx = "" if blk.cell < 0 else int(blk.cell)
-            for a, i in enumerate(blk.group_index):
-                gi = G[int(i)]
-                for b, j in enumerate(blk.group_index):
-                    if a == b:
-                        continue
-                    gj = G[int(j)]
-                    w.writerow([blk.kind, blk.window_set, blk.construction, ctx, int(i), gi.cell, gi.chunk, int(j), gj.cell, gj.chunk,
-                                int(blk.reference_draws[b]), repr(float(blk.ranks[a, b]))])
+    write_pairs(compatibility_csv, compatibility)
+    space_csvs = {}
+    for c in rank_spaces:
+        space_csvs[c.label] = out_dir / f"aggregation_compatibility_{c.label}.csv"
+        write_pairs(space_csvs[c.label], c)
     manifest_path = out_dir / "aggregation_manifest.json"
     manifest_path.write_text(json.dumps({**manifest, "archive_sha256": _sha256(archive)}, indent=1, default=str))
     return {"archive": archive, "groups_csv": groups_csv, "comparison_csv": comparison_csv, "compatibility_csv": compatibility_csv,
-            "manifest": manifest_path}
+            "manifest": manifest_path, "rank_space_csvs": space_csvs}
 
 
 def comparison_rows(result: AggregationResult, table, *, reference=None) -> list:
@@ -1161,9 +1294,10 @@ def comparison_rows(result: AggregationResult, table, *, reference=None) -> list
 
 def load_candidate_archive(path) -> dict:
     """Read ``aggregation_candidates.npz`` back: arrays plus the decoded manifest; verifies the row counts. Accepts
-    format 1 (no compatibility data: ``compatibility`` is None and only a uniform selection can be built from it)
-    and format 2, whose compatibility data are validated here (:func:`validate_archive_compatibility`): a reader
-    never builds a weighted selection from inconsistent scores."""
+    format 1 (no compatibility data: ``compatibility`` is None and only a uniform selection can be built from it),
+    format 2 (the primary rank space ``all``) and format 3 (additional rank coordinate spaces), whose compatibility
+    data are validated here, every space alike (:func:`validate_archive_compatibility`): a reader never builds a
+    weighted selection from inconsistent scores."""
     path = Path(path)
     with np.load(path, allow_pickle=False) as data:
         arrays = {k: data[k] for k in data.files}
@@ -1193,45 +1327,68 @@ def _int_array(arr, name, where) -> np.ndarray:
 
 
 def validate_archive_compatibility(arrays, manifest, *, where="archive") -> dict:
-    """Validate a format-2 archive's compatibility data against its own groups and declared contexts. The reference
-    CONTEXTS are derived from the candidate groups themselves: every (condition, window set) with at least two
-    per_cell groups and every (condition, window set, cell) with at least two per_cell_window groups must hold exactly
-    one block over exactly its complete peer population (a population split into several blocks, a missing peer, an
-    unexpected block and a false ``insufficient_peers`` are refused); a context with one group must carry
-    ``insufficient_peers`` with no score. Per block: integer identities and counts (never coerced), unique in-range
-    group indices, reference draw counts equal to the referenced groups' pooled draw counts, a NaN diagonal, finite
-    off-diagonal ranks in [0, 1], and the stored score equal to the row median with the right reference count. The
-    protocol's numeric scale must be the archive's own ``sgm_scale`` and the contract's. Returns
-    ``{"protocol", "blocks": [...], "by_group": {...}}``; raises :class:`AggregationError` naming the first inconsistency."""
+    """Validate an archive's compatibility data (format 2: the primary rank space ``all``; format 3: ``all`` plus every
+    additional rank coordinate space declared in ``compatibility.rank_spaces``) against its own groups and declared
+    contexts. Common to all spaces, the reference CONTEXTS are derived from the candidate groups themselves: every
+    (condition, window set) with at least two per_cell groups and every (condition, window set, cell) with at least two
+    per_cell_window groups must hold exactly one block over exactly its complete peer population (a population split
+    into several blocks, a missing peer, an unexpected block and a false ``insufficient_peers`` are refused); a context
+    with one group must carry ``insufficient_peers`` with no score; the scientific identities of the rank-scored groups
+    must be distinct (one group per cell in a per_cell context, chunk -1; one per window position in a per_cell_window
+    context). Per block: integer identities and counts (never coerced), unique in-range group indices, reference draw
+    counts equal to the referenced groups' pooled draw counts, a NaN diagonal, finite off-diagonal ranks in [0, 1], and
+    the stored score equal to the row median with the right reference count. Per space: the protocol name, its declared
+    coordinates (every key for ``all``; a proper non-empty subset in table order otherwise, named once) and its scale,
+    which must be the archive's ``sgm_scale`` restricted to those coordinates (and, for ``all``, equal to the manifest's
+    and the contract's). Returns ``{"protocol", "blocks", "by_group", "coordinates", "spaces": {label: {...}}}`` where the
+    top level is the primary space ``all``; raises :class:`AggregationError` naming the first inconsistency."""
     section = manifest.get("compatibility") or {}
-    proto = section.get("protocol") or {}
-    if proto.get("name") != COMPATIBILITY_PROTOCOL:
-        raise AggregationError(f"{where}: compatibility protocol {proto.get('name')!r} is not {COMPATIBILITY_PROTOCOL!r}; the stored ranks are "
-                               f"not the ones this reader interprets.")
-    scale = np.asarray(arrays["sgm_scale"], float)
-    for label, other in (("protocol", proto.get("sgm_scale")), ("manifest", manifest.get("sgm_scale")),
-                         ("contract", (manifest.get("contract") or {}).get("sgm_scale"))):
-        if other is None or np.asarray(other, float).shape != scale.shape or not np.array_equal(np.asarray(other, float), scale):
-            raise AggregationError(f"{where}: the {label} sgm_scale {other} is not the archive's {scale.tolist()}; the stored ranks were "
+    version = int(manifest.get("archive_format_version", 2))
+    keys = [str(k) for k in arrays["parameter_keys"]]
+    scale_all = np.asarray(arrays["sgm_scale"], float)
+    for label, other in (("manifest", manifest.get("sgm_scale")), ("contract", (manifest.get("contract") or {}).get("sgm_scale"))):
+        if other is None or np.asarray(other, float).shape != scale_all.shape or not np.array_equal(np.asarray(other, float), scale_all):
+            raise AggregationError(f"{where}: the {label} sgm_scale {other} is not the archive's {scale_all.tolist()}; the stored ranks were "
                                    f"computed under another metric.")
+    contexts = _derive_rank_contexts(arrays, where)
+    declared = section.get("rank_spaces")
+    if version >= 3:
+        if not isinstance(declared, dict) or RANK_SPACE_ALL not in declared:
+            raise AggregationError(f"{where}: a format-{version} archive declares its rank spaces under compatibility.rank_spaces, with "
+                                   f"{RANK_SPACE_ALL!r} first.")
+        primary_decl = declared[RANK_SPACE_ALL]
+        if list(primary_decl.get("coordinates") or []) != keys:
+            raise AggregationError(f"{where}: the primary rank space {RANK_SPACE_ALL!r} must list every parameter key {keys}; got "
+                                   f"{primary_decl.get('coordinates')}.")
+    primary = _validate_rank_space(arrays, section, contexts, where=where, label=RANK_SPACE_ALL, coordinates=keys, keys=keys,
+                                   scale_all=scale_all, require_coordinates=version >= 3)
+    spaces = {RANK_SPACE_ALL: primary}
+    if version >= 3:
+        for label, decl in declared.items():
+            if label == RANK_SPACE_ALL:
+                continue
+            if not _SPACE_LABEL.match(str(label)):
+                raise AggregationError(f"{where}: rank space label {label!r} must match [a-z][a-z0-9_]*.")
+            coords = [str(c) for c in (decl.get("coordinates") or [])]
+            if not coords or len(coords) >= len(keys) or len(set(coords)) != len(coords) or any(c not in keys for c in coords) \
+                    or coords != [k for k in keys if k in set(coords)]:
+                raise AggregationError(f"{where}: rank space {label!r} declares coordinates {coords}; a proper non-empty subset of {keys} in "
+                                       f"table order, each key once, is required.")
+            spaces[str(label)] = _validate_rank_space(arrays, decl, contexts, where=where, label=str(label), coordinates=coords, keys=keys,
+                                                      scale_all=scale_all, require_coordinates=True)
+    return {**primary, "spaces": spaces}
+
+
+def _derive_rank_contexts(arrays, where) -> dict:
+    """The reference contexts of an archive from its candidate groups (shared by every rank space): ``{(kind, set,
+    construction, cell or -1): [group indices]}`` after the distinct-identity checks."""
     n = arrays["construction"].shape[0]
-    for k in ("compatibility_score", "compatibility_n_references", "compatibility_status", "sgm_outside_prior_keys"):
-        if k not in arrays or arrays[k].shape != (n,):
-            raise AggregationError(f"{where}: compatibility array {k!r} is missing or has not one entry per group ({n}).")
-    score = np.asarray(arrays["compatibility_score"], float); nref = _int_array(arrays["compatibility_n_references"], "compatibility_n_references", where)
-    status = np.asarray(arrays["compatibility_status"]).astype(str)
-    unknown = sorted(set(status.tolist()) - set(COMPATIBILITY_STATUSES))
-    if unknown:
-        raise AggregationError(f"{where}: unknown compatibility statuses {unknown}.")
     constr = np.asarray(arrays["construction"]).astype(str); ws = np.asarray(arrays["window_set"]).astype(str)
     kind = np.asarray(arrays["kind"]).astype(str)
     cell = _int_array(arrays["cell"], "cell", where); chunk = _int_array(arrays["chunk"], "chunk", where)
-    n_draws = _int_array(arrays["n_draws"], "n_draws", where)
     # the scientific identities of the rank-scored groups must be distinct BEFORE their reference contexts are derived
     # from them: one group per distinct cell in a per_cell context (pooled cell groups carry chunk = -1), one group per
     # distinct selected window position in a per_cell_window context; unique group-array indices alone do not establish it
-    def ctx_name(key):
-        return f"{key[0]}/{key[1]}/{key[2]}" + (f" cell {key[3]}" if key[2] == "per_cell_window" else "")
     expected = {}
     for i in range(n):
         if constr[i] == "per_cell":
@@ -1248,67 +1405,117 @@ def validate_archive_compatibility(arrays, manifest, *, where="archive") -> dict
         label = "cell" if key[2] == "per_cell" else "window position"
         if np.unique(ident).size != len(members):
             dup = sorted(set(int(v) for v in ident if int(np.sum(ident == v)) > 1))
-            raise AggregationError(f"{where}: the context {ctx_name(key)} holds {len(members)} groups over {np.unique(ident).size} distinct "
+            raise AggregationError(f"{where}: the context {_ctx_name(key)} holds {len(members)} groups over {np.unique(ident).size} distinct "
                                    f"{label}s (duplicated {label} identities {dup[:10]}); one representative per distinct {label} is required.")
+    return expected
+
+
+def _ctx_name(key):
+    return f"{key[0]}/{key[1]}/{key[2]}" + (f" cell {key[3]}" if key[2] == "per_cell_window" else "")
+
+
+def _validate_rank_space(arrays, section, expected, *, where, label, coordinates, keys, scale_all, require_coordinates) -> dict:
+    """Validate ONE rank space's protocol, arrays and blocks against the shared contexts (see
+    :func:`validate_archive_compatibility`); returns ``{"protocol", "blocks", "by_group", "coordinates", "label"}``."""
+    proto = section.get("protocol") or {}
+    sp = f"rank space {label!r}"
+    if proto.get("name") != COMPATIBILITY_PROTOCOL:
+        raise AggregationError(f"{where}: {sp}: compatibility protocol {proto.get('name')!r} is not {COMPATIBILITY_PROTOCOL!r}; the stored ranks "
+                               f"are not the ones this reader interprets.")
+    pc = proto.get("coordinates")
+    if pc is not None or require_coordinates:
+        if [str(c) for c in (pc or [])] != [str(c) for c in coordinates]:
+            raise AggregationError(f"{where}: {sp}: the protocol's coordinates {pc} are not the space's declared {list(coordinates)}.")
+    idx = _key_indices(keys, coordinates)
+    scale = scale_all[idx]
+    other = proto.get("sgm_scale")
+    if other is None or np.asarray(other, float).shape != scale.shape or not np.array_equal(np.asarray(other, float), scale):
+        raise AggregationError(f"{where}: {sp}: the protocol sgm_scale {other} is not the archive's sgm_scale over its coordinates "
+                               f"{scale.tolist()}; the stored ranks were computed under another metric.")
+    names = section.get("arrays") or {}
+    p = _space_prefix(label)
+    want = {"score": f"{p}_score", "n_references": f"{p}_n_references", "status": f"{p}_status"}
+    for k, v in want.items():
+        if names.get(k, v) != v:
+            raise AggregationError(f"{where}: {sp}: the {k} array is named {names.get(k)!r}; {v!r} is required.")
+    n = arrays["construction"].shape[0]
+    required = list(want.values()) + (["sgm_outside_prior_keys"] if label == RANK_SPACE_ALL else [])
+    for k in required:
+        if k not in arrays or arrays[k].shape != (n,):
+            raise AggregationError(f"{where}: {sp}: compatibility array {k!r} is missing or has not one entry per group ({n}).")
+    score = np.asarray(arrays[want["score"]], float); nref = _int_array(arrays[want["n_references"]], want["n_references"], where)
+    status = np.asarray(arrays[want["status"]]).astype(str)
+    unknown = sorted(set(status.tolist()) - set(COMPATIBILITY_STATUSES))
+    if unknown:
+        raise AggregationError(f"{where}: {sp}: unknown compatibility statuses {unknown}.")
+    constr = np.asarray(arrays["construction"]).astype(str); ws = np.asarray(arrays["window_set"]).astype(str)
+    kind = np.asarray(arrays["kind"]).astype(str)
+    cell = _int_array(arrays["cell"], "cell", where); chunk = _int_array(arrays["chunk"], "chunk", where)
+    n_draws = _int_array(arrays["n_draws"], "n_draws", where)
+    ctx_name = _ctx_name
     held = {}
     blocks = []
     for blk in section.get("blocks", []):
-        names = blk.get("arrays") or {}
+        bnames = blk.get("arrays") or {}
         for k in ("group_index", "ranks", "reference_draws"):
-            if names.get(k) not in arrays:
-                raise AggregationError(f"{where}: block {blk.get('index')} names a missing array {names.get(k)!r}.")
-        gi = _int_array(arrays[names["group_index"]], f"block {blk.get('index')} group_index", where)
-        R = np.asarray(arrays[names["ranks"]], float)
-        draws = _int_array(arrays[names["reference_draws"]], f"block {blk.get('index')} reference_draws", where)
+            if bnames.get(k) not in arrays:
+                raise AggregationError(f"{where}: {sp}: block {blk.get('index')} names a missing array {bnames.get(k)!r}.")
+        gi = _int_array(arrays[bnames["group_index"]], f"block {blk.get('index')} group_index", where)
+        R = np.asarray(arrays[bnames["ranks"]], float)
+        draws = _int_array(arrays[bnames["reference_draws"]], f"block {blk.get('index')} reference_draws", where)
         m = gi.size
         if m < 2 or np.unique(gi).size != m or gi.min() < 0 or gi.max() >= n:
-            raise AggregationError(f"{where}: block {blk.get('index')}: group indices {gi.tolist()[:10]} are not at least two distinct groups of the archive.")
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: group indices {gi.tolist()[:10]} are not at least two distinct groups of the archive.")
         if blk.get("construction") not in RANK_SCORED_CONSTRUCTIONS:
-            raise AggregationError(f"{where}: block {blk.get('index')}: construction {blk.get('construction')!r} carries no rank score.")
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: construction {blk.get('construction')!r} carries no rank score.")
         key = (str(blk.get("kind")), str(blk.get("window_set")), str(blk["construction"]),
                int(blk.get("cell", -1)) if blk["construction"] == "per_cell_window" else -1)
         if key not in expected:
-            raise AggregationError(f"{where}: block {blk.get('index')} names the context {ctx_name(key)}, which has no rank-scored groups in this archive.")
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')} names the context {ctx_name(key)}, which has no rank-scored groups in this archive.")
         if key in held:
-            raise AggregationError(f"{where}: block {blk.get('index')}: the context {ctx_name(key)} already has block {held[key]}; a peer population "
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: the context {ctx_name(key)} already has block {held[key]}; a peer population "
                                    f"split into several blocks is refused (every eligible group of a context is scored against ALL its peers).")
         if sorted(gi.tolist()) != sorted(expected[key]):
-            raise AggregationError(f"{where}: block {blk.get('index')} ({ctx_name(key)}) holds groups {sorted(gi.tolist())[:12]} but the context's complete "
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')} ({ctx_name(key)}) holds groups {sorted(gi.tolist())[:12]} but the context's complete "
                                    f"peer population is {sorted(expected[key])[:12]} ({len(expected[key])} groups): a block must hold exactly the "
                                    f"context's groups, never a subset or a foreign group.")
         held[key] = blk.get("index")
+        for k in ("group_index", "ranks", "reference_draws"):
+            if not str(bnames.get(k)).startswith(p + "_block_"):
+                raise AggregationError(f"{where}: {sp}: block {blk.get('index')} names the array {bnames.get(k)!r}, which does not belong to this "
+                                       f"space's arrays ({p}_block_*); a space never borrows another space's matrices.")
         if R.shape != (m, m) or draws.shape != (m,) or np.any(draws <= 0):
-            raise AggregationError(f"{where}: block {blk.get('index')}: ranks {R.shape} / reference draws {draws.shape} do not match {m} groups, "
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: ranks {R.shape} / reference draws {draws.shape} do not match {m} groups, "
                                    f"or a reference has no draws.")
         if not np.array_equal(draws, n_draws[gi]):
-            raise AggregationError(f"{where}: block {blk.get('index')} ({ctx_name(key)}): reference draw counts {draws.tolist()[:6]} are not the referenced "
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')} ({ctx_name(key)}): reference draw counts {draws.tolist()[:6]} are not the referenced "
                                    f"groups' pooled draw counts {n_draws[gi].tolist()[:6]}.")
         diag = np.diag(R); off = R[~np.eye(m, dtype=bool)]
         if not np.all(np.isnan(diag)) or not np.all(np.isfinite(off)) or off.size and (off.min() < 0 or off.max() > 1):
-            raise AggregationError(f"{where}: block {blk.get('index')}: the diagonal must be masked (NaN) and every off-diagonal rank finite in [0, 1].")
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: the diagonal must be masked (NaN) and every off-diagonal rank finite in [0, 1].")
         for a, i in enumerate(gi):
             med = float(np.median(np.delete(R[a], a)))
             if status[i] != "computed" or nref[i] != m - 1 or not np.isfinite(score[i]) or abs(score[i] - med) > 1e-12:
-                raise AggregationError(f"{where}: group {int(i)} ({kind[i]}/{ws[i]}/{constr[i]} cell {cell[i]} chunk {chunk[i]}): stored score "
+                raise AggregationError(f"{where}: {sp}: group {int(i)} ({kind[i]}/{ws[i]}/{constr[i]} cell {cell[i]} chunk {chunk[i]}): stored score "
                                        f"{score[i]!r}/status {status[i]!r}/{nref[i]} references disagree with its block (median {med!r}, {m - 1} references).")
         blocks.append({**{k: v for k, v in blk.items() if k != "arrays"}, "group_index": gi, "ranks": R, "reference_draws": draws})
     for key, members in expected.items():
         if len(members) >= 2 and key not in held:
-            raise AggregationError(f"{where}: the context {ctx_name(key)} has {len(members)} rank-scored groups but no block; the archive is incomplete.")
+            raise AggregationError(f"{where}: {sp}: the context {ctx_name(key)} has {len(members)} rank-scored groups but no block; the archive is incomplete.")
         if len(members) == 1:
             i = members[0]
             if status[i] != "insufficient_peers" or np.isfinite(score[i]) or nref[i] != 0:
-                raise AggregationError(f"{where}: group {i} ({kind[i]}/{ws[i]}/{constr[i]} cell {cell[i]} chunk {chunk[i]}) is the only group of its "
+                raise AggregationError(f"{where}: {sp}: group {i} ({kind[i]}/{ws[i]}/{constr[i]} cell {cell[i]} chunk {chunk[i]}) is the only group of its "
                                        f"context, so its status must be 'insufficient_peers' with no score and no reference; got {status[i]!r}.")
     for i in range(n):
         if constr[i] in RANK_SCORED_CONSTRUCTIONS:
             if status[i] == "not_applicable":
-                raise AggregationError(f"{where}: group {i} ({constr[i]}) cannot be 'not_applicable'.")
+                raise AggregationError(f"{where}: {sp}: group {i} ({constr[i]}) cannot be 'not_applicable'.")
         else:
             if status[i] != "not_applicable" or np.isfinite(score[i]) or nref[i] != 0:
-                raise AggregationError(f"{where}: group {i} ({constr[i]}) must be 'not_applicable' with no score; got {status[i]!r}.")
+                raise AggregationError(f"{where}: {sp}: group {i} ({constr[i]}) must be 'not_applicable' with no score; got {status[i]!r}.")
     by_group = {i: {"score": None if np.isnan(score[i]) else float(score[i]), "n_references": int(nref[i]), "status": str(status[i])} for i in range(n)}
-    return {"protocol": section["protocol"], "blocks": blocks, "by_group": by_group}
+    return {"protocol": section["protocol"], "blocks": blocks, "by_group": by_group, "coordinates": [str(c) for c in coordinates], "label": str(label)}
 
 
 def archive_summary_rows(archive, table, *, statistic="sgm", levels=(0.05, 0.25, 0.5, 0.75, 0.95)) -> list:
@@ -1345,15 +1552,20 @@ def archive_component(archive, *, kind, window_set, construction, statistic="sgm
         raise AggregationError(f"statistic {statistic!r} must be one of {STATISTICS}.")
     vecs = (a["sgm_log10"] if statistic == "sgm" else a["median_log10"])[idx].astype(float)
     compat = archive.get("compatibility")
+    spaces = {} if compat is None else (compat.get("spaces") or {RANK_SPACE_ALL: {**compat, "coordinates": [str(k) for k in archive["keys"]]}})
     ident = [{"cell": int(a["cell"][i]), "chunk": int(a["chunk"][i]), "n_windows": int(a["n_windows"][i]),
               "sgm_source": {"cell": int(a["sgm_source_cell"][i]), "chunk": int(a["sgm_source_chunk"][i]),
                              "draw_index": int(a["sgm_source_draw"][i]), "source_label": str(a["sgm_source_label"][i])},
               "sgm_method": str(a["sgm_method"][i]), "equivalent_to": str(a["equivalent_to"][i]),
               "is_sampled_rows": statistic == "sgm", "group_index": int(i),
-              # the SGM's compatibility (the score describes the SGM representative, whatever statistic is selected)
-              "compatibility": None if compat is None else dict(compat["by_group"][int(i)])} for i in idx]
+              # the SGM's compatibility (the score describes the SGM representative, whatever statistic is selected): the
+              # primary space 'all' as `compatibility`, every space of the archive by label as `compatibility_by_space`
+              "compatibility": None if compat is None else dict(compat["by_group"][int(i)]),
+              "compatibility_by_space": None if compat is None else {lab: dict(sp["by_group"][int(i)]) for lab, sp in spaces.items()}}
+             for i in idx]
     return {"kind": kind, "window_set": window_set, "construction": construction, "statistic": statistic,
-            "vectors": vecs, "identities": ident, "group_indices": idx.tolist(),
+            "vectors": vecs, "identities": ident, "group_indices": idx.tolist(), "parameter_keys": [str(k) for k in archive["keys"]],
+            "rank_spaces": {lab: list(sp["coordinates"]) for lab, sp in spaces.items()},
             "compatibility_available": compat is not None, "archive_format_version": int(archive.get("format_version", 1))}
 
 
@@ -1378,6 +1590,7 @@ class AggregationRequest:
     product_label: str = ""
     source_clouds_note: str = ""
     target: dict = None                    # project_alias, condition, timing_label, window_seconds, n_frames, estimator_tag
+    rank_spaces: dict = None               # additional rank coordinate spaces {label: (keys)} (parse_rank_spaces); None = none
 
 
 def _fmt(v):
@@ -1429,6 +1642,7 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
     bad_members = verify_members(result, coll)
     elapsed = time.time() - t0
     compat = compute_compatibility(result, coll)          # the same validated clouds, after the groups are verified
+    spaces = compute_rank_spaces(result, coll, request.rank_spaces)   # additional rank coordinate spaces, same groups and references
     ref = request.reference
     covered_cells = {k: result.coverage[k]["cells"] for k in result.coverage}
     coverage_lines = []
@@ -1448,8 +1662,8 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
                                    extra={"reference_vector": None if ref is None else {"name": ref["name"], "log10": [float(v) for v in ref["log10"]],
                                                                                        "physical": [float(v) for v in ref["physical"]]},
                                           "source_clouds_note": request.source_clouds_note, "aggregation_seconds": round(elapsed, 2)},
-                                   compatibility=compat)
-    paths = write_aggregation_exports(result, out_dir, table, manifest=agg_manifest, compatibility=compat, reference=ref)
+                                   compatibility=compat, rank_spaces=spaces)
+    paths = write_aggregation_exports(result, out_dir, table, manifest=agg_manifest, compatibility=compat, reference=ref, rank_spaces=spaces)
     # ---- the section ----------------------------------------------------------------------------------------
     sets_desc = "; ".join(format_window_set(n, c) for n, c in result.window_sets.items())
     src_desc = sources_description(result.sources)
@@ -1522,6 +1736,13 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
         + "".join(f", [aggregation_{kind}_{s}_compatibility_windows.png](figures/aggregation_{kind}_{s}_compatibility_windows.png), "
                   f"[within-cell matrix atlas {kind}/{s}](compatibility/{kind}/{s}/windows/index.md)"
                   for kind in result.coverage for s, c in result.window_sets.items() if len(c) > 1)
+        + "".join(f"; rank space `{sp.label}` ({', '.join(sp.coordinates)}): [aggregation_compatibility_{sp.label}.csv](aggregation_compatibility_{sp.label}.csv), "
+                  + ", ".join(f"[aggregation_{kind}_{s}_compatibility_cells_{sp.label}.png](figures/aggregation_{kind}_{s}_compatibility_cells_{sp.label}.png)"
+                              for kind in result.coverage for s in result.window_sets if len(result.coverage[kind]["cells"]) >= 2)
+                  + "".join(f", [aggregation_{kind}_{s}_compatibility_windows_{sp.label}.png](figures/aggregation_{kind}_{s}_compatibility_windows_{sp.label}.png), "
+                            f"[within-cell matrix atlas {kind}/{s} in `{sp.label}`](compatibility/{kind}/{s}/windows_{sp.label}/index.md)"
+                            for kind in result.coverage for s, c in result.window_sets.items() if len(c) > 1)
+                  for sp in spaces)
         + " (captions at the end of the report).", "",
         "Reading rules: an acknowledged training-bound extrapolation stays visible in the outside-prior columns (the InlB "
         "PSF width lies above its prior ceiling); pairwise correlations in the joint figures are descriptive, not selection "
@@ -1749,7 +1970,8 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
                                          f"means a per-cell vector.{sel_example} {prior_note}{kind_notes}")
     # ---- posterior compatibility of the SGM representatives (raw median ranks; no sampling probability here) ------
     _report_compatibility(reporter, result, compat, coll, request, out_dir, condition_display, n_product_cells, n_product_windows,
-                          kind_notes, figure_compatibility_cells, figure_compatibility_windows, figure_compatibility_atlas_page)
+                          kind_notes, figure_compatibility_cells, figure_compatibility_windows, figure_compatibility_atlas_page,
+                          rank_spaces=spaces)
     try:
         back = load_candidate_archive(paths["archive"])
         readback = f"format {back['format_version']}, {len(back['compatibility']['blocks'])} rank blocks, {len(result.groups)} groups re-validated"
@@ -1768,13 +1990,24 @@ ATLAS_CELLS_PER_PAGE = 12
 
 
 def _report_compatibility(reporter, result, compat, coll, request, out_dir, condition_display, n_product_cells, n_product_windows,
-                          kind_notes, fig_cells, fig_windows, fig_atlas):
+                          kind_notes, fig_cells, fig_windows, fig_atlas, rank_spaces=()):
     """The compact subsection: the definition, one scope/availability table (matrices, candidates, references, computed or
-    unavailable, zero scores labeled as centrality outcomes), the inline cell matrix with its score strip and the window-score
-    overview per condition and window set, and the complete linked within-cell atlas."""
+    unavailable, zero scores labeled as centrality outcomes; one row set per rank coordinate space), the inline cell matrix
+    with its score strip and the window-score overview per condition, window set and space, and the complete linked
+    within-cell atlas per space."""
     geom = coll.contract["window_geometry"]; ws = request.window_seconds
     step_s = (float(ws) * geom["step_frames"] / geom["n_frames"]) if ws else 1.0
     groups = result.groups
+    all_spaces = [compat] + list(rank_spaces)
+    space_text = ("**Rank coordinate spaces.** The primary space `all` runs the distances over every parameter coordinate "
+                  f"({', '.join(str(k) for k in result.keys)}). " + (
+                  "Additional spaces restrict the same candidates, reference SGMs and reference clouds to a declared subset of the "
+                  "coordinates (the scale is the prior widths of those coordinates); the groups, the SGMs and the reference populations "
+                  "are identical across spaces, only the metric changes, so a space whose coordinates exclude a parameter is blind to "
+                  "disagreement in that parameter: " + "; ".join(f"`{sp.label}` = {', '.join(sp.coordinates)}" for sp in rank_spaces)
+                  + ". Each space has its own scores, statuses, figures, atlas and CSV (`aggregation_compatibility_<space>.csv`); the "
+                  "Nuisance DLI constructor names the space it weights with (`rank_coordinates`)." if rank_spaces else
+                  "No additional space was requested for this report (`--compatibility-coordinates`)."))
     text = [
         "For every rank-scored representative, each other group of its block is a reference posterior: that group's retained "
         "cloud (for one SGM per cell, the equal-window mixture of the cell's selected windows; for one SGM per cell–window, the "
@@ -1804,17 +2037,19 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
         f"rank: [aggregation_compatibility.csv](aggregation_compatibility.csv); the rank-matrix blocks and the protocol "
         f"`{COMPATIBILITY_PROTOCOL}`: [aggregation_candidates.npz](aggregation_candidates.npz) (archive format {ARCHIVE_FORMAT_VERSION}, "
         f"manifest section `compatibility`). Computation took {compat.seconds:.1f} s on the CPU. The figures (captions at the end of the "
-        "report) show raw median ranks; the complete within-cell matrices of every cell are in the linked atlas pages, twelve cells per page.",
+        "report) show raw median ranks; the complete within-cell matrices of every cell are in the linked atlas pages, twelve cells per page.", "",
+        space_text,
     ]
     reporter.prose(COMPATIBILITY_TITLE, "\n".join(text))
     rows = []
-    for kind in result.coverage:
+    for sp in all_spaces:
+      for kind in result.coverage:
         kname = condition_display(kind); cells = [int(c) for c in result.coverage[kind]["cells"]]
         for set_name, chunks in result.window_sets.items():
             for c in CONSTRUCTIONS:
                 idx = [i for i, g in enumerate(groups) if g.kind == kind and g.window_set == set_name and g.construction == c]
-                st = sorted(set(compat.status[i] for i in idx))
-                zero_ids = [i for i in idx if compat.status[i] == "computed" and compat.score[i] == 0.0]
+                st = sorted(set(sp.status[i] for i in idx))
+                zero_ids = [i for i in idx if sp.status[i] == "computed" and sp.score[i] == 0.0]
                 if c == "per_cell":
                     n_mat, refs = (1 if len(cells) >= 2 else 0), f"{len(cells) - 1}"
                     avail = "computed" if st == ["computed"] else "unavailable: one included cell (insufficient_peers)"
@@ -1829,18 +2064,23 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
                     zeros = f"{len(zero_ids)}" + (f" ({zl}{'; …' if len(zero_ids) > 12 else ''})" if zero_ids else "")
                 else:
                     zeros = "-"
-                rows.append([kname, set_name, f"{display_name(c, short=True)} (`{c}`)", str(n_mat), str(len(idx)),
+                rows.append([f"`{sp.label}`", kname, set_name, f"{display_name(c, short=True)} (`{c}`)", str(n_mat), str(len(idx)),
                              refs if n_mat else "-", avail, zeros])
     reporter.table(f"{COMPATIBILITY_TITLE}: scope and availability",
-                   ["condition", "window set", "grouping", "matrices", "candidates", "references per candidate", "status",
+                   ["rank space", "condition", "window set", "grouping", "matrices", "candidates", "references per candidate", "status",
                     "zero scores (centrality outcomes, not defective recordings)"], rows,
                    note="a matrix is one block of candidates against references (per_cell: one block over the included cells; "
                         "per_cell_window: one block per cell over its selected windows); 'unavailable' keeps the groups with no score "
-                        f"and zero references, never a fabricated 0 or 1.{kind_notes}")
+                        f"and zero references, never a fabricated 0 or 1; rank spaces: " + "; ".join(f"`{sp.label}` = {', '.join(sp.coordinates)}" for sp in all_spaces)
+                        + f".{kind_notes}")
     if not reporter.dump:
         return
     n_draws = coll.n_draws
-    for kind in result.coverage:
+    for sp in all_spaces:
+      compat = sp
+      sfx = "" if sp.label == RANK_SPACE_ALL else f"_{sp.label}"
+      space_note = "" if sp.label == RANK_SPACE_ALL else f" Rank space `{sp.label}`: distances over {', '.join(sp.coordinates)} only."
+      for kind in result.coverage:
         kname = condition_display(kind); cells = [int(c) for c in result.coverage[kind]["cells"]]; cov = result.coverage[kind]
         for set_name, chunks in result.window_sets.items():
             chunks = [int(w) for w in chunks]
@@ -1854,8 +2094,9 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
                 ids = [groups[int(blk.group_index[o])].cell for o in order]
                 R = blk.ranks[np.ix_(order, order)]; S = compat.score[blk.group_index[order]]
                 n_zero = int(np.sum(S == 0))
-                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_cells",
-                                     fig_cells(R, ids, S, title="One SGM vector per cell: posterior compatibility", subtitle=sub),
+                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_cells{sfx}",
+                                     fig_cells(R, ids, S, title="One SGM vector per cell: posterior compatibility" + (f" [rank space {sp.label}]" if sfx else ""),
+                                               subtitle=sub),
                                      caption=f"{sub}. Rows: candidate cell; columns: reference cell (stable numeric order, every cell retained). "
                                              f"Each reference is the other cell's retained cloud, the equal-window mixture of its selected windows "
                                              f"({len(chunks)} window{'s' if len(chunks) != 1 else ''} x {n_draws:,} draws), with that cell's own SGM; color = the "
@@ -1863,9 +2104,9 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
                                              f"coordinates divided by the prior widths; the self comparison is gray (excluded). The matrix is asymmetric because "
                                              f"each reference has its own spread. Right strip: the row median over the other cells, the raw score on the same 0–1 "
                                              f"scale, not a sampling probability" + (f"; {n_zero} cell(s) score exactly zero (a centrality outcome, not a data "
-                                             f"quality verdict)" if n_zero else "") + f".{kind_notes}")
+                                             f"quality verdict)" if n_zero else "") + f".{space_note}{kind_notes}")
             elif len(cells) < 2:
-                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}]: cell matrix",
+                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: cell matrix",
                                "Not computed: fewer than two included cells, so no cell has a reference cell (insufficient_peers).")
             if len(chunks) > 1:
                 win_blocks = {b.cell: b for b in compat.blocks if b.kind == kind and b.window_set == set_name and b.construction == "per_cell_window"}
@@ -1876,42 +2117,48 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
                     pos = {groups[int(i)].chunk: k for k, i in enumerate(blk.group_index)}
                     S[a] = [compat.score[blk.group_index[pos[w]]] for w in chunks]
                 n_zero = int(np.sum(S == 0))
-                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_windows",
-                                     fig_windows(S, cells, times, title="One SGM vector per cell–window: median compatibility ranks", subtitle=sub,
-                                                 window_seconds=ws),
+                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_windows{sfx}",
+                                     fig_windows(S, cells, times, title="One SGM vector per cell–window: median compatibility ranks"
+                                                 + (f" [rank space {sp.label}]" if sfx else ""), subtitle=sub, window_seconds=ws),
                                      caption=f"{sub}. Rows: cells in stable order; columns: the selected window start times. Color = the within-cell "
                                              f"median compatibility rank of the cell–window SGM: its references are the other {len(chunks) - 1} selected "
                                              f"windows of that same cell, each with its own cloud ({n_draws:,} draws) and SGM, and nothing outside the cell. "
                                              f"Zeros stay visible as the darkest color and are centrality outcomes, not data failures" + (f" ({n_zero} here)" if n_zero else "")
-                                             + f". Each cell's full window-to-window matrix is in the linked atlas (compatibility/{kind}/{set_name}/windows/index.md).{kind_notes}")
-                _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, times, win_blocks, groups, compat, fig_atlas)
+                                             + f". Each cell's full window-to-window matrix is in the linked atlas (compatibility/{kind}/{set_name}/windows{sfx}/index.md)."
+                                             f"{space_note}{kind_notes}")
+                _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, times, win_blocks, groups, compat, fig_atlas,
+                             folder_name=f"windows{sfx}", space_note=space_note)
             else:
-                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}]: window scores",
+                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: window scores",
                                f"Not computed: no other selected window within a cell ({phrase}); the within-cell window scores are unavailable "
                                "(insufficient_peers) and no heat map of artificial zeros is drawn. The per-cell scores across cells remain available above.")
 
 
-def _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, times, win_blocks, groups, compat, fig_atlas):
+def _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, times, win_blocks, groups, compat, fig_atlas,
+                 folder_name="windows", space_note=""):
     """The complete within-cell matrix atlas: paged contact sheets (``ATLAS_CELLS_PER_PAGE`` cells per page, 3 x 4) under
-    ``compatibility/<kind>/<set>/windows/`` with an index mapping every cell to its page."""
-    folder = Path(out_dir) / "compatibility" / str(kind) / str(set_name) / "windows"
+    ``compatibility/<kind>/<set>/<folder_name>/`` (``windows`` for the primary rank space, ``windows_<label>`` otherwise)
+    with an index mapping every cell to its page."""
+    folder = Path(out_dir) / "compatibility" / str(kind) / str(set_name) / str(folder_name)
     folder.mkdir(parents=True, exist_ok=True)
+    sfx = "" if compat.label == RANK_SPACE_ALL else f"_{compat.label}"
+    score_col = "compatibility_score" + sfx; pairs_csv = f"aggregation_compatibility{sfx}.csv"; block_arrays = f"{_space_prefix(compat.label)}_block_*"
     panels = []
     for c in cells:
         blk = win_blocks[c]
         order = np.argsort([groups[int(i)].chunk for i in blk.group_index], kind="stable")
         panels.append((c, blk.ranks[np.ix_(order, order)]))
     pages = [panels[i:i + ATLAS_CELLS_PER_PAGE] for i in range(0, len(panels), ATLAS_CELLS_PER_PAGE)]
-    lines = [f"# Within-cell compatibility matrices: {kname}, windows included: {phrase}", "", sub, "",
+    lines = [f"# Within-cell compatibility matrices: {kname}, windows included: {phrase}" + (f", rank space `{compat.label}`" if sfx else ""), "", sub, "",
              "Each panel is one cell's window-to-window distance-rank matrix: rows are candidate windows, columns reference windows "
              "(both labeled by window start time in seconds); color is the share of the reference window's draws strictly farther from "
              "its own SGM than the candidate window's SGM (0–1, one scale for every panel); the self comparison is gray (excluded). "
-             "Row medians (the within-cell scores) are the `compatibility_score` column of "
-             "[aggregation_groups.csv](../../../../aggregation_groups.csv); every pairwise value is in "
-             "[aggregation_compatibility.csv](../../../../aggregation_compatibility.csv); the matrices themselves are the "
-             "`compatibility_block_*` arrays of [aggregation_candidates.npz](../../../../aggregation_candidates.npz). A zero is a "
-             "centrality outcome, not a data-quality classification; raw-data notes and training-prior flags stay separate. Back to the "
-             "[report](../../../../report.md).", "", "| cell | page | within-cell scores by window start (s) |", "|---|---|---|"]
+             f"Row medians (the within-cell scores) are the `{score_col}` column of "
+             f"[aggregation_groups.csv](../../../../aggregation_groups.csv); every pairwise value is in "
+             f"[{pairs_csv}](../../../../{pairs_csv}); the matrices themselves are the "
+             f"`{block_arrays}` arrays of [aggregation_candidates.npz](../../../../aggregation_candidates.npz). A zero is a "
+             "centrality outcome, not a data-quality classification; raw-data notes and training-prior flags stay separate." + space_note
+             + " Back to the [report](../../../../report.md).", "", "| cell | page | within-cell scores by window start (s) |", "|---|---|---|"]
     for p, page in enumerate(pages, start=1):
         for c, _ in page:
             blk = win_blocks[c]
@@ -1921,7 +2168,8 @@ def _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, tim
     lines += ["", "## Pages", ""]
     for p, page in enumerate(pages, start=1):
         first, last = page[0][0], page[-1][0]
-        fig = fig_atlas(page, times, title=f"Within-cell compatibility matrices, page {p} of {len(pages)}: cells {first} to {last}", subtitle=sub)
+        fig = fig_atlas(page, times, title=f"Within-cell compatibility matrices, page {p} of {len(pages)}: cells {first} to {last}"
+                        + (f" [rank space {compat.label}]" if sfx else ""), subtitle=sub)
         fig.savefig(str(folder / f"page_{p:02d}.png"), dpi=150)
         lines += [f"### Page {p}: cells " + ", ".join(str(c) for c, _ in page), "", f"![page_{p:02d}](page_{p:02d}.png)", ""]
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")

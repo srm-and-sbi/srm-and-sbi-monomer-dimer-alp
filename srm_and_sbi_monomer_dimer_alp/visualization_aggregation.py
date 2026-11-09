@@ -446,3 +446,43 @@ def figure_member_probabilities(labels, selected, baseline, *, title="", subtitl
     _titles(fig, title, subtitle)
     fig.tight_layout(rect=(0, 0.16, 1, 0.94))
     return fig
+
+
+def figure_member_probability_grid(cells, times, probabilities, baseline, *, title="", subtitle="", window_seconds=None):
+    """The constructor's probability figure for a selection of one SGM per cell and window: a cell-by-window grid of the
+    stored row probabilities (rows cells in stable order, columns window start times; color = the stored probability as a
+    share of its cell's mass, one 0–1 scale; a zero is marked, a sampling outcome and not a data-quality verdict), with
+    the cell masses beside it against the equal-member baseline. ``probabilities`` and ``baseline`` are (n_cells, n_windows)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    P = np.asarray(probabilities, float); B = np.asarray(baseline, float)
+    n_c, n_w = P.shape
+    mass = P.sum(axis=1); base_mass = B.sum(axis=1)
+    share = np.full_like(P, np.nan)
+    pos = mass > 0
+    share[pos] = P[pos] / mass[pos][:, None]
+    fig = Figure(figsize=(max(9.0, 0.55 * n_w + 6.5), max(5.0, 0.16 * n_c + 2.6)))
+    gs = fig.add_gridspec(1, 3, width_ratios=[20, 6, 0.8], wspace=0.08, left=0.07, right=0.92, top=0.88, bottom=0.2)
+    ax = fig.add_subplot(gs[0, 0]); axm = fig.add_subplot(gs[0, 1], sharey=ax); cax = fig.add_subplot(gs[0, 2])
+    cmap = matplotlib.colormaps["viridis"].copy(); cmap.set_bad("0.78")
+    im = ax.imshow(share, aspect="auto", cmap=cmap, vmin=0.0, vmax=max(1e-12, float(np.nanmax(share)) if np.isfinite(share).any() else 1.0),
+                   interpolation="nearest")
+    zr, zc = np.nonzero(P == 0)
+    if zr.size:
+        ax.plot(zc, zr, "x", color="tab:red", ms=6, mew=1.4, label=f"zero probability ({zr.size}; a sampling outcome, not a data-quality verdict)")
+    ax.set_xticks(np.arange(n_w)); ax.set_xticklabels([f"{t:g}" for t in times], fontsize=8)
+    ax.set_yticks(np.arange(n_c)); ax.set_yticklabels([str(c) for c in cells], fontsize=_id_fontsize(n_c))
+    ax.set_xlabel("window start (s)" + (f"; {window_seconds:g} s windows" if window_seconds else ""))
+    ax.set_ylabel("cell (stable numeric order)")
+    ax.set_title("stored probability as a share of the cell's mass", fontsize=9)
+    y = np.arange(n_c)
+    axm.barh(y, base_mass, height=0.8, color="0.8", label="equal-member baseline (same components, masses and overrides)")
+    axm.plot(mass, y, "o", color="k", ms=3.5, label="stored cell mass (sum of the cell's row probabilities)")
+    axm.set_xlabel("cell mass", fontsize=8); axm.tick_params(axis="y", labelleft=False); axm.grid(alpha=0.2, axis="x")
+    axm.set_title("cell mass", fontsize=9)
+    fig.colorbar(im, cax=cax).set_label("share of the cell's mass")
+    handles, labels_ = ax.get_legend_handles_labels(); h2, l2 = axm.get_legend_handles_labels()
+    fig.legend(handles + h2, labels_ + l2, loc="lower center", ncol=1, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.0))
+    _titles(fig, title, subtitle)
+    return fig

@@ -5,6 +5,59 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.48 - 2026-11-09
+
+Experiment can rank the SGM representatives over a declared subset of the parameter coordinates beside the
+all-coordinate ranks; the Nuisance DLI constructor selects the rank space it weights with and reports its relation
+to the overrides; the probability figure of a selection of one SGM per cell and window becomes a readable grid.
+No change to the SGM calculation, the pooling, the candidate vectors, the all-coordinate ranks and scores, the
+quantile conventions, the estimators, the priors or the Nuisance DLI artifact format.
+
+- **Rank coordinate spaces (Experiment).** `--compatibility-coordinates LABEL=key,key[;LABEL2=...]` computes, for
+  every requested space, the same cell-to-cell and within-cell rank matrices over the same groups, reference SGMs
+  and reference clouds projected onto the named coordinates (scale = their prior widths); statuses and reference
+  populations are those of the primary space `all`. Each space has its own figures (`..._compatibility_cells_<label>`,
+  `..._compatibility_windows_<label>`), atlas (`compatibility/<condition>/<set>/windows_<label>/`), pairwise CSV
+  (`aggregation_compatibility_<label>.csv`) and score/status/reference columns in `aggregation_groups.csv`; the
+  report's subsection names the spaces and its scope table carries a rank-space column.
+- **Candidate archive format 3.** The format-2 arrays, files and content are unchanged; additional spaces are stored
+  as `compatibility_<label>_{score,n_references,status}` and `compatibility_<label>_block_<b>_*`, described in the
+  manifest section `compatibility.rank_spaces` (coordinates, key indices, protocol with the restricted scale, block
+  map, counts). The reader accepts formats 1, 2 and 3 and validates every space under the context rules of 0.1.47
+  plus its declared coordinates, its restricted scale and the ownership of its matrices.
+- **Constructor.** `[[component]].rank_coordinates` (optional, with `posterior_rank_median` only) selects the archive
+  space over exactly those keys; the default is every coordinate. A space the archive lacks is refused with the
+  available spaces named; `rank_coordinates` on a uniform component and malformed lists are refused. The record
+  carries per component the rank space, the coordinates used and the ranked coordinates that an override later
+  replaced, and for the artifact whether every rank-weighted component's coordinates are disjoint from the
+  overrides; the dry-run, the selection table and the report state it. `representatives_members.csv` gains
+  `rank_space` and `score_used`. Availability (the skeleton's comments, the template console) is evaluated
+  separately for every rank space of the archive, each space through the constructor's own normalization with its
+  coordinates (`rank space <label> (<keys>): available ... | unavailable: ...` clauses); a space's availability
+  never stands in for another's.
+- **HPC forwarding.** `COMPATIBILITY_COORDINATES` (`LABEL=key,key[;LABEL2=...]`) is forwarded by both Experiment
+  launchers to the worker and the merge as one quoted `--compatibility-coordinates` argument and carried by both
+  submitters through the exported environment via `ALL` like `AGGREGATION_WINDOW_SETS` (commas and semicolons
+  never enter Slurm's comma-split export list); the fake-scheduler forwarding test covers two named spaces and the
+  absence of the knob.
+- **Figure.** `figure_member_probability_grid`: for a single non-duplicated selection of one SGM per cell and
+  window, the stored row probabilities as a cell-by-window grid (share of the cell's mass, zeros marked) with the
+  cell masses against the equal-member baseline, replacing the unreadable 600-bar figure; other selections keep
+  the per-row figure. The probability figure's subtitle names the rank space and its coordinates.
+- **Tests.** Five tests added to `tests/test_experiment_compatibility.py` (18; suite 329 over 39 files): a subset
+  space equals plain counting over the projected coordinates; the format-3 round trip, format-2 compatibility and
+  malformed-space refusals; the constructor's space selection, exact weights, override-overlap flags and refusals;
+  availability per rank space (a usable primary space with an unusable subset, the reverse, missing scores); the
+  grid figure and the report statements. The HPC forwarding tests gained the coordinate-space knob. CHANGELOG,
+  VALIDATION, DETECTOR_WORKFLOW sec. 7.2/7.3, PROJECT_CONTEXT, the HPC README and the constructor's companion
+  document updated.
+- **Production selection `RANK4` (2026-11-09).** Both conditions' production `Nuisance_DLI` artifacts built on the CPU
+  through the companion CLI from the complete-cohort format-3 archives: one SGM per cell and 2 s window over all ten
+  windows (600 vectors), equal cell mass, `posterior_rank_median` over `mu_r`, `sigma_r`, `mu_pc`, `sigma_pc`,
+  bleaching 0.05, flicker 5.1 (Fab) and 4.7 (InlB) per second as empirically anchored working overrides from the
+  localization-table derivation. Decision record in DETECTOR_WORKFLOW sec. 7.6; the `SEL` references and their record
+  are unchanged. Evidence: `Script_Bank/Analysis/Evidence/Nuisance_DLI_RANK4_2026-11-09/`.
+
 ## 0.1.47 - 2026-11-06
 
 Experiment reports the posterior compatibility of its SGM representatives; the Nuisance DLI constructor gains the
