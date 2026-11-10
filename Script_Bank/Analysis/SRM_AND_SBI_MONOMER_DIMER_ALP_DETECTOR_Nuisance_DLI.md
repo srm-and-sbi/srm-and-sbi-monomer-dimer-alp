@@ -383,4 +383,7 @@ Scientific and execution records:
 - [Full-cohort collection evidence](Evidence/Experiment_Aggregation_Cohort_2026-11-05/COMPLETION_NOTE.md): the 116 cohort collections and the complete-cohort reports.
 - [Compatibility and member-weighting evidence](Evidence/Experiment_Compatibility_2026-11-06/COMPLETION_NOTE.md): the regenerated `COHORT60RANKS` reports, the full-data oracle comparison, the illustrative rank-weighted build.
 - [Rank coordinate spaces evidence](Evidence/Rank_Coordinate_Spaces_2026-11-09/COMPLETION_NOTE.md): the `COHORT60RANKSR3` regenerations with the four-coordinate space, the independent plain-counting oracle, the comparison of the two weightings.
-- [Production selection RANK4](Evidence/Nuisance_DLI_RANK4_2026-11-09/COMPLETION_NOTE.md): the production `empirical_representatives` artifacts of both conditions (decision record in DETECTOR_WORKFLOW.md sec. 7.6): specs, CLI dry-runs and builds, loader validation against the reviewed proposal, report copies.
+- [Production Nuisance DLI of the biology workflow](Evidence/Nuisance_DLI_Production_2026-11-10/COMPLETION_NOTE.md): the
+  canonical artifacts adopted on 2026-11-10 (construction-wide rank weights), with the scope implementation in
+  [Comparison scope](Evidence/Comparison_Scope_2026-11-10/COMPLETION_NOTE.md).
+- [Selection RANK4 (2026-11-09; replaced as the production selection, kept as a record)](Evidence/Nuisance_DLI_RANK4_2026-11-09/COMPLETION_NOTE.md): the production `empirical_representatives` artifacts of both conditions (decision record in DETECTOR_WORKFLOW.md sec. 7.6): specs, CLI dry-runs and builds, loader validation against the reviewed proposal, report copies.

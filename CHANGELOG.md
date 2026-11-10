@@ -74,6 +74,11 @@ artifacts and archives keep their recorded meaning.
   histograms, and the companion report. `tests/test_experiment_compatibility.py` pins the hierarchical scope by
   name.
 
+Documentation after the release (2026-11-10, no code change): `DETECTOR_WORKFLOW.md` section 7.6 records the production
+`Nuisance_DLI` of the biology workflow, the canonical untagged artifact of each condition built from the
+construction-wide rank weights, and keeps `RANK4` as a record; evidence in
+`Script_Bank/Analysis/Evidence/Nuisance_DLI_Production_2026-11-10/`.
+
 ## 0.1.48 - 2026-11-09
 
 Experiment can rank the SGM representatives over a declared subset of the parameter coordinates beside the

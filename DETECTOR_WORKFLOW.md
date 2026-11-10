@@ -1108,10 +1108,11 @@ estimator format; both workflows write and read it, and the run-identity table o
 ### 7.6 The working imaging vector: sources, selected values and limitations
 
 **Fixed-scenario record and the production selection.** This subsection preserves the decisions and evidence
-behind `REF`, `SEL`, and their variants, and records the production selection `RANK4` of 2026-11-09 (below, after
-the `SEL` record). The built `SEL` artifacts are the fixed references shown by Experiment. The active
-representative-based procedure is in §7.2–§7.3; `RANK4` is its production selection. Historical selections do not
-automatically supply the weights or parameter treatment of an empirical artifact.
+behind `REF`, `SEL`, and their variants, the selection `RANK4` of 2026-11-09 and the production `Nuisance_DLI` of the
+biology workflow adopted on 2026-11-10 (both below, after the `SEL` record). The built `SEL` artifacts are the fixed
+references shown by Experiment. The active representative-based procedure is in §7.2–§7.3; its production selection
+is the canonical, untagged artifact of each condition. `RANK4` precedes it and is kept as a record. Historical
+selections do not automatically supply the weights or parameter treatment of an empirical artifact.
 
 The biology reference run conditions on one fixed imaging vector, chosen explicitly from the sources that the
 synthetic benchmarks of §6.9, §9.6 and §9.7 rank, and applied to the experimental recordings, which have no
@@ -1297,8 +1298,9 @@ conditions follows under these tags, Fab first, the sensitivity runs after the r
 development stays closed unless a sensitivity scenario or other material evidence threatens a
 reaction-diffusion conclusion (§9.10).
 
-**The production `Nuisance_DLI` decision record (2026-11-09): `RANK4`.** The biology generation of both conditions
-draws its imaging vectors from the weighted empirical artifacts `..._FAB_2S_50FPS_RANK4_Nuisance_DLI` and
+**The `Nuisance_DLI` decision record of 2026-11-09: `RANK4` (replaced as the production selection on 2026-11-10; kept
+as a record).** Under this decision the biology generation of both conditions was to
+draw its imaging vectors from the weighted empirical artifacts `..._FAB_2S_50FPS_RANK4_Nuisance_DLI` and
 `..._INLB_2S_50FPS_RANK4_Nuisance_DLI` (§7.2–§7.3), built on the CPU from the complete-cohort candidate archives of
 the adopted detector estimators (`C128V42A`, `C128V42AP3LR32`; sixty recordings per condition, ten 2 s windows each;
 format-3 archives with the rank coordinate space `spatial_brightness`). The selection, adopted after review:
@@ -1337,16 +1339,50 @@ artifacts' recorded `outside_prior_by_key` and `outside_prior_mass`) and restate
 acknowledged in the `SEL` record; production samples the stored rows without clipping or excluding them for exceeding a
 training-prior bound.
 The `SEL` artifacts, their values and their decision record above are unchanged and remain the fixed references
-displayed by Experiment and the sensitivity scenarios. The biology generation selects the artifact with the tag
-`RANK4` (`--nuisance-tag`, dispatcher `NUISANCE_TAG`), and every consumer records the selected artifact's identity.
+displayed by Experiment and the sensitivity scenarios. A generation from this selection would name the tag
+`RANK4` (`--nuisance-tag`, dispatcher `NUISANCE_TAG`); every consumer records the selected artifact's identity.
 Evidence: `Script_Bank/Analysis/Evidence/Nuisance_DLI_RANK4_2026-11-09/` (specs, CLI dry-runs and builds, loader
 validation against the reviewed proposal, report copies) and the rank-space evidence folder beside it.
 
-Status on 2026-11-10: the comparison scope of this selection is under review. The intended consensus is over the
-complete population of the 600 cell–window representatives (the scope `construction` of §7.2), which `RANK4` does
-not implement; `RANK4` and its artifacts stay as recorded above, the candidate revision exists as review products
-only (`Script_Bank/Analysis/Evidence/Comparison_Scope_2026-11-10/`), and the biology generation waits for the
-decision. A revised production selection is recorded here, under its own tag, when it is adopted.
+No biology video was generated from `RANK4`: before generation started, its comparison scope was found not to be
+the intended one (below), and the artifacts stay as recorded above.
+
+**The production `Nuisance_DLI` decision record (2026-11-10): the canonical artifact of the biology workflow.** The
+biology generation of both conditions draws its imaging vectors from the canonical weighted empirical artifacts
+`..._DETECTOR_FAB_2S_50FPS_Nuisance_DLI` and `..._DETECTOR_INLB_2S_50FPS_Nuisance_DLI` (no tag: this is the first
+production run of the biology workflow, and the generation is launched without `--nuisance-tag`). They are built on
+the CPU from the complete-cohort candidate archives of the adopted detector estimators under the comparison scope
+`construction` (format-4 archives of the review label `COHORT60RANKSR4`, with the rank coordinate space
+`spatial_brightness`). The selection, adopted by the lead after review:
+
+- the same 600 SGM representatives per condition as `RANK4` (one per cell and 2 s window over all ten windows), the
+  same four ranked coordinates `mu_r`, `sigma_r`, `mu_pc` and `sigma_pc`, and one complete vector sampled per
+  synthetic video and held fixed during it;
+- `posterior_rank_median` weights under `rank_scope = "construction"`: each representative's probability is
+  proportional to the median cross-posterior distance rank of its SGM among the other 599 cell–window groups of its
+  condition, the other windows of its own cell included, normalized over all 600 representatives. This is consensus
+  over the complete population the aggregation produces, which is the intended selection; `RANK4` ranked each window
+  within its own cell and gave every cell equal mass, a different target. No cell keeps a reserved mass: cell totals
+  range from 0.035 % to 3.04 % (Fab) and from 0.067 % to 4.54 % (InlB) against 1.67 % at equal weights, and no cell
+  has zero total. A majority-zero representative receives exactly zero probability (Fab one row, InlB sixty-four), a
+  sampling outcome of the consensus policy and no statement about the recordings. The effective number of rows is
+  427.3 (Fab) and 318.0 (InlB) against 600 at equal weights, a concentration measure and not a count of independent
+  experiments. The opening window carries 3.2 % (Fab) and 4.9 % (InlB) of the mass against 10 % at equal weights, and
+  no opening-window exception is made;
+- `prob_photo_bleach` 0.05 in both conditions and `lambda_rate` 5.1 per second (Fab) and 4.7 (InlB), with the
+  rationale, the qualifications and the limits stated in the `RANK4` record above, unchanged.
+
+The InlB artifact carries 96.9 % of its mass above the PSF-width prior edge (`mu_r`), 3.5 % below the brightness edge
+and 2.2 % above the brightness-spread edge. For Fab, 0.2 % lies above the `mu_r` edge and 12.0 % below the `mu_pc`
+edge; 12.3 % lies outside on at least one coordinate. These shares are the artifacts' recorded
+`outside_prior_by_key` and `outside_prior_mass`; production samples the stored rows without clipping or excluding
+them for exceeding a training-prior bound. The artifacts' vectors, probabilities, memberships and overrides are
+identical to the reviewed proposal (`PROPOSALCW4`), whose scores and probabilities reproduce an independent
+calculation from the retained clouds. `RANK4`, `SEL` and their records are unchanged.
+Evidence: `Script_Bank/Analysis/Evidence/Comparison_Scope_2026-11-10/` (the scope implementation, the regenerated
+reports, the reviewed proposal and its comparison with `RANK4`) and
+`Script_Bank/Analysis/Evidence/Nuisance_DLI_Production_2026-11-10/` (specifications, CLI dry-runs and builds, loader
+validation, production copies).
 
 **Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
 full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the

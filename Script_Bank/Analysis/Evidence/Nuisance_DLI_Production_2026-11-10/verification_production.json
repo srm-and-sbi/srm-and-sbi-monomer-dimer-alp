@@ -1,0 +1,101 @@
+{
+ "FAB": {
+  "artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Nuisance_DLI.npz",
+  "artifact_sha256": "2a239febdab93cbbac3a2975f4f556e482e25cc480e02471d92d40d49d134e7e",
+  "spec": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_Nuisance_DLI_Spec.toml",
+  "spec_sha256": "ae1598eea1c310a382c3209d9a81783da3b49f4c48513f3e10594a586f6b7773",
+  "tag": null,
+  "choice": "empirical_representatives",
+  "stored_rows": 600,
+  "samples_identical_to_reviewed_proposal": true,
+  "probabilities_identical_to_reviewed_proposal": true,
+  "members_identical_to_reviewed_proposal": true,
+  "archive_sha256": "aa5a668bc86030dfcaa0eb67efcab038855a7293ea8d1b285e3315cf9a95ecd8",
+  "archive_identical_to_reviewed_proposal": true,
+  "overrides": {
+   "prob_photo_bleach": 0.05,
+   "lambda_rate": 5.1
+  },
+  "overrides_identical_to_reviewed_proposal": true,
+  "rank_scope": "construction",
+  "rank_space": "spatial_brightness",
+  "rank_coordinates": [
+   "mu_r",
+   "sigma_r",
+   "mu_pc",
+   "sigma_pc"
+  ],
+  "references_per_member": [
+   599
+  ],
+  "normalization_rule": "weight * score / sum of the component's scores",
+  "effective_rows": 427.3026734958224,
+  "zero_probability_rows": 1,
+  "probability_sum": 1.0,
+  "outside_prior_mass": 0.1226528546155498,
+  "outside_prior_by_key": {
+   "mu_r": 0.0022548548405239848,
+   "sigma_r": 0.0,
+   "mu_pc": 0.12046446941885078,
+   "sigma_pc": 0.0,
+   "prob_photo_bleach": 0.0,
+   "lambda_rate": 0.0
+  },
+  "bleaching_in_every_row": 0.049999999999999996,
+  "flicker_in_every_row": 5.1000000000000005,
+  "sampled_draws": 20000,
+  "draws_are_stored_rows": true,
+  "zero_rows_drawn": 0,
+  "max_abs_frequency_minus_probability": 0.0011990668684616883
+ },
+ "INLB": {
+  "artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_Nuisance_DLI.npz",
+  "artifact_sha256": "667b3b2b6b58b4031b91754d527eb5a2123eba10f906bb14f00ea0f126d2f2aa",
+  "spec": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_Nuisance_DLI_Spec.toml",
+  "spec_sha256": "4d66ce0e9b45cd29405f3dc831edf185d2134fc592199e71b6c2e49af8d5f78e",
+  "tag": null,
+  "choice": "empirical_representatives",
+  "stored_rows": 600,
+  "samples_identical_to_reviewed_proposal": true,
+  "probabilities_identical_to_reviewed_proposal": true,
+  "members_identical_to_reviewed_proposal": true,
+  "archive_sha256": "179617f2665504a9e0c1662bc6c135279833bb6d056d841bc00cdfedffb91b6f",
+  "archive_identical_to_reviewed_proposal": true,
+  "overrides": {
+   "prob_photo_bleach": 0.05,
+   "lambda_rate": 4.7
+  },
+  "overrides_identical_to_reviewed_proposal": true,
+  "rank_scope": "construction",
+  "rank_space": "spatial_brightness",
+  "rank_coordinates": [
+   "mu_r",
+   "sigma_r",
+   "mu_pc",
+   "sigma_pc"
+  ],
+  "references_per_member": [
+   599
+  ],
+  "normalization_rule": "weight * score / sum of the component's scores",
+  "effective_rows": 317.9663016398907,
+  "zero_probability_rows": 64,
+  "probability_sum": 1.0,
+  "outside_prior_mass": 0.9693101946880638,
+  "outside_prior_by_key": {
+   "mu_r": 0.9693101946880638,
+   "sigma_r": 0.0,
+   "mu_pc": 0.03500653106922934,
+   "sigma_pc": 0.021813771225975,
+   "prob_photo_bleach": 0.0,
+   "lambda_rate": 0.0
+  },
+  "bleaching_in_every_row": 0.049999999999999996,
+  "flicker_in_every_row": 4.700000000000001,
+  "sampled_draws": 20000,
+  "draws_are_stored_rows": true,
+  "zero_rows_drawn": 0,
+  "max_abs_frequency_minus_probability": 0.001329921627169248
+ },
+ "all_ok": true
+}
