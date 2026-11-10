@@ -1,0 +1,68 @@
+{
+  "FAB": {
+    "archive_format": 4,
+    "comparison_scope": "construction",
+    "constructions": {
+      "per_cell": {
+        "n": 60,
+        "directed_ranks_identical": 3540,
+        "scores_identical": true
+      },
+      "per_window_position": {
+        "n": 10,
+        "directed_ranks_identical": 90,
+        "scores_identical": true
+      },
+      "per_cell_window": {
+        "n": 600,
+        "directed_ranks_identical": 359400,
+        "scores_identical": true
+      }
+    },
+    "unchanged_group_arrays": 14,
+    "artifact": {
+      "max_probability_error": 0.0,
+      "stored_vectors_unchanged": true,
+      "overrides_unchanged": true,
+      "effective_rows": 427.3026734958224,
+      "zero_rows": 1
+    },
+    "exact_histogram_bins_and_point_masses_checked": 122,
+    "legacy_spec_missing_scope_refusal": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_RANK4_Nuisance_DLI_Spec.toml: [[component]] 0: member_weighting 'posterior_rank_median' needs an explicit rank_scope, one of ('construction', 'within_cell') (\"construction\": every representative against all the other representatives of its grouping, condition and window set, normalized over the whole component; \"within_cell\": the hierarchical policy of an archive of that comparison scope (formats 2 and 3), per_cell_window only); got None. The scope is never implied by the grouping.",
+    "legacy_migrated_copy_reproduces_artifact": true,
+    "legacy_artifact_sha256": "3b89edab3bb4498abfaf5a54c2fdf31e85f8ac5eff110c8a3a95a83bbb59c801"
+  },
+  "INLB": {
+    "archive_format": 4,
+    "comparison_scope": "construction",
+    "constructions": {
+      "per_cell": {
+        "n": 60,
+        "directed_ranks_identical": 3540,
+        "scores_identical": true
+      },
+      "per_window_position": {
+        "n": 10,
+        "directed_ranks_identical": 90,
+        "scores_identical": true
+      },
+      "per_cell_window": {
+        "n": 600,
+        "directed_ranks_identical": 359400,
+        "scores_identical": true
+      }
+    },
+    "unchanged_group_arrays": 14,
+    "artifact": {
+      "max_probability_error": 1.734723475976807e-18,
+      "stored_vectors_unchanged": true,
+      "overrides_unchanged": true,
+      "effective_rows": 317.9663016398907,
+      "zero_rows": 64
+    },
+    "exact_histogram_bins_and_point_masses_checked": 122,
+    "legacy_spec_missing_scope_refusal": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_RANK4_Nuisance_DLI_Spec.toml: [[component]] 0: member_weighting 'posterior_rank_median' needs an explicit rank_scope, one of ('construction', 'within_cell') (\"construction\": every representative against all the other representatives of its grouping, condition and window set, normalized over the whole component; \"within_cell\": the hierarchical policy of an archive of that comparison scope (formats 2 and 3), per_cell_window only); got None. The scope is never implied by the grouping.",
+    "legacy_migrated_copy_reproduces_artifact": true,
+    "legacy_artifact_sha256": "50a7678ea858aa10f5df950f70d4301278059a10981c208ca3b0996245e661c8"
+  }
+}

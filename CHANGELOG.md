@@ -5,6 +5,75 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.49 - 2026-11-10
+
+The posterior compatibility ranks carry an explicit comparison scope, and Experiment computes the construction-wide
+scope: every SGM representative of an aggregation is scored against ALL the other representatives of that
+aggregation in the same condition and window set. The Nuisance DLI constructor names the scope it weights with and
+normalizes construction-wide scores over the complete component, with no mass reserved per cell. The report of a
+weighted empirical artifact plots the stored probabilities exactly. No change to the SGM calculation, the pooling,
+the candidate vectors and their identities, the rank primitive, the median score, the rank coordinate spaces, the
+quantile conventions, the estimators, the priors, the sampler or the Nuisance DLI artifact format. Existing
+artifacts and archives keep their recorded meaning.
+
+- **Comparison scope (Experiment).** `compute_compatibility(..., scope=)` takes `construction` (the default, what
+  the Experiment stage writes) or `within_cell`. Under `construction`, per condition and window set, one block per
+  aggregation over its complete population: the included cells (one SGM per cell, as before), the selected window
+  positions (one SGM per window position, newly scored; each reference its equal-cell cloud mixture) and every
+  cell–window group (one SGM per cell–window: 599 references with 60 cells and ten windows, the other windows of the
+  candidate's own cell among them). Only the candidate's own group is excluded, by identity. The dataset
+  representative has no peer and no score. `within_cell` reproduces the hierarchical populations of 0.1.47 and
+  0.1.48 (per-cell across cells; cell–window against the other windows of the same cell; positions unscored).
+- **Candidate archive format 4, protocol `sgm_distance_rank_v2`.** The manifest declares
+  `compatibility.comparison_scope` and the reference scope of every rank-scored aggregation
+  (`comparison_scopes`), every protocol record repeats them, and every block names its `scope`; the array names are
+  unchanged and hold the scores of the declared scope. `aggregation_compatibility*.csv` gains the column
+  `reference_scope`. The reader accepts formats 1 to 4: formats 2 and 3 (protocol `sgm_distance_rank_v1`) are read
+  as `within_cell`, their recorded meaning, and never supply construction-wide cell–window scores; a scope field in
+  a legacy archive, a missing or inconsistent scope in format 4, a block of another scope, a construction-wide block
+  with a cell context, a split or relabeled population, a duplicated (cell, window position) pair and a pooled
+  position group with a cell identity are refused beside the guards of 0.1.47 and 0.1.48.
+- **Experiment report.** The compatibility subsection states aggregation, comparison scope, coordinate space and
+  where normalization happens; its table gains the comparison-scope column and the window-position and
+  cell–window population rows; new figures `..._compatibility_positions[_<label>]` (position-to-position matrix) and
+  `..._compatibility_population[_<label>]` (the complete cell–window matrix as ONE matrix with cell boundaries and the
+  score strip); `..._compatibility_windows[_<label>]` shows the population-wide scores by cell and window; the atlas
+  under `compatibility/<condition>/<set>/windows[_<label>]/` enlarges the same-cell blocks of the population matrix
+  and says that they are a small part of each candidate's references.
+- **Constructor.** `[[component]].rank_scope` is required with `posterior_rank_median` (`"construction"` or
+  `"within_cell"`; refused on a uniform component; `"within_cell"` for `per_cell_window` only) and must equal the
+  scope the archive computed that grouping's scores under; a mismatch is refused both ways and nothing is
+  renormalized from one scope into another. `"construction"` normalizes over the complete component
+  (`weight * score / sum of the component's scores`) for `per_cell`, `per_window_position` and `per_cell_window`; a
+  cell whose representatives all score zero is valid and has zero total mass; an all-zero component is refused. The
+  record carries `rank_scope`, `reference_population`, the per-cell totals (`cell_mass_by_cell`,
+  `zero_mass_cells`), the references per member and, for the artifact, `rank_scopes_used`. Availability statements
+  name the scope. A specification written before the field existed must name its scope to be rebuilt: the field is
+  added to a copy (the adopted `RANK4` specifications are `"within_cell"`, and a migrated copy reproduces their stored
+  probabilities), the stored specifications stay as historical records, and stored artifacts load unchanged. The
+  per-cell scores of a format-2 or format-3 archive are accepted as `"construction"`, because they already compare
+  all cells.
+- **Exact marginals of a weighted empirical artifact.** `experiment_aggregation.weighted_histogram` and
+  `marginal_histograms` compute bin masses as sums of stored probabilities over deterministic bins (30 equal-width
+  bins in the stored coordinate from the smallest to the largest stored value, shared by the selected distribution
+  and the equal-member baseline; a single-valued coordinate is a point mass). The constructor report's
+  `nuisance_marginals` figure (`visualization_aggregation.figure_weighted_histograms`: physical units, probability
+  mass per bin; every binned panel shows the full support of the stored vectors, and a prior bound or reference
+  outside that view is named with its value by an arrow label at the panel edge and never widens the axis) and its
+  per-parameter summary are computed from the
+  stored vectors and probabilities with no resampling, and `nuisance_marginal_histograms.csv` lists the bin masses;
+  the 10,000 sampled draws serve the sampler check only. The continuous constructions and the unweighted pools keep
+  the sampled summary.
+- **Probability grid.** For one SGM per cell and window, `figure_member_probability_grid` colors the stored row
+  probabilities themselves (not shares of a cell's mass) and shows every cell's total beside the equal-member
+  baseline, a zero-total cell included; the report adds the cell-total table and `representatives_cell_totals.csv`.
+- **Tests.** `tests/test_experiment_comparison_scope.py` (8): direct-counting ranks over complete populations,
+  same-cell peers inside the population, window-position ranks, singletons and the opening equivalence, a zero-mass
+  cell and an all-zero component, the format-4 scope records with thirteen malformed-scope refusals and legacy
+  read-back, explicit masses with consolidation, overrides and whole-vector sampling, exact deterministic
+  histograms, and the companion report. `tests/test_experiment_compatibility.py` pins the hierarchical scope by
+  name.
+
 ## 0.1.48 - 2026-11-09
 
 Experiment can rank the SGM representatives over a declared subset of the parameter coordinates beside the

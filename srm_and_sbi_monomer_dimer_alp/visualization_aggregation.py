@@ -38,6 +38,7 @@ STYLES = {
 }
 _FALLBACK = [dict(color=c, marker="o", lw=1.4) for c in ("tab:red", "tab:brown", "tab:pink", "tab:olive", "tab:cyan")]
 PRIOR_LABEL = "training prior bounds"
+HISTOGRAM_VIEW_MARGIN = 0.04       # margin of a binned histogram panel beyond the stored support, as a share of its span (stored coordinate)
 BAND_COLOR = "0.6"
 
 
@@ -347,10 +348,12 @@ def _id_fontsize(n):
     return 5 if n > 40 else (6.5 if n > 20 else 8)
 
 
-def figure_compatibility_cells(ranks, cell_ids, scores, *, title="", subtitle=""):
-    """The cell-to-cell distance-rank matrix (rows: candidate cell; columns: reference cell; stable numeric cell order
-    on both axes, every cell retained) with a narrow aligned strip of each row's median compatibility rank on the same
-    0–1 scale (a raw score, not a sampling probability). Self comparisons are gray (NaN)."""
+def figure_compatibility_cells(ranks, cell_ids, scores, *, title="", subtitle="", entity="cell", entities="cells"):
+    """The distance-rank matrix of one population of groups named by one identity (rows: candidate; columns: reference;
+    the same stable order on both axes, every group retained): the cell-to-cell matrix of one SGM per cell by default,
+    or, with ``entity``/``entities`` and ``cell_ids`` holding the labels, the position-to-position matrix of one SGM
+    per window position. A narrow aligned strip carries each row's median compatibility rank on the same 0–1 scale (a
+    raw score, not a sampling probability). Self comparisons are gray (NaN)."""
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib.figure import Figure
@@ -363,7 +366,7 @@ def figure_compatibility_cells(ranks, cell_ids, scores, *, title="", subtitle=""
     im = ax.imshow(R, vmin=0, vmax=1, cmap=_rank_cmap(), aspect="auto", origin="upper", interpolation="nearest")
     ax.set_xticks(range(n)); ax.set_xticklabels(labels, fontsize=fs, rotation=90)
     ax.set_yticks(range(n)); ax.set_yticklabels(labels, fontsize=fs)
-    ax.set_xlabel("Reference cell"); ax.set_ylabel("Candidate cell")
+    ax.set_xlabel(f"Reference {entity}"); ax.set_ylabel(f"Candidate {entity}")
     fig.colorbar(im, cax=cax, label=RANK_LABEL)
     s = np.asarray(scores, float)
     sx.barh(np.arange(n), np.where(np.isnan(s), 0.0, s), color="0.3", height=0.8)
@@ -371,15 +374,54 @@ def figure_compatibility_cells(ranks, cell_ids, scores, *, title="", subtitle=""
         sx.plot([0.01], [i], marker="|", color="tab:red", ms=6, lw=0)
     sx.set_xlim(0, 1); sx.set_xlabel(f"{SCORE_LABEL}\n(0–1; a raw score, not a sampling probability)", fontsize=8)
     sx.tick_params(axis="y", labelleft=False); sx.grid(alpha=0.25, axis="x")
-    sx.set_title("row median over the other cells\n(red tick = exactly zero)", fontsize=8.5)
+    sx.set_title(f"row median over the other {entities}\n(red tick = exactly zero)", fontsize=8.5)
     _titles(fig, title, subtitle)
     return fig
 
 
-def figure_compatibility_windows(scores, cell_ids, times, *, title="", subtitle="", window_seconds=None):
-    """Cells (rows, stable order) by selected window start times (columns): the within-cell median compatibility rank
-    of each cell–window SGM against the other selected windows of the same cell, on the shared 0–1 scale. Zeros stay
-    visible (dark); an unavailable score would be gray."""
+def figure_compatibility_population(ranks, cell_ids, n_windows, scores, *, title="", subtitle=""):
+    """The complete cell–window distance-rank matrix of ONE population (rows: candidate cell–window groups; columns:
+    reference groups; both ordered by cell in stable numeric order and, within a cell, by window start; ``n_windows``
+    groups per cell), with thin lines at the cell boundaries, the cells labeled at their block centers and the aligned
+    strip of each row's median over ALL the other groups. The small blocks on the diagonal are the same-cell
+    comparisons: part of this one population, not separate matrices. Self comparisons are gray (NaN)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    R = np.asarray(ranks, float); N = R.shape[0]; W = int(n_windows); C = len(cell_ids)
+    if C * W != N:
+        raise ValueError(f"figure_compatibility_population: {C} cells x {W} windows is not the matrix size {N}.")
+    fig = Figure(figsize=(12.4, 10.0))
+    gs = fig.add_gridspec(1, 3, width_ratios=[20, 4.5, 0.8], wspace=0.1, left=0.07, right=0.9, top=0.91, bottom=0.08)
+    ax = fig.add_subplot(gs[0, 0]); sx = fig.add_subplot(gs[0, 1], sharey=ax); cax = fig.add_subplot(gs[0, 2])
+    im = ax.imshow(R, vmin=0, vmax=1, cmap=_rank_cmap(), aspect="auto", origin="upper", interpolation="nearest")
+    for e in np.arange(1, C) * W - 0.5:
+        ax.axhline(e, color="w", lw=0.3, alpha=0.7); ax.axvline(e, color="w", lw=0.3, alpha=0.7)
+    centers = np.arange(C) * W + (W - 1) / 2.0
+    labels = [str(c) for c in cell_ids]; fs = _id_fontsize(C)
+    ax.set_xticks(centers); ax.set_xticklabels(labels, fontsize=fs, rotation=90)
+    ax.set_yticks(centers); ax.set_yticklabels(labels, fontsize=fs)
+    ax.set_xlabel(f"Reference cell–window group (cell labels; {W} window(s) per cell, by start time)")
+    ax.set_ylabel(f"Candidate cell–window group (cell labels; {W} window(s) per cell, by start time)")
+    fig.colorbar(im, cax=cax, label=RANK_LABEL)
+    s = np.asarray(scores, float)
+    sx.barh(np.arange(N), np.where(np.isnan(s), 0.0, s), color="0.3", height=1.0)
+    zero = np.flatnonzero(s == 0)
+    if zero.size:
+        sx.plot(np.full(zero.size, 0.01), zero, marker="|", color="tab:red", ms=3, lw=0)
+    sx.set_xlim(0, 1); sx.set_xlabel(f"{SCORE_LABEL}\n(0–1; a raw score, not a sampling probability)", fontsize=8)
+    sx.tick_params(axis="y", labelleft=False); sx.grid(alpha=0.25, axis="x")
+    sx.set_title(f"row median over the other {N - 1} groups\n(red tick = exactly zero)", fontsize=8.5)
+    _titles(fig, title, subtitle)
+    return fig
+
+
+def figure_compatibility_windows(scores, cell_ids, times, *, title="", subtitle="", window_seconds=None,
+                                 colorbar_label=None):
+    """Cells (rows, stable order) by selected window start times (columns): the median compatibility rank of each
+    cell–window SGM over its reference population (every other cell–window group of the condition and window set under
+    the construction-wide scope; ``colorbar_label`` names the population), on the shared 0–1 scale. Zeros stay visible
+    (dark); an unavailable score would be gray."""
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib.figure import Figure
@@ -390,17 +432,18 @@ def figure_compatibility_windows(scores, cell_ids, times, *, title="", subtitle=
     ax.set_xticks(range(W)); ax.set_xticklabels([f"{float(t):g}" for t in times], fontsize=8)
     ax.set_yticks(range(C)); ax.set_yticklabels([str(c) for c in cell_ids], fontsize=_id_fontsize(C))
     ax.set_xlabel(f"start of the selected {float(window_seconds):g} s window (s)" if window_seconds else "start of the selected window (s)")
-    ax.set_ylabel("cell (candidate and reference windows belong to this cell)")
-    fig.colorbar(im, ax=ax, label=f"{SCORE_LABEL} (within the cell; 0–1)")
+    ax.set_ylabel("cell of the candidate window (stable numeric order)")
+    fig.colorbar(im, ax=ax, label=colorbar_label or f"{SCORE_LABEL} (over every other cell–window group; 0–1)")
     _titles(fig, title, subtitle)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     return fig
 
 
 def figure_compatibility_atlas_page(panels, times, *, title="", subtitle="", ncols=3, nrows=4):
-    """One contact sheet of within-cell window-to-window matrices (``panels``: ``[(cell_id, (W, W) ranks), ...]``, at most
-    ``ncols * nrows``), each titled by its cell; candidate and reference axes are window start times; shared 0–1 color
-    scale; gray self comparisons."""
+    """One contact sheet of same-cell window-to-window matrices (``panels``: ``[(cell_id, (W, W) ranks), ...]``, at most
+    ``ncols * nrows``; under the construction-wide scope each is a diagonal block of the complete cell–window matrix),
+    each titled by its cell; candidate and reference axes are window start times; shared 0–1 color scale; gray self
+    comparisons."""
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib.figure import Figure
@@ -450,24 +493,26 @@ def figure_member_probabilities(labels, selected, baseline, *, title="", subtitl
 
 def figure_member_probability_grid(cells, times, probabilities, baseline, *, title="", subtitle="", window_seconds=None):
     """The constructor's probability figure for a selection of one SGM per cell and window: a cell-by-window grid of the
-    stored row probabilities (rows cells in stable order, columns window start times; color = the stored probability as a
-    share of its cell's mass, one 0–1 scale; a zero is marked, a sampling outcome and not a data-quality verdict), with
-    the cell masses beside it against the equal-member baseline. ``probabilities`` and ``baseline`` are (n_cells, n_windows)."""
+    STORED row probabilities themselves (rows cells in stable order, columns window start times; color = the row's
+    stored sampling probability, the values of the whole grid summing to the component mass; a zero is marked, a sampling
+    outcome and not a data-quality verdict), with the cell totals beside it (the sum of each cell's row probabilities)
+    against the equal-member baseline. Cell totals are whatever the selected policy gives them: equal only under the
+    equal-member baseline or a policy that assigns equal cell mass; a cell whose rows are all zero has total zero.
+    ``probabilities`` and ``baseline`` are (n_cells, n_windows); a missing member is NaN (gray)."""
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib.figure import Figure
     P = np.asarray(probabilities, float); B = np.asarray(baseline, float)
     n_c, n_w = P.shape
-    mass = P.sum(axis=1); base_mass = B.sum(axis=1)
-    share = np.full_like(P, np.nan)
-    pos = mass > 0
-    share[pos] = P[pos] / mass[pos][:, None]
-    fig = Figure(figsize=(max(9.0, 0.55 * n_w + 6.5), max(5.0, 0.16 * n_c + 2.6)))
-    gs = fig.add_gridspec(1, 3, width_ratios=[20, 6, 0.8], wspace=0.08, left=0.07, right=0.92, top=0.88, bottom=0.2)
+    mass = np.nansum(P, axis=1); base_mass = np.nansum(B, axis=1)
+    height = max(5.0, 0.16 * n_c + 2.6)
+    fig = Figure(figsize=(max(9.0, 0.55 * n_w + 6.5), height))
+    # fixed margins in inches (title and subtitle above, the three-line legend below), whatever the number of cells
+    gs = fig.add_gridspec(1, 3, width_ratios=[20, 6, 0.8], wspace=0.08, left=0.07, right=0.92, top=1.0 - 1.0 / height, bottom=1.45 / height)
     ax = fig.add_subplot(gs[0, 0]); axm = fig.add_subplot(gs[0, 1], sharey=ax); cax = fig.add_subplot(gs[0, 2])
     cmap = matplotlib.colormaps["viridis"].copy(); cmap.set_bad("0.78")
-    im = ax.imshow(share, aspect="auto", cmap=cmap, vmin=0.0, vmax=max(1e-12, float(np.nanmax(share)) if np.isfinite(share).any() else 1.0),
-                   interpolation="nearest")
+    top = float(np.nanmax(P)) if np.isfinite(P).any() else 0.0
+    im = ax.imshow(P, aspect="auto", cmap=cmap, vmin=0.0, vmax=top if top > 0 else 1.0, interpolation="nearest")
     zr, zc = np.nonzero(P == 0)
     if zr.size:
         ax.plot(zc, zr, "x", color="tab:red", ms=6, mew=1.4, label=f"zero probability ({zr.size}; a sampling outcome, not a data-quality verdict)")
@@ -475,14 +520,101 @@ def figure_member_probability_grid(cells, times, probabilities, baseline, *, tit
     ax.set_yticks(np.arange(n_c)); ax.set_yticklabels([str(c) for c in cells], fontsize=_id_fontsize(n_c))
     ax.set_xlabel("window start (s)" + (f"; {window_seconds:g} s windows" if window_seconds else ""))
     ax.set_ylabel("cell (stable numeric order)")
-    ax.set_title("stored probability as a share of the cell's mass", fontsize=9)
+    base_vals = B[np.isfinite(B)]
+    ax.set_title("stored sampling probability of each row"
+                 + (f" (equal-member value {float(base_vals[0]):.3g})" if base_vals.size and np.allclose(base_vals, base_vals[0]) else ""), fontsize=9)
     y = np.arange(n_c)
-    axm.barh(y, base_mass, height=0.8, color="0.8", label="equal-member baseline (same components, masses and overrides)")
-    axm.plot(mass, y, "o", color="k", ms=3.5, label="stored cell mass (sum of the cell's row probabilities)")
-    axm.set_xlabel("cell mass", fontsize=8); axm.tick_params(axis="y", labelleft=False); axm.grid(alpha=0.2, axis="x")
-    axm.set_title("cell mass", fontsize=9)
-    fig.colorbar(im, cax=cax).set_label("share of the cell's mass")
+    axm.barh(y, base_mass, height=0.8, color="0.8", label="equal-member baseline cell total (same components, masses and overrides)")
+    axm.plot(mass, y, "o", color="k", ms=3.5, label="stored cell total (sum of the cell's row probabilities)")
+    zero_cells = np.flatnonzero(mass == 0)
+    if zero_cells.size:
+        axm.plot(np.zeros(zero_cells.size), zero_cells, "x", color="tab:red", ms=6, mew=1.4, label=f"cell total exactly zero ({zero_cells.size})")
+    axm.set_xlim(left=0)
+    axm.set_xlabel("cell total", fontsize=8); axm.tick_params(axis="y", labelleft=False); axm.grid(alpha=0.2, axis="x")
+    axm.set_title("cell total", fontsize=9)
+    fig.colorbar(im, cax=cax).set_label("stored sampling probability of the row")
     handles, labels_ = ax.get_legend_handles_labels(); h2, l2 = axm.get_legend_handles_labels()
     fig.legend(handles + h2, labels_ + l2, loc="lower center", ncol=1, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.0))
     _titles(fig, title, subtitle)
+    return fig
+
+
+def figure_weighted_histograms(panels, table, *, title="", subtitle="", selected_name="selected probabilities",
+                               baseline_name="equal-member baseline", reference=None, reference_name="reference"):
+    """Exact marginal histograms of a finite weighted distribution, one panel per parameter, drawn from ``panels``
+    (``experiment_aggregation.marginal_histograms``: per parameter the deterministic bin edges in estimator coordinates
+    and the probability mass per bin of the selected distribution and of the equal-member baseline over the SAME stored
+    vectors and bins, or a point mass for a coordinate with one stored value). Nothing is resampled: a bar's height is
+    the sum of the stored probabilities of the vectors in its bin. Axes are physical units (a log row takes a logarithmic
+    axis; its bins are uniform in log10); the y axis is probability mass per bin. A binned panel shows the full support
+    of the stored vectors (the first to the last bin edge, with a margin of ``HISTOGRAM_VIEW_MARGIN`` of the span on
+    each side, in the stored coordinate): no tail is cropped and no annotation widens the view. The training-prior
+    bounds (dotted red) and ``reference`` ((D,) estimator coordinates; dashed purple) are annotations, not data
+    weights: one that falls inside the view is drawn as a line, one that falls outside is named with its value by an
+    arrow label at the corresponding edge of the panel. A point-mass panel has no binned shape, so it shows the value
+    within the prior range, with its annotation inside the panel."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    D = len(table)
+    rows, cols = _grid(D)
+    fig = Figure(figsize=(4.6 * cols, 3.6 * rows + 1.5))
+    axes = fig.subplots(rows, cols, squeeze=False).ravel()
+    for j, (e, pan) in enumerate(zip(table, panels)):
+        ax = axes[j]
+        # annotations in the stored coordinate: (value, color, line style, line width, legend label, short name)
+        marks = [(float(e["PRIOR_RANGE"][0]), "r", ":", 0.8, PRIOR_LABEL, "prior bound"), (float(e["PRIOR_RANGE"][1]), "r", ":", 0.8, PRIOR_LABEL, "prior bound")]
+        if reference is not None:
+            marks.append((float(np.asarray(reference, float)[j]), "tab:purple", "--", 1.2, reference_name, "reference"))
+        if pan["kind"] == "point_mass":
+            x = float(_phys1(pan["value"], e))
+            ax.vlines([x], 0, [pan["selected_mass"]], color="k", lw=3.0)
+            ax.plot([x], [pan["baseline_mass"]], marker="s", mfc="none", color="0.45", ms=9, lw=0)
+            ax.text(0.5, 0.5, f"point mass {pan['selected_mass']:.3g} at {x:.5g}" + (f"\n({pan['note']})" if pan.get("note") else ""),
+                    transform=ax.transAxes, ha="center", va="center", fontsize=7.5, bbox=dict(boxstyle="round", fc="white", ec="0.8", alpha=0.85))
+            ax.set_ylim(0, 1.08 * max(pan["selected_mass"], pan["baseline_mass"], 1e-12))
+            view = None                                   # no binned shape: the value within the prior range
+        else:
+            stored = np.asarray(pan["edges"], float)
+            edges = _phys1(stored, e)
+            ax.bar(edges[:-1], pan["selected"], width=np.diff(edges), align="edge", color="tab:blue", alpha=0.75, edgecolor="white", linewidth=0.3)
+            ax.stairs(pan["baseline"], edges, color="0.3", lw=1.3)
+            ax.set_ylim(0, 1.08 * max(float(np.max(pan["selected"])), float(np.max(pan["baseline"])), 1e-12))
+            pad = HISTOGRAM_VIEW_MARGIN * (stored[-1] - stored[0])
+            view = (stored[0] - pad, stored[-1] + pad)    # the full stored support, in the stored coordinate
+        outside = {"left": [], "right": []}
+        for value, color, ls, lw, _, short in marks:
+            if view is None or view[0] <= value <= view[1]:
+                ax.axvline(float(_phys1(value, e)), color=color, ls=ls, lw=lw)
+            else:
+                outside["left" if value < view[0] else "right"].append((short, float(_phys1(value, e)), color))
+        if view is not None:
+            ax.set_xlim(float(_phys1(view[0], e)), float(_phys1(view[1], e)))
+        _physical_axis(ax, e, "x")
+        if view is not None:
+            ax.set_xlim(float(_phys1(view[0], e)), float(_phys1(view[1], e)))
+        # an annotation outside the view: named with its value at the edge it lies beyond, never by widening the axis
+        for side, items in outside.items():
+            for k, (short, value, color) in enumerate(items):
+                text = f"\u2190 {short} {value:.4g}" if side == "left" else f"{short} {value:.4g} \u2192"
+                ax.text(0.015 if side == "left" else 0.985, 0.965 - 0.075 * k, text, transform=ax.transAxes, ha=side, va="top", fontsize=7,
+                        color=color, bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8))
+        _panel_title(ax, e)
+        ax.set_xlabel(axis_label(e, short=True) + ("  [logarithmic axis]" if is_log_row(e) else "  [linear axis]"), fontsize=8.5)
+        ax.set_ylabel("probability mass per bin", fontsize=8); ax.grid(alpha=0.2)
+    for ax in axes[D:]:
+        ax.set_visible(False)
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    handles = [Patch(facecolor="tab:blue", alpha=0.75, label=selected_name + " (bars; a thick line for a point mass)"),
+               Line2D([], [], color="0.3", lw=1.3, label=baseline_name + " (outline; an open square for a point mass)"),
+               Line2D([], [], color="r", ls=":", lw=0.8, label=PRIOR_LABEL + " (a line inside the view; an arrow label with the value when outside it)")]
+    if reference is not None:
+        handles.append(Line2D([], [], color="tab:purple", ls="--", lw=1.2, label=reference_name + " (line, or arrow label when outside the view)"))
+    fig.legend(handles=handles, loc="lower center", ncol=1, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.0))
+    _titles(fig, title, subtitle)
+    fig.tight_layout(rect=(0, 0.13, 1, 0.95))
+    return fig
+    _titles(fig, title, subtitle)
+    fig.tight_layout(rect=(0, 0.1, 1, 0.95))
     return fig

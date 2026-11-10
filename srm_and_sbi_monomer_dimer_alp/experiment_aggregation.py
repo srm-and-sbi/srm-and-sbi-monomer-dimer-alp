@@ -733,6 +733,52 @@ def weighted_quantile(values, weights, p) -> float:
     return float(v[order][int(np.searchsorted(cw, p - 1e-12, side="left"))])
 
 
+MARGINAL_HISTOGRAM_BINS = 30      # bins per parameter of an exact weighted marginal histogram (deterministic edges)
+
+
+def weighted_histogram(values, weights, edges) -> np.ndarray:
+    """The exact bin masses of a finite weighted distribution: ``H(B) = sum_i w_i 1[v_i in B]`` for the bins of
+    ``edges`` (half-open ``[a, b)``, the last bin closed, numpy's convention). Nothing is sampled and nothing is
+    normalized: the masses add up to the total weight, so every value must lie inside ``[edges[0], edges[-1]]`` (a value
+    outside the bins is refused, never dropped silently). A zero weight contributes exactly zero."""
+    v = np.asarray(values, np.float64).ravel(); w = np.asarray(weights, np.float64).ravel()
+    e = np.asarray(edges, np.float64).ravel()
+    if v.shape != w.shape or e.size < 2 or not np.all(np.diff(e) > 0):
+        raise AggregationError("weighted_histogram: one weight per value and at least two strictly increasing bin edges are required.")
+    if not (np.all(np.isfinite(v)) and np.all(np.isfinite(w)) and np.all(w >= 0)):
+        raise AggregationError("weighted_histogram: values and weights must be finite and the weights non-negative.")
+    if v.size and (v.min() < e[0] or v.max() > e[-1]):
+        raise AggregationError(f"weighted_histogram: values span [{v.min()!r}, {v.max()!r}], outside the bins [{e[0]!r}, {e[-1]!r}].")
+    return np.histogram(v, bins=e, weights=w)[0].astype(np.float64)
+
+
+def marginal_histograms(vectors, probabilities, baseline, keys, *, n_bins=MARGINAL_HISTOGRAM_BINS, notes=None) -> list:
+    """Per parameter, the exact marginal histogram of a finite weighted distribution over complete vectors: every
+    coordinate inherits the SAME whole-vector probabilities (``probabilities``; ``baseline`` is a second weighting of the
+    same vectors, e.g. the equal-member baseline, binned with the SAME edges). The edges are deterministic: ``n_bins``
+    equal-width bins in the stored estimator coordinate (uniform in log10 for a log row) from the smallest to the largest
+    stored value of that coordinate over ALL the vectors (zero-probability vectors included, so the two weightings share
+    one support and nothing is cropped to the training box). A coordinate with a single stored value (a fixed or
+    overridden parameter) is a point mass, not a histogram. Returns one dict per key: ``{"key", "kind": "bins", "edges",
+    "selected", "baseline"}`` or ``{"key", "kind": "point_mass", "value", "selected_mass", "baseline_mass", "note"}``
+    (``notes``: ``{key: text}`` shown beside a point mass)."""
+    V = np.asarray(vectors, np.float64); p = np.asarray(probabilities, np.float64).ravel(); b = np.asarray(baseline, np.float64).ravel()
+    if V.ndim != 2 or V.shape[0] != p.size or p.size != b.size or V.shape[1] != len(keys) or int(n_bins) < 1:
+        raise AggregationError("marginal_histograms: (n, D) vectors, n probabilities, n baseline weights, D keys and a positive bin count are required.")
+    out = []
+    for j, k in enumerate(keys):
+        col = V[:, j]; lo, hi = float(col.min()), float(col.max())
+        if lo == hi:
+            out.append({"key": str(k), "kind": "point_mass", "value": lo, "selected_mass": float(p.sum()), "baseline_mass": float(b.sum()),
+                        "note": (notes or {}).get(str(k), "")})
+            continue
+        edges = np.linspace(lo, hi, int(n_bins) + 1)
+        edges[0], edges[-1] = lo, hi                     # the exact extremes, whatever linspace rounds to
+        out.append({"key": str(k), "kind": "bins", "edges": edges, "selected": weighted_histogram(col, p, edges),
+                    "baseline": weighted_histogram(col, b, edges)})
+    return out
+
+
 def representative_summary(vectors, weights, low, high, levels=(0.05, 0.25, 0.5, 0.75, 0.95)) -> dict:
     """Per-coordinate weighted-CDF quantiles (estimator coordinates) and outside-box mass of a representative
     collection (``vectors`` (n, D), ``weights`` (n,) or None = equal)."""
@@ -766,20 +812,54 @@ def group_vectors(groups, statistic="sgm") -> np.ndarray:
 # ``insufficient_peers`` with a missing score (NaN) and zero references, never a fabricated 0 or 1; a computed
 # zero is a valid outcome and stays distinct from a missing score. Scores are raw medians: Experiment reports
 # them and never normalizes them into sampling probabilities (the Nuisance DLI constructor does that under an
-# explicitly selected policy). Reference populations: per_cell = the other included cells of the same condition
-# and window set (each reference its own equal-window cloud mixture); per_cell_window = the other selected
-# windows of the same cell; per_window_position and global carry no rank score (``not_applicable``). Identical
-# vectors with an ``equivalent_to`` alias (per_cell[opening] = per_cell_window[opening]) have DIFFERENT scoring
-# availability and are never copied from one another.
-COMPATIBILITY_PROTOCOL = "sgm_distance_rank_v1"
+# explicitly selected policy).
+#
+# COMPARISON SCOPE: the reference population of a rank-scored group, recorded in the protocol and never implied by
+# the aggregation. ``construction`` (what Experiment computes and writes): every group of ONE construction in one
+# condition and window set is scored against ALL the other groups of that same construction: per_cell against the
+# other included cells (each reference its own equal-window cloud mixture), per_window_position against the other
+# selected window positions (each reference its own equal-cell cloud mixture), per_cell_window against every other
+# cell-window group (each reference one window's own cloud; the other windows of the candidate's own cell are peers
+# like any other, and only the candidate's own group identity is excluded). ``within_cell`` (the hierarchical scope
+# of archive formats 2 and 3, kept under its recorded meaning and still computable by name): per_cell as above,
+# per_cell_window against the other selected windows of the SAME cell only, per_window_position unscored. global has
+# no same-level peer in either scope (``not_applicable``). A scored construction with fewer than two groups carries
+# ``insufficient_peers``. Identical vectors with an ``equivalent_to`` alias (per_cell[opening] and
+# per_cell_window[opening]) are scored on their own: under ``construction`` their populations and reference clouds
+# coincide, so the scores agree by computation; under ``within_cell`` their availability differs. Scores are never
+# copied from one group to another.
+COMPATIBILITY_PROTOCOL = "sgm_distance_rank_v2"          # written by this implementation: the comparison scope is explicit
+LEGACY_COMPATIBILITY_PROTOCOL = "sgm_distance_rank_v1"   # archive formats 2 and 3: no scope field; its populations are within_cell's
 COMPATIBILITY_STATUSES = ("computed", "insufficient_peers", "not_applicable")
-RANK_SCORED_CONSTRUCTIONS = ("per_cell", "per_cell_window")
-COMPATIBILITY_REFERENCE = {"per_cell": "the other included cells of the same condition and window set; each reference is "
-                                       "its own equal-window cloud mixture",
-                           "per_cell_window": "the other selected windows of the same cell and condition; each reference is "
-                                              "one window's own cloud",
-                           "per_window_position": "no rank policy in this scope (uniform selection remains available)",
-                           "global": "no same-level peer (uniform selection remains available)"}
+SCOPE_CONSTRUCTION = "construction"
+SCOPE_WITHIN_CELL = "within_cell"
+COMPARISON_SCOPES = (SCOPE_CONSTRUCTION, SCOPE_WITHIN_CELL)
+# per comparison scope of an archive: the rank-scored constructions and the reference scope of each
+SCOPES_BY_CONSTRUCTION = {
+    SCOPE_CONSTRUCTION: {"per_cell": SCOPE_CONSTRUCTION, "per_window_position": SCOPE_CONSTRUCTION, "per_cell_window": SCOPE_CONSTRUCTION},
+    SCOPE_WITHIN_CELL: {"per_cell": SCOPE_CONSTRUCTION, "per_cell_window": SCOPE_WITHIN_CELL},
+}
+_REF_CELLS = "the other included cells of the same condition and window set; each reference is its own equal-window cloud mixture"
+_REF_GLOBAL = "no same-level peer (uniform selection remains available)"
+REFERENCE_POPULATIONS = {
+    SCOPE_CONSTRUCTION: {"per_cell": _REF_CELLS,
+                         "per_window_position": "the other selected window positions of the same condition and window set; each reference "
+                                                "is its own equal-cell cloud mixture",
+                         "per_cell_window": "every other cell–window group of the same condition and window set, the other windows of the "
+                                            "candidate's own cell included; each reference is one window's own cloud",
+                         "global": _REF_GLOBAL},
+    SCOPE_WITHIN_CELL: {"per_cell": _REF_CELLS,
+                        "per_cell_window": "the other selected windows of the same cell and condition; each reference is one window's own cloud",
+                        "per_window_position": "no rank policy in this scope (uniform selection remains available)",
+                        "global": _REF_GLOBAL},
+}
+
+
+def rank_scored_constructions(scope=SCOPE_CONSTRUCTION) -> tuple:
+    """The constructions that carry a rank score under a comparison scope (construction order)."""
+    return tuple(c for c in CONSTRUCTIONS if c in SCOPES_BY_CONSTRUCTION[scope])
+
+
 RANK_SPACE_ALL = "all"               # the primary space: every parameter coordinate (the format-2 arrays)
 _SPACE_LABEL = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -851,7 +931,9 @@ def reference_distance_ranks(reference_cloud, reference_sgm, candidates, scale) 
 class CompatibilityBlock:
     """One rank matrix: rows are candidates, columns references, both the SAME ordered groups (indices into
     ``AggregationResult.groups``); the diagonal (self reference) is NaN; ``reference_draws`` counts each
-    reference pool's draws. ``cell`` is the cell context of a per_cell_window block, -1 for a per_cell block."""
+    reference pool's draws. ``scope`` is the block's reference scope: ``construction`` = the block holds every group of
+    its construction in one condition and window set (``cell`` -1); ``within_cell`` = the selected windows of ONE cell
+    (``cell`` names it)."""
     kind: str
     window_set: str
     construction: str
@@ -859,6 +941,7 @@ class CompatibilityBlock:
     group_index: np.ndarray
     ranks: np.ndarray
     reference_draws: np.ndarray
+    scope: str = SCOPE_CONSTRUCTION
 
 
 @dataclass
@@ -871,16 +954,22 @@ class CompatibilityResult:
     label: str = RANK_SPACE_ALL          # the rank coordinate space: "all" or a declared subset label
     coordinates: tuple = None            # the parameter keys the distances were computed over (table order)
     key_indices: tuple = None            # their positions in the parameter table
+    scope: str = SCOPE_CONSTRUCTION      # the comparison scope every block of this result was computed under
 
     def of(self, i) -> dict:
         s = float(self.score[i])
         return {"score": None if np.isnan(s) else s, "n_references": int(self.n_references[i]), "status": str(self.status[i])}
 
 
-def compatibility_protocol(scale, *, coordinates=None) -> dict:
+def compatibility_protocol(scale, *, coordinates=None, scope=SCOPE_CONSTRUCTION) -> dict:
     """The protocol record bound into the archive manifest (what the stored ranks and scores mean). ``coordinates``
-    names the parameter keys the distances run over (``scale`` holds their prior widths, in the same order)."""
+    names the parameter keys the distances run over (``scale`` holds their prior widths, in the same order); ``scope``
+    is the comparison scope (:data:`COMPARISON_SCOPES`): the reference population of every rank-scored construction."""
+    if scope not in COMPARISON_SCOPES:
+        raise AggregationError(f"comparison scope {scope!r} must be one of {COMPARISON_SCOPES}.")
+    scored = rank_scored_constructions(scope)
     return {"name": COMPATIBILITY_PROTOCOL, "coordinates": None if coordinates is None else [str(k) for k in coordinates],
+            "comparison_scope": scope, "comparison_scopes": dict(SCOPES_BY_CONSTRUCTION[scope]),
             "rank": "share of the reference's retained draws strictly farther from the reference's own SGM than the candidate "
                     "SGM (comparison '>', empirical-CDF lookup with searchsorted side='right'); rows = candidates, columns = "
                     "references, self reference excluded by group identity (NaN diagonal); generally asymmetric",
@@ -890,15 +979,19 @@ def compatibility_protocol(scale, *, coordinates=None) -> dict:
             "sgm_scale": [float(v) for v in scale],
             "score": "ordinary sample median of the candidate's off-diagonal row (two middle ranks averaged when even); raw, not "
                      "normalized across candidates; a computed zero is a valid outcome distinct from a missing score",
-            "reference_populations": dict(COMPATIBILITY_REFERENCE), "statuses": list(COMPATIBILITY_STATUSES),
-            "availability": "computed when at least one other reference group exists in the block; insufficient_peers for a "
-                            "per_cell block with one included cell or a per_cell_window block with one selected window (no "
-                            "score, zero references); not_applicable for per_window_position and global; equivalent groups "
-                            "(an opening per_cell = per_cell_window alias) keep their own availability, scores are never copied",
+            "reference_populations": dict(REFERENCE_POPULATIONS[scope]), "statuses": list(COMPATIBILITY_STATUSES),
+            "availability": (f"rank-scored constructions under scope {scope!r}: {list(scored)}; computed when the block holds at least "
+                             "two groups; insufficient_peers (no score, zero references) for a scored construction whose block would "
+                             "hold one group (one included cell, one selected window position, or one cell–window group"
+                             + ("; within_cell: a cell with one selected window" if scope == SCOPE_WITHIN_CELL else "")
+                             + "); not_applicable for every other construction (global has no same-level peer"
+                             + ("; per_window_position carries no rank in this scope" if scope == SCOPE_WITHIN_CELL else "")
+                             + "); equivalent groups keep their own scores, never copied from one another"),
             "precision": "float64"}
 
 
-def _rank_block(result, coll, kind, set_name, construction, cell, group_indices, pools, scale, out, idx=None) -> CompatibilityBlock:
+def _rank_block(result, coll, kind, set_name, construction, cell, group_indices, pools, scale, out, idx=None,
+                scope=SCOPE_CONSTRUCTION) -> CompatibilityBlock:
     """Fill one block: every reference pool scores every candidate SGM of the block; writes score/references/status.
     ``idx`` (coordinate positions) projects the candidates, the reference SGMs and the clouds onto a rank space; ``scale``
     is already restricted to it."""
@@ -921,18 +1014,25 @@ def _rank_block(result, coll, kind, set_name, construction, cell, group_indices,
         row = np.delete(ranks[a], a)
         score[i] = float(np.median(row)); n_ref[i] = row.size; status[i] = "computed"
     return CompatibilityBlock(kind=kind, window_set=set_name, construction=construction, cell=int(cell), group_index=gi,
-                              ranks=ranks, reference_draws=draws)
+                              ranks=ranks, reference_draws=draws, scope=str(scope))
 
 
-def compute_compatibility(result: AggregationResult, coll: CloudCollection, *, coordinates=None, label=RANK_SPACE_ALL) -> CompatibilityResult:
+def compute_compatibility(result: AggregationResult, coll: CloudCollection, *, coordinates=None, label=RANK_SPACE_ALL,
+                          scope=SCOPE_CONSTRUCTION) -> CompatibilityResult:
     """The compatibility matrices and median scores of every rank-scored group of an aggregation, from the SAME
-    validated clouds the groups were built from (call after :func:`aggregate` and :func:`verify_members`). One
-    per_cell block per (condition, window set) when at least two cells are included; one per_cell_window block per
-    (condition, window set, cell) when at least two windows are selected; nothing else is scored. ``coordinates``
-    (parameter keys, any order; None = every key) restricts the distances to a rank coordinate space named ``label``:
-    the candidates, the reference SGMs and the reference clouds are projected onto those keys and the scale is their
-    prior widths; the groups, the SGMs and the reference populations are exactly those of the primary space."""
+    validated clouds the groups were built from (call after :func:`aggregate` and :func:`verify_members`). ``scope``
+    is the comparison scope (see the section comment). ``construction`` (the default, what Experiment writes): per
+    (condition, window set) ONE block over the complete population of each of per_cell (the included cells),
+    per_window_position (the selected positions) and per_cell_window (every cell–window group), each block needing at
+    least two groups. ``within_cell``: the per_cell block as above and one per_cell_window block per cell over its
+    selected windows; per_window_position unscored. ``coordinates`` (parameter keys, any order; None = every key)
+    restricts the distances to a rank coordinate space named ``label``: the candidates, the reference SGMs and the
+    reference clouds are projected onto those keys and the scale is their prior widths; the groups, the SGMs and the
+    reference populations are exactly those of the primary space."""
     t0 = time.time()
+    if scope not in COMPARISON_SCOPES:
+        raise AggregationError(f"comparison scope {scope!r} must be one of {COMPARISON_SCOPES}.")
+    scopes = SCOPES_BY_CONSTRUCTION[scope]
     n_groups = len(result.groups)
     score = np.full(n_groups, np.nan); n_ref = np.zeros(n_groups, np.int64)
     status = np.array(["not_applicable"] * n_groups, dtype=object)
@@ -954,33 +1054,43 @@ def compute_compatibility(result: AggregationResult, coll: CloudCollection, *, c
     index = {(g.construction, g.window_set, g.kind, int(g.cell), int(g.chunk)): i for i, g in enumerate(result.groups)}
     rows_of = {(int(coll.kind_index[r]), int(coll.cell[r]), int(coll.chunk[r])): int(r) for r in range(coll.n_windows)}
     blocks = []
+    out = (score, n_ref, status)
+
+    def block(kind, set_name, construction, cell, gi, pools):
+        """One reference population: its groups are rank-scored (``insufficient_peers`` until a block scores them)."""
+        for i in gi:
+            status[i] = "insufficient_peers"
+        if len(gi) >= 2:
+            blocks.append(_rank_block(result, coll, kind, set_name, construction, cell, gi, pools, scale, out, idx,
+                                      scope=scopes[construction]))
+
     for kind in result.coverage:
         ki = coll.kinds.index(kind)
         cells = [int(c) for c in result.coverage[kind]["cells"]]
         for set_name, chunks in result.window_sets.items():
             chunks = [int(w) for w in chunks]
-            gi = [index[("per_cell", set_name, kind, c, -1)] for c in cells]
-            for i in gi:
-                status[i] = "insufficient_peers"
-            if len(cells) >= 2:
-                pools = [np.asarray([rows_of[(ki, c, w)] for w in chunks]) for c in cells]
-                blocks.append(_rank_block(result, coll, kind, set_name, "per_cell", -1, gi, pools, scale, (score, n_ref, status), idx))
-            for c in cells:
-                gi = [index[("per_cell_window", set_name, kind, c, w)] for w in chunks]
-                for i in gi:
-                    status[i] = "insufficient_peers"
-                if len(chunks) >= 2:
-                    pools = [np.asarray([rows_of[(ki, c, w)]]) for w in chunks]
-                    blocks.append(_rank_block(result, coll, kind, set_name, "per_cell_window", c, gi, pools, scale, (score, n_ref, status), idx))
+            block(kind, set_name, "per_cell", -1, [index[("per_cell", set_name, kind, c, -1)] for c in cells],
+                  [np.asarray([rows_of[(ki, c, w)] for w in chunks]) for c in cells])
+            if "per_window_position" in scopes:
+                block(kind, set_name, "per_window_position", -1, [index[("per_window_position", set_name, kind, -1, w)] for w in chunks],
+                      [np.asarray([rows_of[(ki, c, w)] for c in cells]) for w in chunks])
+            if scopes["per_cell_window"] == SCOPE_CONSTRUCTION:
+                # the complete cell–window population: every other group is a reference, same-cell windows included
+                block(kind, set_name, "per_cell_window", -1, [index[("per_cell_window", set_name, kind, c, w)] for c in cells for w in chunks],
+                      [np.asarray([rows_of[(ki, c, w)]]) for c in cells for w in chunks])
+            else:
+                for c in cells:
+                    block(kind, set_name, "per_cell_window", c, [index[("per_cell_window", set_name, kind, c, w)] for w in chunks],
+                          [np.asarray([rows_of[(ki, c, w)]]) for w in chunks])
     return CompatibilityResult(blocks=blocks, score=score, n_references=n_ref, status=np.asarray(status.tolist(), dtype=str),
                                seconds=time.time() - t0, label=str(label), coordinates=coords,
-                               key_indices=tuple(int(i) for i in (_key_indices(keys, coords) if idx is None else idx)))
+                               key_indices=tuple(int(i) for i in (_key_indices(keys, coords) if idx is None else idx)), scope=str(scope))
 
 
-def compute_rank_spaces(result: AggregationResult, coll: CloudCollection, spaces) -> list:
+def compute_rank_spaces(result: AggregationResult, coll: CloudCollection, spaces, *, scope=SCOPE_CONSTRUCTION) -> list:
     """The additional rank coordinate spaces (``{label: coordinates}``, see :func:`parse_rank_spaces`), each a
-    :class:`CompatibilityResult` over the same groups and reference populations as the primary space."""
-    return [compute_compatibility(result, coll, coordinates=coords, label=label) for label, coords in (spaces or {}).items()]
+    :class:`CompatibilityResult` over the same groups, comparison scope and reference populations as the primary space."""
+    return [compute_compatibility(result, coll, coordinates=coords, label=label, scope=scope) for label, coords in (spaces or {}).items()]
 
 
 def sgm_outside_prior_keys(result: AggregationResult) -> list:
@@ -996,9 +1106,13 @@ def sgm_outside_prior_keys(result: AggregationResult) -> list:
 # =============================================================================
 # Exports
 # =============================================================================
-ARCHIVE_FORMAT_VERSION = 3             # v2: compatibility scores, statuses, rank-matrix blocks and the protocol beside v1's arrays;
-                                       # v3: additional rank coordinate spaces (a declared key subset each) beside v2's arrays, unchanged
-SUPPORTED_ARCHIVE_FORMATS = (1, 2, 3)  # a v1 archive (no compatibility data) still supplies a uniform selection
+ARCHIVE_FORMAT_VERSION = 4             # v2: compatibility scores, statuses, rank-matrix blocks and the protocol beside v1's arrays;
+                                       # v3: additional rank coordinate spaces (a declared key subset each) beside v2's arrays, unchanged;
+                                       # v4: the comparison scope is explicit (protocol sgm_distance_rank_v2, ``compatibility.comparison_scope``,
+                                       #     a ``scope`` per block); the same array names now hold the scores of the DECLARED scope, so a
+                                       #     format-2/3 archive (within_cell by its recorded populations) never supplies construction-wide scores
+SUPPORTED_ARCHIVE_FORMATS = (1, 2, 3, 4)   # a v1 archive (no compatibility data) still supplies a uniform selection
+LEGACY_SCOPE_FORMATS = (2, 3)          # formats whose protocol is sgm_distance_rank_v1: their comparison scope is within_cell, by record
 ARCHIVE_NAME = "aggregation_candidates.npz"
 
 
@@ -1036,19 +1150,20 @@ def _space_section(result: AggregationResult, compatibility: CompatibilityResult
     for b, blk in enumerate(compatibility.blocks):
         name = _block_name(b, label)
         blocks.append({"index": b, "kind": blk.kind, "window_set": blk.window_set, "construction": blk.construction,
-                       "cell": int(blk.cell), "n_groups": int(blk.group_index.size),
+                       "cell": int(blk.cell), "scope": str(blk.scope), "n_groups": int(blk.group_index.size),
                        "arrays": {"group_index": f"{name}_group_index", "ranks": f"{name}_ranks", "reference_draws": f"{name}_reference_draws"},
                        "orientation": "rows = candidates, columns = references, both in group_index order; diagonal NaN"})
     return {"label": str(label), "coordinates": list(coords), "key_indices": [int(i) for i in idx],
-            "protocol": compatibility_protocol(scale, coordinates=coords),
+            "protocol": compatibility_protocol(scale, coordinates=coords, scope=compatibility.scope),
             "arrays": {"score": f"{p}_score", "n_references": f"{p}_n_references", "status": f"{p}_status"},
             "blocks": blocks, "status_counts": counts, "n_zero_scores": zero, "seconds": round(float(compatibility.seconds), 3)}
 
 
 def compatibility_manifest(result: AggregationResult, compatibility: CompatibilityResult, rank_spaces=()) -> dict:
     """The ``compatibility`` section of the archive manifest: the primary space's protocol, block map (which arrays hold
-    which matrix, with the block's condition, window set, construction and cell context) and per-status counts (the
-    format-2 fields, unchanged), plus ``rank_spaces``: every space of the archive by label (the primary space ``all``
+    which matrix, with the block's condition, window set, construction, reference scope and cell context) and
+    per-status counts, the archive's ``comparison_scope`` (one per archive, every space alike) with the reference scope of
+    each rank-scored construction (``comparison_scopes``), plus ``rank_spaces``: every space of the archive by label (the primary space ``all``
     over every parameter key first, then each additional declared subset) with its coordinates, protocol, arrays, blocks
     and counts. The protocols are bound to the archive's own target, checkpoint, coverage, input conversion and source
     hashes through the manifest that carries this section."""
@@ -1063,8 +1178,12 @@ def compatibility_manifest(result: AggregationResult, compatibility: Compatibili
     for c in rank_spaces:
         if c.score.shape != compatibility.score.shape:
             raise AggregationError(f"rank space {c.label!r} does not cover the archive's groups.")
+        if c.scope != compatibility.scope:
+            raise AggregationError(f"rank space {c.label!r} was computed under comparison scope {c.scope!r}; the archive's is "
+                                   f"{compatibility.scope!r} (one scope per archive, every space alike).")
         spaces[c.label] = _space_section(result, c)
-    return {"protocol": primary["protocol"], "arrays": {**primary["arrays"], "sgm_outside_prior_keys": "sgm_outside_prior_keys"},
+    return {"comparison_scope": str(compatibility.scope), "comparison_scopes": dict(SCOPES_BY_CONSTRUCTION[compatibility.scope]),
+            "protocol": primary["protocol"], "arrays": {**primary["arrays"], "sgm_outside_prior_keys": "sgm_outside_prior_keys"},
             "blocks": primary["blocks"], "status_counts": primary["status_counts"], "n_zero_scores": primary["n_zero_scores"],
             "seconds": primary["seconds"], "rank_spaces": spaces,
             "bound_to": "the target, contract (checkpoint, keys, scale, geometry, draws, pool mode, input conversion), coverage "
@@ -1160,13 +1279,13 @@ def _disclosed_differences(sources) -> dict:
 
 def write_aggregation_exports(result: AggregationResult, out_dir, table, *, manifest: dict, compatibility: CompatibilityResult,
                               reference=None, rank_spaces=()) -> dict:
-    """Write the candidate archive (format 3: v1's arrays unchanged in content and row order, v2's compatibility
-    scores, statuses, SGM-outside-prior keys and rank-matrix blocks of the primary space, plus one array set per
-    additional rank coordinate space, ``compatibility_<label>_*``), ``aggregation_groups.csv`` (v1's columns plus score,
-    status, references and outside-prior keys, then one score/status/references triple per additional space),
-    ``aggregation_comparison.csv``, ``aggregation_compatibility.csv`` (one row per off-diagonal candidate/reference pair
-    of the primary space) and ``aggregation_compatibility_<label>.csv`` per additional space, and the manifest into
-    ``out_dir``; return their paths."""
+    """Write the candidate archive (format 4: v1's arrays unchanged in content and row order; the compatibility scores,
+    statuses, SGM-outside-prior keys and rank-matrix blocks of the primary space under the result's comparison scope, plus
+    one array set per additional rank coordinate space, ``compatibility_<label>_*``), ``aggregation_groups.csv`` (v1's
+    columns plus score, status, references and outside-prior keys, then one score/status/references triple per additional
+    space), ``aggregation_comparison.csv``, ``aggregation_compatibility.csv`` (one row per off-diagonal
+    candidate/reference pair of the primary space, with the pair's reference scope) and
+    ``aggregation_compatibility_<label>.csv`` per additional space, and the manifest into ``out_dir``; return their paths."""
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     G = result.groups; D = len(result.keys); Q = len(result.levels)
     if compatibility is None or compatibility.score.shape != (len(G),) or compatibility.label != RANK_SPACE_ALL:
@@ -1238,7 +1357,7 @@ def write_aggregation_exports(result: AggregationResult, out_dir, table, *, mani
         with path.open("w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(["kind", "window_set", "construction", "cell_context", "candidate_group", "candidate_cell", "candidate_chunk",
-                        "reference_group", "reference_cell", "reference_chunk", "reference_draws", "rank"])
+                        "reference_group", "reference_cell", "reference_chunk", "reference_draws", "rank", "reference_scope"])
             for blk in comp.blocks:
                 ctx = "" if blk.cell < 0 else int(blk.cell)
                 for a, i in enumerate(blk.group_index):
@@ -1248,7 +1367,7 @@ def write_aggregation_exports(result: AggregationResult, out_dir, table, *, mani
                             continue
                         gj = G[int(j)]
                         w.writerow([blk.kind, blk.window_set, blk.construction, ctx, int(i), gi.cell, gi.chunk, int(j), gj.cell, gj.chunk,
-                                    int(blk.reference_draws[b]), repr(float(blk.ranks[a, b]))])
+                                    int(blk.reference_draws[b]), repr(float(blk.ranks[a, b])), blk.scope])
     compatibility_csv = out_dir / "aggregation_compatibility.csv"
     write_pairs(compatibility_csv, compatibility)
     space_csvs = {}
@@ -1295,9 +1414,11 @@ def comparison_rows(result: AggregationResult, table, *, reference=None) -> list
 def load_candidate_archive(path) -> dict:
     """Read ``aggregation_candidates.npz`` back: arrays plus the decoded manifest; verifies the row counts. Accepts
     format 1 (no compatibility data: ``compatibility`` is None and only a uniform selection can be built from it),
-    format 2 (the primary rank space ``all``) and format 3 (additional rank coordinate spaces), whose compatibility
-    data are validated here, every space alike (:func:`validate_archive_compatibility`): a reader never builds a
-    weighted selection from inconsistent scores."""
+    formats 2 and 3 (the primary rank space ``all``; additional rank coordinate spaces in format 3; comparison scope
+    ``within_cell`` by their recorded reference populations) and format 4 (the comparison scope declared in the
+    archive), whose compatibility data are validated here, every space alike, under the archive's own scope
+    (:func:`validate_archive_compatibility`): a reader never builds a weighted selection from inconsistent scores, and
+    never reads one scope's scores as another's."""
     path = Path(path)
     with np.load(path, allow_pickle=False) as data:
         arrays = {k: data[k] for k in data.files}
@@ -1326,22 +1447,50 @@ def _int_array(arr, name, where) -> np.ndarray:
     return a.astype(np.int64)
 
 
+def archive_comparison_scope(manifest, *, where="archive") -> str:
+    """The comparison scope an archive's stored scores were computed under. Formats 2 and 3 (protocol
+    ``sgm_distance_rank_v1``) carry no scope field: their recorded reference populations are the ``within_cell`` scope,
+    and a scope field in such an archive is refused. Format 4 (protocol ``sgm_distance_rank_v2``) declares it in
+    ``compatibility.comparison_scope`` with the per-construction map; anything else is refused."""
+    section = manifest.get("compatibility") or {}
+    version = int(manifest.get("archive_format_version", 2))
+    declared = section.get("comparison_scope")
+    if version in LEGACY_SCOPE_FORMATS:
+        if declared is not None:
+            raise AggregationError(f"{where}: a format-{version} archive carries no comparison scope field (its populations are "
+                                   f"{SCOPE_WITHIN_CELL!r} by record); found {declared!r}.")
+        return SCOPE_WITHIN_CELL
+    if declared not in COMPARISON_SCOPES:
+        raise AggregationError(f"{where}: a format-{version} archive declares compatibility.comparison_scope, one of {COMPARISON_SCOPES}; "
+                               f"got {declared!r}.")
+    if dict(section.get("comparison_scopes") or {}) != SCOPES_BY_CONSTRUCTION[declared]:
+        raise AggregationError(f"{where}: compatibility.comparison_scopes {section.get('comparison_scopes')} is not the map of scope "
+                               f"{declared!r} ({SCOPES_BY_CONSTRUCTION[declared]}).")
+    return str(declared)
+
+
 def validate_archive_compatibility(arrays, manifest, *, where="archive") -> dict:
-    """Validate an archive's compatibility data (format 2: the primary rank space ``all``; format 3: ``all`` plus every
-    additional rank coordinate space declared in ``compatibility.rank_spaces``) against its own groups and declared
-    contexts. Common to all spaces, the reference CONTEXTS are derived from the candidate groups themselves: every
-    (condition, window set) with at least two per_cell groups and every (condition, window set, cell) with at least two
-    per_cell_window groups must hold exactly one block over exactly its complete peer population (a population split
-    into several blocks, a missing peer, an unexpected block and a false ``insufficient_peers`` are refused); a context
-    with one group must carry ``insufficient_peers`` with no score; the scientific identities of the rank-scored groups
-    must be distinct (one group per cell in a per_cell context, chunk -1; one per window position in a per_cell_window
-    context). Per block: integer identities and counts (never coerced), unique in-range group indices, reference draw
-    counts equal to the referenced groups' pooled draw counts, a NaN diagonal, finite off-diagonal ranks in [0, 1], and
-    the stored score equal to the row median with the right reference count. Per space: the protocol name, its declared
+    """Validate an archive's compatibility data (format 2: the primary rank space ``all``; formats 3 and 4: ``all`` plus
+    every additional rank coordinate space declared in ``compatibility.rank_spaces``) against its own groups, its
+    comparison scope (:func:`archive_comparison_scope`) and its declared contexts. Common to all spaces, the reference
+    CONTEXTS are derived from the candidate groups themselves under that scope. ``construction``: every (condition,
+    window set) holds one context per rank-scored construction (per_cell, per_window_position, per_cell_window) over ALL
+    its groups. ``within_cell``: one per_cell context per (condition, window set) and one per_cell_window context per
+    (condition, window set, cell). A context with at least two groups must hold exactly one block over exactly its
+    complete peer population (a population split into several blocks, a missing peer, an unexpected block, a block of
+    another scope and a false ``insufficient_peers`` are refused); a context with one group must carry
+    ``insufficient_peers`` with no score; the scientific identities of the rank-scored groups must be distinct (one
+    group per cell in a per_cell context, chunk -1; one per window position in a per_window_position context, cell -1;
+    one per (cell, window position) pair in a construction-wide per_cell_window context, where cell identities repeat
+    legitimately; one per window position in a within-cell context). Per block: integer identities and counts (never
+    coerced), unique in-range group indices, reference draw counts equal to the referenced groups' pooled draw counts, a
+    NaN diagonal, finite off-diagonal ranks in [0, 1], and the stored score equal to the row median with the right
+    reference count. Per space: the protocol name of the archive's format, the same comparison scope, its declared
     coordinates (every key for ``all``; a proper non-empty subset in table order otherwise, named once) and its scale,
     which must be the archive's ``sgm_scale`` restricted to those coordinates (and, for ``all``, equal to the manifest's
-    and the contract's). Returns ``{"protocol", "blocks", "by_group", "coordinates", "spaces": {label: {...}}}`` where the
-    top level is the primary space ``all``; raises :class:`AggregationError` naming the first inconsistency."""
+    and the contract's). Returns ``{"protocol", "blocks", "by_group", "coordinates", "comparison_scope",
+    "comparison_scopes", "spaces": {label: {...}}}`` where the top level is the primary space ``all``; raises
+    :class:`AggregationError` naming the first inconsistency."""
     section = manifest.get("compatibility") or {}
     version = int(manifest.get("archive_format_version", 2))
     keys = [str(k) for k in arrays["parameter_keys"]]
@@ -1350,7 +1499,8 @@ def validate_archive_compatibility(arrays, manifest, *, where="archive") -> dict
         if other is None or np.asarray(other, float).shape != scale_all.shape or not np.array_equal(np.asarray(other, float), scale_all):
             raise AggregationError(f"{where}: the {label} sgm_scale {other} is not the archive's {scale_all.tolist()}; the stored ranks were "
                                    f"computed under another metric.")
-    contexts = _derive_rank_contexts(arrays, where)
+    scope = archive_comparison_scope(manifest, where=where)
+    contexts = _derive_rank_contexts(arrays, where, scope)
     declared = section.get("rank_spaces")
     if version >= 3:
         if not isinstance(declared, dict) or RANK_SPACE_ALL not in declared:
@@ -1361,7 +1511,7 @@ def validate_archive_compatibility(arrays, manifest, *, where="archive") -> dict
             raise AggregationError(f"{where}: the primary rank space {RANK_SPACE_ALL!r} must list every parameter key {keys}; got "
                                    f"{primary_decl.get('coordinates')}.")
     primary = _validate_rank_space(arrays, section, contexts, where=where, label=RANK_SPACE_ALL, coordinates=keys, keys=keys,
-                                   scale_all=scale_all, require_coordinates=version >= 3)
+                                   scale_all=scale_all, require_coordinates=version >= 3, scope=scope, version=version)
     spaces = {RANK_SPACE_ALL: primary}
     if version >= 3:
         for label, decl in declared.items():
@@ -1375,53 +1525,82 @@ def validate_archive_compatibility(arrays, manifest, *, where="archive") -> dict
                 raise AggregationError(f"{where}: rank space {label!r} declares coordinates {coords}; a proper non-empty subset of {keys} in "
                                        f"table order, each key once, is required.")
             spaces[str(label)] = _validate_rank_space(arrays, decl, contexts, where=where, label=str(label), coordinates=coords, keys=keys,
-                                                      scale_all=scale_all, require_coordinates=True)
-    return {**primary, "spaces": spaces}
+                                                      scale_all=scale_all, require_coordinates=True, scope=scope, version=version)
+    return {**primary, "comparison_scope": scope, "comparison_scopes": dict(SCOPES_BY_CONSTRUCTION[scope]), "spaces": spaces}
 
 
-def _derive_rank_contexts(arrays, where) -> dict:
-    """The reference contexts of an archive from its candidate groups (shared by every rank space): ``{(kind, set,
-    construction, cell or -1): [group indices]}`` after the distinct-identity checks."""
+def _derive_rank_contexts(arrays, where, scope) -> dict:
+    """The reference contexts of an archive from its candidate groups under its comparison scope (shared by every rank
+    space): ``{(kind, set, construction, cell or -1): [group indices]}`` after the distinct-identity checks. The cell
+    slot names a cell only for a within-cell per_cell_window context; every construction-wide context carries -1."""
+    scopes = SCOPES_BY_CONSTRUCTION[scope]
     n = arrays["construction"].shape[0]
     constr = np.asarray(arrays["construction"]).astype(str); ws = np.asarray(arrays["window_set"]).astype(str)
     kind = np.asarray(arrays["kind"]).astype(str)
     cell = _int_array(arrays["cell"], "cell", where); chunk = _int_array(arrays["chunk"], "chunk", where)
     # the scientific identities of the rank-scored groups must be distinct BEFORE their reference contexts are derived
-    # from them: one group per distinct cell in a per_cell context (pooled cell groups carry chunk = -1), one group per
-    # distinct selected window position in a per_cell_window context; unique group-array indices alone do not establish it
+    # from them: one group per distinct cell in a per_cell context (pooled cell groups carry chunk = -1), one per distinct
+    # window position in a per_window_position context (cell = -1) or in a within-cell per_cell_window context, one per
+    # distinct (cell, window position) pair in a construction-wide per_cell_window context; unique group-array indices
+    # alone do not establish it
     expected = {}
     for i in range(n):
-        if constr[i] == "per_cell":
+        c = constr[i]
+        if c not in scopes:
+            continue
+        if c == "per_cell":
             if chunk[i] != -1:
                 raise AggregationError(f"{where}: group {i} ({kind[i]}/{ws[i]}/per_cell cell {cell[i]}) carries chunk {chunk[i]}; a pooled "
                                        f"cell group carries chunk -1.")
-            expected.setdefault((kind[i], ws[i], "per_cell", -1), []).append(i)
-        elif constr[i] == "per_cell_window":
+            expected.setdefault((kind[i], ws[i], c, -1), []).append(i)
+        elif c == "per_window_position":
+            if cell[i] != -1 or chunk[i] < 0:
+                raise AggregationError(f"{where}: group {i} ({kind[i]}/{ws[i]}/per_window_position) carries cell {cell[i]} and chunk {chunk[i]}; "
+                                       f"a pooled position group carries cell -1 and its window position.")
+            expected.setdefault((kind[i], ws[i], c, -1), []).append(i)
+        else:
             if chunk[i] < 0:
                 raise AggregationError(f"{where}: group {i} ({kind[i]}/{ws[i]}/per_cell_window cell {cell[i]}) carries no window position.")
-            expected.setdefault((kind[i], ws[i], "per_cell_window", int(cell[i])), []).append(i)
+            expected.setdefault((kind[i], ws[i], c, int(cell[i]) if scopes[c] == SCOPE_WITHIN_CELL else -1), []).append(i)
     for key, members in expected.items():
-        ident = cell[members] if key[2] == "per_cell" else chunk[members]
-        label = "cell" if key[2] == "per_cell" else "window position"
-        if np.unique(ident).size != len(members):
-            dup = sorted(set(int(v) for v in ident if int(np.sum(ident == v)) > 1))
-            raise AggregationError(f"{where}: the context {_ctx_name(key)} holds {len(members)} groups over {np.unique(ident).size} distinct "
+        if key[2] == "per_cell":
+            ident, label = [int(v) for v in cell[members]], "cell"
+        elif key[2] == "per_window_position" or key[3] >= 0:
+            ident, label = [int(v) for v in chunk[members]], "window position"
+        else:
+            ident, label = [(int(a), int(b)) for a, b in zip(cell[members], chunk[members])], "(cell, window position) pair"
+        if len(set(ident)) != len(members):
+            dup = sorted({v for v in ident if ident.count(v) > 1})
+            raise AggregationError(f"{where}: the context {_ctx_name(key)} holds {len(members)} groups over {len(set(ident))} distinct "
                                    f"{label}s (duplicated {label} identities {dup[:10]}); one representative per distinct {label} is required.")
     return expected
 
 
 def _ctx_name(key):
-    return f"{key[0]}/{key[1]}/{key[2]}" + (f" cell {key[3]}" if key[2] == "per_cell_window" else "")
+    return f"{key[0]}/{key[1]}/{key[2]}" + (f" cell {key[3]}" if key[2] == "per_cell_window" and key[3] >= 0 else "")
 
 
-def _validate_rank_space(arrays, section, expected, *, where, label, coordinates, keys, scale_all, require_coordinates) -> dict:
-    """Validate ONE rank space's protocol, arrays and blocks against the shared contexts (see
-    :func:`validate_archive_compatibility`); returns ``{"protocol", "blocks", "by_group", "coordinates", "label"}``."""
+def _validate_rank_space(arrays, section, expected, *, where, label, coordinates, keys, scale_all, require_coordinates,
+                         scope=SCOPE_WITHIN_CELL, version=3) -> dict:
+    """Validate ONE rank space's protocol, arrays and blocks against the shared contexts of the archive's comparison
+    ``scope`` (see :func:`validate_archive_compatibility`); returns ``{"protocol", "blocks", "by_group", "coordinates",
+    "label"}``."""
     proto = section.get("protocol") or {}
     sp = f"rank space {label!r}"
-    if proto.get("name") != COMPATIBILITY_PROTOCOL:
-        raise AggregationError(f"{where}: {sp}: compatibility protocol {proto.get('name')!r} is not {COMPATIBILITY_PROTOCOL!r}; the stored ranks "
-                               f"are not the ones this reader interprets.")
+    scopes = SCOPES_BY_CONSTRUCTION[scope]
+    legacy = version in LEGACY_SCOPE_FORMATS
+    want_name = LEGACY_COMPATIBILITY_PROTOCOL if legacy else COMPATIBILITY_PROTOCOL
+    if proto.get("name") != want_name:
+        raise AggregationError(f"{where}: {sp}: compatibility protocol {proto.get('name')!r} is not {want_name!r}, the protocol of archive "
+                               f"format {version}; the stored ranks are not the ones this reader interprets.")
+    if legacy:
+        if proto.get("comparison_scope") is not None:
+            raise AggregationError(f"{where}: {sp}: a {LEGACY_COMPATIBILITY_PROTOCOL} protocol carries no comparison scope; found "
+                                   f"{proto.get('comparison_scope')!r}.")
+    elif proto.get("comparison_scope") != scope or dict(proto.get("comparison_scopes") or {}) != scopes:
+        raise AggregationError(f"{where}: {sp}: the protocol's comparison scope {proto.get('comparison_scope')!r} "
+                               f"({proto.get('comparison_scopes')}) is not the archive's {scope!r} ({scopes}); every space of an archive "
+                               f"shares one comparison scope.")
     pc = proto.get("coordinates")
     if pc is not None or require_coordinates:
         if [str(c) for c in (pc or [])] != [str(c) for c in coordinates]:
@@ -1466,10 +1645,18 @@ def _validate_rank_space(arrays, section, expected, *, where, label, coordinates
         m = gi.size
         if m < 2 or np.unique(gi).size != m or gi.min() < 0 or gi.max() >= n:
             raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: group indices {gi.tolist()[:10]} are not at least two distinct groups of the archive.")
-        if blk.get("construction") not in RANK_SCORED_CONSTRUCTIONS:
-            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: construction {blk.get('construction')!r} carries no rank score.")
-        key = (str(blk.get("kind")), str(blk.get("window_set")), str(blk["construction"]),
-               int(blk.get("cell", -1)) if blk["construction"] == "per_cell_window" else -1)
+        if blk.get("construction") not in scopes:
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')}: construction {blk.get('construction')!r} carries no rank score "
+                                   f"under comparison scope {scope!r}.")
+        want_scope = scopes[str(blk["construction"])]
+        if (blk.get("scope") is not None or not legacy) and blk.get("scope") != want_scope:
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')} ({blk.get('construction')}) declares reference scope "
+                                   f"{blk.get('scope')!r}; the archive's comparison scope {scope!r} requires {want_scope!r}.")
+        within = want_scope == SCOPE_WITHIN_CELL
+        if not within and int(blk.get("cell", -1)) != -1:
+            raise AggregationError(f"{where}: {sp}: block {blk.get('index')} ({blk.get('construction')}, scope {want_scope!r}) names the cell "
+                                   f"context {blk.get('cell')}; a construction-wide block spans its whole population (cell -1).")
+        key = (str(blk.get("kind")), str(blk.get("window_set")), str(blk["construction"]), int(blk.get("cell", -1)) if within else -1)
         if key not in expected:
             raise AggregationError(f"{where}: {sp}: block {blk.get('index')} names the context {ctx_name(key)}, which has no rank-scored groups in this archive.")
         if key in held:
@@ -1508,9 +1695,9 @@ def _validate_rank_space(arrays, section, expected, *, where, label, coordinates
                 raise AggregationError(f"{where}: {sp}: group {i} ({kind[i]}/{ws[i]}/{constr[i]} cell {cell[i]} chunk {chunk[i]}) is the only group of its "
                                        f"context, so its status must be 'insufficient_peers' with no score and no reference; got {status[i]!r}.")
     for i in range(n):
-        if constr[i] in RANK_SCORED_CONSTRUCTIONS:
+        if constr[i] in scopes:
             if status[i] == "not_applicable":
-                raise AggregationError(f"{where}: {sp}: group {i} ({constr[i]}) cannot be 'not_applicable'.")
+                raise AggregationError(f"{where}: {sp}: group {i} ({constr[i]}) cannot be 'not_applicable' under comparison scope {scope!r}.")
         else:
             if status[i] != "not_applicable" or np.isfinite(score[i]) or nref[i] != 0:
                 raise AggregationError(f"{where}: {sp}: group {i} ({constr[i]}) must be 'not_applicable' with no score; got {status[i]!r}.")
@@ -1566,6 +1753,11 @@ def archive_component(archive, *, kind, window_set, construction, statistic="sgm
     return {"kind": kind, "window_set": window_set, "construction": construction, "statistic": statistic,
             "vectors": vecs, "identities": ident, "group_indices": idx.tolist(), "parameter_keys": [str(k) for k in archive["keys"]],
             "rank_spaces": {lab: list(sp["coordinates"]) for lab, sp in spaces.items()},
+            # the reference scope the archive's scores of THIS construction were computed under (None: unscored in the archive's
+            # comparison scope, or a format-1 archive), and the archive's comparison scope
+            "comparison_scope": None if compat is None else (compat.get("comparison_scopes") or {}).get(construction),
+            "archive_comparison_scope": None if compat is None else compat.get("comparison_scope"),
+            "compatibility_protocol": None if compat is None else (compat.get("protocol") or {}).get("name"),
             "compatibility_available": compat is not None, "archive_format_version": int(archive.get("format_version", 1))}
 
 
@@ -1606,7 +1798,7 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
     supporting exports into ``out_dir``. Returns the aggregation manifest, or ``None`` when the section states
     that the calculations are unavailable (aggregation disabled, or no retained clouds)."""
     from .visualization_aggregation import (figure_compatibility_atlas_page, figure_compatibility_cells,
-                                            figure_compatibility_windows, figure_joint_corner, figure_marginal_cdfs,
+                                            figure_compatibility_population, figure_compatibility_windows, figure_joint_corner, figure_marginal_cdfs,
                                             figure_temporal, figure_window_selection)
     keys = [e["KEY"] for e in table]
     kinds = [str(k) for k in arrays["kinds"]]
@@ -1641,8 +1833,10 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
                        exact_capacity=request.exact_capacity)
     bad_members = verify_members(result, coll)
     elapsed = time.time() - t0
-    compat = compute_compatibility(result, coll)          # the same validated clouds, after the groups are verified
-    spaces = compute_rank_spaces(result, coll, request.rank_spaces)   # additional rank coordinate spaces, same groups and references
+    # the same validated clouds, after the groups are verified; Experiment computes the construction-wide comparison scope
+    # (every group against ALL the other groups of its construction, condition and window set)
+    compat = compute_compatibility(result, coll, scope=SCOPE_CONSTRUCTION)
+    spaces = compute_rank_spaces(result, coll, request.rank_spaces, scope=SCOPE_CONSTRUCTION)   # additional rank coordinate spaces, same groups and references
     ref = request.reference
     covered_cells = {k: result.coverage[k]["cells"] for k in result.coverage}
     coverage_lines = []
@@ -1723,7 +1917,7 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
         "**Supporting files (this directory).** [aggregation_candidates.npz](aggregation_candidates.npz) (every group's SGM and "
         "median vectors, mixture quantiles, identities, methods, contract, sources and the target binding), "
         "[aggregation_groups.csv](aggregation_groups.csv), [aggregation_comparison.csv](aggregation_comparison.csv), "
-        "[aggregation_compatibility.csv](aggregation_compatibility.csv) (every pairwise distance rank), "
+        "[aggregation_compatibility.csv](aggregation_compatibility.csv) (every pairwise distance rank, with its reference scope), "
         "[aggregation_manifest.json](aggregation_manifest.json). Figures: "
         + ", ".join(f"[aggregation_{kind}_{s}_{f}.png](figures/aggregation_{kind}_{s}_{f}.png)" for kind in result.coverage
                     for s in result.window_sets for f in ("marginals", "joint"))
@@ -1733,14 +1927,16 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
         + "; posterior compatibility (the subsection at the end of this section): "
         + ", ".join(f"[aggregation_{kind}_{s}_compatibility_cells.png](figures/aggregation_{kind}_{s}_compatibility_cells.png)"
                     for kind in result.coverage for s in result.window_sets if len(result.coverage[kind]["cells"]) >= 2)
-        + "".join(f", [aggregation_{kind}_{s}_compatibility_windows.png](figures/aggregation_{kind}_{s}_compatibility_windows.png), "
-                  f"[within-cell matrix atlas {kind}/{s}](compatibility/{kind}/{s}/windows/index.md)"
+        + "".join(f", [aggregation_{kind}_{s}_compatibility{f}.png](figures/aggregation_{kind}_{s}_compatibility{f}.png)"
+                  for kind in result.coverage for s, c in result.window_sets.items() if len(c) > 1 for f in ("_positions", "_population", "_windows"))
+        + "".join(f", [same-cell blocks of the cell–window matrix, {kind}/{s}](compatibility/{kind}/{s}/windows/index.md)"
                   for kind in result.coverage for s, c in result.window_sets.items() if len(c) > 1)
         + "".join(f"; rank space `{sp.label}` ({', '.join(sp.coordinates)}): [aggregation_compatibility_{sp.label}.csv](aggregation_compatibility_{sp.label}.csv), "
                   + ", ".join(f"[aggregation_{kind}_{s}_compatibility_cells_{sp.label}.png](figures/aggregation_{kind}_{s}_compatibility_cells_{sp.label}.png)"
                               for kind in result.coverage for s in result.window_sets if len(result.coverage[kind]["cells"]) >= 2)
-                  + "".join(f", [aggregation_{kind}_{s}_compatibility_windows_{sp.label}.png](figures/aggregation_{kind}_{s}_compatibility_windows_{sp.label}.png), "
-                            f"[within-cell matrix atlas {kind}/{s} in `{sp.label}`](compatibility/{kind}/{s}/windows_{sp.label}/index.md)"
+                  + "".join(f", [aggregation_{kind}_{s}_compatibility{f}_{sp.label}.png](figures/aggregation_{kind}_{s}_compatibility{f}_{sp.label}.png)"
+                            for kind in result.coverage for s, c in result.window_sets.items() if len(c) > 1 for f in ("_positions", "_population", "_windows"))
+                  + "".join(f", [same-cell blocks of the cell–window matrix, {kind}/{s} in `{sp.label}`](compatibility/{kind}/{s}/windows_{sp.label}/index.md)"
                             for kind in result.coverage for s, c in result.window_sets.items() if len(c) > 1)
                   for sp in spaces)
         + " (captions at the end of the report).", "",
@@ -1971,10 +2167,11 @@ def report_aggregation(reporter, request: AggregationRequest, arrays, manifest, 
     # ---- posterior compatibility of the SGM representatives (raw median ranks; no sampling probability here) ------
     _report_compatibility(reporter, result, compat, coll, request, out_dir, condition_display, n_product_cells, n_product_windows,
                           kind_notes, figure_compatibility_cells, figure_compatibility_windows, figure_compatibility_atlas_page,
-                          rank_spaces=spaces)
+                          figure_compatibility_population, rank_spaces=spaces)
     try:
         back = load_candidate_archive(paths["archive"])
-        readback = f"format {back['format_version']}, {len(back['compatibility']['blocks'])} rank blocks, {len(result.groups)} groups re-validated"
+        readback = (f"format {back['format_version']}, comparison scope {back['compatibility']['comparison_scope']}, "
+                    f"{len(back['compatibility']['blocks'])} rank blocks, {len(result.groups)} groups re-validated")
         ok = True
     except AggregationError as exc:
         readback, ok = str(exc), False
@@ -1990,15 +2187,21 @@ ATLAS_CELLS_PER_PAGE = 12
 
 
 def _report_compatibility(reporter, result, compat, coll, request, out_dir, condition_display, n_product_cells, n_product_windows,
-                          kind_notes, fig_cells, fig_windows, fig_atlas, rank_spaces=()):
-    """The compact subsection: the definition, one scope/availability table (matrices, candidates, references, computed or
-    unavailable, zero scores labeled as centrality outcomes; one row set per rank coordinate space), the inline cell matrix
-    with its score strip and the window-score overview per condition, window set and space, and the complete linked
-    within-cell atlas per space."""
+                          kind_notes, fig_cells, fig_windows, fig_atlas, fig_population, rank_spaces=()):
+    """The compact subsection under the construction-wide comparison scope: the definition, the aggregation / reference
+    population / normalization statement, one scope and availability table (matrices, candidates, references, computed or
+    unavailable, zero scores labeled as centrality outcomes; one row set per rank coordinate space), and per condition,
+    window set and space: the cell matrix, the window-position matrix, the complete cell–window population matrix (one
+    N x N matrix, never a set of separate within-cell matrices), the cell-by-window score overview, and the linked atlas
+    of the population matrix's same-cell blocks."""
+    if compat.scope != SCOPE_CONSTRUCTION or any(sp.scope != SCOPE_CONSTRUCTION for sp in rank_spaces):
+        raise AggregationError(f"the Experiment report presents the {SCOPE_CONSTRUCTION!r} comparison scope; got "
+                               f"{[compat.scope] + [sp.scope for sp in rank_spaces]}.")
     geom = coll.contract["window_geometry"]; ws = request.window_seconds
     step_s = (float(ws) * geom["step_frames"] / geom["n_frames"]) if ws else 1.0
     groups = result.groups
     all_spaces = [compat] + list(rank_spaces)
+    refs = REFERENCE_POPULATIONS[SCOPE_CONSTRUCTION]
     space_text = ("**Rank coordinate spaces.** The primary space `all` runs the distances over every parameter coordinate "
                   f"({', '.join(str(k) for k in result.keys)}). " + (
                   "Additional spaces restrict the same candidates, reference SGMs and reference clouds to a declared subset of the "
@@ -2006,80 +2209,102 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
                   "are identical across spaces, only the metric changes, so a space whose coordinates exclude a parameter is blind to "
                   "disagreement in that parameter: " + "; ".join(f"`{sp.label}` = {', '.join(sp.coordinates)}" for sp in rank_spaces)
                   + ". Each space has its own scores, statuses, figures, atlas and CSV (`aggregation_compatibility_<space>.csv`); the "
-                  "Nuisance DLI constructor names the space it weights with (`rank_coordinates`)." if rank_spaces else
+                  "Nuisance DLI constructor names the space it weights with (`rank_coordinates`). The coordinate space and the "
+                  "comparison scope are separate choices." if rank_spaces else
                   "No additional space was requested for this report (`--compatibility-coordinates`)."))
     text = [
-        "For every rank-scored representative, each other group of its block is a reference posterior: that group's retained "
-        "cloud (for one SGM per cell, the equal-window mixture of the cell's selected windows; for one SGM per cell–window, the "
-        "window's own cloud) with the group's own existing SGM. The distance rank R_ij of candidate SGM v_i against reference j is "
-        "the share of reference j's draws that lie strictly farther from v_j than v_i does, with distances in estimator coordinates "
-        f"divided by the prior widths {result.scale.tolist()} (log10 coordinates are not transformed again). Rows are candidates, "
-        "columns references; the self comparison is excluded by identity; the matrix is generally asymmetric because every "
-        "reference has its own spread. The candidate's score is the ordinary median of its row over the other references (two "
-        "middle ranks averaged when their number is even), a raw score that is not normalized across candidates. A rank near one "
-        "means the candidate sits closer to the reference's SGM than most of that reference's draws; near zero, almost every "
-        "reference draw is closer. The rank describes radial centrality, not posterior density, not membership in a joint credible "
-        "region and not the validity of a recording.", "",
-        f"**Reference populations.** One SGM per cell: {COMPATIBILITY_REFERENCE['per_cell']}. One SGM per cell–window: "
-        f"{COMPATIBILITY_REFERENCE['per_cell_window']}. One SGM per window position: {COMPATIBILITY_REFERENCE['per_window_position']}. "
-        f"One SGM for the included dataset: {COMPATIBILITY_REFERENCE['global']}. Under a single-window set such as `opening`, the per-cell "
-        "score is computed across cells while the within-cell window score is unavailable (no other selected window): the identical "
-        "vectors of the two constructions keep their own availability, and no score is copied between equivalent groups.", "",
+        "For every rank-scored representative, each other group of its reference population is a reference posterior: that "
+        "group's retained cloud with the group's own existing SGM. The distance rank R_ij of candidate SGM v_i against reference "
+        "j is the share of reference j's draws that lie strictly farther from v_j than v_i does, with distances in estimator "
+        f"coordinates divided by the prior widths {result.scale.tolist()} (log10 coordinates are not transformed again). Rows are "
+        "candidates, columns references; the self comparison is excluded by group identity (never by vector equality); the matrix "
+        "is generally asymmetric because every reference has its own spread. The candidate's score is the ordinary median of its "
+        "row over the other references (two middle ranks averaged when their number is even), a raw score that is not normalized "
+        "across candidates. A rank near one means the candidate sits closer to the reference's SGM than most of that reference's "
+        "draws; near zero, almost every reference draw is closer. The rank describes radial centrality, not posterior density, "
+        "not membership in a joint credible region and not the validity of a recording.", "",
+        f"**Comparison scope: `{SCOPE_CONSTRUCTION}`.** The aggregation fixes which representatives exist; the comparison scope "
+        "fixes whom each representative is compared with; the two are separate. In this report every representative of one "
+        "aggregation is scored against ALL the other representatives of that same aggregation, within one condition and one "
+        "window set, and the candidate's own group is the only one excluded. "
+        f"One SGM per cell: {refs['per_cell']}. One SGM per window position: {refs['per_window_position']}. "
+        f"One SGM per cell–window: {refs['per_cell_window']}. One SGM for the included dataset: {refs['global']}. "
+        "For one SGM per cell–window the other windows of the candidate's own cell are therefore a small part of its references "
+        "(for example nine of 599 with 60 cells and ten windows), with no separate treatment and no mass reserved for the cell. "
+        "Under a single-window set such as `opening`, the cell–window groups and the per-cell groups are the same windows with "
+        "the same clouds: both are scored on their own and the scores agree; a single window position has no peer position "
+        "(`insufficient_peers`).", "",
+        "**Normalization happens in the Nuisance DLI constructor, not here.** Experiment reports raw median ranks s_i only. Under "
+        "the member policy `posterior_rank_median` with `rank_scope = \"construction\"`, the constructor assigns the N "
+        "representatives of the selected aggregation, condition and window set the probabilities p_i = alpha * s_i / (s_1 + ... + "
+        "s_N), where alpha is the component's explicit mass (one for a single-component selection). No cell receives a reserved "
+        "mass: a cell's total is the sum of its representatives' probabilities and may be small or zero. The earlier hierarchical "
+        f"policy (`rank_scope = \"{SCOPE_WITHIN_CELL}\"`: each cell–window SGM scored against the other windows of its own cell "
+        "only, every cell given equal mass) is a different selection target; it is read from archive formats 2 and 3 under "
+        "that name and is never substituted for the scope of this report.", "",
         "**Zeros and availability.** A median compatibility score of exactly zero means that a majority of the candidate's reference "
         "ranks are zero (at least half of the other references place the candidate beyond all of their draws); some references may "
         "still assign it a high rank. It is a valid centrality outcome of a valid recording, distinct from an unavailable score "
-        "(`insufficient_peers`: a singleton reference set, no score, zero references), and it is not a data-quality classification: "
-        "nothing is removed, excluded or curated on its account. Experiment reports raw median ranks only; turning scores into sampling probabilities is the "
-        "Nuisance DLI constructor's explicit choice (`member_weighting`). Training-prior flags stay separate (`sgm_outside_prior_keys` "
+        "(`insufficient_peers`: a population of one group, no score, zero references), and it is not a data-quality classification: "
+        "nothing is removed, excluded or curated on its account. Training-prior flags stay separate (`sgm_outside_prior_keys` "
         "in aggregation_groups.csv: whether the SGM itself lies outside the training prior, a different quantity from the "
         "outside-box fractions of the pooled draws).", "",
         f"**Files.** Scores, statuses and reference counts per group: [aggregation_groups.csv](aggregation_groups.csv); every pairwise "
-        f"rank: [aggregation_compatibility.csv](aggregation_compatibility.csv); the rank-matrix blocks and the protocol "
-        f"`{COMPATIBILITY_PROTOCOL}`: [aggregation_candidates.npz](aggregation_candidates.npz) (archive format {ARCHIVE_FORMAT_VERSION}, "
-        f"manifest section `compatibility`). Computation took {compat.seconds:.1f} s on the CPU. The figures (captions at the end of the "
-        "report) show raw median ranks; the complete within-cell matrices of every cell are in the linked atlas pages, twelve cells per page.", "",
+        f"rank with its reference scope: [aggregation_compatibility.csv](aggregation_compatibility.csv); the rank-matrix blocks, the "
+        f"protocol `{COMPATIBILITY_PROTOCOL}` and the comparison scope: [aggregation_candidates.npz](aggregation_candidates.npz) (archive "
+        f"format {ARCHIVE_FORMAT_VERSION}, manifest section `compatibility`). Computation took {compat.seconds:.1f} s on the CPU. The "
+        "figures (captions at the end of the report) show raw median ranks.", "",
         space_text,
     ]
     reporter.prose(COMPATIBILITY_TITLE, "\n".join(text))
+
+    def zero_label(i, c):
+        g = groups[i]
+        if c == "per_cell":
+            return f"cell {g.cell}"
+        if c == "per_window_position":
+            return f"window start {g.chunk * step_s:g} s"
+        return f"cell {g.cell} window start {g.chunk * step_s:g} s"
+
     rows = []
     for sp in all_spaces:
       for kind in result.coverage:
-        kname = condition_display(kind); cells = [int(c) for c in result.coverage[kind]["cells"]]
+        kname = condition_display(kind)
         for set_name, chunks in result.window_sets.items():
             for c in CONSTRUCTIONS:
                 idx = [i for i, g in enumerate(groups) if g.kind == kind and g.window_set == set_name and g.construction == c]
+                if c not in SCOPES_BY_CONSTRUCTION[SCOPE_CONSTRUCTION]:
+                    rows.append([f"`{sp.label}`", kname, set_name, f"{display_name(c, short=True)} (`{c}`)", "-", "0", str(len(idx)), "-",
+                                 "not applicable (no same-level peer; uniform selection remains available)", "-"])
+                    continue
                 st = sorted(set(sp.status[i] for i in idx))
+                n_mat = 1 if len(idx) >= 2 else 0
                 zero_ids = [i for i in idx if sp.status[i] == "computed" and sp.score[i] == 0.0]
-                if c == "per_cell":
-                    n_mat, refs = (1 if len(cells) >= 2 else 0), f"{len(cells) - 1}"
-                    avail = "computed" if st == ["computed"] else "unavailable: one included cell (insufficient_peers)"
-                elif c == "per_cell_window":
-                    n_mat, refs = (len(cells) if len(chunks) >= 2 else 0), f"{len(chunks) - 1}"
-                    avail = "computed" if st == ["computed"] else "unavailable: no other selected window within a cell (insufficient_peers)"
-                else:
-                    n_mat, refs, avail = 0, "-", "not applicable (no rank policy)"
-                if c in RANK_SCORED_CONSTRUCTIONS and n_mat:
-                    zl = ", ".join(f"cell {groups[i].cell}" + (f" window start {groups[i].chunk * step_s:g} s" if c == "per_cell_window" else "")
-                                   for i in zero_ids[:12])
+                avail = "computed" if st == ["computed"] else f"unavailable: a population of {len(idx)} group has no peer (insufficient_peers)"
+                if n_mat:
+                    zl = ", ".join(zero_label(i, c) for i in zero_ids[:12])
                     zeros = f"{len(zero_ids)}" + (f" ({zl}{'; …' if len(zero_ids) > 12 else ''})" if zero_ids else "")
                 else:
                     zeros = "-"
-                rows.append([f"`{sp.label}`", kname, set_name, f"{display_name(c, short=True)} (`{c}`)", str(n_mat), str(len(idx)),
-                             refs if n_mat else "-", avail, zeros])
-    reporter.table(f"{COMPATIBILITY_TITLE}: scope and availability",
-                   ["rank space", "condition", "window set", "grouping", "matrices", "candidates", "references per candidate", "status",
-                    "zero scores (centrality outcomes, not defective recordings)"], rows,
-                   note="a matrix is one block of candidates against references (per_cell: one block over the included cells; "
-                        "per_cell_window: one block per cell over its selected windows); 'unavailable' keeps the groups with no score "
-                        f"and zero references, never a fabricated 0 or 1; rank spaces: " + "; ".join(f"`{sp.label}` = {', '.join(sp.coordinates)}" for sp in all_spaces)
-                        + f".{kind_notes}")
+                rows.append([f"`{sp.label}`", kname, set_name, f"{display_name(c, short=True)} (`{c}`)", SCOPE_CONSTRUCTION, str(n_mat), str(len(idx)),
+                             str(len(idx) - 1) if n_mat else "-", avail, zeros])
+    reporter.table(f"{COMPATIBILITY_TITLE}: aggregation, comparison scope and availability",
+                   ["rank space", "condition", "window set", "aggregation", "comparison scope", "matrices", "candidates",
+                    "references per candidate", "status", "zero scores (centrality outcomes, not defective recordings)"], rows,
+                   note="a matrix is one block of candidates against references: the complete population of the aggregation in that "
+                        "condition and window set (the included cells; the selected window positions; every cell–window group), so "
+                        "'references per candidate' is the population size minus the candidate itself; 'unavailable' keeps the groups with "
+                        "no score and zero references, never a fabricated 0 or 1; rank spaces: "
+                        + "; ".join(f"`{sp.label}` = {', '.join(sp.coordinates)}" for sp in all_spaces) + f".{kind_notes}")
     if not reporter.dump:
         return
     n_draws = coll.n_draws
     for sp in all_spaces:
       compat = sp
       sfx = "" if sp.label == RANK_SPACE_ALL else f"_{sp.label}"
+      tag = f" [rank space {sp.label}]" if sfx else ""
       space_note = "" if sp.label == RANK_SPACE_ALL else f" Rank space `{sp.label}`: distances over {', '.join(sp.coordinates)} only."
+      by = {(b.kind, b.window_set, b.construction): b for b in compat.blocks}
       for kind in result.coverage:
         kname = condition_display(kind); cells = [int(c) for c in result.coverage[kind]["cells"]]; cov = result.coverage[kind]
         for set_name, chunks in result.window_sets.items():
@@ -2087,17 +2312,18 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
             sub = scope_line(kname, cov, n_product_cells[kind], n_product_windows[kind], set_name=set_name, chunks=chunks,
                              geometry=geom, n_draws=n_draws, window_seconds=ws)
             phrase = window_set_phrase(set_name, chunks, geom, window_seconds=ws)
-            cell_blocks = [b for b in compat.blocks if b.kind == kind and b.window_set == set_name and b.construction == "per_cell"]
-            if cell_blocks:
-                blk = cell_blocks[0]
+            times = [w * step_s for w in chunks]
+            # ---- one SGM per cell: the cell-to-cell matrix -----------------------------------------------------
+            blk = by.get((kind, set_name, "per_cell"))
+            if blk is not None:
                 order = np.argsort([groups[int(i)].cell for i in blk.group_index], kind="stable")
                 ids = [groups[int(blk.group_index[o])].cell for o in order]
                 R = blk.ranks[np.ix_(order, order)]; S = compat.score[blk.group_index[order]]
                 n_zero = int(np.sum(S == 0))
                 reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_cells{sfx}",
-                                     fig_cells(R, ids, S, title="One SGM vector per cell: posterior compatibility" + (f" [rank space {sp.label}]" if sfx else ""),
-                                               subtitle=sub),
+                                     fig_cells(R, ids, S, title="One SGM vector per cell: posterior compatibility" + tag, subtitle=sub),
                                      caption=f"{sub}. Rows: candidate cell; columns: reference cell (stable numeric order, every cell retained). "
+                                             f"Comparison scope: every cell against the other {len(ids) - 1} included cells. "
                                              f"Each reference is the other cell's retained cloud, the equal-window mixture of its selected windows "
                                              f"({len(chunks)} window{'s' if len(chunks) != 1 else ''} x {n_draws:,} draws), with that cell's own SGM; color = the "
                                              f"share of the reference's draws strictly farther from its SGM than the candidate SGM, distances in estimator "
@@ -2105,70 +2331,110 @@ def _report_compatibility(reporter, result, compat, coll, request, out_dir, cond
                                              f"each reference has its own spread. Right strip: the row median over the other cells, the raw score on the same 0–1 "
                                              f"scale, not a sampling probability" + (f"; {n_zero} cell(s) score exactly zero (a centrality outcome, not a data "
                                              f"quality verdict)" if n_zero else "") + f".{space_note}{kind_notes}")
-            elif len(cells) < 2:
+            else:
                 reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: cell matrix",
                                "Not computed: fewer than two included cells, so no cell has a reference cell (insufficient_peers).")
-            if len(chunks) > 1:
-                win_blocks = {b.cell: b for b in compat.blocks if b.kind == kind and b.window_set == set_name and b.construction == "per_cell_window"}
-                times = [w * step_s for w in chunks]
-                S = np.full((len(cells), len(chunks)), np.nan)
-                for a, c in enumerate(cells):
-                    blk = win_blocks[c]
-                    pos = {groups[int(i)].chunk: k for k, i in enumerate(blk.group_index)}
-                    S[a] = [compat.score[blk.group_index[pos[w]]] for w in chunks]
+            # ---- one SGM per window position: the position-to-position matrix --------------------------------------
+            blk = by.get((kind, set_name, "per_window_position"))
+            if blk is not None:
+                order = np.argsort([groups[int(i)].chunk for i in blk.group_index], kind="stable")
+                ids = [f"{groups[int(blk.group_index[o])].chunk * step_s:g}" for o in order]
+                R = blk.ranks[np.ix_(order, order)]; S = compat.score[blk.group_index[order]]
                 n_zero = int(np.sum(S == 0))
-                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_windows{sfx}",
-                                     fig_windows(S, cells, times, title="One SGM vector per cell–window: median compatibility ranks"
-                                                 + (f" [rank space {sp.label}]" if sfx else ""), subtitle=sub, window_seconds=ws),
-                                     caption=f"{sub}. Rows: cells in stable order; columns: the selected window start times. Color = the within-cell "
-                                             f"median compatibility rank of the cell–window SGM: its references are the other {len(chunks) - 1} selected "
-                                             f"windows of that same cell, each with its own cloud ({n_draws:,} draws) and SGM, and nothing outside the cell. "
-                                             f"Zeros stay visible as the darkest color and are centrality outcomes, not data failures" + (f" ({n_zero} here)" if n_zero else "")
-                                             + f". Each cell's full window-to-window matrix is in the linked atlas (compatibility/{kind}/{set_name}/windows{sfx}/index.md)."
-                                             f"{space_note}{kind_notes}")
-                _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, times, win_blocks, groups, compat, fig_atlas,
-                             folder_name=f"windows{sfx}", space_note=space_note)
+                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_positions{sfx}",
+                                     fig_cells(R, ids, S, title="One SGM vector per window position: posterior compatibility" + tag, subtitle=sub,
+                                               entity="window position (start, s)", entities="window positions"),
+                                     caption=f"{sub}. Rows: candidate window position; columns: reference window position (labeled by window start in "
+                                             f"seconds). Comparison scope: every position against the other {len(ids) - 1} selected positions. Each "
+                                             f"reference is the other position's retained cloud, the equal-cell mixture of that window over the included "
+                                             f"cells ({len(cells)} cell{'s' if len(cells) != 1 else ''} x {n_draws:,} draws), with that position's own SGM; "
+                                             f"color and strip as in the cell matrix. The row median is a raw score, not a sampling probability"
+                                             + (f"; {n_zero} position(s) score exactly zero (a centrality outcome)" if n_zero else "")
+                                             + f".{space_note}{kind_notes}")
             else:
-                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: window scores",
-                               f"Not computed: no other selected window within a cell ({phrase}); the within-cell window scores are unavailable "
-                               "(insufficient_peers) and no heat map of artificial zeros is drawn. The per-cell scores across cells remain available above.")
+                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: window-position matrix",
+                               f"Not computed: one selected window position ({phrase}) has no peer position (insufficient_peers); the single "
+                               "representative remains selectable with uniform probability.")
+            # ---- one SGM per cell–window: ONE population matrix, its score overview and its same-cell blocks -----
+            blk = by.get((kind, set_name, "per_cell_window"))
+            if blk is not None and len(chunks) > 1:
+                pos = {(groups[int(i)].cell, groups[int(i)].chunk): k for k, i in enumerate(blk.group_index)}
+                order = np.asarray([pos[(c, w)] for c in cells for w in chunks])
+                R = blk.ranks[np.ix_(order, order)]; S = compat.score[blk.group_index[order]]
+                N = order.size; W = len(chunks); n_zero = int(np.sum(S == 0))
+                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_population{sfx}",
+                                     fig_population(R, cells, W, S, title=f"One SGM vector per cell–window: the complete population matrix "
+                                                    f"({N} x {N})" + tag, subtitle=sub),
+                                     caption=f"{sub}. ONE matrix over the complete cell–window population of this condition and window set: {N} "
+                                             f"candidates (rows) against the same {N} groups as references (columns), ordered by cell in stable numeric "
+                                             f"order and, within a cell, by window start; thin lines mark the cell boundaries and the labels name the "
+                                             f"cells. Comparison scope: every cell–window SGM against the other {N - 1} cell–window groups, each "
+                                             f"reference one window's own cloud ({n_draws:,} draws) with its own SGM. The {W} x {W} blocks on the "
+                                             f"diagonal are the comparisons between windows of the same cell: {W - 1} of each candidate's {N - 1} "
+                                             f"references, part of this one population and not separate matrices. Color = the share of the reference's "
+                                             f"draws strictly farther from its SGM than the candidate SGM; the self comparison is gray (excluded). Right "
+                                             f"strip: the row median over the other {N - 1} groups, the raw score, not a sampling probability"
+                                             + (f"; {n_zero} group(s) score exactly zero (a centrality outcome, not a data-quality verdict)" if n_zero else "")
+                                             + f".{space_note}{kind_notes}")
+                Sg = S.reshape(len(cells), W)
+                reporter.save_figure(f"aggregation_{kind}_{set_name}_compatibility_windows{sfx}",
+                                     fig_windows(Sg, cells, times, title="One SGM vector per cell–window: median compatibility ranks over the complete "
+                                                 "population" + tag, subtitle=sub, window_seconds=ws),
+                                     caption=f"{sub}. Rows: cells in stable order; columns: the selected window start times. Color = the median "
+                                             f"compatibility rank of the cell–window SGM over the other {N - 1} cell–window groups of the condition and "
+                                             f"window set (the same scores as the strip of the population matrix, arranged by cell and window); the other "
+                                             f"windows of the same cell are {W - 1} of those references. Zeros stay visible as the darkest color and are "
+                                             f"centrality outcomes, not data failures" + (f" ({n_zero} here)" if n_zero else "")
+                                             + f". These are raw scores: the constructor's probabilities are these scores divided by their sum over the "
+                                             f"whole grid (times the component mass), with no mass reserved per cell. The same-cell blocks of the matrix "
+                                             f"are enlarged in the linked atlas (compatibility/{kind}/{set_name}/windows{sfx}/index.md)."
+                                             f"{space_note}{kind_notes}")
+                panels = [(c, R[a * W:(a + 1) * W, a * W:(a + 1) * W]) for a, c in enumerate(cells)]
+                _write_atlas(out_dir, kind, kname, set_name, phrase, sub, panels, {c: Sg[a] for a, c in enumerate(cells)}, times, compat, fig_atlas,
+                             folder_name=f"windows{sfx}", space_note=space_note, n_groups=N)
+            elif blk is not None:
+                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: cell–window population",
+                               f"Computed without a separate figure: with one selected window ({phrase}) the cell–window groups are the same "
+                               "windows, with the same clouds, as the per-cell groups, so their population matrix and scores equal the cell "
+                               "matrix above (both are computed on their own; the scores are in aggregation_groups.csv).")
+            else:
+                reporter.prose(f"{COMPATIBILITY_TITLE} [{kname}, window set {set_name}, rank space {sp.label}]: cell–window population",
+                               "Not computed: one cell–window group has no peer (insufficient_peers).")
 
 
-def _write_atlas(out_dir, kind, kname, set_name, phrase, sub, cells, chunks, times, win_blocks, groups, compat, fig_atlas,
-                 folder_name="windows", space_note=""):
-    """The complete within-cell matrix atlas: paged contact sheets (``ATLAS_CELLS_PER_PAGE`` cells per page, 3 x 4) under
-    ``compatibility/<kind>/<set>/<folder_name>/`` (``windows`` for the primary rank space, ``windows_<label>`` otherwise)
-    with an index mapping every cell to its page."""
+def _write_atlas(out_dir, kind, kname, set_name, phrase, sub, panels, cell_scores, times, compat, fig_atlas,
+                 folder_name="windows", space_note="", n_groups=0):
+    """The atlas of the cell–window population matrix's same-cell blocks: paged contact sheets (``ATLAS_CELLS_PER_PAGE``
+    cells per page, 3 x 4) under ``compatibility/<kind>/<set>/<folder_name>/`` (``windows`` for the primary rank space,
+    ``windows_<label>`` otherwise) with an index mapping every cell to its page. ``panels`` are ``[(cell, (W, W) block)]``
+    in cell order; ``cell_scores`` the cell's construction-wide scores by window."""
     folder = Path(out_dir) / "compatibility" / str(kind) / str(set_name) / str(folder_name)
     folder.mkdir(parents=True, exist_ok=True)
     sfx = "" if compat.label == RANK_SPACE_ALL else f"_{compat.label}"
     score_col = "compatibility_score" + sfx; pairs_csv = f"aggregation_compatibility{sfx}.csv"; block_arrays = f"{_space_prefix(compat.label)}_block_*"
-    panels = []
-    for c in cells:
-        blk = win_blocks[c]
-        order = np.argsort([groups[int(i)].chunk for i in blk.group_index], kind="stable")
-        panels.append((c, blk.ranks[np.ix_(order, order)]))
+    W = len(times)
     pages = [panels[i:i + ATLAS_CELLS_PER_PAGE] for i in range(0, len(panels), ATLAS_CELLS_PER_PAGE)]
-    lines = [f"# Within-cell compatibility matrices: {kname}, windows included: {phrase}" + (f", rank space `{compat.label}`" if sfx else ""), "", sub, "",
-             "Each panel is one cell's window-to-window distance-rank matrix: rows are candidate windows, columns reference windows "
-             "(both labeled by window start time in seconds); color is the share of the reference window's draws strictly farther from "
-             "its own SGM than the candidate window's SGM (0–1, one scale for every panel); the self comparison is gray (excluded). "
-             f"Row medians (the within-cell scores) are the `{score_col}` column of "
-             f"[aggregation_groups.csv](../../../../aggregation_groups.csv); every pairwise value is in "
-             f"[{pairs_csv}](../../../../{pairs_csv}); the matrices themselves are the "
+    lines = [f"# Same-cell blocks of the cell–window population matrix: {kname}, windows included: {phrase}" + (f", rank space `{compat.label}`" if sfx else ""), "", sub, "",
+             f"Each panel enlarges one {W} x {W} diagonal block of the complete {n_groups} x {n_groups} cell–window matrix: the "
+             "distance ranks between the windows of ONE cell (rows candidate windows, columns reference windows, both labeled by "
+             "window start time in seconds); color is the share of the reference window's draws strictly farther from its own SGM "
+             "than the candidate window's SGM (0–1, one scale for every panel); the self comparison is gray (excluded). These "
+             f"same-cell comparisons are {W - 1} of each candidate's {n_groups - 1} references under the construction-wide scope; "
+             "they are shown for legibility and are NOT the candidate's score, which is the median of its whole row of the "
+             f"population matrix (the `{score_col}` column of [aggregation_groups.csv](../../../../aggregation_groups.csv), listed "
+             f"per cell below). Every pairwise value is in [{pairs_csv}](../../../../{pairs_csv}); the full matrix is the "
              f"`{block_arrays}` arrays of [aggregation_candidates.npz](../../../../aggregation_candidates.npz). A zero is a "
              "centrality outcome, not a data-quality classification; raw-data notes and training-prior flags stay separate." + space_note
-             + " Back to the [report](../../../../report.md).", "", "| cell | page | within-cell scores by window start (s) |", "|---|---|---|"]
+             + " Back to the [report](../../../../report.md).", "",
+             f"| cell | page | scores over the complete population ({n_groups - 1} references) by window start (s) |", "|---|---|---|"]
     for p, page in enumerate(pages, start=1):
         for c, _ in page:
-            blk = win_blocks[c]
-            pos = {groups[int(i)].chunk: k for k, i in enumerate(blk.group_index)}
-            sc = ", ".join(f"{t:g}: {compat.score[blk.group_index[pos[w]]]:.3f}" for w, t in zip(chunks, times))
+            sc = ", ".join(f"{t:g}: {s:.3f}" for t, s in zip(times, cell_scores[c]))
             lines.append(f"| {c} | [page_{p:02d}.png](page_{p:02d}.png) | {sc} |")
     lines += ["", "## Pages", ""]
     for p, page in enumerate(pages, start=1):
         first, last = page[0][0], page[-1][0]
-        fig = fig_atlas(page, times, title=f"Within-cell compatibility matrices, page {p} of {len(pages)}: cells {first} to {last}"
+        fig = fig_atlas(page, times, title=f"Same-cell blocks of the cell–window matrix, page {p} of {len(pages)}: cells {first} to {last}"
                         + (f" [rank space {compat.label}]" if sfx else ""), subtitle=sub)
         fig.savefig(str(folder / f"page_{p:02d}.png"), dpi=150)
         lines += [f"### Page {p}: cells " + ", ".join(str(c) for c, _ in page), "", f"![page_{p:02d}](page_{p:02d}.png)", ""]

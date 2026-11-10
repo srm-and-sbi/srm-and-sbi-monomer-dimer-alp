@@ -1,0 +1,29 @@
+# REVIEW Nuisance_DLI spec PROPOSALCW4 (2026-11-10; not adopted, not for generation): one SGM per cell and 2 s window over all ten windows,
+# posterior_rank_median over mu_r, sigma_r, mu_pc, sigma_pc with rank_scope construction (every representative against the other 599,
+# normalized over all 600, no reserved cell mass); bleaching and flicker overridden exactly as in RANK4 (reasons below, verbatim).
+# The adopted RANK4 (within-cell scope) and the historical fixed reference SEL are unchanged.
+
+[block]
+posterior_sample_pool_choice = "empirical_representatives"
+candidate_archive = "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment_COHORT60RANKSR4/aggregation_candidates.npz"
+candidate_archive_sha256 = "179617f2665504a9e0c1662bc6c135279833bb6d056d841bc00cdfedffb91b6f"
+rationale = "Review proposal PROPOSALCW4 (2026-11-10; NOT adopted, built for review only): one SGM representative per cell and 2 s window over all ten windows of the sixty INLB recordings (600 vectors), so that the between-cell and the within-recording variation of the effective imaging conditions across the full acquisition both enter the simulated population; member weighting posterior_rank_median under rank_scope construction: each representative's probability is proportional to the median cross-posterior distance rank of its SGM among the other 599 cell-window groups of the condition (the other windows of its own cell are nine of those references, with no separate treatment), normalized over all 600 representatives. This is consensus over the complete representative population of the aggregation; no cell keeps a reserved mass, so a cell whose windows lie away from the population receives less total probability, possibly zero (a majority-zero window receives exactly zero; both are sampling outcomes of the policy, documented, not data-quality verdicts). It revises the scope of the adopted RANK4 selection (within-cell ranks with equal cell mass), which stays unchanged under its own tag. The four spatial and brightness coordinates of each SGM are retained together; the bleaching probability is overridden by the recorded value 0.05 (empirically anchored for Fab, declared for InlB) and the flicker rate by the direct single-dye-equivalent reference of the committed derivation, because the estimator does not recover the former and only partially recovers the latter. One complete vector is sampled per synthetic 2 s video and held fixed during it. Member weights from the ranks over the four retained coordinates only (rank space spatial_brightness), so the weights rest on exactly the coordinates the final vectors carry."
+
+[[component]]
+source_experiment = "SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32"
+condition = "INLB"
+window_set = "all"
+grouping = "per_cell_window"
+statistic = "sgm"
+weight = 1.0
+member_weighting = "posterior_rank_median"
+rank_scope = "construction"
+rank_coordinates = ["mu_r", "sigma_r", "mu_pc", "sigma_pc"]
+
+[override.prob_photo_bleach]
+value = 0.05
+reason = "declared shared-rate assumption: the same dye, illumination, camera settings and 100-frame reference interval as MET-FAB, so the Fab empirically anchored value 0.05 is adopted as the practical baseline in the absence of an InlB decline analysis (the lead, 2026-10-27; DETECTOR_WORKFLOW.md sec. 7.6). The estimator's own coordinate (median 0.100, MAP 0.120) is not retained: it does not recover the parameter (r 0.02). No measurement on the InlB recordings supports the value."
+
+[override.lambda_rate]
+value = 4.7
+reason = "direct single-dye-equivalent reference: lambda_rate shape-matched to the normalized ln-brightness autocorrelation of the MET-INLB single-molecule localization tables (61,884 tracks, public accession S-BSST712; tau_corr(1/e) about 0.145 s), the matched-length model arm absorbing the finite-track detrending bias (DETECTOR_WORKFLOW.md sec. 6.5; the committed derivation Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Flicker_Rate_Derivation.md). Assumptions that travel with the value: one dye per trace with the logarithm taken per trace (a multi-dye spot's ln-intensity is not a single-dye OU process and its autocorrelation also depends on sigma_pc), so this is a reference under the single-emitter assumption, not a calibration of dye multiplicity or of the image-analysis chain; mu_pc and sigma_pc cancel in the single-dye normalized autocorrelation. The adopted neural estimator's per-window coordinate (median 2.283, partially recovered, MAE 0.206 dex, r 0.53, conditioned on the extrapolated PSF-width estimate) is not retained. The condition-specific localization-table references, 5.1 per second for FAB and 4.7 for INLB, are similar within the reported cell-to-cell scatter; we use them as empirically anchored working overrides under the single-emitter model. Their agreement does not establish unbiased per-dye recovery; observation-chain effects and the single-dye approximation remain limitations. The neural SEL value 2 remains a documented alternative; the factor-of-four difference between the neural values is recorded, not explained, and does not by itself show them wrong. This is a selection from existing evidence, not a new measurement or a validation of the derivation."

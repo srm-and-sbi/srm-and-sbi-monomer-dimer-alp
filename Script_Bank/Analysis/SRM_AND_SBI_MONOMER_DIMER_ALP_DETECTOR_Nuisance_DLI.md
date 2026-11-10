@@ -57,39 +57,49 @@ choices once: which windows are included, and which samples are pooled; `opening
 per-cell-window and per-position equal global, and the opening figures name these equivalences. It links
 these supporting files in its own output directory:
 
-- `aggregation_candidates.npz` (format 3): group vectors, quantiles, identities, methods, source contract, target
+- `aggregation_candidates.npz` (format 4): group vectors, quantiles, identities, methods, source contract, target
   binding, and the posterior-compatibility data (per-group median score, status and reference count; the
-  rank-matrix blocks; the protocol `sgm_distance_rank_v1`) of the primary rank space `all` (every coordinate) and
-  of every additional rank coordinate space Experiment was asked for (`compatibility_<label>_*`, manifest section
-  `compatibility.rank_spaces` with each space's coordinates and restricted scale).
+  rank-matrix blocks; the protocol `sgm_distance_rank_v2` with the archive's comparison scope, `construction`) of
+  the primary rank space `all` (every coordinate) and of every additional rank coordinate space Experiment was
+  asked for (`compatibility_<label>_*`, manifest section `compatibility.rank_spaces` with each space's coordinates
+  and restricted scale).
 - `aggregation_groups.csv`: each group's physical values, source draw identity, compatibility score, status,
   reference count and the keys on which the SGM itself lies outside the training prior; one further
   score/status/reference-count triple per additional rank space.
 - `aggregation_comparison.csv`: representative-distribution summaries by grouping, set, statistic, and parameter.
-- `aggregation_compatibility.csv`: every pairwise distance rank (candidate, reference, reference draws, rank) of
-  the primary space; `aggregation_compatibility_<label>.csv` the same for an additional space.
+- `aggregation_compatibility.csv`: every pairwise distance rank (candidate, reference, reference draws, rank,
+  reference scope) of the primary space; `aggregation_compatibility_<label>.csv` the same for an additional space.
 - `aggregation_manifest.json`: source identities and checksums, coverage, methods, the compatibility block map,
   and archive checksum.
-- `figures/aggregation_*`: the figures embedded in the report, including the compatibility cell matrix with its
-  score strip and the window-score overview per condition and window set.
-- `compatibility/<condition>/<set>/windows/index.md`: the complete atlas of every cell's window-to-window matrix,
-  twelve cells per page, linked once from the report.
+- `figures/aggregation_*`: the figures embedded in the report, including, per condition and window set, the
+  compatibility cell matrix and the window-position matrix with their score strips, the complete cell–window
+  population matrix (one matrix over all cell–window groups) and the cell-by-window overview of its scores.
+- `compatibility/<condition>/<set>/windows/index.md`: the atlas that enlarges the same-cell blocks of the
+  cell–window population matrix, twelve cells per page, linked once from the report.
 
 **Posterior compatibility.** The subsection "Posterior compatibility of SGM representatives" reports, for one SGM
-per cell and one SGM per cell–window, how central each SGM is relative to the posterior clouds of its peers: the
-distance rank R_ij (the share of reference j's retained draws strictly farther from reference j's own SGM than the
-candidate SGM is, distances in estimator coordinates divided by the prior widths; rows candidates, columns
-references, self comparison excluded by identity, generally asymmetric) and the candidate's score, the ordinary
-median of its row over the other references. References are the other included cells of the same condition and
-window set (each its equal-window cloud mixture) or the other selected windows of the same cell. A median score of
-zero means that a majority of the candidate's reference ranks are zero; some references may still assign it a high
-rank. A zero score is a valid centrality outcome of a valid recording and differs from an unavailable score (a
-singleton reference set, `insufficient_peers`); it is not a data-quality classification. The archive reader checks
-the complete reference context of every block (one block per eligible context over exactly its peer population,
-reference draw counts equal to the referenced groups' pooled draws, the protocol scale equal to the archive's) and
-refuses an archive whose blocks were split, trimmed or rescaled. Under `opening` the per-cell score exists while
-the within-cell window score does not, although the vectors coincide. Experiment reports raw median ranks only;
-the definitions and equations are in DETECTOR_WORKFLOW.md §7.2.
+per cell, one SGM per window position and one SGM per cell–window, how central each SGM is relative to the
+posterior clouds of its peers: the distance rank R_ij (the share of reference j's retained draws strictly farther
+from reference j's own SGM than the candidate SGM is, distances in estimator coordinates divided by the prior
+widths; rows candidates, columns references, self comparison excluded by identity, generally asymmetric) and the
+candidate's score, the ordinary median of its row over the other references. Experiment computes the comparison
+scope `construction`: the references of a representative are ALL the other representatives of its own
+aggregation in the same condition and window set (the other included cells, each its equal-window cloud mixture;
+the other selected window positions, each its equal-cell cloud mixture; every other cell–window group, each one
+window's own cloud, the other windows of the candidate's own cell included). The cell–window matrix is therefore
+one population matrix (600 x 600 for 60 cells and ten windows), not a set of per-cell matrices; its small
+diagonal blocks, enlarged in the atlas, are the same-cell comparisons and are a small part of each candidate's
+references. A median score of zero means that a majority of the candidate's reference ranks are zero; some
+references may still assign it a high rank. A zero score is a valid centrality outcome of a valid recording and
+differs from an unavailable score (a population of one group, `insufficient_peers`); it is not a data-quality
+classification. The archive reader determines the comparison scope from the archive, checks the complete
+reference context of every block (one block of that scope per eligible context over exactly its peer population,
+reference draw counts equal to the referenced groups' pooled draws, the protocol scale equal to the archive's)
+and refuses an archive whose blocks were split, trimmed, rescaled or relabeled. Archives of formats 2 and 3 hold
+the scope `within_cell` (each cell–window SGM against the other windows of its own cell; window positions
+unscored) and are read under that meaning. Under `opening` the per-cell and the cell–window groups are the same
+windows, so both are scored and agree, while the single window position has no peer. Experiment reports raw
+median ranks only; the definitions and equations are in DETECTOR_WORKFLOW.md §7.2.
 
 The source-uncertainty table names the first requested multi-position set it summarizes. The archive retains
 quantiles for every other group. Ranges over representatives describe empirical dispersion, not posterior
@@ -178,7 +188,8 @@ The spec uses the following fields:
 | `[[component]].grouping` | One of the four grouping IDs above |
 | `[[component]].statistic` | `"sgm"` by default, or explicitly `"median"` |
 | `[[component]].weight` | Non-negative component mass; all component weights sum to one |
-| `[[component]].member_weighting` | `"uniform"` (default: every member receives alpha_k / n_k) or `"posterior_rank_median"` (consensus weighting from Experiment's compatibility scores; requires `statistic = "sgm"`, grouping `per_cell` or `per_cell_window`, and a format-2 or later archive) |
+| `[[component]].member_weighting` | `"uniform"` (default: every member receives alpha_k / n_k) or `"posterior_rank_median"` (consensus weighting from Experiment's compatibility scores; requires `statistic = "sgm"`, a grouping with peers (`per_cell`, `per_window_position`, `per_cell_window`), an explicit `rank_scope` and an archive that holds that grouping's scores under that scope) |
+| `[[component]].rank_scope` | Required with `posterior_rank_median`, not allowed otherwise: `"construction"` (scores against all the other representatives of the grouping, condition and window set; normalized over the whole component) or `"within_cell"` (`per_cell_window` only: scores against the other windows of the same cell, equal cell mass). The scope is a property of the comparison population the archive recorded for that grouping's scores, and the field must name it; it is not tied to a format number as such (see "Comparison scope and archive format" below) |
 | `[[component]].rank_coordinates` | Optional, with `posterior_rank_median` only: the parameter keys of the archive rank space that supplies the scores (default: every coordinate, the space `all`); the archive must hold a space over exactly those keys |
 | `[override.<KEY>].value` and `.reason` | Optional explicit physical value and the recorded justification for applying it to every vector |
 
@@ -188,20 +199,61 @@ collections would give larger collections more mass solely because of their row 
 used here.
 
 Under `posterior_rank_median`, a member's probability is proportional to the median compatibility rank s of its
-SGM. For one SGM per cell, p = alpha_k s_c / sum of the component's cell scores. For one SGM per cell–window, the
-score is normalized within each cell and every included cell keeps the equal mass alpha_k / |C_k|: p = (alpha_k /
-|C_k|) s_cw / sum of that cell's selected-window scores. Normalizing all window scores in one step would give
-recordings with larger score totals more mass; that is not this policy, and cell-level and within-cell weights
-are never multiplied together. A zero score is exactly zero probability: the member stays in the record and the
+SGM, and the component names the comparison scope of those scores (`rank_scope`). The aggregation does not imply
+the scope. Under `"construction"` the scores compare every representative with all the other representatives of
+its grouping in the same condition and window set, and they are normalized over the complete component: p_i =
+alpha_k s_i / sum of the component's scores. For one SGM per cell–window over 60 cells and ten windows each
+representative has 599 references, the other nine windows of its own cell among them, and no cell keeps a
+reserved mass: a cell's total is the sum of its representatives' probabilities and may be small or exactly zero.
+Under `"within_cell"` (one SGM per cell–window only) the scores compare each representative with the other
+selected windows of its own cell, and every included cell keeps the equal mass alpha_k / |C_k|: p = (alpha_k /
+|C_k|) s_cw / sum of that cell's selected-window scores. The two are different selection targets with different
+reference populations; the scope must be the one the archive computed the grouping's scores under, a mismatch is
+refused, and one scope's scores are never renormalized into the other's. A zero score is exactly zero probability: the member stays in the record and the
 exports, nothing is floored, clipped or removed, and the report counts the zero rows as sampling outcomes of the
-selected policy, not as defective recordings. A component whose every score is zero, or any included cell whose
-every selected-window score is zero, is refused rather than dropped or redistributed; an unknown policy, a missing
-or unavailable score (a singleton reference set), a marginal-median statistic or an unsupported grouping are
-explicit errors with no fallback to uniform. A format-1 archive (written before the compatibility data) still
+selected policy, not as defective recordings. A component whose every score is zero (under `"within_cell"`: any
+included cell whose every selected-window score is zero) is refused rather than dropped or redistributed; under
+`"construction"` a single cell whose representatives all score zero is valid and carries zero total mass. An
+unknown policy, a missing or mismatched scope, a missing or unavailable score (a population of one group), a
+marginal-median statistic or a grouping without peers (the dataset representative, selectable with uniform
+probability) are explicit errors with no fallback to uniform. A format-1 archive (written before the compatibility data) still
 supplies a uniform selection; rank weighting needs the CPU regeneration of the Experiment report. The scores
 describe the original SGM candidates; explicit overrides transform the stored rows afterwards and are shown. The
 consensus-weighted distribution need not preserve the original proportions of acquisition batches; that is a
 consequence to describe, not an automatic reason to reject a selection.
+
+**Comparison scope and archive format.** What a specification names with `rank_scope` is the reference population
+the archive's scores of that grouping were computed against, as the archive records it:
+
+| Archive | `per_cell` scores | `per_window_position` scores | `per_cell_window` scores |
+|---|---|---|---|
+| Comparison scope `construction` (format 4) | `"construction"`: against all the other cells | `"construction"`: against all the other positions | `"construction"`: against all the other cell–window groups |
+| Comparison scope `within_cell` (formats 2 and 3) | `"construction"`: against all the other cells | none (uniform only) | `"within_cell"`: against the other windows of the same cell |
+
+One SGM per cell is therefore selected with `rank_scope = "construction"` from either kind of archive: its scores
+already compare every cell with all the other cells in both, with the same reference population and the same
+values. The construction-wide weighting of cell–window representatives and of window positions needs scores that
+were computed against those complete populations, which only an archive of the `construction` scope holds; an
+archive of the other scope is never relabeled or renormalized to supply them, and the build is refused with the
+archive's format, protocol and scope named.
+
+**Specifications written before `rank_scope` existed.** The field is required and has no default, so that the scope
+is never implied. A built artifact is unaffected: it loads and samples exactly as before, whatever its age. A
+rank-weighted specification file written earlier is refused until it names its scope. To rebuild or dry-run such a
+selection, add the field to a COPY of the specification, under its `[[component]]` table, and leave the stored
+specification as the historical record it is:
+
+```toml
+[[component]]
+# ... source_experiment, condition, window_set, grouping = "per_cell_window", statistic, weight as stored ...
+member_weighting = "posterior_rank_median"
+rank_scope = "within_cell"          # the scope of a cell–window selection built from a format-2 or format-3 archive
+rank_coordinates = ["mu_r", "sigma_r", "mu_pc", "sigma_pc"]
+```
+
+This is the migration of the adopted `RANK4` specifications (one SGM per cell and window, format-3 archives): with
+that one line a copy reproduces the stored `RANK4` probabilities exactly. A per-cell selection written earlier takes
+`rank_scope = "construction"`.
 
 The scores come from one rank coordinate space of the archive. By default they are the ranks over every
 coordinate (the space `all`); `rank_coordinates` names a list of parameter keys and selects the archive space over
@@ -256,17 +308,23 @@ The output paths follow the active machine profile, under `Posit`:
 - `<alias>_<timing>_<TAG>_Nuisance_DLI_Analysis/report.md`: the selection table (source archive and checksum,
   condition, window set, grouping, SGM statistic, component mass, member policy, members / positive / zero, the
   member probability range and the effective number of representatives 1/sum(p_i^2) with its normalization scope,
-  a concentration measure and not a count of independent experiments), consolidation, overrides, the weighted
-  marginal summary, the stored sampling probabilities beside the equal-member baseline (`representatives_probabilities`;
-  a cell-by-window grid of each row's share of its cell's mass with the cell masses beside it for a single
-  non-duplicated selection of one SGM per cell and window, labeled by source cell for a single non-duplicated
-  per-cell selection, otherwise by stored row), the six-parameter
+  a concentration measure and not a count of independent experiments; for a rank-weighted component the comparison
+  scope, its reference population, the rank space and the normalization rule), consolidation, overrides, the exact
+  marginal summary and the exact marginal histograms (`nuisance_marginals`, with the bin masses in
+  `nuisance_marginal_histograms.csv`: probability mass per bin in physical units, computed from the stored vectors
+  and their probabilities with deterministic bins shared by the selected distribution and the equal-member
+  baseline, an overridden coordinate drawn as a point mass, nothing resampled; the sampled draws of the report
+  serve its sampler check only), the stored sampling probabilities beside the equal-member baseline
+  (`representatives_probabilities`; a cell-by-window grid of the stored row probabilities themselves with every
+  cell's total beside it for a single non-duplicated selection of one SGM per cell and window, whose totals are
+  also tabulated and exported as `representatives_cell_totals.csv`; labeled by source cell for a single
+  non-duplicated per-cell selection, otherwise by stored row), the six-parameter
   CDF comparison of the selected probabilities against that baseline (`representatives_marginals`; the baseline uses
   the same components, component masses, duplicate consolidation and overrides with uniform members, so the
   comparison isolates the member weighting), the components view (`representatives_components`) and the joint
   projections (`representatives_joint`), beside `representatives_members.csv` (per member: identities, the
-  primary-space score, status and references, the rank space and the score the policy used, contribution, stored
-  row) and `representatives_rows.csv` (per stored row: probability,
+  primary-space score, status and references, the rank space, the rank scope and the score the policy used,
+  contribution, stored row) and `representatives_rows.csv` (per stored row: probability,
   baseline probability, memberships by the recorded stored-row identity, the stored estimator coordinates
   `<key>_stored_log10` and the physical values `<key>_physical`). Every stored row keeps its memberships even when
   an override makes distinct rows identical; the report checks that the contributions add up to each row's

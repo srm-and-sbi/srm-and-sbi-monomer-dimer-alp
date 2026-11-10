@@ -1,0 +1,262 @@
+{
+ "condition": "INLB",
+ "tag": "PROPOSALCW4",
+ "status": "review product; not adopted; not in the Posit directory",
+ "artifact": {
+  "path": "/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/Special_Analyses/NUISANCE_DLI_PRODUCTION_PROPOSAL_2026-11-09/WEIGHTING_REVISION_2026-11-10/INLB/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_PROPOSALCW4_Nuisance_DLI.npz",
+  "sha256": "3eb66dc85238edeb24872dae15ba3c632495504c2552bba558eaee43089e9b1f",
+  "spec": "/home/mars-fias/Documents/Projects/RCL_Agent_Projects/srm-and-sbi/Special_Analyses/NUISANCE_DLI_PRODUCTION_PROPOSAL_2026-11-09/WEIGHTING_REVISION_2026-11-10/INLB/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_PROPOSALCW4_Nuisance_DLI_Spec.toml",
+  "spec_sha256": "13a7d7691ff5e3587107e3ca58158483cccd9b7645aa43a880bebd731d00d154"
+ },
+ "archive": {
+  "path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment_COHORT60RANKSR4/aggregation_candidates.npz",
+  "sha256": "179617f2665504a9e0c1662bc6c135279833bb6d056d841bc00cdfedffb91b6f",
+  "format": 4,
+  "comparison_scope": "construction",
+  "protocol": "sgm_distance_rank_v2"
+ },
+ "selection": {
+  "grouping": "per_cell_window",
+  "window_set": "all",
+  "member_weighting": "posterior_rank_median",
+  "rank_scope": "construction",
+  "reference_population": "every other cell\u2013window group of the same condition and window set, the other windows of the candidate's own cell included; each reference is one window's own cloud",
+  "rank_space": "spatial_brightness",
+  "rank_coordinates": [
+   "mu_r",
+   "sigma_r",
+   "mu_pc",
+   "sigma_pc"
+  ],
+  "references_per_member": [
+   599
+  ],
+  "normalization_rule": "weight * score / sum of the component's scores",
+  "sum_of_scores": 16.077,
+  "zero_mass_cells": [],
+  "rank_coordinates_disjoint_from_overrides": true,
+  "overrides": {
+   "prob_photo_bleach": 0.05,
+   "lambda_rate": 4.7
+  }
+ },
+ "loader_validation": {
+  "loaded_through": "detector_nuisance_dli.require_nuisance_dli(<this folder>, alias, 2S_50FPS, PROPOSALCW4)",
+  "choice": "empirical_representatives",
+  "stored_rows": 600,
+  "draws": 20000,
+  "draws_are_stored_positive_probability_rows": true,
+  "zero_rows_drawn": 0,
+  "max_abs_frequency_minus_probability": 0.001329921627169248
+ },
+ "against_exploratory_calculation": {
+  "scores_identical": true,
+  "max_abs_probability_difference": 1.734723475976807e-18
+ },
+ "against_rank4": {
+  "rank4_artifact": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_RANK4_Nuisance_DLI.npz",
+  "rank4_sha256": "50a7678ea858aa10f5df950f70d4301278059a10981c208ca3b0996245e661c8",
+  "rank4_unchanged_after_build": true,
+  "rank4_scope": "within_cell",
+  "same_stored_vectors_and_identities": true,
+  "overrides_identical": true,
+  "total_variation_distance": 0.4082619420593304,
+  "zero_rows_in_both": 17,
+  "zero_only_here": 47,
+  "zero_only_in_rank4": 7
+ },
+ "distributions": {
+  "construction_wide_PROPOSALCW4": {
+   "probability_sum": 1.0,
+   "effective_rows": 317.9663016398907,
+   "zero_probability_rows": 64,
+   "max_row_probability": 0.0059028425701312445,
+   "opening_window_mass": 0.04876531691235928,
+   "window_mass_by_start_chunk": [
+    0.04876531691235928,
+    0.0732039559619332,
+    0.07110157367668099,
+    0.08169434596006718,
+    0.09419045841885924,
+    0.1090626360639423,
+    0.12886110592772287,
+    0.129601293773714,
+    0.12225539590719663,
+    0.14126391739752442
+   ],
+   "cell_total_min": 0.000665547054798781,
+   "cell_total_max": 0.045406481308701875,
+   "zero_total_cells": 0,
+   "effective_cells": 43.4105000937339,
+   "outside_prior_mass": 0.9693101946880638,
+   "outside_prior_by_key": {
+    "mu_r": 0.9693101946880638,
+    "sigma_r": 0.0,
+    "mu_pc": 0.03500653106922934,
+    "sigma_pc": 0.021813771225975,
+    "prob_photo_bleach": 0.0,
+    "lambda_rate": 0.0
+   },
+   "marginal_p05_median_p95_physical": {
+    "mu_r": [
+     2.019000572936657,
+     2.2229312617220915,
+     2.3340411630247067
+    ],
+    "sigma_r": [
+     0.354414265426677,
+     0.4072138228430878,
+     0.44745277908616626
+    ],
+    "mu_pc": [
+     103.12870726254977,
+     147.76680505687875,
+     212.42688105787644
+    ],
+    "sigma_pc": [
+     0.724348967390661,
+     0.8506610727453338,
+     0.9832436686350992
+    ],
+    "prob_photo_bleach": [
+     0.049999999999999996,
+     0.049999999999999996,
+     0.049999999999999996
+    ],
+    "lambda_rate": [
+     4.700000000000001,
+     4.700000000000001,
+     4.700000000000001
+    ]
+   }
+  },
+  "within_cell_RANK4": {
+   "probability_sum": 1.0,
+   "effective_rows": 380.0517048582569,
+   "zero_probability_rows": 24,
+   "max_row_probability": 0.00926829268292683,
+   "opening_window_mass": 0.011580066956469105,
+   "window_mass_by_start_chunk": [
+    0.011580066956469105,
+    0.0472713386628139,
+    0.08134810338981263,
+    0.11431240121371262,
+    0.12104071479736932,
+    0.14933244933903367,
+    0.1329163304527004,
+    0.12613288927537653,
+    0.11588294874425538,
+    0.10018275716845644
+   ],
+   "cell_total_min": 0.01666666666666666,
+   "cell_total_max": 0.01666666666666667,
+   "zero_total_cells": 0,
+   "effective_cells": 60.00000000000003,
+   "outside_prior_mass": 0.9386214438837415,
+   "outside_prior_by_key": {
+    "mu_r": 0.9386214438837415,
+    "sigma_r": 0.0,
+    "mu_pc": 0.18186330768581122,
+    "sigma_pc": 0.06575026242396348,
+    "prob_photo_bleach": 0.0,
+    "lambda_rate": 0.0
+   },
+   "marginal_p05_median_p95_physical": {
+    "mu_r": [
+     1.9631957002360378,
+     2.254448751830736,
+     2.3374757560763
+    ],
+    "sigma_r": [
+     0.3263746353984337,
+     0.4055910603597661,
+     0.44616106457740995
+    ],
+    "mu_pc": [
+     67.11703634373099,
+     143.1685246024605,
+     381.0035663844709
+    ],
+    "sigma_pc": [
+     0.6706848647844247,
+     0.8584836882107094,
+     1.0056622198059084
+    ],
+    "prob_photo_bleach": [
+     0.049999999999999996,
+     0.049999999999999996,
+     0.049999999999999996
+    ],
+    "lambda_rate": [
+     4.700000000000001,
+     4.700000000000001,
+     4.700000000000001
+    ]
+   }
+  },
+  "equal_member_baseline": {
+   "probability_sum": 1.0,
+   "effective_rows": 599.9999999999999,
+   "zero_probability_rows": 0,
+   "max_row_probability": 0.0016666666666666668,
+   "opening_window_mass": 0.09999999999999999,
+   "window_mass_by_start_chunk": [
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999,
+    0.09999999999999999
+   ],
+   "cell_total_min": 0.016666666666666666,
+   "cell_total_max": 0.016666666666666666,
+   "zero_total_cells": 0,
+   "effective_cells": 60.000000000000014,
+   "outside_prior_mass": 0.9466666666666668,
+   "outside_prior_by_key": {
+    "mu_r": 0.9466666666666668,
+    "sigma_r": 0.0033333333333333335,
+    "mu_pc": 0.20500000000000004,
+    "sigma_pc": 0.07833333333333331,
+    "prob_photo_bleach": 0.0,
+    "lambda_rate": 0.0
+   },
+   "marginal_p05_median_p95_physical": {
+    "mu_r": [
+     1.9731002313940647,
+     2.254448751830736,
+     2.3383558934556703
+    ],
+    "sigma_r": [
+     0.31162441923014095,
+     0.40301969043667035,
+     0.4452278059958872
+    ],
+    "mu_pc": [
+     65.13090348844848,
+     147.76680505687875,
+     468.7451885092012
+    ],
+    "sigma_pc": [
+     0.5344541199142318,
+     0.8506610727453338,
+     1.0117926951046077
+    ],
+    "prob_photo_bleach": [
+     0.049999999999999996,
+     0.049999999999999996,
+     0.049999999999999996
+    ],
+    "lambda_rate": [
+     4.700000000000001,
+     4.700000000000001,
+     4.700000000000001
+    ]
+   }
+  }
+ }
+}

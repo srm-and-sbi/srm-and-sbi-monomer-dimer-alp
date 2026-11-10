@@ -706,6 +706,8 @@ def run_experiment(cfg: WorkflowConfig, args: argparse.Namespace) -> None:
     print(f"  reference vector          : " + (f"Nuisance_DLI tag {args.reference_nuisance_tag} (displayed as a historical comparison; absent = none)" if aggregation_on and args.reference_nuisance_tag else "none"))
     if aggregation_on:
         print("  compatibility rank spaces : all (every coordinate)" + "".join(f"; {k} = {', '.join(v)}" for k, v in rank_spaces.items()))
+        print("  comparison scope          : construction (every SGM representative against all the other representatives of its aggregation, "
+              "condition and window set)")
     if args.regenerate_report:
         print(f"  --regenerate-report       : CPU re-rendering of the saved product; review label {review_label}; retained clouds from "
               + (args.cloud_sources if args.cloud_sources else "the product itself (if stored)"))
@@ -1127,8 +1129,9 @@ def build_experiment_parser() -> argparse.ArgumentParser:
         help="Additional rank coordinate spaces of the posterior-compatibility subsection: 'LABEL=key,key[;LABEL2=...]' "
              "(lowercase labels; keys of the parameter table; a proper subset). The primary space 'all' (every coordinate) is "
              "always computed; each additional space restricts the SAME candidates, reference SGMs and clouds to its keys and is "
-             "stored beside it in the candidate archive (format 3), the CSV exports and the report. The Nuisance DLI constructor "
-             "selects a space by its keys (rank_coordinates). Default: none.",
+             "stored beside it in the candidate archive, the CSV exports and the report, under the archive's comparison scope "
+             "(construction: every representative against all the other representatives of its aggregation). The Nuisance DLI "
+             "constructor selects a space by its keys (rank_coordinates) and names the scope (rank_scope). Default: none.",
     )
     parser.add_argument(
         "--no-aggregation", action="store_true",

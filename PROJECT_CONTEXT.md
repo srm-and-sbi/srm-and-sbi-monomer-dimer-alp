@@ -1656,18 +1656,26 @@ rather than a single monolithic support file. The modules and their roles:
   compatibility of the SGM representatives (the shared distance-rank
   primitive `reference_distance_ranks`, the cross-posterior rank matrices and
   their median scores, with explicit availability statuses, over every
-  coordinate and over any declared rank coordinate space), exports the
-  format-3 candidate archive, and adds the aggregation section with its
-  compatibility subsection and atlas to the existing Experiment report.
+  coordinate and over any declared rank coordinate space, under an explicit
+  comparison scope: `construction`, every representative against all the
+  other representatives of its aggregation, which Experiment writes, or the
+  hierarchical `within_cell` of archive formats 2 and 3), exports the
+  format-4 candidate archive, provides the exact weighted marginal
+  histograms of a finite weighted distribution, and adds the aggregation
+  section with its compatibility subsection and atlas to the existing
+  Experiment report.
   Saved-result regeneration calls the same reporting function on CPU; it
   performs no neural sampling. Detector candidates feed the separate
   nuisance-selection analysis; biology uses the same grouping and reporting
   utilities.
 - **`visualization_aggregation.py`** — marginal CDF, joint, temporal,
-  window-selection and compatibility plots (cell matrix with score strip,
-  window-score overview, atlas pages) for the Experiment report, reused for
-  the final weighted nuisance distribution together with the member-probability
-  figures (per row, or a cell-by-window grid). Representative dispersion and input-posterior uncertainty have
+  window-selection and compatibility plots (cell and window-position
+  matrices with score strips, the complete cell–window population matrix,
+  the window-score overview, atlas pages of its same-cell blocks) for the
+  Experiment report, reused for the final weighted nuisance distribution
+  together with the exact weighted marginal histograms and the
+  member-probability figures (per row, or a cell-by-window grid of the stored
+  row probabilities with the cell totals). Representative dispersion and input-posterior uncertainty have
   separate labels; raw ranks and adopted probabilities are never confused.
 - **`inference_network.py`** — the network architecture (§6): positional
   encoding, attention block, temporal transformer, and the 3D-CNN video encoder.

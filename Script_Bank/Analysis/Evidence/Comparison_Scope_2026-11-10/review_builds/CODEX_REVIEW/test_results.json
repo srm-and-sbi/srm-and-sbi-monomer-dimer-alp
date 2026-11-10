@@ -1,0 +1,38 @@
+[
+  {
+    "file": "test_experiment_comparison_scope.py",
+    "exit_code": 0,
+    "tail": [
+      "  PASS position ranks over the complete population; singleton and dataset handling; opening per-cell = cell-window",
+      "PASS test_window_positions_singletons_and_the_opening_equivalence (0.0 s)",
+      "8/8 passed"
+    ]
+  },
+  {
+    "file": "test_experiment_compatibility.py",
+    "exit_code": 0,
+    "tail": [
+      "  [dump] report -> /tmp/tmpqbiuon9b/rep_posterior_rank_median/report.md",
+      "PASS test_zero_mass_components_report_truthfully_in_the_dry_run_and_the_report (8.6 s)",
+      "18/18 passed"
+    ]
+  },
+  {
+    "file": "test_experiment_aggregation.py",
+    "exit_code": 0,
+    "tail": [
+      "PASS test_weighted_quantile_is_the_generalized_inverse (0.0 s)",
+      "PASS test_window_sets_parse_and_refuse_malformed_items (0.0 s)",
+      "17/17 passed"
+    ]
+  },
+  {
+    "file": "test_selection_user.py",
+    "exit_code": 0,
+    "tail": [
+      "PASS test_selection_converts_physical_values_to_log10_in_table_order (0.0 s)",
+      "PASS test_spec_file_round_trip_through_load_spec_and_the_template_cannot_build_unfilled (0.0 s)",
+      "8/8 passed"
+    ]
+  }
+]

@@ -518,6 +518,14 @@ def _member_counts(c):
     return n_pos, n_zero, eff_text
 
 
+def _scope_of(c) -> str:
+    """The comparison scope of a rank-weighted component record. A record written before the scope was recorded carries
+    the hierarchical policy of its time: within_cell for per_cell_window (equal cell mass), the whole construction for per_cell."""
+    if c.get("rank_scope"):
+        return str(c["rank_scope"])
+    return "within_cell" if c.get("grouping") == "per_cell_window" else "construction"
+
+
 def _policy_line(c) -> str:
     """One console line on how a component's mass reached its members (truthful for unequal members and for a zero mass)."""
     n_pos, n_zero, eff = _member_counts(c)
@@ -527,7 +535,7 @@ def _policy_line(c) -> str:
     space = ""
     if c.get("rank_space"):
         over = c.get("rank_coordinates_overridden") or []
-        space = (f"; rank space {c['rank_space']} ({', '.join(c.get('rank_coordinates') or [])})"
+        space = (f"; rank scope {_scope_of(c)}; rank space {c['rank_space']} ({', '.join(c.get('rank_coordinates') or [])})"
                  + (f"; ranked coordinates later overridden: {', '.join(over)}" if over else "; no ranked coordinate is overridden"))
     return (f"{c['member_weighting']} -> {n_pos} positive and {n_zero} zero member(s); "
             f"probabilities {lo:.6f} – {hi:.6f}; effective members {eff} of {c['n_members']}{space}")
@@ -665,13 +673,18 @@ def _figure_nuisance_marginals(draws, keys, prior_low, prior_high):
 def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
     """Persist a report.md + a 1-D marginals figure beside the built artifact (the record a
     person reads to judge, and choose between, nuisance constructions). A weighted
-    ``empirical_representatives`` artifact adds its components, probabilities, consolidation and
-    overrides, the weighted-CDF marginal summary, and the final weighted marginal and joint figures
-    drawn with the Experiment report's plotting functions (``archive`` supplies the components)."""
+    ``empirical_representatives`` artifact is a known finite distribution: its marginal summary and
+    its marginal figure are computed EXACTLY from the stored vectors and their probabilities (no
+    resampling; the ``n_draws`` sampled draws serve the sampler validation only), and it adds its
+    components, probabilities, consolidation and overrides, the weighted-CDF marginal summary, and
+    the final weighted marginal and joint figures drawn with the Experiment report's plotting
+    functions (``archive`` supplies the components). The continuous constructions (box, Gaussian) and
+    the unweighted pools keep the sampled summary and histogram."""
     report_dir = art.with_name(art.stem + "_Analysis")
     reporter = DiagnosticReporter(
         stage="Nuisance_DLI", enabled=True, dump=True, dump_dir=report_dir,
         run_label=f"{R['paths'].project_alias}_{R['timing_label']}")
+    weighted = nu.posterior_sample_pool_choice in ndli._WEIGHTED
     draws = nu.sample(n_draws)
     plo, phi = np.asarray(R["plo"], dtype=float), np.asarray(R["phi"], dtype=float)
     # Checks: the invariants a built artifact must satisfy before the biology DLI draws from it.
@@ -683,15 +696,28 @@ def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
                         "stage maps every draw onto the right imaging row.")
     reporter.check_shape("draws", draws, (n_draws, len(nu.parameter_keys)))
     reporter.check_no_nan_inf("draws", draws)
-    outside_any = float(np.mean(np.any((draws < plo) | (draws > phi), axis=1)))
+    if weighted:
+        X = np.asarray(nu.samples, dtype=float); P = np.asarray(nu.probabilities, dtype=float)
+        positive = {tuple(r) for r in X[P > 0]}
+        n_foreign = sum(1 for d in draws if tuple(d) not in positive)
+        reporter.check("sampler_draws_are_stored_positive_probability_rows", n_foreign == 0,
+                       f"{n_draws - n_foreign} of {n_draws} draws are stored rows of positive probability",
+                       note="sampler validation only: production draws whole stored vectors with replacement under the stored "
+                            "probabilities. The tables and figures of this report do not use these draws; they are computed "
+                            "exactly from the stored vectors and probabilities.")
+        outside_any = float(P[np.any((X < plo) | (X > phi), axis=1)].sum())
+        outside_text = f"{outside_any:.6f} of the stored probability mass has a parameter outside the box (exact)"
+    else:
+        outside_any = float(np.mean(np.any((draws < plo) | (draws > phi), axis=1)))
+        outside_text = f"{outside_any:.4f} of {n_draws} draws have a parameter outside the box"
     if nu.pool_mode == "unrestricted":
         reporter.stat("frac_draws_outside_prior", outside_any,
-                      note="share of draws with at least one parameter outside the imaging prior "
+                      note=("share of the stored probability mass" if weighted else "share of draws")
+                           + " with at least one parameter outside the imaging prior "
                            "box; permitted only under pool_mode='unrestricted', where it is a "
                            "property of the calibration pool, not a defect.")
     else:
-        reporter.check("draws_inside_prior_box", outside_any == 0.0,
-                       f"{outside_any:.4f} of {n_draws} draws have a parameter outside the box",
+        reporter.check("draws_inside_prior_box", outside_any == 0.0, outside_text,
                        note="the bounded pool and the box constructions must stay inside the imaging "
                             "prior box; only pool_mode='unrestricted' may place mass outside it.")
     reporter.table(
@@ -699,8 +725,9 @@ def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
         [["artifact", str(art)],
          ["posterior_sample_pool_choice", nu.posterior_sample_pool_choice],
          ["pool_mode", nu.pool_mode],
-         ["parameters", str(len(nu.parameter_keys))],
-         ["marginal draws", str(n_draws)]],
+         ["parameters", str(len(nu.parameter_keys))]]
+        + ([["marginal summary and figure", f"exact: {X.shape[0]} stored vectors with their stored probabilities (no resampling)"],
+            ["sampler-validation draws", str(n_draws)]] if weighted else [["marginal draws", str(n_draws)]]),
         note="How the calibrated imaging is represented for production marginalization.")
     if nu.posterior_sample_pool_choice == "selection_user" and nu.selection is not None:
         sel = nu.selection
@@ -715,28 +742,110 @@ def _write_nuisance_report(nu, R, art, n_draws=10000, archive=None):
                  "carries no calibrated joint uncertainty; the biology inference is conditional on "
                  "these values. " + (f"Outside-prior justification: {sel['outside_prior_justification']}"
                                      if sel["outside_prior"] else ""))
-    rows = []
-    for i, k in enumerate(nu.parameter_keys):
-        col = draws[:, i]
-        oob = float(np.mean((col < plo[i]) | (col > phi[i])))
-        rows.append([k, f"{np.median(col):+.3f}",
-                     f"[{np.percentile(col, 5):+.3f}, {np.percentile(col, 95):+.3f}]",
-                     f"[{plo[i]:+.2f}, {phi[i]:+.2f}]", f"{oob:.3f}"])
-    reporter.table(
-        "Per-parameter marginal summary (log10)",
-        ["parameter", "median", "[p05, p95]", "prior box", "frac outside prior"], rows,
-        note="Drawn from the built nuisance, so this is exactly what production will sample. "
-             "'frac outside prior' is > 0 only for pool_mode='unrestricted'; bounded and the box "
-             "forms stay within the prior box.")
-    reporter.save_figure(
-        "nuisance_marginals",
-        _figure_nuisance_marginals(draws, nu.parameter_keys, plo, phi),
-        caption="1-D marginal of each imaging parameter under the built nuisance (sampled from the "
-                "artifact); red dashes mark the imaging prior box.")
+    if weighted:
+        _report_exact_marginals(reporter, nu, R, plo, phi)
+    else:
+        rows = []
+        for i, k in enumerate(nu.parameter_keys):
+            col = draws[:, i]
+            oob = float(np.mean((col < plo[i]) | (col > phi[i])))
+            rows.append([k, f"{np.median(col):+.3f}",
+                         f"[{np.percentile(col, 5):+.3f}, {np.percentile(col, 95):+.3f}]",
+                         f"[{plo[i]:+.2f}, {phi[i]:+.2f}]", f"{oob:.3f}"])
+        reporter.table(
+            "Per-parameter marginal summary (log10)",
+            ["parameter", "median", "[p05, p95]", "prior box", "frac outside prior"], rows,
+            note="Drawn from the built nuisance, so this is exactly what production will sample. "
+                 "'frac outside prior' is > 0 only for pool_mode='unrestricted'; bounded and the box "
+                 "forms stay within the prior box.")
+        reporter.save_figure(
+            "nuisance_marginals",
+            _figure_nuisance_marginals(draws, nu.parameter_keys, plo, phi),
+            caption="1-D marginal of each imaging parameter under the built nuisance (sampled from the "
+                    "artifact); red dashes mark the imaging prior box.")
     if nu.posterior_sample_pool_choice in ndli._WEIGHTED:
         _report_representatives(reporter, nu, R, archive)
     reporter.write_report()
     return report_dir
+
+
+def _report_exact_marginals(reporter, nu, R, plo, phi):
+    """The marginal summary and the marginal histograms of a weighted empirical artifact, computed EXACTLY from the stored
+    vectors and their probabilities: every parameter inherits the same whole-vector probabilities (one joint distribution,
+    projected), a bin's mass is the sum of the stored probabilities of the vectors in it, and the equal-member baseline is
+    binned with the same deterministic edges. Nothing here depends on a random draw or a draw count."""
+    import csv
+    from srm_and_sbi_monomer_dimer_alp.visualization_aggregation import figure_weighted_histograms
+    keys = list(nu.parameter_keys); table = det.DETECTOR_PARAMETERIZATION
+    X = np.asarray(nu.samples, dtype=float); P = np.asarray(nu.probabilities, dtype=float)
+    sel = nu.selection or {}
+    base = sel.get("equal_member_baseline")
+    B = np.asarray(base["probabilities"], float) if base else P
+    rows = []
+    for i, k in enumerate(keys):
+        q = [agg.weighted_quantile(X[:, i], P, p) for p in (0.05, 0.5, 0.95)]
+        oob = float(P[(X[:, i] < plo[i]) | (X[:, i] > phi[i])].sum())
+        rows.append([k, f"{q[1]:+.3f}", f"[{q[0]:+.3f}, {q[2]:+.3f}]", f"[{plo[i]:+.2f}, {phi[i]:+.2f}]", f"{oob:.4f}"])
+    reporter.table(
+        "Per-parameter marginal summary (log10; exact)",
+        ["parameter", "median", "[p05, p95]", "prior box", "probability mass outside prior"], rows,
+        note="Exact: the inverse weighted empirical CDF of the stored vectors under their stored probabilities (the smallest "
+             "stored value whose cumulative probability reaches the level), and the stored probability mass outside the prior "
+             "box per parameter. No draw enters this table, so it does not vary with a seed or a draw count; it is the "
+             "distribution production samples whole vectors from.")
+    over = sel.get("overrides") or {}
+    notes = {k: "fixed by an explicit override" for k in over}
+    panels = agg.marginal_histograms(X, P, B, keys, notes=notes)
+    ref_p, ref = _reference_physical(R)
+    cond = (sel.get("archive") or {}).get("target", {}).get("condition", "")
+    comps = sel.get("components") or []
+    policies = sorted({c.get("member_weighting", "uniform") for c in comps})
+    scopes = sorted({_scope_of(c) for c in comps if c.get("member_weighting", "uniform") != "uniform"})
+    rank_weighted = bool(scopes)
+    scope_text = (f"{cond} · {X.shape[0]} stored vectors from {len(comps)} component(s); policies {policies}"
+                  + (f"; rank scope {', '.join(scopes)}" if scopes else "")).strip(" ·")
+    n_point = sum(1 for pan in panels if pan["kind"] == "point_mass")
+    reporter.save_figure(
+        "nuisance_marginals",
+        figure_weighted_histograms(panels, table, title="Nuisance_DLI marginals: exact probability mass of the stored vectors", subtitle=scope_text,
+                                   selected_name=f"selected probabilities ({', '.join(policies)}" + (f"; rank scope {', '.join(scopes)}" if scopes else "") + ")",
+                                   baseline_name=("equal-member baseline (same vectors, components, masses and overrides; uniform members)"
+                                                  if rank_weighted else "equal-member weighting (identical to the selected probabilities)"),
+                                   reference=None if ref is None else ref["log10"],
+                                   reference_name="" if ref is None else agg.display_name("reference", short=True, reference_name=ref["name"])),
+        caption=f"{scope_text}. Exact marginal histograms of the stored distribution, in physical units (a logarithmic axis for a "
+                f"log-scaled parameter): each bar is the SUM of the stored probabilities of the stored vectors whose coordinate falls in "
+                f"the bin (probability mass per bin, the bars of a panel adding up to one); nothing is resampled, so the figure does not "
+                f"depend on a random seed or a draw count. Every parameter inherits the same whole-vector probabilities: the panels are "
+                f"projections of one joint distribution, not six separately weighted ones. Bins: {agg.MARGINAL_HISTOGRAM_BINS} equal-width "
+                f"bins in the stored coordinate (uniform in log10 for a log-scaled parameter) from the smallest to the largest stored value "
+                f"of that coordinate over all stored vectors, zero-probability vectors included; the range is never cropped to the training "
+                f"box. Blue bars: the selected probabilities; dark outline: "
+                + ("the equal-member baseline, the same vectors, components, component masses and overrides with uniform members, in the "
+                   "same bins (the comparison isolates the member weighting)" if rank_weighted else
+                   "equal-member weighting, which coincides with the selected probabilities because every component is uniform")
+                + (f". {n_point} parameter(s) hold one stored value and are drawn as a point mass of the total probability at that value"
+                   + (" (" + ", ".join(k for k in over) + ": fixed by explicit overrides)" if over else "") if n_point else "")
+                + ". Each binned panel shows the full support of the stored vectors with a small margin; no tail is cropped. Dotted red: "
+                "the training-prior bounds; dashed purple: the reference scenario. Both are annotations, not data weights: one that lies "
+                "inside the view is a line, one that lies outside it is named with its value by an arrow label at that edge of the panel, so "
+                "an annotation never stretches the axis. The bin masses are in nuisance_marginal_histograms.csv; the exact weighted CDFs are "
+                "in representatives_marginals.")
+    if reporter.dump_dir is not None:
+        with (reporter.dump_dir / "nuisance_marginal_histograms.csv").open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["parameter", "kind", "bin", "low_stored_log10", "high_stored_log10", "low_physical", "high_physical",
+                        "selected_probability_mass", "equal_member_baseline_probability_mass"])
+            for e, pan in zip(table, panels):
+                if pan["kind"] == "point_mass":
+                    v = float(to_physical(np.asarray([[pan["value"]]]), [e])[0, 0])
+                    w.writerow([pan["key"], "point_mass", 0, repr(pan["value"]), repr(pan["value"]), repr(v), repr(v),
+                                repr(pan["selected_mass"]), repr(pan["baseline_mass"])])
+                    continue
+                phys = to_physical(np.asarray(pan["edges"], float)[:, None], [e])[:, 0]
+                for b in range(len(pan["selected"])):
+                    w.writerow([pan["key"], "bin", b, repr(float(pan["edges"][b])), repr(float(pan["edges"][b + 1])), repr(float(phys[b])),
+                                repr(float(phys[b + 1])), repr(float(pan["selected"][b])), repr(float(pan["baseline"][b]))])
 
 
 def _rank_override_statement(sel) -> str:
@@ -778,7 +887,9 @@ def _report_representatives(reporter, nu, R, archive):
             rng_ = f"{float(c['member_probability']):.6f} each"
         else:
             rng_ = f"{c['probability_range'][0]:.6f} – {c['probability_range'][1]:.6f}"
-        pol_text = pol if pol == "uniform" or not c.get("rank_space") else f"{pol} in rank space `{c['rank_space']}` ({', '.join(c.get('rank_coordinates') or [])})"
+        pol_text = pol if pol == "uniform" or not c.get("rank_space") else (
+            f"{pol}, rank scope `{_scope_of(c)}` ({c.get('reference_population') or 'the reference population of its archive record'}), "
+            f"in rank space `{c['rank_space']}` ({', '.join(c.get('rank_coordinates') or [])}); normalization: {(c.get('normalizers') or {}).get('rule', '')}")
         rows.append([c["index"], c["source_experiment"], c["condition"], c["window_set"],
                      f"{agg.display_name(c['grouping'], statistic=c['statistic'], short=True)} (`{c['grouping']}`)", c["statistic"],
                      f"{c['weight']:.6f}", pol_text, f"{c['n_members']} / {n_pos} / {n_zero}", rng_, eff])
@@ -861,7 +972,7 @@ def _report_representatives(reporter, nu, R, archive):
             w = csv.writer(fh)
             w.writerow(["component", "member", "condition", "window_set", "grouping", "statistic", "member_weighting", "cell", "chunk", "n_windows",
                         "sgm_source_cell", "sgm_source_chunk", "sgm_source_draw", "compatibility_score", "compatibility_status", "compatibility_n_references",
-                        "rank_space", "score_used", "contribution", "stored_row"])
+                        "rank_space", "score_used", "contribution", "stored_row", "rank_scope"])
             for c in comps:
                 for j, mbr in enumerate(c["members"]):
                     cp = mbr.get("compatibility") or {}
@@ -869,7 +980,8 @@ def _report_representatives(reporter, nu, R, archive):
                                 mbr["cell"], mbr["chunk"], mbr["n_windows"], mbr["sgm_source"]["cell"], mbr["sgm_source"]["chunk"], mbr["sgm_source"]["draw_index"],
                                 "" if cp.get("score") is None else repr(float(cp["score"])), cp.get("status", ""), cp.get("n_references", ""),
                                 c.get("rank_space") or "", "" if mbr.get("score_used") is None else repr(float(mbr["score_used"])),
-                                repr(float(mbr.get("probability", c.get("member_probability") or 0.0))), "" if mbr.get("stored_row") is None else int(mbr["stored_row"])])
+                                repr(float(mbr.get("probability", c.get("member_probability") or 0.0))), "" if mbr.get("stored_row") is None else int(mbr["stored_row"]),
+                                _scope_of(c) if c.get("member_weighting", "uniform") != "uniform" else ""])
         rows_csv = report_dir / "representatives_rows.csv"
         phys = to_physical(nu.samples, table)
         with rows_csv.open("w", newline="") as fh:
@@ -881,8 +993,8 @@ def _report_representatives(reporter, nu, R, archive):
                 w.writerow([r, repr(float(nu.probabilities[r])), repr(float(base_p[r])), txt] + [repr(float(v)) for v in nu.samples[r]]
                            + [repr(float(v)) for v in phys[r]])
     reporter.prose("empirical_representatives: exports",
-                   f"Per-member record (identities, the primary-space compatibility score, status and references, the rank space and the score used "
-                   f"by the policy, contribution, stored row): `representatives_members.csv`; "
+                   f"Per-member record (identities, the primary-space compatibility score, status and references, the rank space, the rank scope and "
+                   f"the score used by the policy, contribution, stored row): `representatives_members.csv`; "
                    f"per stored row (probability, equal-member baseline probability, memberships by recorded identity, the stored estimator "
                    f"coordinates `<key>_stored_log10` and the physical values `<key>_physical`): `representatives_rows.csv`; both beside this report. "
                    f"Member policies in this artifact: {policies}." + (" The equal-member baseline uses the same components, component masses, duplicate "
@@ -903,7 +1015,9 @@ def _report_representatives(reporter, nu, R, archive):
     else:
         labels = [str(r) for r in view]; xlabel = "stored row (memberships in representatives_rows.csv)"
     spaces_used = sorted({f"{c['rank_space']} ({', '.join(c.get('rank_coordinates') or [])})" for c in comps if c.get("rank_space")})
+    scopes_used = sorted({_scope_of(c) for c in comps if c.get("member_weighting", "uniform") != "uniform"})
     scope_p = (f"{cond} · {nu.samples.shape[0]} stored rows from {len(comps)} component(s); policies {policies}"
+               + (f"; rank scope {', '.join(scopes_used)}" if scopes_used else "")
                + (f"; rank space {', '.join(spaces_used)}" if spaces_used else ""))
     single_cw = (len(comps) == 1 and comps[0]["grouping"] == "per_cell_window" and not sel["consolidated"]
                  and nu.samples.shape[0] == comps[0]["n_members"] and all(len(row_members[r]) == 1 for r in row_members))
@@ -922,14 +1036,43 @@ def _report_representatives(reporter, nu, R, archive):
         times_g = [w * step_s if step_s else w for w in chunks_g]
         Pg = np.asarray([[nu.probabilities[cw[(c, w)]] if (c, w) in cw else np.nan for w in chunks_g] for c in cells_g], float)
         Bg = np.asarray([[base_p[cw[(c, w)]] if (c, w) in cw else np.nan for w in chunks_g] for c in cells_g], float)
+        totals = np.nansum(Pg, axis=1); base_totals = np.nansum(Bg, axis=1)
+        scope_c0 = _scope_of(comps[0]) if comps[0].get("member_weighting", "uniform") != "uniform" else None
+        zero_cells = [int(c) for c, t in zip(cells_g, totals) if t == 0.0]
+        opening = float(np.nansum(Pg[:, 0])) if Pg.shape[1] else float("nan")
+        reporter.table("empirical_representatives: cell totals of the stored probabilities",
+                       ["cells", "smallest cell total", "largest cell total", "equal-member cell total", "cells at exactly zero",
+                        f"mass of the first window (start {times_g[0]:g})", "equal-member mass of the first window"],
+                       [[len(cells_g), f"{float(totals.min()):.6f}", f"{float(totals.max()):.6f}", f"{float(base_totals[0]):.6f}",
+                         f"{len(zero_cells)}" + (f" ({', '.join(str(c) for c in zero_cells[:20])})" if zero_cells else ""),
+                         f"{opening:.6f}", f"{float(np.nansum(Bg[:, 0])):.6f}"]],
+                       note="a cell total is the sum of the stored probabilities of the cell's rows. "
+                            + ("Under rank scope `construction` the scores are normalized over the whole component, so no cell has a reserved "
+                               "mass: cell totals differ, and a cell whose rows all score zero has total zero (a sampling outcome of the "
+                               "policy, not a data-quality verdict)." if scope_c0 == "construction" else
+                               "Under rank scope `within_cell` every cell receives the same mass by rule, distributed over its windows by "
+                               "their within-cell scores." if scope_c0 == "within_cell" else
+                               "Under uniform members every cell total equals the equal-member value.")
+                            + " Every cell's total is in representatives_cell_totals.csv.")
+        if report_dir is not None:
+            with (report_dir / "representatives_cell_totals.csv").open("w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["cell", "stored_cell_total", "equal_member_cell_total", "rows", "zero_probability_rows"])
+                for a, c in enumerate(cells_g):
+                    w.writerow([c, repr(float(totals[a])), repr(float(base_totals[a])), int(np.sum(np.isfinite(Pg[a]))), int(np.sum(Pg[a] == 0))])
         reporter.save_figure("representatives_probabilities",
                              figure_member_probability_grid(cells_g, times_g, Pg, Bg, title="Stored sampling probabilities by cell and window",
                                                             subtitle=scope_p, window_seconds=wsec),
-                             caption=f"{scope_p}. Left: each stored row's probability as a share of its cell's total mass (rows: source cells in numeric order; "
-                                     f"columns: window start{' times in seconds' if step_s else ' positions'}); under the equal-member baseline every share "
-                                     f"would be 1/{len(chunks_g)}. Red crosses mark rows at exactly zero: a sampling outcome of the selected policy, not a "
-                                     f"data-quality verdict. Right: the cell masses (black) against the equal-member baseline (gray bars); equal cell mass is "
-                                     f"the policy's rule. These are probabilities, not Experiment's raw ranks; the per-row values are in representatives_rows.csv.")
+                             caption=f"{scope_p}. Left: the stored sampling probability of every row itself (rows: source cells in numeric order; "
+                                     f"columns: window start{' times in seconds' if step_s else ' positions'}); the values of the grid sum to one, and "
+                                     f"under the equal-member baseline every row would carry {1.0 / max(1, int(np.sum(np.isfinite(Pg)))):.6f}. Red crosses "
+                                     f"mark rows at exactly zero: a sampling outcome of the selected policy, not a data-quality verdict. Right: the cell "
+                                     f"totals (black: the sum of the cell's stored row probabilities) against the equal-member baseline (gray bars). "
+                                     + ("The scores are normalized over the complete component, so the cell totals differ and no cell has a reserved "
+                                        "mass. " if scope_c0 == "construction" else
+                                        "Equal cell totals are this policy's rule (rank scope within_cell). " if scope_c0 == "within_cell" else "")
+                                     + "These are probabilities, not Experiment's raw ranks; the per-row values are in representatives_rows.csv and "
+                                     "the cell totals in representatives_cell_totals.csv.")
     else:
         reporter.save_figure("representatives_probabilities",
                              figure_member_probabilities(labels, nu.probabilities[view], base_p[view], title="Stored sampling probabilities versus the equal-member baseline",

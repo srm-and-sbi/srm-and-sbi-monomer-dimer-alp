@@ -813,26 +813,64 @@ are refused. Every draw is a complete stored row. Legacy unweighted artifacts re
 spread over its n_k members (`member_weighting`). The default `uniform` gives every member alpha_k / n_k and
 preserves existing specifications. `posterior_rank_median` uses the compatibility scores s that Experiment
 exports for the SGM representatives (below) and constructs a **consensus-weighted empirical distribution**.
-For one SGM per cell,
+
+Three choices are separate and each is stated explicitly: the **aggregation** fixes which representatives
+exist; the **comparison scope** (`rank_scope`) fixes the reference population each representative is scored
+against, and with it the normalization; the **rank coordinate space** (`rank_coordinates`) fixes the
+coordinates the distances run over. The aggregation never implies the scope.
+
+Under `rank_scope = "construction"`, every representative of the selected aggregation is scored against all
+the other representatives of that same aggregation, in one condition and one window set, and the scores are
+normalized over the complete component:
 
 $$
-p_{kc}=\alpha_k\frac{s_c}{\sum_{d\in C_k}s_d}.
+p_{ki}=\alpha_k\frac{s_i}{\sum_{j\in N_k}s_j},\qquad s_i=\operatorname{median}_{j\ne i}R_{ij}.
 $$
 
-For cell–window representatives the score is calculated within each cell, and equal total cell mass is
-retained inside the component:
+| Aggregation | Representatives (60 cells, ten windows) | Reference population of each representative | Normalization |
+|---|---:|---|---|
+| One SGM per cell | 60 | The other 59 cells, each its own equal-window cloud mixture | Over the 60 scores |
+| One SGM per window position | 10 | The other nine positions, each its own equal-cell cloud mixture | Over the ten scores |
+| One SGM for the included dataset | 1 | No peer | Uniform only: probability alpha_k, no rank score |
+| One SGM per cell–window | 600 | The other 599 cell–window groups, each one window's own cloud | Over the 600 scores |
+
+The counts follow from the geometry and the selected groups. For cell–window representatives the other
+windows of the candidate's own cell are part of its reference population (nine of 599 here) and receive no
+separate treatment; only the candidate's own group is excluded. No cell keeps a reserved mass: a cell's total
+probability is the sum of its representatives' probabilities, and it may be small or exactly zero when its
+representatives lie away from the population.
+
+Under `rank_scope = "within_cell"`, available for cell–window representatives, each representative is scored
+against the other selected windows of its own cell only, and every cell keeps equal total mass inside the
+component:
 
 $$
 p_{kcw}=\frac{\alpha_k}{|C_k|}\,\frac{s_{cw}}{\sum_{u\in S_k}s_{cu}}.
 $$
 
-Normalizing all window scores together would alter the cells' total masses according to their score totals;
-that is not this policy. Cell-level and within-cell weighting are alternative constructions and are never
-multiplied together. Valid windows and cells may receive zero probability because their representatives differ
+This hierarchical policy answers a different question (which windows agree with the rest of their own
+recording, every recording counted equally) and is a distinct selection target, not a variant normalization
+of the first: the two scopes differ in the reference population, so dividing within-cell scores by their
+overall sum yields neither policy. The scope named in a specification must be the scope the candidate archive
+computed that aggregation's scores under (recorded in the archive protocol), and it is carried into the
+constructor record and the report; a mismatch is refused, and one scope's scores are never renormalized into
+another's. The scope is a property of the recorded comparison population, not of a format number: the per-cell
+scores of an archive of either scope already compare every cell with all the other cells, so one SGM per cell is
+selected as `construction` from both, while construction-wide weights for cell–window representatives or window
+positions need scores computed against those complete populations. A rank-weighted specification written before
+the field existed is refused until a copy of it names its scope (the stored artifacts load unchanged; the
+constructor's companion note shows the one-line migration). With fewer than two groups an aggregation has no peer and no score: rank weighting is then
+unavailable and is never replaced by uniform scores, while the single representative remains selectable with
+uniform probability. In a mixture, every component is normalized inside itself and multiplied by its explicit
+mass; the row counts of the constructions never set the mixture.
+
+Valid windows and cells may receive zero probability because their representatives differ
 from the reference population: zero probability is a sampling outcome, not a data-quality classification, and
 it is kept and shown (no floor, no clipping, no removal). Every selected score must be available in the
-matching archive context; a required normalizing sum of zero, an unsupported statistic or grouping, a missing
-score, an unknown policy or an incompatible archive is an explicit refusal, never a fallback to uniform. A
+matching archive context; a required normalizing sum of zero (the whole component under `construction`, any
+included cell under `within_cell`), an unsupported statistic or grouping, a missing score, a missing or
+mismatched scope, an unknown policy or an incompatible archive is an explicit refusal, never a fallback to
+uniform. Under `construction` a single cell whose representatives all score zero is a valid outcome. A
 format-1 candidate archive still supplies a uniform selection; rank weighting requires a CPU regeneration of
 the Experiment report (format 2 or later). The resulting distribution emphasizes agreement among representatives; it
 need not preserve the original proportions of acquisition batches, a consequence to describe when a selection
@@ -894,31 +932,43 @@ candidate's reference ranks are zero; some references may still assign it a high
 differs from an unavailable score. The rank describes radial centrality, not posterior density, membership in a joint credible
 region, or the probability that an experimental recording is valid.
 
-| Representative | Reference groups | Availability |
+| Representative | Reference groups under the comparison scope `construction` | Availability |
 |---|---|---|
-| One SGM per cell | Other included cells, using the same acquisition-window set and condition | At least two included cells |
-| One SGM per cell–window | Other selected windows within the same cell | At least two selected windows |
-| One SGM per window position | Uniform selection remains available; no rank policy is applied | Rank policy not applicable |
+| One SGM per cell | The other included cells of the same condition and window set, each its equal-window cloud mixture | At least two included cells |
+| One SGM per window position | The other selected window positions, each its equal-cell cloud mixture | At least two selected positions |
+| One SGM per cell–window | Every other cell–window group of the same condition and window set, the other windows of its own cell included; each reference is one window's own cloud | At least two cell–window groups |
 | One SGM for the included dataset | No same-level peer reference | Rank policy not applicable |
 
-For opening-only selection, per-cell scoring remains available across cells, while within-cell window scoring
-is unavailable (`insufficient_peers`: no score, zero references, never a fabricated 0 or 1). Equal vectors or
-equivalent point constructions do not imply identical reference populations or scoring availability, and no
-score is copied between equivalent groups. Experiment reports the matrices, median scores, reference identities
-and coverage with its existing aggregation results, in a compact subsection: a cell-to-cell matrix with an
-aligned median-score strip for each condition and requested window set, a cells-by-window-start-time heat map
-of within-cell median scores when more than one window is selected, a linked atlas containing every cell's
-window-to-window matrix (an across-cell median never replaces the individual matrices), and a scope and
-availability table that counts zero scores as centrality outcomes. All compatibility plots use a common 0–1
+Experiment computes and writes the comparison scope `construction`: one block per aggregation, condition and
+window set over the complete population of that aggregation, the candidate's own group being the only one
+excluded (by identity, never by vector equality). The alternative scope `within_cell` (the per-cell block as
+above, one block per cell over its selected windows for the cell–window representatives, window positions
+unscored) is the recorded meaning of archive formats 2 and 3 and remains readable and computable under that
+name. For an opening-only selection the cell–window groups and the per-cell groups are the same windows with the
+same clouds, so under `construction` both are scored (each on its own) and agree, while a single window position
+has no peer (`insufficient_peers`: no score, zero references, never a fabricated 0 or 1). No score is copied
+between equivalent groups. Experiment reports the matrices, median scores, reference identities and coverage with
+its existing aggregation results, in a compact subsection: the statement of aggregation, comparison scope,
+coordinate space and normalization; a cell-to-cell matrix and a position-to-position matrix, each with an aligned
+median-score strip, for each condition and requested window set; when more than one window is selected, the
+complete cell–window population matrix as ONE matrix (600 x 600 for 60 cells and ten windows; its small diagonal
+blocks are the same-cell comparisons, part of that population), a cells-by-window-start-time heat map of the
+population-wide median scores, and a linked atlas that enlarges the same-cell blocks for legibility; and a scope
+and availability table that counts zero scores as centrality outcomes. All compatibility plots use a common 0–1
 scale, stable identity and time ordering and gray excluded self comparisons; matrix colors do not classify
-raw-data quality. The candidate archive (format 2) stores the scores, statuses, reference counts and the rank
-blocks under the protocol `sgm_distance_rank_v1` beside the unchanged candidate arrays; `aggregation_groups.csv`
-gains the score, status, reference-count and SGM-outside-prior-key columns and `aggregation_compatibility.csv`
-lists every pairwise rank. The reader of the archive requires distinct scientific identities (one group per cell in
-a per_cell context, one per selected window position in a per_cell_window context), derives every eligible reference
-context from those groups and requires one block over exactly that context's peer population, reference draw counts equal to the
-referenced groups' pooled draws and a protocol scale equal to the archive's; a split, trimmed or rescaled archive is
-refused rather than normalized. Experiment displays raw median ranks and never turns them into sampling
+raw-data quality. The candidate archive (format 4) stores the scores, statuses, reference counts and the rank
+blocks under the protocol `sgm_distance_rank_v2`, which records the comparison scope and the reference scope of
+every rank-scored aggregation, beside the unchanged candidate arrays; `aggregation_groups.csv` carries the score,
+status, reference-count and SGM-outside-prior-key columns and `aggregation_compatibility.csv` lists every pairwise
+rank with its reference scope. The reader of the archive determines the comparison scope from the archive
+(declared in format 4; `within_cell` by record for formats 2 and 3, protocol `sgm_distance_rank_v1`), requires
+distinct scientific identities (one group per cell in a per-cell context; one per window position in a
+window-position context; one per (cell, window position) pair in a construction-wide cell–window context, where
+cell identities repeat legitimately; one per window position in a within-cell context), derives every eligible
+reference context from those groups and requires one block of the right scope over exactly that context's peer
+population, reference draw counts equal to the referenced groups' pooled draws and a protocol scale equal to the
+archive's; a split, trimmed, rescaled or relabeled archive is refused rather than normalized, so an archive of
+one scope never supplies another scope's scores. Experiment displays raw median ranks and never turns them into sampling
 probabilities. Training-prior flags remain separate; physically valid extrapolated values are not clipped or
 assigned zero probability because they lie outside the training prior.
 
@@ -931,9 +981,10 @@ parameter is blind to disagreement in that parameter. Each additional space has 
 and atlas (`compatibility/<condition>/<set>/windows_<label>/`), its own `aggregation_compatibility_<label>.csv`
 and score, status and reference-count columns in `aggregation_groups.csv`, and its own arrays
 (`compatibility_<label>_*`) and manifest section (`compatibility.rank_spaces`, coordinates, protocol with the
-restricted scale, block map) in the candidate archive, whose format is 3; the primary space's arrays and files
-keep their format-2 names and content. The reader validates every space under the same context rules and
-additionally its declared coordinates and restricted scale, and accepts formats 1, 2 and 3. The constructor
+restricted scale, block map) in the candidate archive (format 3 and later); the primary space keeps the
+unsuffixed array and file names. Every space of an archive shares the archive's comparison scope: the coordinate
+space and the comparison scope are independent choices. The reader validates every space under the same context
+rules and additionally its declared coordinates and restricted scale, and accepts formats 1 to 4. The constructor
 selects a space by its coordinates (`rank_coordinates`, above).
 
 Unrestricted clouds are not clipped. Valid values outside the detector training box remain labeled as
@@ -976,16 +1027,29 @@ are recorded scientific choices. The route has three steps:
    with components commented out. The user names the components, their weights, the statistic (`sgm` or `median`),
    the member-weighting policy per component (`uniform`, the default, or `posterior_rank_median`; the skeleton
    states for every component whether compatibility scores are available and which rank spaces the archive
-   holds), optionally the rank coordinates of a rank-weighted component, and rationale. Optional
+   holds), for a rank-weighted component its comparison scope (`rank_scope`, required) and optionally its rank
+   coordinates, and rationale. Optional
    `[override.<KEY>]` tables declare physical values and reasons. No production selection is inferred from the
    skeleton or an illustrative example.
 3. **Validate and build on CPU.** `--build --dry-run` checks archive identity, target binding, component
    definitions, coverage, weights, member policies, and physical values, and states truthfully how each
    component's mass reaches its members (positive and zero members, the probability range, the effective number
-   of members). The build writes the selected complete vectors, probabilities, manifest, and a report with the
-   selection table, the stored probabilities beside the equal-member baseline (the same components, masses and
-   overrides with uniform members), the six-parameter CDF comparison of the two, the components view, the joint
-   projections and per-member and per-row CSV exports, using Experiment's plotting functions. The report states
+   of members, the comparison scope). The build writes the selected complete vectors, probabilities, manifest,
+   and a report with the selection table (aggregation, comparison scope and reference population, rank space,
+   normalization rule), the stored probabilities beside the equal-member baseline (the same components, masses
+   and overrides with uniform members), the exact marginal histograms, the six-parameter CDF comparison of the
+   two, the components view, the joint projections and per-member and per-row CSV exports, using Experiment's
+   plotting functions. A weighted empirical artifact is a known finite distribution, so its marginal summary and
+   its marginal histograms are computed exactly from the stored vectors and their probabilities, with no
+   resampling: every parameter inherits the same whole-vector probabilities (the panels are projections of one
+   joint distribution), a bin's height is the sum of the stored probabilities of the vectors in the bin
+   (probability mass per bin, in physical units, with deterministic bins shared by the selected distribution and
+   the equal-member baseline and spanning the full stored support), a coordinate fixed by an override is drawn as
+   a point mass, and the result does not depend on a random seed or a draw count. Sampling whole vectors with
+   replacement remains the production rule for generating independent videos; the report's sampler check is
+   separate from its tables and figures. For a selection of one SGM per cell and window, the probability figure
+   is a cell-by-window grid of the stored row probabilities themselves, with every cell's total beside it and the
+   totals tabulated; the totals are equal only under a policy that assigns equal cell mass. The report states
    the effective number of representatives, 1/sum(p_i^2), with its normalization scope; it is a concentration
    measure, not a count of independent experiments. It does not load the estimator or repeat neural sampling. Generation calls `require_nuisance_dli`
    to load the chosen artifact; it never rebuilds one. The per-simulation `Nuisance_DLI_Theta_Set` record is written
@@ -1250,7 +1314,8 @@ format-3 archives with the rank coordinate space `spatial_brightness`). The sele
   483.6 (FAB) and 380.1 (InlB) against 600 at equal weights, a concentration measure and not a count of independent
   experiments. The opening window's total mass falls from 10 % to about 1.2 % in both conditions: a within-cell
   consensus rank under a monotone within-recording trend penalizes the ends of the trend, and no opening-window
-  exception is made;
+  exception is made. In the terms of §7.2 this weighting is the comparison scope `within_cell`; the adopted
+  specification files predate the explicit `rank_scope` field, which a rebuild with the current constructor names;
 - `prob_photo_bleach` overridden to 0.05 in both conditions under the condition-specific rationale of the `SEL` record
   (empirically anchored for Fab, declared for InlB);
 - `lambda_rate` overridden to 5.1 per second (Fab) and 4.7 (InlB): the condition-specific localization-table
@@ -1276,6 +1341,12 @@ displayed by Experiment and the sensitivity scenarios. The biology generation se
 `RANK4` (`--nuisance-tag`, dispatcher `NUISANCE_TAG`), and every consumer records the selected artifact's identity.
 Evidence: `Script_Bank/Analysis/Evidence/Nuisance_DLI_RANK4_2026-11-09/` (specs, CLI dry-runs and builds, loader
 validation against the reviewed proposal, report copies) and the rank-space evidence folder beside it.
+
+Status on 2026-11-10: the comparison scope of this selection is under review. The intended consensus is over the
+complete population of the 600 cell–window representatives (the scope `construction` of §7.2), which `RANK4` does
+not implement; `RANK4` and its artifacts stay as recorded above, the candidate revision exists as review products
+only (`Script_Bank/Analysis/Evidence/Comparison_Scope_2026-11-10/`), and the biology generation waits for the
+decision. A revised production selection is recorded here, under its own tag, when it is adopted.
 
 **Superseded diagnostic renders (2026-09-25).** Three recordings (cells 0, 26 and 16) were rendered for their
 full 20 s, with two one-coordinate variants on cell 26 and clips of four more recordings, and compared with the

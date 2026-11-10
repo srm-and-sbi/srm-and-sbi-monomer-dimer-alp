@@ -1,0 +1,353 @@
+{
+ "conditions": {
+  "FAB": {
+   "archive": {
+    "path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment_COHORT60RANKSR4/aggregation_candidates.npz",
+    "sha256": "aa5a668bc86030dfcaa0eb67efcab038855a7293ea8d1b285e3315cf9a95ecd8",
+    "format": 4,
+    "comparison_scope": "construction",
+    "protocol": "sgm_distance_rank_v2",
+    "rank_spaces": {
+     "all": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc",
+      "prob_photo_bleach",
+      "lambda_rate"
+     ],
+     "spatial_brightness": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc"
+     ]
+    }
+   },
+   "previous_archive": {
+    "path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_FAB_2S_50FPS_C128V42A_MAP_Experiment_COHORT60RANKSR3/aggregation_candidates.npz",
+    "sha256": "5fe7091bef07ce75a4659d322c1c5072c33cfa6ed592aa27038ecf3df5f037ce",
+    "format": 3,
+    "comparison_scope": "within_cell",
+    "protocol": "sgm_distance_rank_v1"
+   },
+   "groups_identical_to_previous_archive": {
+    "construction": true,
+    "window_set": true,
+    "kind": true,
+    "cell": true,
+    "chunk": true,
+    "n_draws": true,
+    "n_windows": true,
+    "members_json": true,
+    "sgm_log10": true,
+    "sgm_source_cell": true,
+    "sgm_source_chunk": true,
+    "sgm_source_draw": true,
+    "sgm_source_label": true,
+    "sgm_method": true,
+    "equivalent_to": true,
+    "median_log10": true,
+    "quantiles_log10": true,
+    "outside_box_fraction": true,
+    "outside_box_by_key": true,
+    "parameter_keys": true,
+    "sgm_scale": true,
+    "prior_low": true,
+    "prior_high": true,
+    "sgm_outside_prior_keys": true
+   },
+   "sources_identical": true,
+   "contract_identical": true,
+   "reproduction_of_exploratory_calculation": {
+    "per_cell": {
+     "n": 60,
+     "references_per_candidate": 59,
+     "ranks_identical": true,
+     "off_diagonal_entries": 3540,
+     "scores_identical": true,
+     "constructor_scores_identical": true,
+     "max_abs_probability_difference": 0.0,
+     "probability_sum": 1.0,
+     "zero_probability_rows": 0,
+     "effective_representatives": 52.231663271003704,
+     "normalization_rule": "weight * score / sum of the component's scores",
+     "comparison_scope": "construction",
+     "references_per_member": [
+      59
+     ]
+    },
+    "per_window_position": {
+     "n": 10,
+     "references_per_candidate": 9,
+     "ranks_identical": true,
+     "off_diagonal_entries": 90,
+     "scores_identical": true,
+     "constructor_scores_identical": true,
+     "max_abs_probability_difference": 0.0,
+     "probability_sum": 1.0,
+     "zero_probability_rows": 0,
+     "effective_representatives": 9.069980182098895,
+     "normalization_rule": "weight * score / sum of the component's scores",
+     "comparison_scope": "construction",
+     "references_per_member": [
+      9
+     ]
+    },
+    "per_cell_window": {
+     "n": 600,
+     "references_per_candidate": 599,
+     "ranks_identical": true,
+     "off_diagonal_entries": 359400,
+     "scores_identical": true,
+     "constructor_scores_identical": true,
+     "max_abs_probability_difference": 0.0,
+     "probability_sum": 1.0,
+     "zero_probability_rows": 1,
+     "effective_representatives": 427.3026734958224,
+     "normalization_rule": "weight * score / sum of the component's scores",
+     "comparison_scope": "construction",
+     "references_per_member": [
+      599
+     ],
+     "opening_window_mass": 0.0317939645563407,
+     "cell_total_min": 0.0003497325875098426,
+     "cell_total_max": 0.030366401128961336,
+     "zero_total_cells": [],
+     "n_cells": 60,
+     "equal_member_cell_total": 0.016666666666666666
+    }
+   },
+   "previous_within_cell_matrices_inside_the_population_matrices": {
+    "all": {
+     "within_cell_entries_checked": 5400,
+     "identical_to_same_cell_blocks": true,
+     "per_cell_scores_identical_to_previous": true
+    },
+    "spatial_brightness": {
+     "within_cell_entries_checked": 5400,
+     "identical_to_same_cell_blocks": true,
+     "per_cell_scores_identical_to_previous": true
+    }
+   },
+   "opening_per_cell_equals_per_cell_window_scores": {
+    "all": true,
+    "spatial_brightness": true
+   },
+   "independent_plain_counting_oracle": {
+    "all": {
+     "per_cell": {
+      "pairs_checked": 300,
+      "mismatches": 0
+     },
+     "per_window_position": {
+      "pairs_checked": 90,
+      "mismatches": 0
+     },
+     "per_cell_window": {
+      "pairs_checked": 1500,
+      "mismatches": 0
+     }
+    },
+    "spatial_brightness": {
+     "per_cell": {
+      "pairs_checked": 300,
+      "mismatches": 0
+     },
+     "per_window_position": {
+      "pairs_checked": 90,
+      "mismatches": 0
+     },
+     "per_cell_window": {
+      "pairs_checked": 1500,
+      "mismatches": 0
+     }
+    }
+   }
+  },
+  "INLB": {
+   "archive": {
+    "path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment_COHORT60RANKSR4/aggregation_candidates.npz",
+    "sha256": "179617f2665504a9e0c1662bc6c135279833bb6d056d841bc00cdfedffb91b6f",
+    "format": 4,
+    "comparison_scope": "construction",
+    "protocol": "sgm_distance_rank_v2",
+    "rank_spaces": {
+     "all": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc",
+      "prob_photo_bleach",
+      "lambda_rate"
+     ],
+     "spatial_brightness": [
+      "mu_r",
+      "sigma_r",
+      "mu_pc",
+      "sigma_pc"
+     ]
+    }
+   },
+   "previous_archive": {
+    "path": "/media/mars-fias/MARS_Data_Reserve_0/MARS_Data_Bank/Projects/RCL_Agent_Projects/srm-and-sbi-monomer-dimer-alp/Data_Bank/Posit/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_INLB_2S_50FPS_C128V42AP3LR32_MAP_Experiment_COHORT60RANKSR3/aggregation_candidates.npz",
+    "sha256": "edb630d06832a49e5fc82626a0d55a360b0f540dcb6e95492232668704e1f401",
+    "format": 3,
+    "comparison_scope": "within_cell",
+    "protocol": "sgm_distance_rank_v1"
+   },
+   "groups_identical_to_previous_archive": {
+    "construction": true,
+    "window_set": true,
+    "kind": true,
+    "cell": true,
+    "chunk": true,
+    "n_draws": true,
+    "n_windows": true,
+    "members_json": true,
+    "sgm_log10": true,
+    "sgm_source_cell": true,
+    "sgm_source_chunk": true,
+    "sgm_source_draw": true,
+    "sgm_source_label": true,
+    "sgm_method": true,
+    "equivalent_to": true,
+    "median_log10": true,
+    "quantiles_log10": true,
+    "outside_box_fraction": true,
+    "outside_box_by_key": true,
+    "parameter_keys": true,
+    "sgm_scale": true,
+    "prior_low": true,
+    "prior_high": true,
+    "sgm_outside_prior_keys": true
+   },
+   "sources_identical": true,
+   "contract_identical": true,
+   "reproduction_of_exploratory_calculation": {
+    "per_cell": {
+     "n": 60,
+     "references_per_candidate": 59,
+     "ranks_identical": true,
+     "off_diagonal_entries": 3540,
+     "scores_identical": true,
+     "constructor_scores_identical": true,
+     "max_abs_probability_difference": 0.0,
+     "probability_sum": 1.0,
+     "zero_probability_rows": 0,
+     "effective_representatives": 45.52938537035286,
+     "normalization_rule": "weight * score / sum of the component's scores",
+     "comparison_scope": "construction",
+     "references_per_member": [
+      59
+     ]
+    },
+    "per_window_position": {
+     "n": 10,
+     "references_per_candidate": 9,
+     "ranks_identical": true,
+     "off_diagonal_entries": 90,
+     "scores_identical": true,
+     "constructor_scores_identical": true,
+     "max_abs_probability_difference": 0.0,
+     "probability_sum": 1.0,
+     "zero_probability_rows": 0,
+     "effective_representatives": 9.38436258888616,
+     "normalization_rule": "weight * score / sum of the component's scores",
+     "comparison_scope": "construction",
+     "references_per_member": [
+      9
+     ]
+    },
+    "per_cell_window": {
+     "n": 600,
+     "references_per_candidate": 599,
+     "ranks_identical": true,
+     "off_diagonal_entries": 359400,
+     "scores_identical": true,
+     "constructor_scores_identical": true,
+     "max_abs_probability_difference": 0.0,
+     "probability_sum": 0.9999999999999999,
+     "zero_probability_rows": 64,
+     "effective_representatives": 317.9663016398908,
+     "normalization_rule": "weight * score / sum of the component's scores",
+     "comparison_scope": "construction",
+     "references_per_member": [
+      599
+     ],
+     "opening_window_mass": 0.048765316912359274,
+     "cell_total_min": 0.0006655470547987808,
+     "cell_total_max": 0.04540648130870187,
+     "zero_total_cells": [],
+     "n_cells": 60,
+     "equal_member_cell_total": 0.016666666666666666
+    }
+   },
+   "previous_within_cell_matrices_inside_the_population_matrices": {
+    "all": {
+     "within_cell_entries_checked": 5400,
+     "identical_to_same_cell_blocks": true,
+     "per_cell_scores_identical_to_previous": true
+    },
+    "spatial_brightness": {
+     "within_cell_entries_checked": 5400,
+     "identical_to_same_cell_blocks": true,
+     "per_cell_scores_identical_to_previous": true
+    }
+   },
+   "opening_per_cell_equals_per_cell_window_scores": {
+    "all": true,
+    "spatial_brightness": true
+   },
+   "independent_plain_counting_oracle": {
+    "all": {
+     "per_cell": {
+      "pairs_checked": 300,
+      "mismatches": 0
+     },
+     "per_window_position": {
+      "pairs_checked": 90,
+      "mismatches": 0
+     },
+     "per_cell_window": {
+      "pairs_checked": 1500,
+      "mismatches": 0
+     }
+    },
+    "spatial_brightness": {
+     "per_cell": {
+      "pairs_checked": 300,
+      "mismatches": 0
+     },
+     "per_window_position": {
+      "pairs_checked": 90,
+      "mismatches": 0
+     },
+     "per_cell_window": {
+      "pairs_checked": 1500,
+      "mismatches": 0
+     }
+    }
+   }
+  }
+ },
+ "earlier_products_unchanged": {
+  "RANK4_FAB": {
+   "sha256": "3b89edab3bb4498abfaf5a54c2fdf31e85f8ac5eff110c8a3a95a83bbb59c801",
+   "equals_recorded": true
+  },
+  "SEL_FAB": {
+   "sha256": "fe9cb5bae47eb0fc88cc70c195d6b46dd7804e4d006bf973c33028846a9159ad",
+   "exists": true
+  },
+  "RANK4_INLB": {
+   "sha256": "50a7678ea858aa10f5df950f70d4301278059a10981c208ca3b0996245e661c8",
+   "equals_recorded": true
+  },
+  "SEL_INLB": {
+   "sha256": "2b2d98f99e4fd0c5c3734280cb613582df3bdbaa387e4f953ec71b7592ceac6f",
+   "exists": true
+  }
+ },
+ "all_ok": true
+}

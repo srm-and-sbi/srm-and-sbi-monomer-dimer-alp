@@ -32,6 +32,30 @@ import test_experiment_aggregation as T                                         
 TABLE, KEYS, IDS, GEOMETRY, TARGET = T.TABLE, T.KEYS, T.IDS, T.GEOMETRY, T.TARGET
 PLO, PHI = np.array([-1.0, 0.0, 0.0]), np.array([0.0, 1.0, 1.0])
 _expect = T._expect
+WC = agg.SCOPE_WITHIN_CELL
+
+
+def _compat(res, coll, **kw):
+    """The hierarchical ``within_cell`` comparison scope the tests of this file pin (per_cell across cells, per_cell_window
+    within its own cell; still computable by name). The construction-wide scope Experiment writes has its own test file."""
+    return agg.compute_compatibility(res, coll, scope=WC, **kw)
+
+
+def _as_legacy(m, version=3):
+    """Rewrite a within_cell format-4 manifest into the legacy format ``version`` (2 or 3) it is equivalent to: the
+    sgm_distance_rank_v1 protocol, which carries no scope field anywhere."""
+    m["archive_format_version"] = version
+    sec = m["compatibility"]
+    sec.pop("comparison_scope", None); sec.pop("comparison_scopes", None)
+    sections = [sec] + [d for lab, d in (sec.get("rank_spaces") or {}).items() if "protocol" in d]
+    for d in sections:
+        d["protocol"]["name"] = agg.LEGACY_COMPATIBILITY_PROTOCOL
+        d["protocol"].pop("comparison_scope", None); d["protocol"].pop("comparison_scopes", None)
+        for b in d.get("blocks", []):
+            b.pop("scope", None)
+    if version == 2:
+        sec.pop("rank_spaces", None)
+    return m
 
 
 def _collection(cloud, ids, *, kinds=("FAB",), geometry=GEOMETRY, scale=(1.0, 1.0, 1.0), keys=KEYS):
@@ -50,16 +74,22 @@ def _collection(cloud, ids, *, kinds=("FAB",), geometry=GEOMETRY, scale=(1.0, 1.
 
 def _archive(tmp, coll, window_sets, *, kinds=("FAB",), table=TABLE, target=TARGET, product_label="P"):
     res = agg.aggregate(coll, table, window_sets=window_sets)
-    compat = agg.compute_compatibility(res, coll)
+    compat = _compat(res, coll)
     man = agg.export_manifest(res, product_label=product_label, condition_labels=list(kinds), target=target, compatibility=compat)
     paths = agg.write_aggregation_exports(res, tmp, table, manifest=man, compatibility=compat)
     return agg.load_candidate_archive(paths["archive"]), res, compat, paths
 
 
-def _comp(grouping, weight, window_set="all", statistic="sgm", member_weighting=None):
+def _comp(grouping, weight, window_set="all", statistic="sgm", member_weighting=None, rank_scope="auto"):
+    """``rank_scope`` "auto" names the scope a within_cell archive computed the grouping's scores under (the rank policy
+    requires an explicit scope); None omits the field."""
     c = {"source_experiment": "P", "condition": "FAB", "window_set": window_set, "grouping": grouping, "statistic": statistic, "weight": weight}
     if member_weighting:
         c["member_weighting"] = member_weighting
+    if rank_scope == "auto":
+        rank_scope = None if member_weighting != "posterior_rank_median" else ("within_cell" if grouping == "per_cell_window" else "construction")
+    if rank_scope is not None:
+        c["rank_scope"] = rank_scope
     return c
 
 
@@ -107,7 +137,7 @@ def test_self_exclusion_is_by_identity_and_identical_peers_stay_in_the_matrix():
     rng = np.random.default_rng(1)
     coll, ids = _two_cells_identical_plus_one(rng)
     res = agg.aggregate(coll, TABLE, window_sets={"all": None})
-    compat = agg.compute_compatibility(res, coll)
+    compat = _compat(res, coll)
     blk = [b for b in compat.blocks if b.construction == "per_cell"][0]
     cells = [res.groups[int(i)].cell for i in blk.group_index]
     a, b = cells.index(3), cells.index(7)
@@ -139,7 +169,7 @@ def test_two_mutually_supporting_distant_windows_get_zero_median_but_nonzero_mea
     rng = np.random.default_rng(2)
     coll, ids, geom = _ten_windows_two_distant(rng)
     res = agg.aggregate(coll, TABLE, window_sets={"all": None})
-    compat = agg.compute_compatibility(res, coll)
+    compat = _compat(res, coll)
     blk = [b for b in compat.blocks if b.construction == "per_cell_window"][0]
     chunks = [res.groups[int(i)].chunk for i in blk.group_index]
     assert chunks == list(range(10))
@@ -181,11 +211,11 @@ def test_missing_scores_are_not_zeros_and_the_constructor_refuses_them():
     coll = _collection(np.array([[-0.5, 0.4, 0.5]]) + rng.normal(scale=0.01, size=(1, 30, 3)), ids,
                        geometry=S.window_geometry(n_frames=100, step_frames=100, span_frames=100))
     res = agg.aggregate(coll, TABLE, window_sets={"all": None, "opening": (0,)})
-    compat = agg.compute_compatibility(res, coll)
+    compat = _compat(res, coll)
     assert not compat.blocks
     for g, st, sc, nr in zip(res.groups, compat.status, compat.score, compat.n_references):
         assert np.isnan(sc) and nr == 0
-        assert st == ("insufficient_peers" if g.construction in agg.RANK_SCORED_CONSTRUCTIONS else "not_applicable"), (g.construction, st)
+        assert st == ("insufficient_peers" if g.construction in agg.rank_scored_constructions(WC) else "not_applicable"), (g.construction, st)
     with tempfile.TemporaryDirectory() as tmp:
         arc, _, _, _ = _archive(Path(tmp), coll, {"all": None, "opening": (0,)})
         avail = ndli.component_weighting_availability(arc)
@@ -206,7 +236,7 @@ def test_missing_scores_are_not_zeros_and_the_constructor_refuses_them():
         pc = [i for i, g in enumerate(res.groups) if g.construction == "per_cell"]
         assert all(compat.status[i] == "computed" and compat.score[i] == 0.0 for i in pc)
         _expect(ValueError, lambda: ndli.representatives_from_spec(_spec(arc, _comp("per_cell", 1.0, member_weighting="posterior_rank_median")),
-                                                                   arc, TABLE, PLO, PHI, target=TARGET), "every per-cell score of this component is zero")
+                                                                   arc, TABLE, PLO, PHI, target=TARGET), "every score of this component is zero")
         # the advertised availability applies the same normalization rule: computed, but not normalizable
         text = ndli.component_weighting_availability(arc)[("FAB", "all", "per_cell")]
         assert text.startswith("rank space all (a, b, c): unavailable") and "computed for 3/3" in text and "cannot be normalized" in text and "zero" in text, text
@@ -228,7 +258,7 @@ def test_reference_scopes_other_windows_of_the_same_cell_other_cells_of_the_same
     a = T._product_with_clouds(rng, IDS)
     coll = agg.cloud_from_product(a, S.decode_manifest(a[S.MANIFEST_KEY]))
     res = agg.aggregate(coll, TABLE, window_sets={"all": None, "late": (2, 3)})
-    compat = agg.compute_compatibility(res, coll)
+    compat = _compat(res, coll)
     # a named set scores only within its declared positions: window 2 against window 3 only
     for g, st, nr in zip(res.groups, compat.status, compat.n_references):
         if g.construction == "per_cell_window":
@@ -247,8 +277,8 @@ def test_reference_scopes_other_windows_of_the_same_cell_other_cells_of_the_same
     inlb_ids = [(1, 5, w) for w in range(4)] + [(1, 9, w) for w in range(4)]
     coll2 = _collection(np.concatenate([coll.cloud, T._cloud(rng, inlb_ids)]), IDS + inlb_ids, kinds=("FAB", "INLB"))
     res2 = agg.aggregate(coll2, TABLE, window_sets={"all": None})
-    compat2 = agg.compute_compatibility(res2, coll2)
-    res1 = agg.aggregate(coll, TABLE, window_sets={"all": None}); compat1 = agg.compute_compatibility(res1, coll)
+    compat2 = _compat(res2, coll2)
+    res1 = agg.aggregate(coll, TABLE, window_sets={"all": None}); compat1 = _compat(res1, coll)
     key = lambda g: (g.construction, g.window_set, g.kind, g.cell, g.chunk)   # noqa: E731
     s1 = {key(g): float(compat1.score[i]) for i, g in enumerate(res1.groups) if g.kind == "FAB"}
     s2 = {key(g): float(compat2.score[i]) for i, g in enumerate(res2.groups) if g.kind == "FAB"}
@@ -265,7 +295,7 @@ def test_opening_aliases_keep_their_own_availability_and_pooled_arrays_are_uncha
     a = T._product_with_clouds(rng, IDS)
     coll = agg.cloud_from_product(a, S.decode_manifest(a[S.MANIFEST_KEY]))
     res = agg.aggregate(coll, TABLE, window_sets={"all": None, "opening": (0,)})
-    compat = agg.compute_compatibility(res, coll)
+    compat = _compat(res, coll)
     pc = {g.cell: i for i, g in enumerate(res.groups) if g.construction == "per_cell" and g.window_set == "opening"}
     pcw = {g.cell: i for i, g in enumerate(res.groups) if g.construction == "per_cell_window" and g.window_set == "opening"}
     for c in pc:
@@ -279,7 +309,7 @@ def test_opening_aliases_keep_their_own_availability_and_pooled_arrays_are_uncha
     assert blk_all.reference_draws.tolist() == [4 * T.SDRAWS] * 3
     # pool invariance: the aggregation's groups are untouched by the compatibility step, and the archive keeps v1's arrays
     before = [(g.sgm_log10.copy(), g.median_log10.copy(), g.quantiles_log10.copy(), dict(g.sgm_source), list(g.members)) for g in res.groups]
-    agg.compute_compatibility(res, coll)
+    _compat(res, coll)
     for g, (s, m, q, src, mem) in zip(res.groups, before):
         assert np.array_equal(g.sgm_log10, s) and np.array_equal(g.median_log10, m) and np.array_equal(g.quantiles_log10, q)
         assert g.sgm_source == src and g.members == mem
@@ -288,12 +318,12 @@ def test_opening_aliases_keep_their_own_availability_and_pooled_arrays_are_uncha
         A = arc["arrays"]
         assert np.array_equal(A["sgm_log10"], np.asarray([g.sgm_log10 for g in res.groups]))
         assert [str(c) for c in A["construction"]] == [g.construction for g in res.groups]
-        assert arc["format_version"] == agg.ARCHIVE_FORMAT_VERSION == 3 and arc["manifest"]["archive_format_version"] == 3
+        assert arc["format_version"] == agg.ARCHIVE_FORMAT_VERSION == 4 and arc["manifest"]["archive_format_version"] == 4
         text = paths["groups_csv"].read_text().splitlines()
         assert text[0].endswith("compatibility_score,compatibility_status,compatibility_n_references,sgm_outside_prior_keys")
         comp_csv = paths["compatibility_csv"].read_text().splitlines()
         assert comp_csv[0].startswith("kind,window_set,construction,cell_context,candidate_group") and len(comp_csv) - 1 == sum(
-            b.group_index.size * (b.group_index.size - 1) for b in agg.compute_compatibility(res, coll).blocks)
+            b.group_index.size * (b.group_index.size - 1) for b in _compat(res, coll).blocks)
 
 
 def test_archive_format_two_round_trip_legacy_format_one_and_malformed_data_are_handled():
@@ -358,7 +388,7 @@ def test_archive_format_two_round_trip_legacy_format_one_and_malformed_data_are_
         _expect(agg.AggregationError, lambda: agg.load_candidate_archive(rewrite("status.npz", status_zero)), "only group of its context")
         _expect(agg.AggregationError, lambda: agg.load_candidate_archive(rewrite("proto.npz", None, lambda m: m["compatibility"]["protocol"].update(name="other"))),
                 "protocol 'other'")
-        _expect(agg.AggregationError, lambda: agg.load_candidate_archive(rewrite("v4.npz", None, lambda m: m.update(archive_format_version=4))), "not one of")
+        _expect(agg.AggregationError, lambda: agg.load_candidate_archive(rewrite("v5.npz", None, lambda m: m.update(archive_format_version=5))), "not one of")
         # the constructor validates the policy field itself
         for bad, needle in ((_comp("per_cell", 1.0, member_weighting="mean_rank"), "must be one of"),
                             (_comp("per_cell", 1.0, statistic="median", member_weighting="posterior_rank_median"), 'requires statistic = "sgm"'),
@@ -369,7 +399,7 @@ def test_archive_format_two_round_trip_legacy_format_one_and_malformed_data_are_
         p = tmp / "s.toml"
         p.write_text('[block]\nposterior_sample_pool_choice = "empirical_representatives"\ncandidate_archive = "x.npz"\nrationale = "r"\n'
                      '[[component]]\nsource_experiment = "P"\ncondition = "FAB"\nwindow_set = "all"\ngrouping = "per_cell"\nweight = 1.0\n'
-                     'member_weighting = "posterior_rank_median"\n')
+                     'member_weighting = "posterior_rank_median"\nrank_scope = "construction"\n')
         ndli.load_spec(p, KEYS, PLO, PHI, table=TABLE)
         p.write_text(p.read_text().replace('"posterior_rank_median"', '"inverse_distance"'))
         _expect(ValueError, lambda: ndli.load_spec(p, KEYS, PLO, PHI, table=TABLE), "must be one of")
@@ -487,24 +517,42 @@ def test_the_experiment_report_carries_the_subsection_figures_and_atlas_for_live
         write_experiment_outputs(rep, xargs, eval_cfg, TABLE, tmp / "live" / "p.npz", a, run_start=0.0, aggregation=req)
         text = (tmp / "live" / "report.md").read_text()
         assert "posterior compatibility of SGM representatives" in text and "ordinary median" in text
-        assert "| MET-FAB | all | SGM per cell (`per_cell`) | 1 | 14 | 13 | computed |" in text
-        assert "| MET-FAB | opening | SGM per cell–window (`per_cell_window`) | 0 | 14 | - | unavailable: no other selected window within a cell (insufficient_peers) |" in text
-        assert "| MET-FAB | all | SGM for included dataset (`global`) | 0 | 1 | - | not applicable (no rank policy) |" in text
+        assert "| MET-FAB | all | SGM per cell (`per_cell`) | construction | 1 | 14 | 13 | computed |" in text
+        # the complete populations: 56 cell–window groups against the other 55, four positions against the other three
+        assert "| MET-FAB | all | SGM per cell–window (`per_cell_window`) | construction | 1 | 56 | 55 | computed |" in text
+        assert "| MET-FAB | all | SGM per window position (`per_window_position`) | construction | 1 | 4 | 3 | computed |" in text
+        # a single-window set: the cell–window population is the 14 opening windows (13 peers); one position has no peer
+        assert "| MET-FAB | opening | SGM per cell–window (`per_cell_window`) | construction | 1 | 14 | 13 | computed |" in text
+        assert ("| MET-FAB | opening | SGM per window position (`per_window_position`) | construction | 0 | 1 | - | unavailable: a population of 1 "
+                "group has no peer (insufficient_peers) |") in text
+        assert ("| MET-FAB | all | SGM for included dataset (`global`) | - | 0 | 1 | - | not applicable (no same-level peer; uniform selection "
+                "remains available) |") in text
+        assert "Comparison scope: `construction`" in text and "p_i = alpha * s_i / (s_1 + ... + s_N)" in text and "No cell receives a reserved mass" in text
         assert "zero scores (centrality outcomes, not defective recordings)" in text and "aggregation_archive_reads_back | PASS" in text
-        for f in ("aggregation_FAB_all_compatibility_cells", "aggregation_FAB_opening_compatibility_cells", "aggregation_FAB_all_compatibility_windows"):
+        for f in ("aggregation_FAB_all_compatibility_cells", "aggregation_FAB_opening_compatibility_cells", "aggregation_FAB_all_compatibility_windows",
+                  "aggregation_FAB_all_compatibility_positions", "aggregation_FAB_all_compatibility_population"):
             assert (tmp / "live" / "figures" / f"{f}.png").exists() and f"figures/{f}.png" in text, f
-        assert not (tmp / "live" / "figures" / "aggregation_FAB_opening_compatibility_windows.png").exists()
-        assert "Not computed: no other selected window within a cell (opening 0–2 s window only)" in text
+        for f in ("windows", "positions", "population"):
+            assert not (tmp / "live" / "figures" / f"aggregation_FAB_opening_compatibility_{f}.png").exists()
+        assert "Computed without a separate figure: with one selected window (opening 0–2 s window only)" in text
+        assert "Not computed: one selected window position (opening 0–2 s window only) has no peer position" in text
+        # the population matrix is labeled as ONE 56 x 56 matrix, its same-cell blocks as part of it
+        assert "ONE matrix over the complete cell–window population" in text and "56 candidates (rows) against the same 56 groups" in text
+        assert "part of this one population and not separate matrices" in text
         assert "Median compatibility rank" not in text.split("## Figures")[0].split("posterior compatibility")[0]   # raw ranks live in the subsection
         atlas = tmp / "live" / "compatibility" / "FAB" / "all" / "windows"
         assert (atlas / "index.md").exists() and (atlas / "page_01.png").exists() and (atlas / "page_02.png").exists() and not (atlas / "page_03.png").exists()
         index = (atlas / "index.md").read_text()
         assert "| 0 | [page_01.png](page_01.png) |" in index and "| 13 | [page_02.png](page_02.png) |" in index
-        assert "[within-cell matrix atlas FAB/all](compatibility/FAB/all/windows/index.md)" in text
+        assert "[same-cell blocks of the cell–window matrix, FAB/all](compatibility/FAB/all/windows/index.md)" in text
+        assert "diagonal block of the complete 56 x 56 cell–window matrix" in index and "are NOT the candidate's score" in index
         for link in ("../../../../aggregation_groups.csv", "../../../../aggregation_compatibility.csv", "../../../../report.md"):
             assert (atlas / link).resolve().exists(), link
         assert (tmp / "live" / "aggregation_compatibility.csv").exists() and "[aggregation_compatibility.csv](aggregation_compatibility.csv)" in text
         live = agg.load_candidate_archive(tmp / "live" / "aggregation_candidates.npz")
+        assert live["format_version"] == 4 and live["compatibility"]["comparison_scope"] == agg.SCOPE_CONSTRUCTION
+        assert [(b["construction"], b["scope"], b["cell"], len(b["group_index"])) for b in live["compatibility"]["blocks"] if b["window_set"] == "all"] == [
+            ("per_cell", "construction", -1, 14), ("per_window_position", "construction", -1, 4), ("per_cell_window", "construction", -1, 56)]
         # the saved path (a retained collection through the same writer) computes the same matrices
         p = T._collection_file(tmp / "coll.npz", a, m, label="X")
         clouds = agg.combine_clouds([agg.cloud_from_collection(p)], reference_contract={k: m[k] for k in agg.CONTRACT_FIELDS})
@@ -532,7 +580,7 @@ def test_the_reader_requires_the_complete_reference_context_of_every_block():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         arc, res, compat, paths = _archive(tmp, coll, {"all": None, "opening": (0,)})
-        assert agg.load_candidate_archive(paths["archive"])["format_version"] == 3
+        assert agg.load_candidate_archive(paths["archive"])["format_version"] == 4
         def rewrite(name, mutate):
             with np.load(paths["archive"], allow_pickle=False) as z:
                 arrs = {k: z[k] for k in z.files}
@@ -581,6 +629,7 @@ def test_the_reader_requires_the_complete_reference_context_of_every_block():
             # an unexpected block on the opening per_cell_window context (a singleton reference set): refused
             import copy
             b = copy.deepcopy(cell_block); b["index"] = 99; b["construction"] = "per_cell_window"; b["cell"] = 0; b["window_set"] = "opening"
+            b["scope"] = WC
             b["arrays"] = {k: "extra_" + k for k in names}; m["compatibility"]["blocks"].append(b)
             gi = np.asarray([i for i, (c, w, s) in enumerate(zip(arrs["construction"], arrs["window_set"], arrs["cell"]))
                              if c == "per_cell_window" and w == "opening" and s == 0] + [0], np.int64)
@@ -647,7 +696,7 @@ def test_zero_mass_components_report_truthfully_in_the_dry_run_and_the_report():
         label = arc["manifest"]["product_label"]
         def comp(weight, policy):
             return {"source_experiment": label, "condition": "FAB", "window_set": "all", "grouping": "per_cell", "statistic": "sgm",
-                    "weight": weight, "member_weighting": policy}
+                    "weight": weight, "member_weighting": policy, **({"rank_scope": "construction"} if policy != "uniform" else {})}
         for policy in ("uniform", "posterior_rank_median"):
             spec = {"block": {"posterior_sample_pool_choice": "empirical_representatives", "candidate_archive": arc["path"],
                               "candidate_archive_sha256": arc["sha256"], "rationale": "zero-mass regression"},
@@ -685,7 +734,7 @@ def test_override_collisions_keep_every_stored_row_s_provenance():
         spec = {"block": {"posterior_sample_pool_choice": "empirical_representatives", "candidate_archive": arc["path"],
                           "candidate_archive_sha256": arc["sha256"], "rationale": "collision regression"},
                 "component": [{"source_experiment": label, "condition": "FAB", "window_set": "all", "grouping": "per_cell", "statistic": "sgm",
-                               "weight": 1.0, "member_weighting": "posterior_rank_median"}],
+                               "weight": 1.0, "member_weighting": "posterior_rank_median", "rank_scope": "construction"}],
                 "override": {k: {"value": v, "reason": "collision probe"} for k, v in values.items()}}
         vec, pr, rec = ndli.representatives_from_spec(spec, arc, table, R["plo"], R["phi"], target=target)
         assert vec.shape == (4, 6) and len(np.unique(vec, axis=0)) == 1              # four stored rows, one final value
@@ -723,8 +772,8 @@ def test_override_collisions_keep_every_stored_row_s_provenance():
 # ---------------------------------------------------------------------------------------------------------------------
 def _archive_with_spaces(tmp, coll, window_sets, spaces, *, kinds=("FAB",), table=TABLE, target=TARGET, product_label="P"):
     res = agg.aggregate(coll, table, window_sets=window_sets)
-    compat = agg.compute_compatibility(res, coll)
-    extra = agg.compute_rank_spaces(res, coll, spaces)
+    compat = _compat(res, coll)
+    extra = agg.compute_rank_spaces(res, coll, spaces, scope=WC)
     man = agg.export_manifest(res, product_label=product_label, condition_labels=list(kinds), target=target, compatibility=compat, rank_spaces=extra)
     paths = agg.write_aggregation_exports(res, tmp, table, manifest=man, compatibility=compat, rank_spaces=extra)
     return agg.load_candidate_archive(paths["archive"]), res, compat, extra, paths
@@ -746,8 +795,8 @@ def test_a_rank_space_projects_the_same_groups_and_references_onto_its_coordinat
     a = T._product_with_clouds(rng, ids)
     coll = agg.cloud_from_product(a, S.decode_manifest(a[S.MANIFEST_KEY]))
     res = agg.aggregate(coll, TABLE, window_sets={"all": None, "opening": (0,)})
-    full = agg.compute_compatibility(res, coll)
-    sub = agg.compute_compatibility(res, coll, coordinates=["c", "a"], label="ac")          # any order in; table order out
+    full = _compat(res, coll)
+    sub = _compat(res, coll, coordinates=["c", "a"], label="ac")          # any order in; table order out
     assert sub.label == "ac" and sub.coordinates == ("a", "c") and sub.key_indices == (0, 2)
     assert full.coordinates == ("a", "b", "c") and full.key_indices == (0, 1, 2) and full.label == agg.RANK_SPACE_ALL
     assert np.array_equal(sub.status, full.status) and np.array_equal(sub.n_references, full.n_references)
@@ -777,10 +826,10 @@ def test_a_rank_space_projects_the_same_groups_and_references_onto_its_coordinat
             assert np.isnan(sub.score[i])
     assert not np.allclose(np.nan_to_num(sub.score), np.nan_to_num(full.score))
     # every key as a declared subset is the primary space again (equal values); a labeled 'all' subset is refused
-    same = agg.compute_compatibility(res, coll, coordinates=["a", "b", "c"], label="everything")
+    same = _compat(res, coll, coordinates=["a", "b", "c"], label="everything")
     assert np.array_equal(np.nan_to_num(same.score), np.nan_to_num(full.score)) and same.coordinates == full.coordinates
-    _expect(agg.AggregationError, lambda: agg.compute_compatibility(res, coll, coordinates=["a"], label=agg.RANK_SPACE_ALL), "own label")
-    _expect(agg.AggregationError, lambda: agg.compute_compatibility(res, coll, coordinates=["zz"], label="x"), "not parameter keys")
+    _expect(agg.AggregationError, lambda: _compat(res, coll, coordinates=["a"], label=agg.RANK_SPACE_ALL), "own label")
+    _expect(agg.AggregationError, lambda: _compat(res, coll, coordinates=["zz"], label="x"), "not parameter keys")
     # the parser
     assert agg.parse_rank_spaces("ac=c,a;b_only=b", KEYS) == {"ac": ("a", "c"), "b_only": ("b",)}
     assert agg.parse_rank_spaces("", KEYS) == {} and agg.parse_rank_spaces(None, KEYS) == {}
@@ -803,7 +852,7 @@ def test_format_three_archives_carry_every_space_and_malformed_spaces_are_refuse
         arc, res, compat, extra, paths = _archive_with_spaces(tmp / "v3", coll, {"all": None, "opening": (0,)}, {"ac": ("a", "c")})
         arc2, _, compat2, paths2 = _archive(tmp / "v2like", coll, {"all": None, "opening": (0,)})
         A, A2 = arc["arrays"], arc2["arrays"]
-        assert arc["format_version"] == 3 and arc2["format_version"] == 3
+        assert arc["format_version"] == 4 and arc2["format_version"] == 4
         for k in ("compatibility_score", "compatibility_status", "compatibility_n_references", "sgm_log10", "compatibility_block_0_ranks"):
             assert np.array_equal(np.nan_to_num(A[k]) if A[k].dtype.kind == "f" else A[k], np.nan_to_num(A2[k]) if A2[k].dtype.kind == "f" else A2[k]), k
         assert paths["compatibility_csv"].read_text() == paths2["compatibility_csv"].read_text()
@@ -833,11 +882,16 @@ def test_format_three_archives_carry_every_space_and_malformed_spaces_are_refuse
             np.savez_compressed(tmp / name, **arrs, manifest_json=np.asarray(json.dumps(m, sort_keys=True, default=str)))
             return tmp / name
         def as_v2(arrs, m):
-            m["archive_format_version"] = 2; m["compatibility"].pop("rank_spaces")
+            _as_legacy(m, 2)
             for k in [k for k in arrs if k.startswith("compatibility_ac_")]:
                 arrs.pop(k)
         v2 = agg.load_candidate_archive(rewrite("v2.npz", as_v2))
-        assert v2["format_version"] == 2 and list(v2["compatibility"]["spaces"]) == ["all"]
+        assert v2["format_version"] == 2 and list(v2["compatibility"]["spaces"]) == ["all"] and v2["compatibility"]["comparison_scope"] == WC
+        # the same archive as legacy format 3 (protocol v1, no scope field): read under its recorded within_cell meaning
+        v3 = agg.load_candidate_archive(rewrite("v3.npz", lambda arrs, m: _as_legacy(m, 3)))
+        assert v3["format_version"] == 3 and v3["compatibility"]["comparison_scope"] == WC and list(v3["compatibility"]["spaces"]) == ["all", "ac"]
+        assert v3["compatibility"]["protocol"]["name"] == agg.LEGACY_COMPATIBILITY_PROTOCOL
+        assert np.array_equal(v3["arrays"]["compatibility_score"], arc["arrays"]["compatibility_score"], equal_nan=True)
         # malformed spaces
         def wrong_coords(arrs, m):
             m["compatibility"]["rank_spaces"]["ac"]["coordinates"] = ["a", "b"]
@@ -938,11 +992,12 @@ def test_availability_is_evaluated_separately_for_every_rank_space():
         tmp = Path(tmp)
         arc, *_ = _archive_with_spaces(tmp / "fwd", coll, {"all": None}, {"a_only": ("a",)})
         comp = agg.archive_component(arc, kind="FAB", window_set="all", construction="per_cell_window")
-        ndli.member_probabilities("posterior_rank_median", 1.0, comp)                                   # the primary space normalizes
-        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp, rank_coordinates=["a"]), "every selected-window score is zero")
+        ndli.member_probabilities("posterior_rank_median", 1.0, comp, rank_scope=WC)                    # the primary space normalizes
+        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp, rank_coordinates=["a"], rank_scope=WC),
+                "every selected-window score is zero")
         text = ndli.component_weighting_availability(arc)[("FAB", "all", "per_cell_window")]
-        assert text.startswith("rank space all (a, b, c): available, compatibility scores computed for 12/12 members and normalizable; "), text
-        assert "rank space a_only (a): unavailable: compatibility scores computed for 12/12 members, but the policy cannot be normalized" in text, text
+        assert text.startswith('rank space all (a, b, c): available under rank_scope "within_cell", compatibility scores computed for 12/12 members and normalizable; '), text
+        assert 'rank space a_only (a): unavailable under rank_scope "within_cell": compatibility scores computed for 12/12 members, but the policy cannot be normalized' in text, text
         assert "every selected-window score is zero" in text and text.count("): available") + text.count("): unavailable") == 2, text
         # the reverse: identical windows in `a` (every `a`-rank is 1, normalizable) with `b` and `c` making the all-space zero within a cell
         clouds2 = [np.column_stack([-0.8 + 0.001 * c + np.linspace(-0.01, 0.01, 51), np.linspace(0.0, 1.0, 51) if w < 2 else np.linspace(0.0, 1.0, 51) + 3.0,
@@ -950,12 +1005,17 @@ def test_availability_is_evaluated_separately_for_every_rank_space():
         coll2 = _collection(np.asarray(clouds2), ids)
         arc2, *_ = _archive_with_spaces(tmp / "rev", coll2, {"all": None}, {"a_only": ("a",)})
         comp2 = agg.archive_component(arc2, kind="FAB", window_set="all", construction="per_cell_window")
-        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp2), "every selected-window score is zero")
-        p, _, _ = ndli.member_probabilities("posterior_rank_median", 1.0, comp2, rank_coordinates=["a"])
+        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp2, rank_scope=WC), "every selected-window score is zero")
+        p, _, _ = ndli.member_probabilities("posterior_rank_median", 1.0, comp2, rank_coordinates=["a"], rank_scope=WC)
         assert abs(p.sum() - 1.0) < 1e-12
         text2 = ndli.component_weighting_availability(arc2)[("FAB", "all", "per_cell_window")]
-        assert text2.startswith("rank space all (a, b, c): unavailable: compatibility scores computed for 12/12 members, but the policy cannot be normalized"), text2
-        assert "; rank space a_only (a): available, compatibility scores computed for 12/12 members and normalizable" in text2, text2
+        assert text2.startswith('rank space all (a, b, c): unavailable under rank_scope "within_cell": compatibility scores computed for 12/12 members, but the policy cannot be normalized'), text2
+        assert '; rank space a_only (a): available under rank_scope "within_cell", compatibility scores computed for 12/12 members and normalizable' in text2, text2
+        # the scope is explicit and never implied: no scope, an unknown scope and the other scope are refused
+        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp2, rank_coordinates=["a"]), "needs an explicit rank_scope")
+        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp2, rank_coordinates=["a"], rank_scope="cell"), "needs an explicit rank_scope")
+        _expect(ValueError, lambda: ndli.member_probabilities("posterior_rank_median", 1.0, comp2, rank_coordinates=["a"], rank_scope="construction"),
+                "is not the scope this archive's per_cell_window scores were computed under", "'within_cell'", "never renormalized")
         # missing scores (the opening per_cell_window singletons) keep their own wording in every space
         arc3, *_ = _archive_with_spaces(tmp / "miss", coll, {"all": None, "opening": (0,)}, {"a_only": ("a",)})
         text3 = ndli.component_weighting_availability(arc3)[("FAB", "opening", "per_cell_window")]
@@ -979,7 +1039,7 @@ def test_the_grid_figure_and_the_companion_report_for_one_sgm_per_cell_and_windo
         arc, R, target, table, companion = _detector_fixture(rng, tmp / "arc", n_cells=3, n_windows=4)
         spec = {"block": {"posterior_sample_pool_choice": "empirical_representatives", "candidate_archive": arc["path"], "rationale": "test"},
                 "component": [{"source_experiment": arc["manifest"]["product_label"], "condition": "FAB", "window_set": "all", "grouping": "per_cell_window",
-                               "statistic": "sgm", "weight": 1.0, "member_weighting": "posterior_rank_median"}],
+                               "statistic": "sgm", "weight": 1.0, "member_weighting": "posterior_rank_median", "rank_scope": "within_cell"}],
                 "override": {"prob_photo_bleach": {"value": 0.05, "reason": "test"}}}
         nu = ndli.build_nuisance_dli(spec, R["imaging_keys"], R["plo"], R["phi"], table=det.DETECTOR_PARAMETERIZATION, archive=arc, target=target)
         rep = DiagnosticReporter(stage="Nuisance_DLI", enabled=True, dump=True, dump_dir=tmp / "rep", run_label="T", timestamp="now")
@@ -987,10 +1047,14 @@ def test_the_grid_figure_and_the_companion_report_for_one_sgm_per_cell_and_windo
         rep.write_report()
         text = (tmp / "rep" / "report.md").read_text()
         assert (tmp / "rep" / "figures" / "representatives_probabilities.png").exists()
-        assert "share of its cell's total mass" in text and "equal cell mass is the policy's rule" in text
+        assert "the stored sampling probability of every row itself" in text and "share of its cell" not in text
+        assert "Equal cell totals are this policy's rule (rank scope within_cell)" in text and "rank scope `within_cell`" in text
         assert "rank space `all`" in text and "include overridden coordinate(s) prob_photo_bleach" in text
         members = (tmp / "rep" / "representatives_members.csv").read_text().splitlines()
-        assert "rank_space,score_used" in members[0] and members[1].split(",")[-4] == "all"
+        assert "rank_space,score_used" in members[0] and members[0].endswith(",rank_scope")
+        assert members[1].split(",")[-5] == "all" and members[1].split(",")[-1] == "within_cell"
+        totals = (tmp / "rep" / "representatives_cell_totals.csv").read_text().splitlines()
+        assert len(totals) == 4 and all(abs(float(line.split(",")[1]) - 1 / 3) < 1e-12 for line in totals[1:])     # equal cell mass by rule
         print("  PASS grid figure drawn for one SGM per cell and window; rank space and override relation stated in the report")
 
 
