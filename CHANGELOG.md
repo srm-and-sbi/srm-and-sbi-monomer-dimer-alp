@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Analysis companions only: the embedding checks. No change to the simulator, the estimators, the stages, the priors,
+the samplers, the artifact formats or any file the stage products hash. The package version is unchanged.
+
+- **Embedding-space distance (`embedding_space_distance`, its runner and guide).** The classifier two-sample test
+  is scored by the held-out AUC under grouped, stratified cross-validation, with a null from relabeling whole units
+  of equal size (`matched_blocks` groups the synthetic videos into blocks of the recordings' window counts); its
+  default classifier is a class-weighted logistic regression, described as linear separability. Every comparison is
+  repeated on one window per recording (`--single-window-chunk`, default 0, the opening window), where each unit is
+  one sample; those rows carry the test. Verdicts read "difference detected" and "no difference detected". A
+  detected difference between the experimental and the synthetic EVAL populations is documented as a difference
+  between populations, not by itself a failure of the forward model. New: a per-window typicality
+  (`knn_typicality`, the tail share of the k-th-nearest-neighbor distance; raw, and standardized with the scale of
+  the reference alone, the latter descriptive), `window_typicality.csv`, the stored `embeddings.npz`, the options
+  `--artifact-tag`, `--c2st-permutations`, `--c2st-reference-cap`, `--c2st-classifier`, `--knn-k`; the HPC launcher
+  forwards `ARTIFACT_TAG`.
+- **Posterior-predictive embedding check (new: `posterior_predictive_embedding_runner`, two entry scripts, guide).**
+  Three steps (`plan`, `simulate`, `analyze`): videos simulated at joint draws of a window's stored posterior, with
+  the workflow's nuisances drawn as the training data draw them, are embedded and the window is ranked among them
+  (`knn_typicality` with pooled scaling). The plan takes the window layout and the recording span from the source of
+  the draws and refuses a contradicting option; a window file is accepted only with the checksum of the plan it was
+  simulated from; the report states the share of posterior draws the pool excluded, a pixel-level comparison of
+  every window with its predictive videos, and that the ranks are not calibrated p-values.
+- **`DETECTOR_WORKFLOW.md`, section 8.** A current-method note takes precedence over the historical statistics and
+  interpretation paragraphs; the numerical results of the section are kept.
+- **Tests.** `tests/test_embedding_space_distance.py` (18), `tests/test_posterior_predictive_embedding.py` (10), one
+  launcher test.
+
 ## 0.1.49 - 2026-11-10
 
 The posterior compatibility ranks carry an explicit comparison scope, and Experiment computes the construction-wide

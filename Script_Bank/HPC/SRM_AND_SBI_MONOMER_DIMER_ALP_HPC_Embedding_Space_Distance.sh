@@ -5,7 +5,9 @@
 # Runs the embedding-distance analysis for either workflow (WORKFLOW=biology|detector)
 # over one shared engine. The analysis embeds every experimental window and every
 # synthetic EVAL video through the trained network, then scores the gap with MMD
-# (permutation null) and C2ST, both blocked by recording.
+# (permutation null) and C2ST (held-out AUC, unit-level permutation null), both blocked by
+# recording, ranks every experimental window among the synthetic videos, and stores the
+# embeddings for the posterior-predictive embedding check.
 #
 # SINGLE-GPU BY DESIGN, WHOLE-NODE BY ALLOCATION. The engine resolves one device
 # (`resolve_topology().device`) and does not shard -- there is no per-rank split and no
@@ -18,7 +20,11 @@
 # SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Submit.sh, and is submitted directly with sbatch.
 #
 # Overridable via --export: WORKFLOW (biology|detector), EVAL_TASKS, TOTAL_TIME, KINDS,
-#   N_PERMUTATIONS, SPAN (experimental recording span, s), EXTRA (extra CLI flags).
+#   N_PERMUTATIONS, SPAN (experimental recording span, s), ARTIFACT_TAG (the tag of the estimator to
+#   read, e.g. C128V49A; the outputs carry the same product label; unset -> the untagged estimator),
+#   EXTRA (extra CLI flags, e.g. "--c2st-permutations 500 --knn-k 10"). The one-window-per-recording
+#   rows read the opening window (the entry point's default); another position goes through EXTRA
+#   ("--single-window-chunk N").
 #
 # Example (biology, the detector's known-good scale):
 #   cd /path/to/srm-and-sbi-monomer-dimer-alp
@@ -68,6 +74,7 @@ TOTAL_TIME="${TOTAL_TIME:-2.0}"
 KINDS="${KINDS:-}"   # default (empty): the run's CONDITION; set only for a deliberate cross-condition embedding
 N_PERMUTATIONS="${N_PERMUTATIONS:-1000}"
 SPAN="${SPAN:-20}"
+ARTIFACT_TAG="${ARTIFACT_TAG:-}"   # empty -> the untagged estimator
 
 # ABSOLUTE paths, as in the stage wrappers. hpc_local.env cd's into the GPU coredump
 # directory after this script's own `cd "$REPO"`, so a relative script path resolves against
@@ -78,7 +85,7 @@ case "$WORKFLOW" in
     *) echo "FATAL: WORKFLOW must be 'biology' or 'detector', got '$WORKFLOW'." >&2; exit 1 ;;
 esac
 
-echo "=== Embedding_Space_Distance | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} time=${TOTAL_TIME}s condition=${CONDITION} kinds=${KINDS:-<condition>} span=${SPAN}s perms=${N_PERMUTATIONS} | node $(hostname) ==="
+echo "=== Embedding_Space_Distance | workflow=${WORKFLOW} eval_tasks=${EVAL_TASKS} time=${TOTAL_TIME}s condition=${CONDITION} kinds=${KINDS:-<condition>} span=${SPAN}s perms=${N_PERMUTATIONS} tag=${ARTIFACT_TAG:-none} | node $(hostname) ==="
 echo "    single-GPU engine on a whole-node allocation (gres=gpu:4); no sharding, no merge."
 
 # CONDITION (FAB|INLB): every product of this stage is condition-specific (the labeling law
@@ -86,12 +93,14 @@ echo "    single-GPU engine on a whole-node allocation (gres=gpu:4); no sharding
 case "${CONDITION:-}" in FAB|INLB) ;; *) echo "FATAL: CONDITION='${CONDITION:-}' (use FAB|INLB)." >&2; exit 1;; esac
 
 KINDS_ARG=(); [ -n "$KINDS" ] && KINDS_ARG=( --kinds "$KINDS" )
+TAG_ARG=(); [ -n "$ARTIFACT_TAG" ] && TAG_ARG=( --artifact-tag "$ARTIFACT_TAG" )   # tagged estimator + tagged outputs
 python -u "$SCRIPT" \
     --condition "$CONDITION" \
     --total-time-seconds "$TOTAL_TIME" \
     --eval-tasks "$EVAL_TASKS" \
     "${KINDS_ARG[@]}" \
     --experiment-span-seconds "$SPAN" \
+    "${TAG_ARG[@]}" \
     --n-permutations "$N_PERMUTATIONS" \
     ${EXTRA:-}
 

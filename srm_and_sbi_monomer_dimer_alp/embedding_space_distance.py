@@ -8,14 +8,25 @@ from synthetic videos (the held-out EVAL set), measured in the trained
   - Maximum Mean Discrepancy (MMD; Gretton et al. 2012) -- a kernel two-sample
     distance with an RBF kernel (median-heuristic bandwidth) and a permutation
     p-value. Larger means a bigger gap.
-  - Classifier Two-Sample Test (C2ST; Lopez-Paz & Oquab 2017) -- the accuracy of a
-    classifier trained to tell experimental from synthetic. ~0.5 means indistinguishable (a
-    small gap); ->1.0 means easily separable (a large gap).
+  - Classifier Two-Sample Test (C2ST; Lopez-Paz & Oquab 2017) -- how well a classifier
+    trained to tell experimental from synthetic ranks held-out samples, read as the area
+    under the ROC curve (AUC). 0.5 means indistinguishable (a small gap); ->1.0 means
+    easily separable (a large gap). The AUC is a rank statistic, so its no-information
+    value is 0.5 whatever the sizes of the two sets; its null distribution is built by
+    exchanging whole units.
 
 Both resample at the CELL level: video chunks within one recording are correlated,
 not independent, so the significance test permutes / splits whole cells rather than
 individual chunks. A sample with no cell label is treated as its own block (i.e.
-independent), which is the correct treatment for synthetic videos.
+independent), which is the correct treatment for synthetic videos; ``matched_blocks``
+groups independent synthetic videos into blocks of the recordings' sizes, so that a
+relabeling of blocks keeps the number of windows on each side.
+
+A third reading works per window instead of per set: ``knn_typicality`` ranks each
+query embedding's distance to its nearest reference neighbors against the same
+distance for the reference points themselves. It needs no classifier and gives one
+value per window, which is what a handful of experimental windows against thousands
+of synthetic videos can support.
 
 Pure analysis: numpy + torch (for the embedding forward pass); scikit-learn and scipy
 are imported lazily inside ``c2st`` so importing this module is cheap and its MMD path
@@ -170,82 +181,315 @@ def mmd_rbf(X, Y, *, bandwidth="median", n_permutations=1000, seed=None,
 # C2ST
 # =============================================================================
 
-def c2st(X, Y, *, classifier="mlp", n_folds=5, standardize=True, seed=None,
-         cells_x=None, cells_y=None):
-    """Classifier two-sample test with cell-aware (grouped) cross-validation.
+def matched_blocks(sizes, n, rng=None):
+    """Group ``n`` independent samples into blocks whose sizes repeat ``sizes``.
 
-    Trains a classifier to separate X (label 0) from Y (label 1) under k-fold CV; if
-    cell labels are given, uses ``GroupKFold`` so a cell's chunks never split across
-    train/test. Reports mean out-of-fold accuracy (null = 0.5), across-fold spread and
-    a 95% CI, and a **cell-aware** p-value: a one-sided t-test of the per-fold
-    accuracies against 0.5. Because the folds are grouped by cell, each fold-accuracy is
-    an out-of-cell estimate, so the test respects the cell correlation (it does NOT pool
-    per-chunk predictions as independent Bernoulli trials, which would be
-    anti-conservative). Conservative with few cells (few folds).
+    ``sizes`` are the window counts of the experimental recordings (their blocks). Independent
+    synthetic videos have no block structure, so any grouping of them is as good as another; grouping
+    them into blocks of the SAME sizes makes a relabeling of whole blocks keep the number of windows on
+    each side, which a permutation of unequal blocks (recordings of several windows against single
+    videos) does not. The samples are assigned to blocks in random order (``rng``); the sizes are cycled
+    in the order given, and samples left over when the next size no longer fits become single-sample
+    blocks.
 
-    ``classifier``: ``"mlp"`` (sbi-style two-layer MLP), ``"rf"`` (random forest), or
-    ``"logreg"``.
+    Returns an integer block label per sample, shape ``(n,)``.
     """
-    from sklearn.model_selection import StratifiedKFold, GroupKFold
+    sizes = [int(s) for s in sizes]
+    if not sizes or min(sizes) < 1:
+        raise ValueError(f"matched_blocks needs positive block sizes; got {sizes}.")
+    rng = np.random.default_rng() if rng is None else rng
+    order = rng.permutation(int(n))
+    labels = np.empty(int(n), dtype=np.int64)
+    pos, block, i = 0, 0, 0
+    while pos < n:
+        size = sizes[i % len(sizes)]
+        if pos + size > n:                      # the next block no longer fits: single-sample blocks
+            size = 1
+        labels[order[pos:pos + size]] = block
+        pos += size; block += 1; i += 1
+    return labels
+
+
+def _auc(scores, labels):
+    """Area under the ROC curve of ``scores`` for binary ``labels`` (1 = positive): the Mann-Whitney
+    statistic with average ranks for ties. NaN when one class is absent."""
+    from scipy.stats import rankdata
+    labels = np.asarray(labels).astype(bool)
+    n_pos = int(labels.sum()); n_neg = int(labels.size - n_pos)
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    ranks = rankdata(np.asarray(scores, float))
+    return float((ranks[labels].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
+def _unit_labels(n, m, cells_x, cells_y):
+    """Integer unit id per sample of the pooled ``[X; Y]`` stack (a recording, or a single sample when
+    no label is given), with the X and Y namespaces kept apart."""
+    gx = [("x", c) for c in (np.asarray(cells_x).tolist() if cells_x is not None else range(n))]
+    gy = [("y", c) for c in (np.asarray(cells_y).tolist() if cells_y is not None else range(m))]
+    gmap = {g: i for i, g in enumerate(dict.fromkeys(gx + gy))}
+    return np.array([gmap[g] for g in (gx + gy)], dtype=np.int64)
+
+
+def c2st(X, Y, *, classifier="logreg", n_folds=5, standardize=True, seed=None,
+         cells_x=None, cells_y=None, n_permutations=200):
+    """Classifier two-sample test: cross-validated AUC with a unit-level permutation null.
+
+    Trains a classifier to separate X (label 0) from Y (label 1) under grouped, stratified k-fold
+    cross-validation (a unit -- a recording, or a block of synthetic videos -- is never split between
+    training and test, and every test fold holds units of both sets) and scores it by the area under the
+    ROC curve of the held-out samples, averaged over the folds. The classifier weighs the two sets
+    equally whatever their sizes (``class_weight="balanced"``; the ``mlp`` option, which has no class
+    weights, trains on an equal-sized random subset of the larger set).
+
+    The AUC is a rank statistic: with no information it is 0.5 for ANY ratio of the two set sizes,
+    unlike the accuracy, whose no-information value is the share of the larger set.
+
+    Null distribution: the unit labels are exchanged and the whole procedure repeated
+    (``n_permutations`` times). Units are exchanged only with units of the same number of samples, so
+    every relabeling keeps the number of units AND the number of samples on each side; pass synthetic
+    blocks of the recordings' sizes (``matched_blocks``) so that every recording has partners. A unit
+    with no partner of its size stays on its side. The p-value is the share of relabelings whose AUC
+    is at least the observed one (one-sided, with the observed labeling counted); it is NaN when no
+    unit can be exchanged or ``n_permutations`` is 0. What the null states: a recording's windows are
+    exchangeable with a block of independent synthetic videos. Matching the block sizes does not make
+    that true: windows of one recording are correlated, so the null can be rejected by that
+    correlation alone, and with several windows per recording the AUC and its null range are the
+    quantities to read, the p-value an approximate guide. With ONE window per recording, and
+    recordings that are independent of each other, every unit is a single sample, the units are
+    exchangeable when the two distributions are equal, and the permutation p-value is valid. A
+    p-value above the level then says that no difference was detected at this sample size, not that
+    the two distributions are equal.
+
+    ``classifier``: ``"logreg"`` (default: L2-regularized logistic regression, cheap enough for the
+    permutations; a linear classifier, so its AUC measures LINEAR separability: a nonlinear classifier
+    can use structure it misses, but a fitted one is not guaranteed to score higher, so the linear AUC
+    is not a bound on it), ``"rf"`` (random forest) or ``"mlp"`` (two-layer MLP, as in the sbi package).
+
+    Returns a dict: ``auc``, ``auc_std``, ``per_fold``, ``null`` (0.5), ``null_mean``, ``null_range95``,
+    ``p_value``, ``n_permutations``, ``oof_score`` (held-out P(class Y) per sample of ``[X; Y]``),
+    ``classifier``, ``n_folds``, ``n``, ``m``, ``n_units_x``, ``n_units_y``, ``n_exchangeable_units_x``.
+    """
+    from sklearn.model_selection import StratifiedGroupKFold
     from sklearn.preprocessing import StandardScaler
-    from scipy.stats import ttest_1samp
 
     X = np.asarray(X, float); Y = np.asarray(Y, float)
     n, m = len(X), len(Y)
     Z = np.vstack([X, Y]); y = np.concatenate([np.zeros(n), np.ones(m)]).astype(int)
     D = Z.shape[1]
-    groups = None
-    if cells_x is not None or cells_y is not None:
-        gx = [("x", c) for c in (cells_x if cells_x is not None else range(n))]
-        gy = [("y", c) for c in (cells_y if cells_y is not None else range(m))]
-        gmap = {g: i for i, g in enumerate(dict.fromkeys(gx + gy))}
-        groups = np.array([gmap[g] for g in (gx + gy)])
+    units = _unit_labels(n, m, cells_x, cells_y)
+    unit_ids, unit_first, unit_index, unit_size = np.unique(units, return_index=True, return_inverse=True,
+                                                            return_counts=True)
+    unit_class = y[unit_first]                  # a unit lies wholly in X or in Y
+    n_units_x = int((unit_class == 0).sum()); n_units_y = int((unit_class == 1).sum())
+    n_splits = min(int(n_folds), n_units_x, n_units_y)
+    if n_splits < 2:
+        raise ValueError(f"c2st needs at least 2 units on each side for grouped cross-validation; "
+                         f"got {n_units_x} (X) and {n_units_y} (Y).")
 
     def _make():
         if classifier == "mlp":
             from sklearn.neural_network import MLPClassifier
-            return MLPClassifier(hidden_layer_sizes=(10 * D, 10 * D),
-                                 max_iter=1000, random_state=seed)
+            return MLPClassifier(hidden_layer_sizes=(10 * D, 10 * D), max_iter=1000, random_state=seed)
         if classifier == "rf":
             from sklearn.ensemble import RandomForestClassifier
-            return RandomForestClassifier(random_state=seed)
-        from sklearn.linear_model import LogisticRegression
-        return LogisticRegression(max_iter=1000)
+            return RandomForestClassifier(random_state=seed, class_weight="balanced")
+        if classifier == "logreg":
+            from sklearn.linear_model import LogisticRegression
+            return LogisticRegression(max_iter=1000, class_weight="balanced")
+        raise ValueError(f"classifier={classifier!r}; expected 'logreg', 'rf' or 'mlp'.")
 
-    if groups is not None:
-        n_splits = min(n_folds, len(np.unique(groups)))
-        splitter = GroupKFold(n_splits=n_splits).split(Z, y, groups)
+    def _statistic(labels, sample_units):
+        """Mean held-out AUC over the folds for one labeling of the samples."""
+        splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        aucs, oof = [], np.full(len(labels), np.nan)
+        sub_rng = np.random.default_rng(seed)
+        for tr, te in splitter.split(Z, labels, sample_units):
+            if classifier == "mlp":                       # no class weights: equal-sized training subset
+                pos, neg = tr[labels[tr] == 1], tr[labels[tr] == 0]
+                small = min(len(pos), len(neg))
+                tr = np.concatenate([sub_rng.choice(pos, small, replace=False),
+                                     sub_rng.choice(neg, small, replace=False)])
+            Ztr, Zte = Z[tr], Z[te]
+            if standardize:
+                sc = StandardScaler().fit(Ztr)
+                Ztr, Zte = sc.transform(Ztr), sc.transform(Zte)
+            clf = _make().fit(Ztr, labels[tr])
+            score = clf.predict_proba(Zte)[:, 1]
+            oof[te] = score
+            a = _auc(score, labels[te])
+            if not np.isnan(a):
+                aucs.append(a)
+        return np.array(aucs), oof
+
+    aucs, oof = _statistic(y, units)
+    auc = float(aucs.mean())
+    sd = float(aucs.std(ddof=1)) if len(aucs) > 1 else 0.0
+
+    # Units exchangeable under the null: the units of a size that both sets hold.
+    exchangeable = np.zeros(len(unit_ids), dtype=bool)
+    for size in np.unique(unit_size):
+        members = unit_size == size
+        if len(np.unique(unit_class[members])) == 2:
+            exchangeable |= members
+    n_exch_x = int((exchangeable & (unit_class == 0)).sum())
+    null = np.array([])
+    if n_permutations > 0 and n_exch_x > 0:
+        rng = np.random.default_rng(seed)
+        null = np.empty(int(n_permutations))
+        for b in range(int(n_permutations)):
+            permuted = unit_class.copy()
+            for size in np.unique(unit_size[exchangeable]):
+                members = np.flatnonzero(exchangeable & (unit_size == size))
+                permuted[members] = unit_class[rng.permutation(members)]
+            null[b] = _statistic(permuted[unit_index], units)[0].mean()
+        p = float((1 + np.count_nonzero(null >= auc)) / (len(null) + 1))
+        null_mean = float(null.mean())
+        null_range = (float(np.quantile(null, 0.025)), float(np.quantile(null, 0.975)))
     else:
-        n_splits = n_folds
-        splitter = StratifiedKFold(n_splits=n_splits, shuffle=True,
-                                   random_state=seed).split(Z, y)
+        p, null_mean, null_range = float("nan"), float("nan"), (float("nan"), float("nan"))
+    return {"auc": auc, "auc_std": sd, "per_fold": aucs.tolist(), "null": 0.5,
+            "null_mean": null_mean, "null_range95": null_range, "p_value": p,
+            "n_permutations": int(len(null)), "oof_score": oof.tolist(), "classifier": classifier,
+            "n_folds": int(n_splits), "n": n, "m": m, "n_units_x": n_units_x, "n_units_y": n_units_y,
+            "n_exchangeable_units_x": n_exch_x}
 
-    accs = []
-    oof = np.full(len(y), np.nan)   # out-of-fold P(class 1 = Y) per sample, for the score figure
-    for tr, te in splitter:
-        Ztr, Zte = Z[tr], Z[te]
-        if standardize:
-            sc = StandardScaler().fit(Ztr)
-            Ztr, Zte = sc.transform(Ztr), sc.transform(Zte)
-        clf = _make().fit(Ztr, y[tr])
-        accs.append(float(np.mean(clf.predict(Zte) == y[te])))
-        # Same classifier as the accuracy, so the score histogram matches the statistic. Each sample
-        # sits in exactly one test fold, so oof is filled once per sample.
-        oof[te] = (clf.predict_proba(Zte)[:, 1] if hasattr(clf, "predict_proba")
-                   else clf.predict(Zte).astype(float))
-    accs = np.array(accs)
-    acc = float(accs.mean())
-    sd = float(accs.std(ddof=1)) if len(accs) > 1 else 0.0
-    half = 1.96 * sd / np.sqrt(len(accs)) if len(accs) > 1 else 0.0
-    # Cell-aware significance: one-sided t-test on the per-fold (cell-grouped) accuracies
-    # vs 0.5 -- respects cell correlation (each fold-accuracy is out-of-cell), unlike a
-    # per-chunk binomial that would treat correlated chunks as independent trials.
-    p = (float(ttest_1samp(accs, 0.5, alternative="greater").pvalue)
-         if len(accs) >= 2 else float("nan"))
-    return {"accuracy": acc, "accuracy_std": sd, "per_fold": accs.tolist(),
-            "ci95": (acc - half, acc + half), "null": 0.5, "p_value": p,
-            "oof_score": oof.tolist(), "classifier": classifier, "n_folds": int(n_splits),
-            "n": n, "m": m}
+
+# =============================================================================
+# Nearest-neighbor typicality (one value per window)
+# =============================================================================
+
+def _sorted_knn(reference, query, k, block=1024):
+    """Distances to and indices of the ``k`` nearest reference points of each query point, sorted from
+    nearest; ``query=None`` takes the reference points themselves, each excluded from its own
+    neighbors (leave-one-out). Euclidean; computed in blocks of queries."""
+    R = np.asarray(reference, float)
+    loo = query is None
+    Q = R if loo else np.asarray(query, float)
+    limit = len(R) - 1 if loo else len(R)
+    if not 1 <= int(k) <= limit:
+        raise ValueError(f"k={k} is not in [1, {limit}] for {len(R)} reference points"
+                         + (" (leave-one-out)." if loo else "."))
+    rr = np.einsum("ij,ij->i", R, R)
+    dist = np.empty((len(Q), k)); index = np.empty((len(Q), k), dtype=np.int64)
+    for start in range(0, len(Q), block):
+        q = Q[start:start + block]
+        d2 = np.maximum(np.einsum("ij,ij->i", q, q)[:, None] + rr[None, :] - 2.0 * (q @ R.T), 0.0)
+        if loo:
+            d2[np.arange(len(q)), np.arange(start, start + len(q))] = np.inf
+        part = np.argpartition(d2, k - 1, axis=1)[:, :k]
+        part_d2 = np.take_along_axis(d2, part, axis=1)
+        order = np.argsort(part_d2, axis=1)
+        index[start:start + len(q)] = np.take_along_axis(part, order, axis=1)
+        dist[start:start + len(q)] = np.sqrt(np.take_along_axis(part_d2, order, axis=1))
+    return dist, index
+
+
+def _pooled_typicality(R, q, k):
+    """One query under pooled scaling: every coordinate is centered and divided by its standard
+    deviation over the ``n + 1`` points (the reference and the query together), so the score of a point
+    does not depend on which of them is called the query. Returns ``(tail_share, query_distance,
+    percentile, neighbors)``."""
+    n = len(R)
+    Z = np.vstack([R, q[None, :]])
+    scale = Z.std(axis=0)
+    Z = (Z - Z.mean(axis=0)) / np.where(scale > 0, scale, 1.0)
+    zz = np.einsum("ij,ij->i", Z, Z)
+    d2 = np.maximum(zz[:, None] + zz[None, :] - 2.0 * (Z @ Z.T), 0.0)
+    np.fill_diagonal(d2, np.inf)
+    score = np.sqrt(np.partition(d2, k - 1, axis=1)[:, k - 1])
+    tail = np.count_nonzero(score >= score[n]) / (n + 1.0)          # the query counts itself
+    percentile = 100.0 * np.count_nonzero(score[:n] < score[n]) / n
+    return tail, score[n], percentile, np.argsort(d2[n, :n], kind="stable")[:k]
+
+
+def knn_typicality(reference, query, *, k=10, standardize=False, block=1024):
+    """How typical each query embedding is of a reference cloud, by nearest-neighbor distance.
+
+    The score of a point is the distance to its ``k``-th nearest neighbor among the OTHER points of
+    the set it is judged in: small in the dense body of the cloud, large at its edge and beyond. For
+    one query point the set is the reference cloud plus that query; the query's score is compared with
+    the scores of the reference points in that same set (a reference point's score changes when the
+    query lands among its ``k`` nearest neighbors, and that is accounted for). ``tail_share`` is
+
+        (1 + number of reference points whose score is at least the query's) / (n_reference + 1).
+
+    If the query were one more independent draw from the distribution of the reference points, the
+    ``n + 1`` points would be exchangeable and the score treats them alike, so a ``tail_share`` at or
+    below ``a`` would occur with probability AT MOST ``a``: exactly ``a`` on the grid of attainable
+    values when no two scores are equal, less when scores tie (ties count against flagging, so the
+    reading is conservative). A small value therefore says the query lies farther from the cloud than
+    almost all of the cloud's own points do from each other. That statement needs the exchangeability:
+    it does not hold for a query that helped to produce the reference (an observation ranked among
+    simulations drawn at its own posterior). Each query is judged on its own; queries from one
+    recording are not independent, so the values of several windows are not combined into one p-value
+    here. A query deep inside the cloud gets a large value: only being far out is flagged.
+
+    ``standardize`` rescales the coordinates before the distances are taken. Raw distances
+    (``False``) are dominated by the coordinates with the largest spread; a standardized reading weighs
+    all coordinates alike, low-variance ones included. Two scalings:
+
+    * ``True`` -- center and scale by the REFERENCE cloud alone. Cheap, and the reference scores are
+      computed once. The query is then treated differently from the reference points (it had no part
+      in the scale), so the statement above is not guaranteed: a query far out in a coordinate is
+      measured with a scale it did not widen. With a large reference the departure is small, but the
+      value is a DESCRIPTIVE rank, not one with a stated rate.
+    * ``"pooled"`` -- center and scale by the reference and the query together, anew for every query.
+      The score is then symmetric in the ``n + 1`` points and the statement above holds as for raw
+      distances. Costs one full distance matrix of the reference per query: meant for small reference
+      sets (a window's predictive videos).
+
+    The raw and the standardized readings are complementary and neither is the 'correct' geometry.
+
+    Returns a dict: ``k``, ``n_reference``, ``standardized``, ``scaling`` (``"none"``,
+    ``"reference"`` or ``"pooled"``), ``query_distance`` (the query's ``k``-th-neighbor distance),
+    ``reference_distance`` (each reference point's leave-one-out ``k``-th-neighbor distance; under
+    pooled scaling in the reference-scaled geometry, as a description of the cloud), ``tail_share``,
+    ``percentile`` (share of the reference scores below the query's, in percent) and ``neighbors``
+    (the indices of the query's ``k`` nearest reference points, nearest first).
+    """
+    R = np.asarray(reference, float); Q = np.atleast_2d(np.asarray(query, float))
+    if R.ndim != 2 or Q.shape[1] != R.shape[1]:
+        raise ValueError(f"reference {R.shape} and query {Q.shape} must be 2-D with one embedding width.")
+    pooled = isinstance(standardize, str)
+    if pooled and standardize != "pooled":
+        raise ValueError(f"standardize={standardize!r}; expected False, True or 'pooled'.")
+    if standardize:
+        center = R.mean(axis=0)
+        scale = R.std(axis=0)
+        scale = np.where(scale > 0, scale, 1.0)
+        R_scaled = (R - center) / scale
+    n = len(R)
+    if pooled:
+        ref_k = _sorted_knn(R_scaled, None, k, block)[0][:, -1]
+        out = [_pooled_typicality(R, q, k) for q in Q]
+        return {"k": int(k), "n_reference": int(n), "standardized": True, "scaling": "pooled",
+                "query_distance": np.array([o[1] for o in out]), "reference_distance": ref_k,
+                "tail_share": np.array([o[0] for o in out]), "percentile": np.array([o[2] for o in out]),
+                "neighbors": np.array([o[3] for o in out], dtype=np.int64).reshape(len(Q), k)}
+    if standardize:
+        R, Q = R_scaled, (Q - center) / scale
+    ref_knn, _ = _sorted_knn(R, None, k, block)
+    ref_k = ref_knn[:, -1]
+    ref_k_minus_1 = ref_knn[:, -2] if k > 1 else np.zeros(n)
+    query_knn, neighbors = _sorted_knn(R, Q, k, block)
+    query_k = query_knn[:, -1]
+    rr = np.einsum("ij,ij->i", R, R)
+    tail = np.empty(len(Q))
+    for start in range(0, len(Q), block):
+        q = Q[start:start + block]
+        d = np.sqrt(np.maximum(np.einsum("ij,ij->i", q, q)[:, None] + rr[None, :] - 2.0 * (q @ R.T), 0.0))
+        # A reference point's score in the set that includes the query: the query replaces its k-th
+        # neighbor when it lies closer than that neighbor.
+        score = np.where(d < ref_k[None, :], np.maximum(ref_k_minus_1[None, :], d), ref_k[None, :])
+        at_least = np.count_nonzero(score >= query_k[start:start + len(q), None], axis=1)
+        tail[start:start + len(q)] = (1.0 + at_least) / (n + 1.0)
+    ref_sorted = np.sort(ref_k)
+    percentile = 100.0 * np.searchsorted(ref_sorted, query_k, side="left") / n
+    return {"k": int(k), "n_reference": int(n), "standardized": bool(standardize),
+            "scaling": "reference" if standardize else "none",
+            "query_distance": query_k, "reference_distance": ref_k, "tail_share": tail,
+            "percentile": percentile, "neighbors": neighbors}
 
 
 # =============================================================================
@@ -289,8 +533,8 @@ def distance_table(result):
         ["MMD (unbiased sq.)", f"{mmd['mmd2']:.4g}", "0 (identical)",
          f"{mmd['p_value']:.3g}", "larger => bigger gap"],
         ["MMD (sqrt)", f"{mmd['mmd']:.4g}", f"RBF sigma={mmd['sigma']:.3g}", "", ""],
-        ["C2ST accuracy", f"{c['accuracy']:.3f}",
-         f"0.5; CI[{c['ci95'][0]:.3f},{c['ci95'][1]:.3f}]", f"{c['p_value']:.3g}",
+        ["C2ST AUC", f"{c['auc']:.3f}",
+         f"0.5; null 95% [{c['null_range95'][0]:.3f},{c['null_range95'][1]:.3f}]", f"{c['p_value']:.3g}",
          "closer to 0.5 => smaller gap"],
     ]
     return headers, rows

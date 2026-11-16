@@ -102,6 +102,32 @@ def test_the_launchers_pass_the_window_sets_to_the_worker_and_the_merge_as_one_a
             assert len(recorded) == 2 and all("--compatibility-coordinates" not in argv for argv in recorded), recorded
 
 
+def test_the_embedding_launcher_forwards_the_estimator_tag_only_when_set():
+    """ARTIFACT_TAG selects the tagged estimator (and names the outputs); unset, no tag is forwarded."""
+    name = "SRM_AND_SBI_MONOMER_DIMER_ALP_HPC_Embedding_Space_Distance.sh"
+    for extra, expected in (({"ARTIFACT_TAG": "C128V49A"}, "C128V49A"), ({}, None)):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); bin_dir = tmp / "bin"; bin_dir.mkdir()
+            calls = tmp / "python_calls.jsonl"
+            _fake(bin_dir / "python", 'printf \'%s\\n\' "$(python3 -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@")" >> "'
+                  + str(calls) + '"\n')
+            conda = _fake(tmp / "conda.sh", "conda() { :; }\n")
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", HPC_ENV="/dev/null", CONDA_SETUP=str(conda),
+                       MACHINE_PROFILE="mars_pc", REPO=str(REPO), CONDITION="FAB", WORKFLOW="biology", **extra)
+            env.pop("ARTIFACT_TAG", None) if expected is None else None
+            rc, out = _run(["bash", str(REPO / "Script_Bank/HPC" / name)], env, REPO)
+            assert rc == 0, out
+            recorded = [json.loads(l) for l in calls.read_text().splitlines() if l.strip()]
+            assert len(recorded) == 1, recorded
+            argv = recorded[0]
+            if expected is None:
+                assert "--artifact-tag" not in argv, argv
+            else:
+                assert argv.count("--artifact-tag") == 1 and argv[argv.index("--artifact-tag") + 1] == expected, argv
+            assert f"tag={expected or 'none'}" in out, out
+            assert argv[argv.index("--condition") + 1] == "FAB", argv
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

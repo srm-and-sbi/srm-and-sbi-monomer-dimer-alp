@@ -1,24 +1,35 @@
 """Shared engine for the embedding-space distance analysis (biology and detector workflows).
 
 Both workflows ask the same question of a different embedding: *does the trained network place the
-REAL recordings where it places its own synthetic training distribution, or somewhere else?* The
-embedding is the only representation the posterior ever sees, so a gap there is a gap the inference
-cannot recover from -- every parameter estimate on real data is then an extrapolation. Measured two
-ways that fail differently: a kernel two-sample test (MMD, with a permutation null) and a
-classifier two-sample test (C2ST, out-of-fold accuracy), both blocked by recording so that
-within-recording correlation cannot masquerade as a real difference.
+experimental recordings where it places its own synthetic training distribution, or somewhere else?*
+The embedding is the only representation the posterior ever sees, so a window the network places
+outside its synthetic cloud is a window on which every parameter estimate is an extrapolation.
+Measured two ways that fail differently: a kernel two-sample test (MMD, with a permutation null) and
+a classifier two-sample test (C2ST, held-out AUC with a unit-level permutation null), both blocked
+by recording. Both are also run on ONE window per recording (a position declared beforehand, the
+opening window by default): the units are then single samples, and the permutation null is
+well-founded if the recordings are independent of each other. A third reading is per window: each
+experimental window's distance to its nearest synthetic neighbors, ranked against the same distance
+among the synthetic videos (``esd.knn_typicality``). The run also stores the embeddings it computed
+(``embeddings.npz``), which the posterior-predictive embedding check reads as its synthetic
+reference cloud.
 
-What the result MEANS is where the two workflows part company, and the difference is worth stating
-because it inverts:
+What a detected difference MEANS needs care, in both workflows. The synthetic EVAL set covers the
+whole training prior; a set of recordings can occupy a narrow part of it and still be described by
+the simulator, window by window. A two-sample test then detects a difference between the two
+POPULATIONS -- correctly, they are different distributions -- although no window lies outside the
+synthetic cloud. A detected difference is therefore not by itself a failure of the forward model.
+The per-window typicality is the reading that asks whether windows lie outside the cloud, and the
+posterior-predictive embedding check asks whether the model reproduces a window at the parameters
+inferred for it. What a window OUTSIDE the cloud points at differs between the workflows:
 
 * **detector** -- the imaging parameters are what the network infers, so the synthetic videos are
-  supposed to reproduce the real ones' *appearance*. A gap is a realism failure of the imaging
-  forward model, and closing it is the goal of the detector calibration.
-* **biology** -- the imaging is held fixed and the reaction-diffusion parameters are inferred, so a
-  gap is NOT primarily an imaging defect. It says the real recordings carry structure the synthetic
-  prior never generated -- biological variation outside the prior's reach, or an imaging mismatch
-  the frozen imaging vector cannot express. The remedy is a wider prior or a recalibrated imaging
-  vector, not a longer training run.
+  meant to reproduce the recordings' *appearance*. A window outside the cloud points at the imaging
+  forward model or at the prior ranges of its parameters.
+* **biology** -- the imaging is held fixed and the reaction-diffusion parameters are inferred. A
+  window outside the cloud carries structure the synthetic prior never generated: biological
+  variation outside the prior's reach, or an imaging mismatch the frozen imaging vector cannot
+  express. The remedy is a wider prior or a recalibrated imaging vector, not a longer training run.
 
 Everything measurable is shared; only the spec (:func:`_esd_spec`) differs -- the parameterization,
 the alias-qualified paths, and the report-facing parameter descriptions.
@@ -116,16 +127,18 @@ def _load_posterior(R):
 def _embed_experimental(R, posterior, device, kinds, span, n_frames, step_frames, max_cells):
     """Embed each experimental recording's model-length windows, one recording at a time.
 
-    Returns ``{kind: {"emb": [n, D], "cells": [n], "n_cells": int}}``. Embedding per recording keeps
-    only one recording's frames in memory at a time; the ``cells`` label (``"{kind}_{cell}"``, unique
-    across kinds) carries the recording identity the cell-level significance needs.
+    Returns ``{kind: {"emb": [n, D], "cells": [n], "n_cells": int, "cell_number": [n], "chunk": [n]}}``.
+    Embedding per recording keeps only one recording's frames in memory at a time; the ``cells`` label
+    (``"{kind}_{cell}"``, unique across kinds) carries the recording identity the cell-level
+    significance needs, and ``cell_number`` with ``chunk`` (the index of the window start) identify
+    each window in the per-window tables and in the stored embeddings.
     """
     groups = {}
     for kind in kinds:
         cells = _discover_cells(R["experiment_dir"], kind, span)
         if max_cells > 0:
             cells = cells[:max_cells]
-        emb_rows, cell_ids = [], []
+        emb_rows, cell_ids, cell_numbers, chunk_ids = [], [], [], []
         for cell in cells:
             tif = R["paths"].experiment_video_path(kind, cell, span, R["data_bank_root"])
             if not tif.exists():
@@ -138,8 +151,12 @@ def _embed_experimental(R, posterior, device, kinds, span, n_frames, step_frames
             emb_rows.append(esd.embed_videos(posterior, chunks, device=str(device),
                                              expected_frames=n_frames))
             cell_ids += [f"{kind}_{cell}"] * len(chunks)
+            cell_numbers += [int(cell)] * len(chunks)
+            chunk_ids += list(range(len(chunks)))                      # window w = the w-th window start
         emb = np.vstack(emb_rows) if emb_rows else np.empty((0, 0))
-        groups[kind] = {"emb": emb, "cells": np.array(cell_ids), "n_cells": len(cells)}
+        groups[kind] = {"emb": emb, "cells": np.array(cell_ids), "n_cells": len(cells),
+                        "cell_number": np.array(cell_numbers, dtype=np.int64),
+                        "chunk": np.array(chunk_ids, dtype=np.int64)}
     return groups
 
 
@@ -242,15 +259,155 @@ def _subsample(emb, cap, rng):
     return emb if len(emb) <= cap else emb[rng.choice(len(emb), cap, replace=False)]
 
 
-def _compare(A, cells_a, B, cells_b, *, alpha, n_perm, seed):
-    """One comparison: MMD + C2ST + a combined verdict (overlap iff both are non-significant)."""
-    mmd = esd.mmd_rbf(A, B, cells_x=cells_a, cells_y=cells_b, n_permutations=n_perm, seed=seed)
-    c = esd.c2st(A, B, cells_x=cells_a, cells_y=cells_b, seed=seed)
-    c2st_ok = np.isnan(c["p_value"]) or c["p_value"] >= alpha        # NaN (too few folds) -> can't reject
-    verdict = "overlap" if (mmd["p_value"] >= alpha and c2st_ok) else "gap"
+def _compare(A, cells_a, B, cells_b, *, alpha, n_perm, seed, c2st_permutations=200,
+             c2st_reference_cap=2000, classifier="logreg"):
+    """One comparison: MMD + C2ST (AUC) + a combined verdict ('no difference detected' iff both are
+    non-significant; that is a statement about this sample, not a proof of equal distributions).
+
+    ``cells_b=None`` marks ``B`` as independent synthetic videos. They are grouped into blocks of the
+    sizes of ``A``'s recordings (``esd.matched_blocks``), so that exchanging blocks keeps the number
+    of windows on each side, in the MMD permutation and in the classifier test alike. The classifier
+    test reads at most ``c2st_reference_cap`` synthetic videos (whole blocks, drawn at random; 0 = all):
+    its null refits the classifier for every relabeling, and a classifier that weighs the two sets
+    equally gains little from a reference many times the experimental set. The MMD reads all of them.
+    """
+    rng = np.random.default_rng(seed)
+    blocks_b = cells_b
+    if cells_b is None:
+        sizes = np.unique(np.asarray(cells_a), return_counts=True)[1]
+        blocks_b = esd.matched_blocks(sizes, len(B), rng)
+    mmd = esd.mmd_rbf(A, B, cells_x=cells_a, cells_y=blocks_b, n_permutations=n_perm, seed=seed)
+    B_used, blocks_used = B, blocks_b
+    if cells_b is None and c2st_reference_cap and len(B) > c2st_reference_cap:
+        counts = np.bincount(blocks_b)
+        order = rng.permutation(len(counts))
+        n_keep = int(np.searchsorted(np.cumsum(counts[order]), c2st_reference_cap, side="left")) + 1
+        keep = np.isin(blocks_b, order[:n_keep])
+        B_used, blocks_used = B[keep], blocks_b[keep]
+    c = esd.c2st(A, B_used, cells_x=cells_a, cells_y=blocks_used, seed=seed,
+                 n_permutations=c2st_permutations, classifier=classifier)
+    c2st_ok = np.isnan(c["p_value"]) or c["p_value"] >= alpha        # NaN (nothing to exchange) -> can't reject
+    verdict = "no difference detected" if (mmd["p_value"] >= alpha and c2st_ok) else "difference detected"
     if np.isnan(c["p_value"]):
         verdict += " (C2ST inconclusive)"
     return {"mmd": mmd, "c2st": c, "verdict": verdict}
+
+
+def one_window_per_recording(group, chunk):
+    """The embeddings and recording labels of ONE window of every recording of a group: the window
+    whose start index is ``chunk`` (recordings without that window are left out)."""
+    sel = np.asarray(group["chunk"]) == int(chunk)
+    return group["emb"][sel], np.asarray(group["cells"])[sel]
+
+
+def single_window_comparisons(exp, present, synth_emb, chunk, compare):
+    """The comparisons of the run repeated on one window per recording. Every unit is then a single
+    sample (the synthetic videos enter as single videos too), so the unit-level relabeling is an
+    ordinary permutation, valid if the recordings are independent. ``compare(A, cells_a, B, cells_b)``
+    is the run's comparison. A comparison with fewer than two recordings on a side is left out.
+    Returns ``{key + "@single": comparison}`` with the keys of the all-window comparisons."""
+    one = {k: one_window_per_recording(exp[k], chunk) for k in present}
+    out = {}
+    pooled = (np.vstack([one[k][0] for k in present]), np.concatenate([one[k][1] for k in present]))
+    if len(pooled[1]) >= 2:
+        out["pooled@single"] = compare(pooled[0], pooled[1], synth_emb, None)
+    for k in present:
+        if len(one[k][1]) >= 2:
+            out[f"{k}@single"] = compare(one[k][0], one[k][1], synth_emb, None)
+    if len(present) == 2:
+        a, b = present
+        if len(one[a][1]) >= 2 and len(one[b][1]) >= 2:
+            out[f"{a}_vs_{b}@single"] = compare(one[a][0], one[a][1], one[b][0], one[b][1])
+    return out
+
+
+def window_typicality(reference_emb, exp, present, k):
+    """Per-window typicality of the experimental windows against the synthetic reference cloud, in the
+    raw and in the standardized geometry (``esd.knn_typicality``), with the window identities."""
+    emb = np.vstack([exp[key]["emb"] for key in present])
+    return {"kind": np.concatenate([[key] * exp[key]["emb"].shape[0] for key in present]),
+            "cell": np.concatenate([exp[key]["cell_number"] for key in present]),
+            "chunk": np.concatenate([exp[key]["chunk"] for key in present]),
+            "raw": esd.knn_typicality(reference_emb, emb, k=k),
+            "standardized": esd.knn_typicality(reference_emb, emb, k=k, standardize=True)}
+
+
+def typicality_tables(typ, alpha):
+    """``(window_rows, recording_rows, group_rows)`` of the per-window typicality, as strings.
+
+    A window is 'far' in a geometry when its tail share is below ``alpha``. The group rows state the
+    count a set of windows drawn like the reference would give on average in the raw geometry (at most
+    ``alpha`` times the number of windows), as the yardstick for the observed count -- not a test:
+    windows of one recording are not independent. The standardized reading is scaled by the reference
+    alone and is descriptive (``esd.knn_typicality``)."""
+    raw, std = typ["raw"], typ["standardized"]
+    kinds, cells, chunks = typ["kind"], typ["cell"], typ["chunk"]
+    far_raw, far_std = raw["tail_share"] < alpha, std["tail_share"] < alpha
+    window_rows = [[_disp(kinds[i]), str(int(cells[i])), str(int(chunks[i])),
+                    f"{raw['query_distance'][i]:.4g}", f"{raw['percentile'][i]:.1f}",
+                    f"{raw['tail_share'][i]:.3g}", f"{std['tail_share'][i]:.3g}",
+                    "far" if far_raw[i] else "typical", "far" if far_std[i] else "typical"]
+                   for i in range(len(kinds))]
+    recording_rows, group_rows = [], []
+    for key in dict.fromkeys(kinds.tolist()):
+        in_kind = kinds == key
+        n_far_recordings = 0
+        for cell in sorted(set(cells[in_kind].tolist())):
+            sel = in_kind & (cells == cell)
+            n_far_recordings += int(far_raw[sel].any())
+            recording_rows.append([_disp(key), str(int(cell)), str(int(sel.sum())),
+                                   f"{raw['tail_share'][sel].min():.3g}",
+                                   f"{np.median(raw['tail_share'][sel]):.3g}",
+                                   f"{int(far_raw[sel].sum())}", f"{int(far_std[sel].sum())}"])
+        n = int(in_kind.sum())
+        group_rows.append([_disp(key), str(n), f"{int(far_raw[in_kind].sum())}",
+                           f"{int(far_std[in_kind].sum())}", f"{alpha * n:.1f}",
+                           f"{n_far_recordings} of {len(set(cells[in_kind].tolist()))}",
+                           f"{np.median(raw['tail_share'][in_kind]):.3g}"])
+    return window_rows, recording_rows, group_rows
+
+
+WINDOW_TYPICALITY_HEADERS = ["group", "recording", "window", "distance (raw)", "percentile (raw)",
+                             "tail share (raw)", "tail share (standardized)", "reading (raw)",
+                             "reading (standardized)"]
+
+
+def _figure_typicality(typ):
+    """The synthetic videos' own nearest-neighbor distances (histogram) with every experimental
+    window's distance drawn on top (one tick per window, colored by group), raw and standardized."""
+    fig = Figure(figsize=(11, 4.4), layout="constrained")
+    axes = fig.subplots(1, 2)
+    kinds = typ["kind"]
+    labels = list(dict.fromkeys(kinds.tolist()))
+    for ax, name in zip(axes, ("raw", "standardized")):
+        res = typ[name]
+        ax.hist(res["reference_distance"], bins=80, density=True, color="0.75", label="synthetic (each to the others)")
+        top = ax.get_ylim()[1]
+        for i, key in enumerate(labels):
+            d = res["query_distance"][kinds == key]
+            ax.vlines(d, 0, top * (0.55 - 0.12 * i), color=f"C{i}", linewidth=1.2, alpha=0.8,
+                      label=f"experimental {_disp(key)}")
+        ax.set_xlabel(f"distance to the {res['k']}-th nearest synthetic neighbor ({name} embedding)")
+        ax.set_ylabel("density")
+        ax.set_title(f"({'a' if name == 'raw' else 'b'}) {name}")
+        ax.legend(fontsize=7)
+    return fig
+
+
+def save_embeddings(path, R, exp, present, synth_emb, estimator_sha256):
+    """Store the embeddings of one run: the experimental windows with their identities and the
+    synthetic reference cloud, with the estimator they were computed with (weights checksum), so a
+    later analysis can reuse the cloud without embedding the EVAL set again."""
+    np.savez_compressed(
+        str(path),
+        experimental=np.vstack([exp[key]["emb"] for key in present]).astype(np.float32),
+        experimental_kind=np.concatenate([[key] * exp[key]["emb"].shape[0] for key in present]),
+        experimental_cell=np.concatenate([exp[key]["cell_number"] for key in present]),
+        experimental_chunk=np.concatenate([exp[key]["chunk"] for key in present]),
+        synthetic=np.asarray(synth_emb, dtype=np.float32),
+        estimator_sha256=str(estimator_sha256), estimator_path=str(R["estimator_path"]),
+        condition=R["condition"], workflow=R["workflow"], product_label=R["product_label"],
+        parameter_keys=np.array(R["parameter_keys"]))
 
 
 # --- figures (deterministic; all groups on shared axes) -------------------------------------------
@@ -312,7 +469,7 @@ def _figure_c2st_scores(oof_score, n_exp, exp_kind_labels):
     ax.axvline(0.5, color="grey", linestyle=":", linewidth=1.0)
     ax.set_xlabel("classifier P(synthetic)")
     ax.set_ylabel("density")
-    ax.set_title("C2ST out-of-fold scores (all near 0.5 ⇒ overlap; split to 0/1 ⇒ gap)")
+    ax.set_title("C2ST out-of-fold scores (all near 0.5 ⇒ not separable; split to 0/1 ⇒ separable)")
     ax.legend(fontsize=8)
     return fig
 
@@ -444,11 +601,11 @@ def _figure_collapse_tracking(pc1, theta, keys, ranked):
 
 
 def _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_kind, n_pooled_exp,
-                  rng, l2_mmd, pca, synth_theta, theta_keys, theta_labels):
-    report_dir = R["posit_dir"] / f"{R['paths'].project_alias}_{R['timing_label']}_Embedding_Space_Distance"
+                  rng, l2_mmd, pca, synth_theta, theta_keys, theta_labels, typicality):
+    report_dir = R["report_dir"]
     reporter = DiagnosticReporter(
         stage="Embedding_Space_Distance", enabled=True, dump=True, dump_dir=report_dir,
-        run_label=f"{R['paths'].project_alias}_{R['timing_label']}")
+        run_label=f"{R['paths'].project_alias}_{R['product_label']}")
 
     # Report checks: the embedded sample counts (both groups non-empty) and finiteness.
     n_synth = int(groups_emb["synthetic"].shape[0])
@@ -468,19 +625,43 @@ def _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_k
         key = f"{present[0]}_vs_{present[1]}"
         label[key] = f"experimental {_disp(present[0])} vs {_disp(present[1])}"
         order.append(key)
+    single = f", one window per recording (window {args.single_window_chunk})"
+    for key in list(order):                              # the same comparisons on one window per recording
+        if f"{key}@single" in comps:
+            label[f"{key}@single"] = label[key] + single
+            order.append(f"{key}@single")
     rows = []
     for key in order:
         c = comps[key]; m, cc = c["mmd"], c["c2st"]
         cp = f"{cc['p_value']:.3g}" if not np.isnan(cc["p_value"]) else "n/a"
-        rows.append([label[key], f"{m['mmd']:.4g}", f"{m['p_value']:.3g}", f"{cc['accuracy']:.3f}",
-                     f"[{cc['ci95'][0]:.3f}, {cc['ci95'][1]:.3f}]", cp, c["verdict"]])
+        null = (f"[{cc['null_range95'][0]:.3f}, {cc['null_range95'][1]:.3f}]"
+                if not np.isnan(cc["null_range95"][0]) else "n/a")
+        rows.append([label[key], f"{m['mmd']:.4g}", f"{m['p_value']:.3g}", f"{cc['auc']:.3f}", null, cp,
+                     f"{cc['n']} vs {cc['m']}", c["verdict"]])
     reporter.table(
         "Experimental-versus-synthetic embedding distance",
-        ["comparison", "MMD", "MMD p", "C2ST acc", "C2ST 95% CI", "C2ST p", "verdict"], rows,
-        note=f"Overlap (realistic imaging) is concluded when both agree: the C2ST CI covers 0.5 "
-             f"(p >= {args.alpha}) and the MMD permutation p >= {args.alpha}. The pooled row is the "
-             f"primary imaging-realism result (imaging is a microscope property, not a condition); "
-             f"the per-condition and between-condition rows are diagnostics.")
+        ["comparison", "MMD", "MMD p", "C2ST AUC", "AUC null 95%", "AUC p", "windows in C2ST", "verdict"], rows,
+        note=f"The MMD and the AUC are the quantities to read: the MMD against 0, the AUC against 0.5 "
+             f"and against the range it takes when the unit labels are exchanged (AUC null 95%). The AUC "
+             f"is a rank statistic, so 0.5 is its no-information value whatever the sizes of the two "
+             f"sets. The rows 'one window per recording' read window {args.single_window_chunk} of every "
+             f"recording, a position fixed before the data were looked at: every unit is then one sample, "
+             f"and if the recordings are independent of each other the permutation p-values are valid. "
+             f"These rows carry the test. The rows with all windows describe the same comparison with "
+             f"more data, but their p-values are approximate guides: their null treats a recording's "
+             f"windows as exchangeable with a block of independent synthetic videos (blocks of the "
+             f"recordings' window counts), and windows of one recording are correlated. 'difference "
+             f"detected' is written when either p < {args.alpha}, 'no difference detected' otherwise; "
+             f"the latter says that this sample did not show a difference, not that the two distributions "
+             f"are equal. A detected difference is one between two populations: the synthetic set covers "
+             f"the whole training prior and the recordings may occupy a narrow part of it, so it is not "
+             f"by itself a failure of the forward model. Whether windows lie outside the synthetic cloud "
+             f"is the question of the per-window tables below. "
+             + ("The classifier is linear: its AUC measures linear separability, and a nonlinear "
+                "classifier is not bounded by it. " if args.c2st_classifier == "logreg" else "")
+             + f"The classifier test reads at most {args.c2st_reference_cap or 'all'} synthetic videos, the "
+             f"MMD all. The pooled rows are the primary ones (imaging is a microscope property, not a "
+             f"condition); the per-condition and between-condition rows are diagnostics.")
 
     reporter.table(
         "Group composition",
@@ -505,10 +686,53 @@ def _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_k
                   f"{pr:.1f} of {len(v1)} dims "
                   f"({'one coordinate dominates' if pr < 2 else 'a multi-dimensional combination'})")
 
+    window_rows, recording_rows, group_rows = typicality_tables(typicality, args.alpha)
+    k_typ, n_ref = typicality["raw"]["k"], typicality["raw"]["n_reference"]
+    reporter.table(
+        "Per-window typicality against the synthetic EVAL set: by group",
+        ["group", "windows", "far (raw)", "far (standardized, descriptive)",
+         "expected at most, if drawn like the reference (raw)",
+         "recordings with a far window (raw)", "median tail share (raw)"], group_rows,
+        note=f"Each experimental window's distance to its {k_typ}-th nearest synthetic neighbor is ranked "
+             f"against the same distance of the {n_ref} synthetic videos among themselves. The tail share "
+             f"is the share of synthetic videos at least as isolated as the window; a window is 'far' when "
+             f"it is below {args.alpha}. 'Expected' is a bound on the AVERAGE count under the hypothesis "
+             f"that every window is exchangeable with the synthetic videos (at most {args.alpha} of the "
+             f"windows; equal scores count against flagging). It is not a limit on the observed count, "
+             f"which varies around its average, more so because windows of one recording are correlated; "
+             f"it is a hypothetical reference, not a criterion for accepting the model. "
+             f"Raw distances follow the embedding coordinates with the largest spread; the standardized "
+             f"reading weighs every coordinate alike, with a scale taken from the synthetic set alone, so "
+             f"its count is a description without a stated rate. Being inside the synthetic cloud is "
+             f"necessary for trusting an estimate, not sufficient: the cloud spans the whole training "
+             f"prior.")
+    reporter.table(
+        "Per-window typicality against the synthetic EVAL set: by recording",
+        ["group", "recording", "windows", "smallest tail share (raw)", "median tail share (raw)",
+         "far (raw)", "far (standardized)"], recording_rows,
+        note="One row per recording; the window-level values are in window_typicality.csv.")
+    with open(report_dir / "window_typicality.csv", "w") as handle:
+        handle.write(",".join(h.replace(",", ";") for h in WINDOW_TYPICALITY_HEADERS) + "\n")
+        for row in window_rows:
+            handle.write(",".join(row) + "\n")
+    reporter.save_figure(
+        "window_typicality", _figure_typicality(typicality),
+        caption="Nearest-neighbor distances in the embedding. Gray: for every synthetic EVAL video, the "
+                "distance to its k-th nearest other synthetic video. Colored ticks: for every experimental "
+                "window, the distance to its k-th nearest synthetic video. Ticks inside the gray "
+                "distribution are windows as close to the synthetic cloud as its own members are to each "
+                "other; ticks beyond its right edge are windows the network has seen nothing like. "
+                "(a) raw embedding, (b) every coordinate divided by its spread over the synthetic set.")
+
     reporter.stat("estimator", str(R["estimator_path"]))
+    reporter.stat("estimator weights sha256", str(R.get("estimator_sha256", "")))
     reporter.stat("mix", args.mix)
     reporter.stat("alpha", args.alpha)
     reporter.stat("n_permutations", args.n_permutations)
+    reporter.stat("C2ST", f"{args.c2st_classifier}, {args.c2st_permutations} relabelings, "
+                          f"reference cap {args.c2st_reference_cap or 'none'}")
+    reporter.stat("one-window-per-recording rows", f"window {args.single_window_chunk} of every recording")
+    reporter.stat("typicality neighbor k", k_typ)
     reporter.stat("pooled MMD (L2/cosine, secondary)",
                   f"{l2_mmd['mmd']:.4g}  (permutation p {l2_mmd['p_value']:.3g})")
 
@@ -522,8 +746,8 @@ def _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_k
                 "is arbitrary; the bottom row projects each embedding to the unit sphere, bounding "
                 "the distance in [0, 2] (cosine), a check on whether the raw picture is a magnitude "
                 "artifact. In either row, cross-group mass in (b) falling within the within-group "
-                "range of (a) means overlap (realistic imaging); a shift to larger distances means a "
-                "gap. The raw MMD is the statistic of record; the pooled MMD in the L2 geometry is a "
+                "range of (a) means the two sets occupy the same region; a shift to larger distances "
+                "means they lie apart. The raw MMD is the statistic of record; the pooled MMD in the L2 geometry is a "
                 "secondary diagnostic (reported below the table).")
     reporter.save_figure(
         "c2st_scores", _figure_c2st_scores(comps["pooled"]["c2st"]["oof_score"],
@@ -532,9 +756,10 @@ def _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_k
                 "(every window scored by a fold that did not train on it, so the scores are honest). "
                 "If experimental and synthetic are indistinguishable the classifier can only guess "
                 "and all groups pile on the dotted 0.5 line; the more the synthetic scores push "
-                "toward 1 and the experimental toward 0, the more separable the groups — a larger "
-                "imaging gap. This is the graphical form of the C2ST accuracy (0.5 = overlap, "
-                "→1 = gap).")
+                "toward 1 and the experimental toward 0, the more separable the two sets. This is the "
+                "graphical form of the C2ST AUC (0.5 = not separable, →1 = separable). Separable "
+                "populations are not by themselves a model failure: the synthetic set spans the whole "
+                "prior.")
     reporter.save_figure(
         "inter_group_distance_matrix", _figure_distance_matrix(groups_emb, present, rng),
         caption="Mean pairwise embedding distance between and within groups: the diagonal is each "
@@ -584,13 +809,18 @@ def _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_k
 
 
 
+def resolve_kinds(args):
+    """The conditions whose recordings a run reads (default: the run's condition). The CLI names
+    conditions scientifically; the recordings on disk are named with the stored tokens, so translate
+    once, here, at the boundary."""
+    return ([args.condition] if args.kinds is None else
+            [KIND_OF_CONDITION.get(k.strip(), k.strip()) for k in args.kinds.split(",") if k.strip()])
+
+
 def run_embedding_space_distance(cfg, args):
     """Shared entry point. ``cfg`` is a WorkflowConfig; ``args`` the parsed CLI namespace."""
     R = _esd_spec(cfg, args)
-    # The CLI names conditions scientifically; the recordings on disk are named with the stored
-    # tokens, so translate once, here, at the boundary.
-    kinds = ([args.condition] if args.kinds is None else
-             [KIND_OF_CONDITION.get(k.strip(), k.strip()) for k in args.kinds.split(",") if k.strip()])
+    kinds = resolve_kinds(args)
     n_frames, step_frames = _chunk_geometry(R["timing"], args.chunk_step_seconds)
 
     if args.dry_run:
@@ -613,8 +843,11 @@ def run_embedding_space_distance(cfg, args):
         for tp in theta_paths[:1]:
             from .io import theta_set_status
             print(f"    EVAL Theta_Set: {tp}  [{theta_set_status(tp, R['parameterization'], condition=R['condition'])}]")
-        print(f"    writes        : {R['posit_dir']}/{R['paths'].project_alias}_"
-              f"{R['timing_label']}_Embedding_Space_Distance/")
+        print(f"    tests         : C2ST {args.c2st_classifier}, {args.c2st_permutations} relabelings, "
+              f"reference cap {args.c2st_reference_cap or 'none'}; MMD {args.n_permutations} permutations; "
+              f"typicality k={args.knn_k}; also on one window per recording (window {args.single_window_chunk})")
+        print(f"    writes        : {R['report_dir']}/  (report.md, figures, window_typicality.csv, "
+              f"embeddings.npz)")
         print("[DRY RUN] no compute performed.")
         return 0
 
@@ -625,6 +858,7 @@ def run_embedding_space_distance(cfg, args):
     print(f"EVAL Theta_Set schema checked for {n_checked} task(s) under {R['condition']} "
           f"({len(R['parameter_keys'])} keys).")
     posterior, device = _load_posterior(R)
+    R["estimator_sha256"] = getattr(posterior, "weights_sha256", "")
     print("Embedding experimental recordings (one recording at a time) ...")
     exp = _embed_experimental(R, posterior, device, kinds, args.experiment_span_seconds,
                               n_frames, step_frames, args.max_cells)
@@ -654,22 +888,32 @@ def run_embedding_space_distance(cfg, args):
         pooled_cells = np.concatenate([exp[k]["cells"] for k in present])
         pooled_kind = np.concatenate([[k] * exp[k]["emb"].shape[0] for k in present])
 
-    comps = {"pooled": _compare(pooled_emb, pooled_cells, synth_emb, None,
-                                alpha=args.alpha, n_perm=args.n_permutations, seed=0)}
+    cmp_kw = dict(alpha=args.alpha, n_perm=args.n_permutations, seed=0,
+                  c2st_permutations=args.c2st_permutations, c2st_reference_cap=args.c2st_reference_cap,
+                  classifier=args.c2st_classifier)
+    comps = {"pooled": _compare(pooled_emb, pooled_cells, synth_emb, None, **cmp_kw)}
     for k in present:
-        comps[k] = _compare(exp[k]["emb"], exp[k]["cells"], synth_emb, None,
-                            alpha=args.alpha, n_perm=args.n_permutations, seed=0)
+        comps[k] = _compare(exp[k]["emb"], exp[k]["cells"], synth_emb, None, **cmp_kw)
     if len(present) == 2:
         a, b = present
         comps[f"{a}_vs_{b}"] = _compare(exp[a]["emb"], exp[a]["cells"],
-                                        exp[b]["emb"], exp[b]["cells"],
-                                        alpha=args.alpha, n_perm=args.n_permutations, seed=0)
+                                        exp[b]["emb"], exp[b]["cells"], **cmp_kw)
+    # The same comparisons on one window per recording: single-sample units, a well-founded null.
+    comps.update(single_window_comparisons(
+        exp, present, synth_emb, args.single_window_chunk,
+        lambda A, cells_a, B, cells_b: _compare(A, cells_a, B, cells_b, **cmp_kw)))
+
+    # One value per window: every experimental window against the whole synthetic cloud (all
+    # windows, whatever --mix selects for the pooled tests).
+    typicality = window_typicality(synth_emb, exp, present, args.knn_k)
 
     # Secondary diagnostic matching the figure's L2 row: the pooled MMD in the L2-normalized
     # (cosine) geometry. Raw stays the geometry of record (the verdict table); this is a scale
     # check only.
+    l2_blocks = esd.matched_blocks(np.unique(pooled_cells, return_counts=True)[1], len(synth_emb),
+                                   np.random.default_rng(0))
     l2_mmd = esd.mmd_rbf(_l2norm(pooled_emb), _l2norm(synth_emb), cells_x=pooled_cells,
-                         cells_y=None, n_permutations=args.n_permutations, seed=0)
+                         cells_y=l2_blocks, n_permutations=args.n_permutations, seed=0)
     pca = _pca_pooled(groups_emb, present)
     synth_theta, theta_keys, theta_labels = _load_eval_theta(R, n_ev_tasks)
     if synth_theta is None:
@@ -677,10 +921,17 @@ def run_embedding_space_distance(cfg, args):
 
     report_dir = _write_report(R, args, comps, exp, present, groups_emb, n_ev_tasks, pooled_kind,
                                pooled_emb.shape[0], rng, l2_mmd, pca,
-                               synth_theta, theta_keys, theta_labels)
-    print(f"\nprimary (pooled) verdict: {comps['pooled']['verdict']}  "
-          f"(C2ST acc {comps['pooled']['c2st']['accuracy']:.3f}, "
-          f"MMD p {comps['pooled']['mmd']['p_value']:.3g})")
+                               synth_theta, theta_keys, theta_labels, typicality)
+    save_embeddings(report_dir / "embeddings.npz", R, exp, present, synth_emb, R["estimator_sha256"])
+    n_far = int(np.count_nonzero(typicality["raw"]["tail_share"] < args.alpha))
+    print(f"\npooled, all windows: {comps['pooled']['verdict']}  "
+          f"(C2ST AUC {comps['pooled']['c2st']['auc']:.3f}, "
+          f"MMD p {comps['pooled']['mmd']['p_value']:.3g}; approximate p-values)")
+    if "pooled@single" in comps:
+        one = comps["pooled@single"]
+        print(f"pooled, one window per recording (window {args.single_window_chunk}): {one['verdict']}  "
+              f"(C2ST AUC {one['c2st']['auc']:.3f}, MMD p {one['mmd']['p_value']:.3g})")
+    print(f"{n_far} of {len(typicality['raw']['tail_share'])} windows far from the synthetic cloud (raw)")
     print(f"report + figures:\n    {report_dir}")
     return 0
 
@@ -711,10 +962,29 @@ def build_parser(description):
     p.add_argument("--mix", choices=("natural", "balanced"), default="natural",
                    help="how the pooled experimental group is composed: 'natural' keeps the dataset "
                         "proportions (default); 'balanced' draws equal windows per condition.")
+    p.add_argument("--artifact-tag", type=str, default=None,
+                   help="artifact tag of the estimator to read (the tag its training run was given); the "
+                        "outputs are written under the same product label. Default: the untagged estimator.")
     p.add_argument("--n-permutations", type=int, default=1000,
                    help="MMD permutation count (default 1000).")
+    p.add_argument("--c2st-permutations", type=int, default=200,
+                   help="relabelings of the units for the classifier test's null (default 200; 0 = none, "
+                        "the AUC alone).")
+    p.add_argument("--c2st-reference-cap", type=int, default=2000,
+                   help="most synthetic videos the classifier test reads (whole blocks, drawn at random; "
+                        "default 2000; 0 = all). The MMD and the per-window typicality read all of them.")
+    p.add_argument("--c2st-classifier", choices=("logreg", "rf", "mlp"), default="logreg",
+                   help="classifier of the two-sample test (default logreg, a linear classifier: its AUC "
+                        "measures linear separability and does not bound what a nonlinear one finds).")
+    p.add_argument("--single-window-chunk", type=int, default=0,
+                   help="the window of every recording read by the one-window-per-recording rows, by the "
+                        "index of its start (default 0, the opening window). Declare it before the run; "
+                        "it is not to be chosen by its result.")
+    p.add_argument("--knn-k", type=int, default=10,
+                   help="neighbor rank of the per-window typicality: the distance to the k-th nearest "
+                        "synthetic video (default 10).")
     p.add_argument("--alpha", type=float, default=0.05,
-                   help="significance level for the overlap/gap verdict (default 0.05).")
+                   help="level of the difference-detected verdict and of the 'far' window reading (default 0.05).")
     p.add_argument("--max-cells", type=int, default=0,
                    help="cap the recordings per condition (0 = all; default 0).")
     p.add_argument("--dry-run", action="store_true",
@@ -761,11 +1031,16 @@ def _esd_spec(cfg, args):
     data_bank_root = PARAMETERS.machine.data_bank_root
     paths = cfg.paths.with_condition(args.condition)   # condition-specific namespace
     posit_dir = data_bank_root / paths.posit_subdir
+    # The estimator and the outputs carry the product label: the timing label, followed by the
+    # artifact tag when the estimator's training run was given one. The EVAL set carries none.
+    product_label = paths.product_label(timing.label, getattr(args, "artifact_tag", None))
     return dict(
         timing=timing, timing_label=timing.label, data_bank_root=data_bank_root,
         paths=paths, posit_dir=posit_dir, condition=str(args.condition),
+        product_label=product_label,
+        report_dir=posit_dir / f"{paths.project_alias}_{product_label}_Embedding_Space_Distance",
         experiment_dir=data_bank_root / paths.experiment_subdir,
-        estimator_path=posit_dir / f"{paths.project_alias}_{timing.label}_Estimator.npz",
+        estimator_path=posit_dir / f"{paths.project_alias}_{product_label}_Estimator.npz",
         parameter_keys=keys,
         parameterization=table,
         param_meaning=(_PARAM_MEANING_DETECTOR if cfg.tag == "detector"

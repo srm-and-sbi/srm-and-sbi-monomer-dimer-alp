@@ -1464,6 +1464,21 @@ claim is made.
 > and the source decision are in §6.11 and §7.6; the biology reference run conditions on the fixed vector of
 > §7.6, not on a pooled imaging distribution. The section is kept for the design of the distance measurement
 > and is not reopened here.
+>
+> **Current method and reading.** The analysis as it runs is documented in
+> `Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Embedding_Space_Distance.md`, which takes precedence
+> over the statistics and the interpretation paragraphs below. The classifier test is scored by a held-out
+> AUC with a unit-level permutation null. Every comparison is repeated on one window per recording (the
+> opening window, which is also what the HPC launcher runs); those rows carry the test, and the rows on all
+> windows are descriptive. A per-window typicality says which windows lie outside the synthetic cloud. A
+> detected difference between the experimental and the synthetic EVAL populations is not by itself a
+> failure of the forward model: the EVAL set spans the whole training prior and the recordings may occupy
+> a narrow part of it, so the reading "overlap indicates realistic imaging, separability a gap" below is
+> not the current one. Whether the model reproduces a window at the parameters inferred for it is the
+> question of the posterior-predictive embedding check
+> (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Embedding.md`), whose ranks are
+> warnings about model and inference together, not calibrated p-values. The numerical results of this
+> section are kept as obtained.
 
 Embedding-space distance between experimental and synthetic videos quantifies the domain gap that arises when the imaging model is misspecified. The gap must be measured, not read off a low-dimensional projection: non-metric projections are seed-dependent and do not preserve inter-point distances, so proximity in a projection is not a metric statement.
 

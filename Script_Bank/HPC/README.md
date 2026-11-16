@@ -588,7 +588,10 @@ directory, submitted directly with `sbatch`:
   experimental-versus-synthetic embedding-space distance for either workflow
   (`WORKFLOW=biology|detector`). Its engine is single-GPU by design (no sharding,
   no merge) on a whole-node allocation; do not read the allocated GPUs as data
-  parallelism.
+  parallelism. `ARTIFACT_TAG` selects a tagged estimator and names the outputs.
+  The posterior-predictive embedding check
+  (`Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_Posterior_Predictive_Embedding.md`)
+  has no launcher: its three steps are run from the analysis script directly.
 - `SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_HPC_Direct_Estimator.sh` — the direct imaging
   estimators (PSF width, flicker rate, fluorescence loss) and the flicker mismatch study on
   one whole CPU node: one process with a pool of workers, one thread each. `ESTIMATOR=`

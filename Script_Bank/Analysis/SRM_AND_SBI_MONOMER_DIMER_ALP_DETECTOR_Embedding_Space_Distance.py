@@ -2,13 +2,15 @@
 
 Scores how far the REAL MET recordings sit from the synthetic videos in the trained network's
 embedding space -- the representation the posterior actually consumes. For the detector workflow the
-imaging parameters ARE the inference target, so the synthetic videos are meant to reproduce the real
-ones' appearance and a measured gap is a realism failure of the imaging forward model. Closing it is
-the goal of the detector calibration. Design and justification: DETECTOR_WORKFLOW.md, section
+imaging parameters ARE the inference target, so the synthetic videos are meant to reproduce the
+recordings' appearance, and a window outside the synthetic cloud points at the imaging forward model
+or at the prior ranges of its parameters. A difference between the two populations is not by itself
+such a finding: the synthetic set covers the whole prior. Design and justification: DETECTOR_WORKFLOW.md, section
 "Quantitative experimental-versus-synthetic distance".
 
-The measurement, its two tests (MMD and C2ST, both blocked by recording), the options, and the
-outputs are identical for both workflows and documented once in the authoritative companion:
+The measurement, its two tests (MMD and C2ST, blocked by recording and repeated on one window per
+recording), the per-window typicality,
+the options, and the outputs are identical for both workflows and documented once in the authoritative companion:
 
     SRM_AND_SBI_MONOMER_DIMER_ALP_Embedding_Space_Distance.md
 
@@ -19,7 +21,7 @@ its report-facing parameter descriptions, and the _DETECTOR-aliased paths. Outpu
 Usage:
     MACHINE_PROFILE=<p> python \
         Script_Bank/Analysis/SRM_AND_SBI_MONOMER_DIMER_ALP_DETECTOR_Embedding_Space_Distance.py \
-        --total-time-seconds 2.0 [--kinds MET-FAB,MET-INLB] [--eval-tasks N] [--dry-run]
+        --condition FAB --total-time-seconds 2.0 [--artifact-tag TAG] [--eval-tasks N] [--dry-run]
 """
 import sys
 
