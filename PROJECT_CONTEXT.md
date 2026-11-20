@@ -2065,9 +2065,9 @@ posterior over θ from that embedding.
 (video, θ) pairs, with rotation and flip augmentation on the videos. The flow
 standardizes θ before the autoregressive layers: the biology uses the
 `independent` standardization (one mean and one scale per coordinate,
-`parameterization.THETA_STANDARDIZATION`), because its table mixes log10
-coordinates spanning two to four decades with two linear fractions on [0, 1],
-and fits it from every theta label of the first TRAIN task rather than from the
+`parameterization.THETA_STANDARDIZATION`), because its tables mix log10
+coordinates spanning one to four decades with one linear fraction on [0, 1]
+under MET-FAB and two under MET-INLB, and fits it from every theta label of the first TRAIN task rather than from the
 two-row dummy batch that fixes the video side; the detector keeps the
 `structured` setting (one shared mean and scale) of `InferenceFlow`. The
 estimator artifact records the condition, the standardization mode and its
@@ -2229,12 +2229,81 @@ matters:
   tail is heavy the variance is large or undefined and the Gaussian standard error
   breaks down. Finite variance is *testable*, not assumed.
 
-The per-example loss is a log-density in the estimator coordinates (log10 for
-a log row, the value for a linear row), so a change of coordinates — a linear
-fraction in place of a log ratio, or a different table — changes the density by
-its Jacobian: losses are comparable only between estimators of one table, one
-condition and one standardization, and the test-loss manifest records the
-coordinate space, the keys, the scales, the bounds and the condition so that
+**Coordinates, mixed scales and the prior baseline.** The per-example loss is a
+log-density in the estimator coordinates of the condition's table (the conversion
+rule of §2): log10 of the physical value for a log row, the value itself for a
+linear row. The biology tables mix the two scales: ten log rows and the linear
+`fraction_basal_dimers_reference` under MET-FAB, plus the linear window-start
+allocation `relative_count_active_dimers_initial` under MET-INLB. The detector's
+six rows are all log. Four consequences govern how a loss is read.
+
+*The loss is a density in the mixed coordinates.* The flow standardizes θ before
+its transforms (§6: per coordinate for the biology, one shared mean and scale for
+the detector) and adds the log-Jacobian of that affine map back. The reported
+loss is therefore −log q(θ | x), in nats, with θ in estimator coordinates: per
+decade for a log row and per unit of value for a linear row. Building the same
+estimator on a coordinate rescaled by a factor c leaves the standardized
+coordinates unchanged and shifts every reported loss by ln c, which checks the
+units numerically. The standardization puts the coordinates on comparable
+numerical scales and so removes imbalance that comes from units alone. It does
+not make the network learn every parameter equally well; that depends on how much
+the videos carry about each parameter and on the flow's capacity. Its
+log-Jacobian is a constant and contributes no gradient, and because the reported
+loss includes it, the standardization does not change the coordinates in which
+losses are compared.
+
+*The prior baseline is the loss of the prior itself.* The training and test
+parameters are drawn uniformly over the prior box in these same coordinates: the
+RDS stage draws in estimator space and converts with `to_physical`, and the
+detector's DLI pass draws its imaging rows uniformly in log10. The prior density
+is therefore 1/∏ᵢ(bᵢ − aᵢ) inside the box, and an estimator that ignores the
+video scores H₀ = Σᵢ ln(bᵢ − aᵢ). For the decided MET-FAB boxes (§2):
+
+| rows | scale | box width | contribution to H₀ (nats) |
+|---|---|---|---|
+| `count_total`, `rate_fast_slow`, `rate_slow_fast`, `rate_slow_immobile`, `rate_immobile_slow` | log10 | 2 decades each | 5 ln 2 = 3.466 |
+| `rate_dissociation` | log10 | 4 decades | ln 4 = 1.386 |
+| `diffusivity_alp`, `relative_diffusivity_dimer`, `relative_diffusivity_slow`, `relative_diffusivity_immobile` | log10 | 1 decade each | 0 |
+| `fraction_basal_dimers_reference` | linear | 1 | 0 |
+| **total** | | | **4.852** |
+
+The MET-INLB allocation row also has width 1, so its H₀ is 4.852 nats as well.
+For the detector H₀ = −1.662 nats: the volume of its six-row box is 0.19 in log10
+units, so the prior density exceeds one and the loss is negative; a negative loss
+carries no special meaning. A row of width w contributes ln w on either scale, so
+a linear row of width 1 contributes nothing. The baseline is exact only because
+the draws are uniform in the coordinates the network sees. A row drawn uniformly
+in physical value but presented in log10 would have a non-flat density there, and
+its term would be that density's differential entropy.
+
+*The gain over the prior does not depend on the scales.* The gain
+G = H₀ − (mean test loss) is the mean log ratio of posterior to prior density at
+the true parameters. Re-expressing the same inference problem in other
+coordinates multiplies posterior and prior density by the same Jacobian at every
+θ, so G is unchanged while the absolute loss moves. Natural log in place of log10
+adds ln ln 10 = 0.834 nats per row to both; a log row recast as a linear one, with
+its prior transformed to match, changes both by the same θ-dependent term. Equal
+relative narrowing gains equally on either scale: narrowing the fraction's unit
+box to an interval of width 0.1 gains ln 10 = 2.30 nats, as does narrowing a
+one-decade log row to a tenth of a decade. G is a variational lower bound on the
+mutual information between parameters and video,
+I(θ; x) ≥ H(θ) + E[log q(θ | x)] = G (Barber & Agakov 2003). The gap of the
+bound is the estimator's KL error of the decomposition above, so a better
+estimator raises G toward the information the videos carry. Mutual information,
+unlike differential entropy, is itself invariant under an invertible change of
+coordinates (Cover & Thomas 2006). For reading, exp(G) is the geometric-mean
+ratio of posterior to prior density at the truth, and exp(−G/d) is the width
+factor per coordinate if the gain were spread evenly over the d coordinates. A
+MET-FAB test loss of 2.0 gives G = 2.85 nats, a density ratio of about 17 and an
+even-spread width factor of 0.77.
+
+*What stays contextual.* The invariance holds for re-expressions of one problem.
+Changing the prior, the target parameters or the observations changes the problem
+itself, so gains of different models (MET-FAB against MET-INLB, biology against
+detector, or a control model) are contextual comparisons: a wider prior leaves
+more to gain, and other data carry other information. Absolute losses compare only
+between estimators of one table and one condition. The test-loss manifest records
+the coordinate space, the keys, the scales, the bounds and the condition, so that
 the comparison below can refuse a pair that differs.
 
 **Best-epoch test-loss distribution (instrumented).** Rather than the mean alone,
@@ -2301,7 +2370,12 @@ posterior-predictive checks; misspecification-robust simulation-based inference
 (Ward et al. 2022; Kelly et al. 2023 — pending independent verification) is the
 relevant literature.
 
-**References.** Gneiting & Raftery (2007), *Strictly Proper Scoring Rules,
+**References.** Barber & Agakov (2003), *The IM Algorithm: A Variational
+Approach to Information Maximization*, Advances in Neural Information Processing
+Systems 16 (the variational lower bound on mutual information); Cover & Thomas
+(2006), *Elements of Information Theory*, 2nd ed., Wiley (differential entropy
+under a change of coordinates, invariance of mutual information);
+Gneiting & Raftery (2007), *Strictly Proper Scoring Rules,
 Prediction, and Estimation*, JASA; Deshpande et al. (2022), *Are you using test
 log-likelihood correctly?*, TMLR; Amisano & Giacomini (2007), *Comparing Density
 Forecasts via Weighted Likelihood Ratio Tests*, JBES; Diebold & Mariano (1995),

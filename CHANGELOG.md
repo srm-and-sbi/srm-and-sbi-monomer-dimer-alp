@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-Analysis companions only: the embedding checks. No change to the simulator, the estimators, the stages, the priors,
+Analysis companions (the embedding checks) and documentation only. No change to the simulator, the estimators, the stages, the priors,
 the samplers, the artifact formats or any file the stage products hash. The package version is unchanged.
 
 - **Embedding-space distance (`embedding_space_distance`, its runner and guide).** The classifier two-sample test
@@ -31,6 +31,12 @@ the samplers, the artifact formats or any file the stage products hash. The pack
   every window with its predictive videos, and that the ranks are not calibrated p-values.
 - **`DETECTOR_WORKFLOW.md`, section 8.** A current-method note takes precedence over the historical statistics and
   interpretation paragraphs; the numerical results of the section are kept.
+- **`PROJECT_CONTEXT.md`, reading the loss across mixed scales (section 7, test-loss interpretation).** How the
+  log10 and linear rows enter the reported loss, the prior baseline H₀ = Σ ln(box width) (4.852 nats under MET-FAB
+  and MET-INLB, −1.662 nats for the detector), the gain over the prior and why it does not depend on the scales, and
+  what stays contextual between models. The comparability statement no longer names the standardization, whose
+  log-Jacobian is part of the reported loss; section 6 gives the decade spans and the linear rows per condition
+  correctly.
 - **Tests.** `tests/test_embedding_space_distance.py` (18), `tests/test_posterior_predictive_embedding.py` (10), one
   launcher test.
 
