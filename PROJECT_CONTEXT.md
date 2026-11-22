@@ -2341,6 +2341,20 @@ the detector estimators; it refuses a pair whose keys, scales, bounds or conditi
 differ, and its report states that matching schemas do not establish that both
 products scored the same TEST examples (the manifest names no tier).
 
+**Selection between replicate chains.** Training is stochastic, so a
+configuration is trained as two or more identical chains, and the chains of one
+condition can differ markedly in TEST loss. The same policy applies to the
+biology and the detector workflows. Within a chain, the checkpoint is selected
+on TEST. Between chains, the selection depends on the compute available and is
+applied with judgment, as in the encoder-screening guidance of
+`DETECTOR_WORKFLOW.md`: when the Evaluation stage can run for every chain, the
+chain is selected on its Evaluation performance on the held-out EVAL videos;
+otherwise the chain with the lower TEST loss is selected, and EVAL serves only
+the assessment of the selected chain. Selecting on EVAL makes the assessment
+videos part of the model selection, so the assessment of the chosen chain is no
+longer held out; selecting on TEST keeps it held out. Each selection states which
+branch it used.
+
 **Calibration and coverage.** A low loss cannot detect an overconfident
 posterior, so faithfulness — the coverage read-out introduced above — is measured
 by the field-standard amortized-inference diagnostics: simulation-based

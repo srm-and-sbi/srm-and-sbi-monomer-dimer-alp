@@ -37,6 +37,9 @@ the samplers, the artifact formats or any file the stage products hash. The pack
   what stays contextual between models. The comparability statement no longer names the standardization, whose
   log-Jacobian is part of the reported loss; section 6 gives the decade spans and the linear rows per condition
   correctly.
+- **Selection between replicate chains (`PROJECT_CONTEXT.md`).** One policy for the biology and the detector
+  workflows: within a chain the checkpoint is selected on TEST; between chains, on EVAL when the Evaluation stage runs
+  for every chain, otherwise on TEST with EVAL kept for the assessment.
 - **Tests.** `tests/test_embedding_space_distance.py` (18), `tests/test_posterior_predictive_embedding.py` (10), one
   launcher test.
 
