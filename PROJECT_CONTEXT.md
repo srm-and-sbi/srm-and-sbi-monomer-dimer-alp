@@ -2537,7 +2537,7 @@ batch 128, about 2.4 nats between the two kernel-7 early-convolution runs). Part
 this spread is attributable not to the loss landscape alone but to the
 learning-rate schedule reacting to it: the rate is halved whenever the per-epoch
 TEST loss fails to improve for one epoch (`ReduceLROnPlateau`, factor 0.5,
-patience 1, floor 1e-5), and after two epochs at the floor without a new best the
+patience 1, floor 4e-5), and after two epochs at the floor without a new best the
 loop reloads the best checkpoint and restarts the rate at a quarter of the
 previous peak. Because the early TEST loss is noisy, two runs of the same
 architecture can follow different rate paths, and the end point moves with the

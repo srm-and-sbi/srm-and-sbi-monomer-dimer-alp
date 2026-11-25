@@ -1354,8 +1354,8 @@ class InferenceTraining:
     """Inference training hyperparameters."""
     epochs: int = 5
     batch_size: int = 32
-    learning_rate_minimum: float = 1.0e-5
-    learning_rate_maximum_factor: int = 128        # 2^7
+    learning_rate_minimum: float = 4.0e-5          # schedule floor: the lowest rate with a measurable gain per epoch
+    learning_rate_maximum_factor: int = 32         # 2^5; default peak = floor * factor = 1.28e-3
     scheduler_factor: float = 0.5                  # ReduceLROnPlateau gamma (per-epoch LR anneal step)
     scheduler_patience: int = 1
     scheduler_tolerance_factor: float = 10.0       # tolerance = lr_min * factor

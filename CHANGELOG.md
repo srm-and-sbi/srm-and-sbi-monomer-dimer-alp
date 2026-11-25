@@ -5,11 +5,23 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.50 - 2026-11-25
 
-Analysis companions (the embedding checks) and documentation only. No change to the simulator, the estimators, the stages, the priors,
-the samplers, the artifact formats or any file the stage products hash. The package version is unchanged.
+The floor of the training learning-rate schedule moves from 1e-5 to 4e-5. The release also carries the analysis
+companions (the embedding checks) and the documentation notes below. No change to the simulator, the network, the
+priors, the samplers, the stage interfaces or the artifact formats.
 
+- **Training schedule floor (`parameterization.InferenceTraining`).** `learning_rate_minimum` is 4e-5 and
+  `learning_rate_maximum_factor` is 32, so the default peak rate (floor × factor) is 1.28e-3 as before. Basis: the
+  training logs of both workflows. After the first descent, about half of the epochs ran at 1e-5 (MET biology: 161 of
+  311, five runs; detector with the same network and global batch: 228 of 540, eight runs), where the best TEST loss
+  improved by 0.003 to 0.005 nats per epoch, against about 0.03 at 4e-5. Two consequences follow from the existing
+  schedule code. The improvement threshold of the plateau scheduler, floor × `scheduler_tolerance_factor`, becomes
+  4e-4; one of the 3,137 logged scheduler decisions would have differed. A warm restart fires only while a quarter of
+  the previous peak exceeds the floor, so a training that starts at 1.28e-3 restarts at 3.2e-4 and at 8e-5, and no
+  longer at 2e-5. A resume state written under the earlier floor keeps that floor in its stored scheduler state until
+  its next warm restart. `parameterization.py` is among the implementation files the stage products hash, so
+  products written from this release on record a different implementation hash.
 - **Embedding-space distance (`embedding_space_distance`, its runner and guide).** The classifier two-sample test
   is scored by the held-out AUC under grouped, stratified cross-validation, with a null from relabeling whole units
   of equal size (`matched_blocks` groups the synthetic videos into blocks of the recordings' window counts); its
